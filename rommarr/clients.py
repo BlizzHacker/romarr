@@ -175,6 +175,29 @@ class Romm:
         token = self.token()
         return {"Authorization": f"Bearer {token}"} if token else {}
 
+    def _get(self, url: str, params: dict, timeout: int):
+        """GET with one re-authentication if the token has expired.
+
+        RomM's access token is short-lived -- about ten minutes. It was fetched
+        once and cached for the life of the process, so every call after that
+        expiry returned 401 forever: the library refreshed correctly at startup
+        and then failed identically for as long as the service stayed up. A
+        restart appeared to fix it, which made it look like a slow leak rather
+        than an expired credential.
+
+        Only 401 is retried. A 403 is a permissions problem that another token
+        will not solve, and retrying it would just double the load while
+        producing the same answer.
+        """
+        response = self._session.get(url, params=params, headers=self._headers(),
+                                     timeout=timeout)
+        if response.status_code == 401:
+            log.info("romm token rejected; re-authenticating")
+            self._token = ""
+            response = self._session.get(url, params=params,
+                                         headers=self._headers(), timeout=timeout)
+        return response
+
     def reachable(self) -> bool:
         """Whether RomM answers, on the health budget rather than the full one.
 
@@ -210,9 +233,8 @@ class Romm:
         # slow library endpoint must degrade to "unknown" rather than holding
         # a page open for the full request timeout -- which reads as the whole
         # application being broken when only one count is unavailable.
-        response = self._session.get(url, params={"limit": 1, **self.CHEAP_QUERY},
-                                     headers=self._headers(),
-                                     timeout=self.HEALTH_TIMEOUT)
+        response = self._get(url, {"limit": 1, **self.CHEAP_QUERY},
+                             self.HEALTH_TIMEOUT)
         response.raise_for_status()
         payload = response.json()
         if isinstance(payload, dict):
@@ -235,9 +257,9 @@ class Romm:
         """
         url = f"{self._config.base_url.rstrip('/')}/api/roms"
         try:
-            response = self._session.get(
-                url, params={"limit": limit, "offset": offset, **self.CHEAP_QUERY},
-                headers=self._headers(), timeout=timeout or self._config.timeout)
+            response = self._get(
+                url, {"limit": limit, "offset": offset, **self.CHEAP_QUERY},
+                timeout or self._config.timeout)
             response.raise_for_status()
             payload = response.json()
         except (requests.RequestException, ValueError) as err:

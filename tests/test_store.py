@@ -265,3 +265,58 @@ def test_the_library_view_is_not_shadowed_by_the_library_path(tmp_path):
     assert isinstance(view, dict) and "items" in view
     # Before the first fetch lands it must say so rather than claim emptiness.
     assert view["loading"] is True
+
+
+# --- romm token expiry -------------------------------------------------------
+#
+# The token is short-lived. Caching it for the life of the process made the
+# library refresh correctly at startup and then fail identically forever after,
+# which reads as a leak rather than an expired credential.
+
+class _FakeResponse:
+    def __init__(self, status): self.status_code = status; self.ok = status < 400
+    def json(self): return {"items": [], "total": 0, "access_token": "t2"}
+    def raise_for_status(self):
+        if not self.ok: raise RuntimeError(f"HTTP {self.status_code}")
+
+
+class _ExpiringSession:
+    """Answers 401 once, then succeeds — a token that expired mid-life."""
+    def __init__(self): self.gets = []; self.posts = 0
+    def post(self, url, **kw):
+        self.posts += 1
+        return _FakeResponse(200)
+    def get(self, url, **kw):
+        self.gets.append(kw.get("headers", {}).get("Authorization"))
+        return _FakeResponse(401 if len(self.gets) == 1 else 200)
+
+
+def test_an_expired_romm_token_is_replaced_rather_than_returned_forever():
+    from rommarr.clients import Romm, RommConfig
+    session = _ExpiringSession()
+    romm = Romm(RommConfig(base_url="http://romm", username="u", password="p"),
+                session=session)
+    romm.games(limit=5)
+    # Two attempts: the 401, then the retry with a freshly fetched token.
+    assert len(session.gets) == 2
+    assert session.posts == 2, "should have re-authenticated after the 401"
+
+
+def test_a_403_is_not_retried():
+    # A permissions problem; another token gives the same answer, so retrying
+    # only doubles the load on an already-struggling service.
+    from rommarr.clients import Romm, RommConfig
+
+    class Forbidden(_ExpiringSession):
+        def get(self, url, **kw):
+            self.gets.append(1)
+            return _FakeResponse(403)
+
+    session = Forbidden()
+    romm = Romm(RommConfig(base_url="http://romm", username="u", password="p"),
+                session=session)
+    try:
+        romm.games(limit=5)
+    except Exception:
+        pass
+    assert len(session.gets) == 1
