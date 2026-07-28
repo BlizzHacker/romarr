@@ -67,6 +67,23 @@ class QBittorrent:
             return False
         return True
 
+    def reachable(self) -> bool:
+        """Whether the download client answers at all.
+
+        Used by the status page, so a failure is reported rather than raised --
+        an unreachable client is a thing to display, not an outage here.
+        """
+        if not self._config.base_url:
+            return False
+        try:
+            if not self._authed:
+                self.login()
+            r = self._session.get(self._url("app/version"), timeout=self._config.timeout)
+            return r.ok
+        except requests.RequestException as err:
+            log.warning("qbittorrent unreachable: %s", err)
+            return False
+
     def completed(self) -> list[dict]:
         """Torrents in our category that have finished."""
         if not self._authed:
@@ -140,6 +157,41 @@ class Romm:
         except requests.RequestException as err:
             log.warning("romm unreachable: %s", err)
             return False
+
+    def games(self, limit: int = 500) -> list[dict]:
+        """The library, flattened to what a poster grid needs.
+
+        RomM's rom payload is large and mostly irrelevant here; sending all of
+        it to a browser to render a name and a cover is wasteful, so it is
+        reduced server-side.
+        """
+        url = f"{self._config.base_url.rstrip('/')}/api/roms"
+        try:
+            response = self._session.get(url, params={"limit": limit},
+                                         headers=self._headers(),
+                                         timeout=self._config.timeout)
+            response.raise_for_status()
+            payload = response.json()
+        except (requests.RequestException, ValueError) as err:
+            log.warning("romm library read failed: %s", err)
+            raise
+
+        items = payload.get("items", payload if isinstance(payload, list) else [])
+        base = self._config.base_url.rstrip("/")
+        out = []
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            cover = it.get("path_cover_small") or it.get("path_cover_large") or ""
+            if cover and not cover.startswith("http"):
+                cover = f"{base}/{cover.lstrip('/')}"
+            out.append({
+                "id": it.get("id"),
+                "name": it.get("name") or it.get("fs_name") or "Unknown",
+                "platform": it.get("platform_display_name") or it.get("platform_slug") or "",
+                "cover": cover,
+            })
+        return out
 
     def rescan(self, platform_slug: str | None = None) -> bool:
         """Ask RomM to pick up newly-imported files."""

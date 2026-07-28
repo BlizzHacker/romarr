@@ -111,3 +111,29 @@ def sanitise_for_display(url: str) -> str:
     import re
 
     return re.sub(r"(?i)(apikey|api_key)=[^&]*", r"\1=<redacted>", url)
+
+
+    def indexers(self) -> list[dict]:
+        """What Prowlarr has configured, for the Indexers page.
+
+        Read-only on purpose. Prowlarr owns indexer configuration; duplicating
+        add/remove here would give two places to edit one thing and no way to
+        tell which had won.
+        """
+        url = f"{self._config.base_url.rstrip('/')}/api/v1/indexer"
+        response = self._session.get(url, headers={"X-Api-Key": self._config.api_key},
+                                     timeout=self._config.timeout)
+        response.raise_for_status()
+        out = []
+        for row in response.json():
+            if not isinstance(row, dict):
+                continue
+            cats = [c.get("name", "") for c in (row.get("capabilities") or {})
+                    .get("categories", []) if isinstance(c, dict)]
+            out.append({
+                "name": row.get("name", ""),
+                "protocol": row.get("protocol", ""),
+                "enable": bool(row.get("enable", False)),
+                "categories": [c for c in cats if c][:4],
+            })
+        return out

@@ -5,12 +5,27 @@ a download client and a database, and an *arr that needs a web framework to
 answer six routes is an *arr that is harder to install than the thing it
 automates.
 
+The API is shaped like the other *arr applications -- /api/v1/<noun>, with the
+same nouns wherever the concept is the same -- so anything that already speaks
+Radarr or Sonarr is not surprised here. Where a concept genuinely differs it is
+renamed rather than faked: there is no Calendar, because a ROM has no air date,
+and a Quality Profile ranks regions rather than bitrates.
+
 Routes:
-  GET  /            the UI
-  GET  /api/health  liveness, plus whether each dependency is reachable
-  GET  /api/search  search indexers, ranked, without grabbing anything
-  POST /api/request grab the best release for a game and queue it for import
-  GET  /api/queue   what is in flight
+  GET  /                       the UI
+  GET  /api/v1/game            the library, from RomM
+  GET  /api/v1/wanted/missing  requested and not yet imported
+  GET  /api/v1/queue           in flight
+  GET  /api/v1/history         what happened
+  GET  /api/v1/indexer         Prowlarr's indexers (read-only)
+  GET  /api/v1/downloadclient  download clients and whether they answer
+  GET  /api/v1/config          settings
+  PUT  /api/v1/config          partial settings update
+  GET  /api/v1/system/status   health of every dependency
+  GET  /api/v1/system/counts   badge counts for the nav
+  POST /api/v1/command         run a task
+  GET  /api/v1/log             recent events
+  POST /api/request            request one game (also used by GG Requestz)
 """
 
 from __future__ import annotations
@@ -25,13 +40,19 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+import time
+
 from .clients import QBittorrent, QbitConfig, Romm, RommConfig
 from .indexers import Prowlarr, ProwlarrConfig
 from .library import import_rom
 from .platforms import PLATFORMS, resolve
 from .selection import best_release
+from .store import Event, Store
+from .ui import page as ui_page
 
 log = logging.getLogger(__name__)
+
+VERSION = "0.2.0"
 
 
 @dataclass
@@ -68,6 +89,23 @@ class Rommarr:
         self.library = Path(e.get("ROMM_LIBRARY", "/mnt/roms"))
         self.queue: list[QueueItem] = []
         self._lock = threading.Lock()
+        self._started = time.monotonic()
+
+        # History, Wanted and settings survive a restart. Without this a restart
+        # lost everything you had asked for, which is the difference between a
+        # tool and a demo.
+        self.store = Store(e.get("ROMMARR_DATA", "/opt/rommarr/rommarr.json"))
+        # A library path saved through the UI has to win over the environment
+        # default, or the setting is one you can change but not apply.
+        saved = self.store.settings.get("library_path")
+        if saved:
+            self.library = Path(saved)
+
+        # Shown on the General page so an operator can see what is wired up
+        # without opening a shell. URLs only -- never a credential.
+        self.store.settings["_prowlarr_url"] = e.get("PROWLARR_URL", "")
+        self.store.settings["_qbit_url"] = e.get("QBITTORRENT_URL", "")
+        self.store.settings["_romm_url"] = e.get("ROMM_URL", "")
 
     # -- operations --------------------------------------------------------
 
@@ -106,6 +144,10 @@ class Rommarr:
                              f"no usable release among {len(releases)} result(s)")
             with self._lock:
                 self.queue.append(item)
+            self.store.want(game, platform.slug)
+            self.store.note_failure(game, platform.slug, item.detail)
+            self.store.record(Event(kind="failed", game=game, platform=platform.slug,
+                                    detail=item.detail))
             return {"ok": False, "error": item.detail}
 
         if not pick.download_url:
@@ -115,6 +157,10 @@ class Rommarr:
                              "release has no plain magnet; grab via Prowlarr")
             with self._lock:
                 self.queue.append(item)
+            self.store.want(game, platform.slug)
+            self.store.note_failure(game, platform.slug, item.detail)
+            self.store.record(Event(kind="failed", game=game, platform=platform.slug,
+                                    release=pick.title, detail=item.detail))
             return {"ok": False, "error": item.detail}
 
         ok = self.qbit.add(pick.download_url)
@@ -123,7 +169,69 @@ class Rommarr:
                          "" if ok else "download client rejected the magnet")
         with self._lock:
             self.queue.append(item)
+        if ok:
+            self.store.record(Event(kind="grabbed", game=game, platform=platform.slug,
+                                    release=pick.title, seeders=pick.seeders,
+                                    size=getattr(pick, "size", 0)))
+        else:
+            self.store.want(game, platform.slug)
+            self.store.note_failure(game, platform.slug, item.detail)
+            self.store.record(Event(kind="failed", game=game, platform=platform.slug,
+                                    release=pick.title, detail=item.detail))
         return {"ok": ok, "release": pick.title, "seeders": pick.seeders}
+
+    def status(self) -> dict:
+        """Everything the System status page reports on."""
+        up = int(time.monotonic() - self._started)
+        return {
+            "version": VERSION,
+            "prowlarr": bool(self.prowlarr._config.api_key),
+            "prowlarr_url": self.store.settings.get("_prowlarr_url", ""),
+            "qbittorrent": self.qbit.reachable(),
+            "qbit_url": self.store.settings.get("_qbit_url", ""),
+            "romm": self.romm.reachable(),
+            "romm_url": self.store.settings.get("_romm_url", ""),
+            "library": self.library.exists(),
+            "library_path": str(self.library),
+            "platforms": len(PLATFORMS),
+            "events": len(self.store.events),
+            "uptime": f"{up // 3600}h {(up % 3600) // 60}m",
+        }
+
+    def counts(self) -> dict:
+        """Badge numbers for the nav rail."""
+        try:
+            games = len(self.romm.games())
+        except Exception:
+            # An unreachable RomM must not blank the whole rail.
+            games = 0
+        with self._lock:
+            queued = sum(1 for i in self.queue if i.state in ("queued", "grabbed"))
+        return {"games": games, "missing": len(self.store.wanted), "queued": queued}
+
+    def search_missing(self) -> dict:
+        """Retry everything in Wanted, the way *arr's missing search does."""
+        searched = grabbed = 0
+        for item in list(self.store.wanted):
+            searched += 1
+            if self.request(item.game, item.platform).get("ok"):
+                grabbed += 1
+        return {"searched": searched, "grabbed": grabbed,
+                "message": f"Searched {searched}, grabbed {grabbed}"}
+
+    def run_command(self, name: str) -> dict:
+        """The Tasks page. Names match how *arr labels its commands."""
+        if name == "MissingGameSearch":
+            return self.search_missing()
+        if name == "ImportCompleted":
+            done = self.import_finished()
+            return {"imported": done, "message": f"Imported {len(done)}"}
+        if name == "RefreshLibrary":
+            try:
+                return {"message": f"{len(self.romm.games())} games in RomM"}
+            except Exception as err:
+                return {"message": f"RomM unreachable: {err}"}
+        return {"error": f"unknown command: {name}"}
 
     def import_finished(self) -> list[dict]:
         """Import anything the download client has completed."""
@@ -141,69 +249,23 @@ class Rommarr:
                 continue
             outcome = import_rom(path, platform, self.library)
             if outcome.ok:
-                self.romm.rescan(platform.slug)
+                if self.store.settings.get("rescan_after_import", True):
+                    self.romm.rescan(platform.slug)
+                self.store.record(Event(kind="imported", game=name,
+                                        platform=platform.slug, release=name,
+                                        detail=str(outcome.destination)))
+                # It has arrived, so it is no longer wanted.
+                for w in list(self.store.wanted):
+                    if w.platform == platform.slug and w.game.lower() in name.lower():
+                        self.store.fulfil(w.game, w.platform)
+            else:
+                self.store.record(Event(kind="failed", game=name,
+                                        platform=platform.slug, detail=outcome.reason))
             results.append({"name": name, "ok": outcome.ok, "reason": outcome.reason})
         return results
 
 
 # -- HTTP ------------------------------------------------------------------
-
-UI = """<!doctype html><meta charset=utf-8><title>Rommarr</title>
-<meta name=viewport content="width=device-width,initial-scale=1">
-<style>
-:root{--bg:#0b0d11;--panel:#151a22;--line:#252d3a;--fg:#e9edf3;--dim:#8b96a8;--accent:#f2a33c}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);
-font:15px/1.55 ui-sans-serif,system-ui,'Segoe UI',Roboto,sans-serif}
-.wrap{max-width:900px;margin:0 auto;padding:28px 22px 70px}
-h1{font-size:26px;letter-spacing:-.02em;margin:0 0 4px}h1 span{color:var(--accent)}
-.sub{color:var(--dim);margin:0 0 26px}
-form{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 22px}
-input,select{padding:10px 13px;background:var(--panel);color:var(--fg);
-border:1px solid var(--line);border-radius:10px;outline:none}
-input{flex:1;min-width:200px}
-button{padding:10px 20px;background:var(--accent);color:#20130a;font-weight:650;
-border:0;border-radius:10px;cursor:pointer}
-table{width:100%;border-collapse:collapse;font-size:14px}
-th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
-th{color:var(--dim);font-size:12px;text-transform:uppercase;letter-spacing:.05em}
-.s{font-size:12px;padding:2px 9px;border-radius:999px;border:1px solid var(--line)}
-.s.grabbed{color:#5eead4;border-color:#2dd4bf}.s.failed{color:#f87171;border-color:#f87171}
-.s.imported{color:#a3e635;border-color:#a3e635}
-.hb{display:flex;gap:16px;flex-wrap:wrap;color:var(--dim);font-size:13px;margin:0 0 26px}
-.hb b{color:var(--fg);font-weight:600}
-</style>
-<div class=wrap>
-<h1>Romm<span>arr</span></h1>
-<p class=sub>Request a game. It searches your indexers, grabs the healthiest release, and files the ROM into RomM.</p>
-<div class=hb id=hb>checking…</div>
-<form id=f>
-  <input id=game placeholder="Game, e.g. Super Mario World" required>
-  <select id=plat></select>
-  <button>Request</button>
-</form>
-<table><thead><tr><th>Game</th><th>Platform</th><th>Release</th><th>Seeders</th><th>State</th></tr></thead>
-<tbody id=q><tr><td colspan=5 style="color:var(--dim)">Nothing queued yet.</td></tr></tbody></table>
-</div>
-<script>
-const j=(u,o)=>fetch(u,o).then(r=>r.json());
-j('/api/platforms').then(p=>{plat.innerHTML=p.map(x=>`<option value="${x.slug}">${x.name}</option>`).join('')});
-function health(){j('/api/health').then(h=>{hb.innerHTML=
- `Prowlarr <b>${h.prowlarr?'configured':'missing key'}</b>`+
- `RomM <b>${h.romm?'reachable':'unreachable'}</b>`.replace(/^/,'&nbsp;&nbsp;•&nbsp;&nbsp;')+
- `Library <b>${h.library?'mounted':'missing'}</b>`.replace(/^/,'&nbsp;&nbsp;•&nbsp;&nbsp;')+
- `<b>${h.platforms}</b> platforms`.replace(/^/,'&nbsp;&nbsp;•&nbsp;&nbsp;')})}
-function queue(){j('/api/queue').then(items=>{
- q.innerHTML=items.length?items.slice().reverse().map(i=>
-  `<tr><td>${i.game}</td><td>${i.platform}</td><td>${i.release||'—'}</td>
-   <td>${i.seeders||'—'}</td><td><span class="s ${i.state}">${i.state}</span>
-   ${i.detail?`<div style="color:var(--dim);font-size:12px">${i.detail}</div>`:''}</td></tr>`).join('')
-  :'<tr><td colspan=5 style="color:var(--dim)">Nothing queued yet.</td></tr>'})}
-f.onsubmit=e=>{e.preventDefault();
- j('/api/request',{method:'POST',headers:{'content-type':'application/json'},
-  body:JSON.stringify({game:game.value,platform:plat.value})}).then(()=>{game.value='';queue()})};
-health();queue();setInterval(queue,5000);
-</script>"""
-
 
 def make_handler(service: Rommarr):
     class Handler(BaseHTTPRequestHandler):
@@ -223,7 +285,42 @@ def make_handler(service: Rommarr):
             route = urlparse(self.path)
             query = parse_qs(route.query)
             if route.path == "/":
-                return self._send(200, UI.encode(), "text/html; charset=utf-8")
+                return self._send(200, ui_page().encode("utf-8"),
+                                  "text/html; charset=utf-8")
+
+            # --- *arr-shaped API ---------------------------------------
+            if route.path == "/api/v1/game":
+                try:
+                    return self._json(200, {"items": service.romm.games()})
+                except Exception as err:
+                    return self._json(200, {"items": [], "error": str(err)})
+            if route.path == "/api/v1/wanted/missing":
+                return self._json(200, {"items": service.store.missing()})
+            if route.path == "/api/v1/queue":
+                return self._json(200, {"items": [asdict(i) for i in service.queue]})
+            if route.path == "/api/v1/history":
+                limit = int((query.get("limit") or ["100"])[0])
+                return self._json(200, {"items": service.store.history(limit)})
+            if route.path == "/api/v1/log":
+                limit = int((query.get("limit") or ["200"])[0])
+                return self._json(200, {"items": service.store.history(limit)})
+            if route.path == "/api/v1/indexer":
+                try:
+                    return self._json(200, {"items": service.prowlarr.indexers()})
+                except Exception as err:
+                    return self._json(200, {"items": [], "error": str(err)})
+            if route.path == "/api/v1/downloadclient":
+                cfg = service.qbit._config
+                return self._json(200, {"items": [{
+                    "name": "qBittorrent", "url": cfg.base_url,
+                    "category": cfg.category, "ok": service.qbit.reachable(),
+                }]})
+            if route.path == "/api/v1/config":
+                return self._json(200, service.store.settings)
+            if route.path == "/api/v1/system/status":
+                return self._json(200, service.status())
+            if route.path == "/api/v1/system/counts":
+                return self._json(200, service.counts())
             if route.path == "/api/health":
                 return self._json(200, service.health())
             if route.path == "/api/platforms":
@@ -253,6 +350,29 @@ def make_handler(service: Rommarr):
                 return self._json(200, service.request(game, platform))
             if route.path == "/api/import":
                 return self._json(200, {"imported": service.import_finished()})
+            if route.path == "/api/v1/command":
+                name = (body.get("name") or "").strip()
+                if not name:
+                    return self._json(400, {"error": "name is required"})
+                return self._json(200, service.run_command(name))
+            return self._json(404, {"error": "not found"})
+
+        def do_PUT(self):
+            route = urlparse(self.path)
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                body = json.loads(self.rfile.read(length) or b"{}")
+            except json.JSONDecodeError:
+                return self._json(400, {"error": "invalid json"})
+
+            if route.path == "/api/v1/config":
+                updated = service.store.update_settings(body)
+                # A library path is only really changed once the running
+                # service files ROMs there, not once it is stored.
+                path = updated.get("library_path")
+                if path:
+                    service.library = Path(path)
+                return self._json(200, updated)
             return self._json(404, {"error": "not found"})
 
         def log_message(self, fmt, *args):
