@@ -55,11 +55,12 @@ class SABnzbd:
     def configured(self) -> bool:
         return bool(self._config.base_url and self._config.api_key)
 
-    def _call(self, mode: str, **params) -> dict | None:
+    def _call(self, mode: str, _timeout: int | None = None, **params) -> dict | None:
         url = f"{self._config.base_url.rstrip('/')}/api"
         query = {"mode": mode, "output": "json", "apikey": self._config.api_key, **params}
         try:
-            response = self._session.get(url, params=query, timeout=self._config.timeout)
+            response = self._session.get(url, params=query,
+                                         timeout=_timeout or self._config.timeout)
             response.raise_for_status()
             return response.json()
         except (requests.RequestException, ValueError) as err:
@@ -67,10 +68,12 @@ class SABnzbd:
             log.warning("sabnzbd %s failed: %s", mode, err.__class__.__name__)
             return None
 
+    HEALTH_TIMEOUT = 5
+
     def reachable(self) -> bool:
         if not self.configured:
             return False
-        out = self._call("version")
+        out = self._call("version", _timeout=self.HEALTH_TIMEOUT)
         return bool(out and out.get("version"))
 
     def add(self, url: str, *, name: str = "") -> bool:

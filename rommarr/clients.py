@@ -127,6 +127,22 @@ class Romm:
     # Health and badge calls get their own short budget; see count().
     HEALTH_TIMEOUT = 5
 
+    # RomM sorts by name using a natural-sort expression -- nested
+    # REGEXP_REPLACE over roms.name. Being computed, no index can serve it, so
+    # the database evaluates it for every row and then filesorts; LIMIT cannot
+    # help because the sort happens first. On a 72,000-row library that is a
+    # sixty-second query.
+    #
+    # Sorting by the primary key instead is free, and the alphabetical order it
+    # gives up means nothing here: this feeds a count and a poster grid, not a
+    # browsable index. The two aggregate extras are likewise work nobody here
+    # consumes.
+    CHEAP_QUERY = {
+        "order_by": "id",
+        "with_char_index": "false",
+        "with_filter_values": "false",
+    }
+
     def __init__(self, config: RommConfig, session: requests.Session | None = None):
         self._config = config
         self._session = session or requests.Session()
@@ -160,14 +176,25 @@ class Romm:
         return {"Authorization": f"Bearer {token}"} if token else {}
 
     def reachable(self) -> bool:
+        """Whether RomM answers, on the health budget rather than the full one.
+
+        This feeds a status page. A dependency that is merely slow must not
+        hold the page open for the whole request timeout -- that turns "RomM is
+        struggling" into "Rommarr is broken", which is the wrong diagnosis to
+        hand somebody.
+
+        The heartbeat is deliberately unauthenticated here: fetching a token
+        first would make this as slow as whatever is wrong with the API, which
+        is exactly what it is trying to report on.
+        """
         try:
             response = self._session.get(
                 f"{self._config.base_url.rstrip('/')}/api/heartbeat",
-                headers=self._headers(), timeout=self._config.timeout,
+                timeout=self.HEALTH_TIMEOUT,
             )
             return response.ok
         except requests.RequestException as err:
-            log.warning("romm unreachable: %s", err)
+            log.warning("romm unreachable: %s", err.__class__.__name__)
             return False
 
     def count(self) -> int:
@@ -183,7 +210,7 @@ class Romm:
         # slow library endpoint must degrade to "unknown" rather than holding
         # a page open for the full request timeout -- which reads as the whole
         # application being broken when only one count is unavailable.
-        response = self._session.get(url, params={"limit": 1},
+        response = self._session.get(url, params={"limit": 1, **self.CHEAP_QUERY},
                                      headers=self._headers(),
                                      timeout=self.HEALTH_TIMEOUT)
         response.raise_for_status()
@@ -201,10 +228,9 @@ class Romm:
         """
         url = f"{self._config.base_url.rstrip('/')}/api/roms"
         try:
-            response = self._session.get(url,
-                                         params={"limit": limit, "offset": offset},
-                                         headers=self._headers(),
-                                         timeout=self._config.timeout)
+            response = self._session.get(
+                url, params={"limit": limit, "offset": offset, **self.CHEAP_QUERY},
+                headers=self._headers(), timeout=self._config.timeout)
             response.raise_for_status()
             payload = response.json()
         except (requests.RequestException, ValueError) as err:

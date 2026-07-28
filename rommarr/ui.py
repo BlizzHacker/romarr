@@ -418,7 +418,11 @@ RENDER.logs=async()=>{
 async function refreshCounts(){
   const s=await j('/api/v1/system/counts').catch(()=>({}));
   document.querySelectorAll('[data-ct]').forEach(b=>{
-    const v=s[b.dataset.ct]; b.textContent=v||''; b.style.display=v?'':'none';
+    const v=s[b.dataset.ct];
+    // null means "not counted yet" -- a dash is honest where 0 would claim
+    // the library is empty.
+    b.textContent = v == null ? (b.dataset.ct === 'games' ? '—' : '') : (v || '');
+    b.style.display = (v == null && b.dataset.ct !== 'games') ? 'none' : '';
   });
 }
 (async()=>{

@@ -128,6 +128,24 @@ class Rommarr:
         self.store.settings["_qbit_url"] = e.get("QBITTORRENT_URL", "")
         self.store.settings["_romm_url"] = e.get("ROMM_URL", "")
 
+        # The library count is refreshed off the request path entirely.
+        # `None` means "not known yet", which the UI shows as a dash -- an
+        # honest answer, where 0 would be a claim that the library is empty.
+        self._count_cache: tuple[int | None, float] = (None, 0.0)
+        self._count_thread = threading.Thread(target=self._refresh_counts, daemon=True)
+        self._count_thread.start()
+
+    def _refresh_counts(self) -> None:
+        """Keep the library count fresh without ever blocking a request."""
+        while True:
+            try:
+                self._count_cache = (self.romm.count(), time.monotonic())
+            except Exception as err:
+                # Keep the last good number rather than replacing it with a
+                # zero that reads as "your library is empty".
+                log.warning("library count refresh failed: %s", err.__class__.__name__)
+            time.sleep(self.COUNT_TTL)
+
     # -- operations --------------------------------------------------------
 
     def health(self) -> dict:
@@ -272,29 +290,22 @@ class Rommarr:
             "uptime": f"{up // 3600}h {(up % 3600) // 60}m",
         }
 
-    # How long a library count is reused. The badge polls every 15s, so without
-    # this a slow or hanging library endpoint costs its full timeout on every
-    # poll -- which is the difference between a page that feels alive and one
-    # that stalls four times a minute.
-    COUNT_TTL = 120
+    # How often the library count is refreshed in the background.
+    COUNT_TTL = 300
 
     def counts(self) -> dict:
-        """Badge numbers for the nav rail."""
-        now = time.monotonic()
-        cached, at = getattr(self, "_count_cache", (None, 0.0))
-        if cached is not None and now - at < self.COUNT_TTL:
-            games = cached
-        else:
-            try:
-                games = self.romm.count()
-            except Exception:
-                # An unreachable RomM must not blank the whole rail, and a
-                # previous good count beats showing zero.
-                games = cached if cached is not None else 0
-            self._count_cache = (games, now)
+        """Badge numbers for the nav rail.
+
+        This never calls RomM. Caching a slow call still means somebody pays
+        for it whenever the cache expires, and on a large library RomM's
+        /api/roms can exceed two minutes -- so the page stalled for whoever
+        happened to poll first.
+        """
+        games = self._count_cache[0]
         with self._lock:
             queued = sum(1 for i in self.queue if i.state in ("queued", "grabbed"))
         return {"games": games, "missing": len(self.store.wanted), "queued": queued}
+
 
     def search_missing(self) -> dict:
         """Retry everything in Wanted, the way *arr's missing search does."""
