@@ -139,3 +139,53 @@ def test_sanitiser_redacts_keys_for_logs():
     dirty = "http://prowlarr:9696/1/download?apikey=SECRET123&link=x"
     assert "SECRET123" not in sanitise_for_display(dirty)
     assert sanitise_for_display("") == ""
+
+
+# --- service wiring -------------------------------------------------------
+
+def test_request_rejects_an_unknown_platform():
+    from rommarr.app import Rommarr
+    svc = Rommarr(env={})
+    out = svc.request("Super Mario World", "PlayStation 5")
+    assert not out["ok"]
+    assert "unknown platform" in out["error"]
+
+
+def test_a_release_without_a_plain_magnet_is_refused_not_leaked(monkeypatch):
+    """Prowlarr's own download links carry its API key, so a release that has
+    no plain magnet must be refused rather than passed to a download client."""
+    from rommarr.app import Rommarr
+    from rommarr.selection import Release
+
+    svc = Rommarr(env={})
+    keyed = Release(title="Super Mario World (USA)", size=524288, seeders=50,
+                    categories=(1030,), download_url="", protocol="torrent")
+    monkeypatch.setattr(svc.prowlarr, "search", lambda *a, **k: [keyed])
+
+    grabbed = []
+    monkeypatch.setattr(svc.qbit, "add", lambda *a, **k: grabbed.append(a) or True)
+
+    out = svc.request("Super Mario World", "snes")
+    assert not out["ok"]
+    assert "no plain magnet" in out["error"]
+    assert grabbed == [], "must not hand a keyed URL to the download client"
+    assert svc.queue[-1].state == "failed"
+
+
+def test_a_healthy_release_is_grabbed_and_queued(monkeypatch):
+    from rommarr.app import Rommarr
+    from rommarr.selection import Release
+
+    svc = Rommarr(env={})
+    good = Release(title="Super Mario World (USA)", size=524288, seeders=120,
+                   categories=(1030,), download_url="magnet:?xt=urn:btih:abc",
+                   protocol="torrent")
+    monkeypatch.setattr(svc.prowlarr, "search", lambda *a, **k: [good])
+    sent = []
+    monkeypatch.setattr(svc.qbit, "add", lambda url, **k: sent.append(url) or True)
+
+    out = svc.request("Super Mario World", "Super Nintendo")
+    assert out["ok"]
+    assert sent == ["magnet:?xt=urn:btih:abc"]
+    assert svc.queue[-1].state == "grabbed"
+    assert svc.queue[-1].platform == "snes"
