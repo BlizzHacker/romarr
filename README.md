@@ -39,22 +39,31 @@ downloader does not:
   rather than after, so films never enter the ranking in the first place
 - **Scores releases** on seeders, region (USA → World → Europe → Japan), and
   size sanity, and rejects prototypes, hacks and demos
-- Grabs via **qBittorrent** (torrent) or **NZBGet** (usenet)
+- Grabs via **qBittorrent** (torrent), **SABnzbd** or **NZBGet** (usenet),
+  routing each release to a client that speaks its protocol
 - **Picks the ROM** out of the finished download, preferring the platform's own
   extensions in order and the best regional dump when several are present
 - **Imports into RomM** at `<library>/<platform-slug>/`, refusing to overwrite
   unless told
 - Triggers a RomM rescan so the game appears without a manual refresh
+- **Translates download paths** when the client runs elsewhere, the way Radarr
+  and Sonarr's remote path mappings do — without it the import fails with
+  "download path does not exist" while the file sits right there
+- Keeps **History, Wanted and settings** across a restart
+- A web UI shaped like the other *arrs: Library, Wanted, Activity, Settings,
+  System
 
 ## Safety, deliberately
 
 - **Zip-slip is blocked.** Archive entries that resolve outside the library root
   are dropped, not sanitised — a release that needs sanitising is not one to
   trust. Tested.
-- **Prowlarr API keys never leave the server.** Prowlarr's `downloadUrl` is a
-  link back to itself *with the key in the query string*. Rommarr only ever
-  passes on a literal `magnet:` URI; anything else is grabbed server-side.
-  Tested.
+- **Prowlarr API keys never reach a browser or a log.** Prowlarr's
+  `downloadUrl` is a link back to itself *with the key in the query string*.
+  That URL is passed to the download client, which fetches it server-side —
+  the same thing Radarr and Sonarr do, and the only way usenet can work at all,
+  since an NZB has no magnet equivalent. It is redacted everywhere it could be
+  displayed or logged. Tested.
 - **Nothing overwrites silently.** An existing ROM is left alone and reported.
 
 ## Supported platforms
@@ -72,7 +81,7 @@ of feeding RomM in the first place.
 Proxmox LXC, one line:
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/BlizzHacker/rommarr/main/ct/rommarr.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/BlizzHacker/rommarr/main/proxmox/ct/rommarr.sh)"
 ```
 
 Or run it yourself:
@@ -92,7 +101,30 @@ python -m rommarr
 | `ROMM_URL` / `ROMM_USERNAME` / `ROMM_PASSWORD` | RomM, for the rescan trigger |
 | `ROMM_LIBRARY` | path to RomM's library root, e.g. `/mnt/roms` |
 | `QBITTORRENT_URL` / `QBITTORRENT_USER` / `QBITTORRENT_PASS` | torrent client |
+| `SABNZBD_URL` / `SABNZBD_API_KEY` | usenet client, optional |
 | `NZBGET_URL` / `NZBGET_USER` / `NZBGET_PASS` | usenet client, optional |
+| `GGREQUESTZ_URL` | shows the request front-end's status, optional |
+| `ROMMARR_DATA` | where history and settings are kept |
+
+A protocol with no client configured cannot be grabbed at all — results are
+found, ranked, and then refused. The Download Clients page names any protocol
+in that state rather than leaving you to work it out.
+
+### Remote path mapping
+
+If your download client runs in a different container or host, it reports paths
+in *its* filesystem. Set the mapping under Settings → Media Management, or in
+the settings file:
+
+```json
+"remote_path_mappings": [
+  { "remote": "/downloads", "local": "/mnt/downloads" }
+]
+```
+
+The longest matching prefix wins. A mapping cannot help if the volume is not
+mounted here at all — that stays a mount problem, and you find out because the
+translated path still does not exist.
 
 Use a **dedicated RomM account**, not your admin one. Rommarr needs only
 enough to trigger a scan.
