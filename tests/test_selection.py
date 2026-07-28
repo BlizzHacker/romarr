@@ -124,3 +124,30 @@ def test_extension_order_is_respected():
     # .smc is declared before .sfc, so it wins when both are present.
     snes = by_slug("snes")
     assert pick_rom_file(["Game.sfc", "Game.smc"], snes) == "Game.smc"
+
+
+def test_a_switch_release_is_never_chosen_for_a_snes_request():
+    """The real failure: searching for a SNES game returned
+    '[Nintendo Switch] Super Mario World (NSP)'. The title matched and the size
+    was plausible, so nothing else rejected it."""
+    snes = by_slug("snes")
+    switch = rel("[Nintendo Switch] Super Mario World (smw) [NSP][ENG]",
+                 size=9 * 1024 * 1024, seeders=62)
+    cart = rel("Super Mario World (USA).smc", size=512 * 1024, seeders=30)
+
+    assert score(switch, "super mario world", snes) < 0
+    assert best_release([switch, cart], "super mario world", snes) is cart
+
+
+def test_platform_markers_match_whole_words_only():
+    # "ds" is inside "worlds"; "pc" is inside "pcb". A naive substring check
+    # disqualifies most of a result set.
+    snes = by_slug("snes")
+    fine = rel("Super Mario World (USA)", size=512 * 1024, seeders=40)
+    assert score(fine, "super mario world", snes) > 0
+
+
+def test_a_platforms_own_name_does_not_disqualify_it():
+    gba = by_slug("gba")
+    ok = rel("Pokemon Emerald (USA) Game Boy Advance", size=16 * 1024 * 1024, seeders=40)
+    assert score(ok, "pokemon emerald", gba) > 0

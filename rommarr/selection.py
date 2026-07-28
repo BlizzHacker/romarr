@@ -19,6 +19,21 @@ from .platforms import Platform
 CONSOLE_CATEGORIES = range(1000, 2000)
 PC_GAME_CATEGORIES = range(4050, 4070)
 
+# Platform names that, when they appear in a title, mean the release is for a
+# DIFFERENT system than the one asked for. A search for a SNES game happily
+# returns "[Nintendo Switch] Super Mario World (NSP)" -- the title matches and
+# the size is plausible, so nothing else in the scorer rejects it, and you end
+# up importing a Switch package into your SNES folder.
+FOREIGN_PLATFORM_MARKERS = {
+    "nintendo switch", "switch", "nsp", "xci",
+    "playstation", "ps1", "ps2", "ps3", "ps4", "ps5", "psp", "psx", "vita",
+    "xbox", "x360", "xbla",
+    "gamecube", "wii", "wiiu", "wii u", "3ds", "nds", "ds",
+    "android", "apk", "ios",
+    "pc", "windows", "steam", "gog", "repack",
+    "dreamcast", "saturn", "psvr",
+}
+
 # Words that mean "this is not a plain cartridge dump".
 _JUNK_MARKERS = (
     "beta", "proto", "prototype", "demo", "sample", "hack", "patched",
@@ -97,6 +112,18 @@ def score(release: Release, wanted: str, platform: Platform | None = None) -> in
     if any(marker in lowered for marker in _JUNK_MARKERS):
         points -= 120
 
+    # Reject a release that names a system other than the one requested. Its own
+    # platform's aliases are removed from the check first, so asking for a Wii
+    # game does not disqualify a title that says "Wii".
+    if platform is not None:
+        own = {platform.slug.lower(), platform.name.lower(), *platform.aliases}
+        own_words = {w for label in own for w in label.split()}
+        for marker in FOREIGN_PLATFORM_MARKERS:
+            if marker in own or marker in own_words:
+                continue
+            if _mentions(lowered, marker):
+                return -300
+
     # A cartridge ROM is small. A multi-gigabyte "release" for a cartridge
     # platform is a romset, a PC port, or a disc image -- none of which this
     # pipeline can hand to a browser emulator.
@@ -155,3 +182,13 @@ def _region_rank(name: str) -> int:
         if any(m in lowered for m in markers):
             return value
     return 0
+
+
+def _mentions(haystack: str, marker: str) -> bool:
+    """Whether `marker` appears in `haystack` as a whole word or phrase.
+
+    Substring matching is wrong here: "ds" is inside "worlds", and "pc" is
+    inside "pcb", so a naive check disqualifies half of every result set.
+    """
+    padded = f" {re.sub(r'[^a-z0-9 ]+', ' ', haystack)} "
+    return f" {marker} " in re.sub(r"\s+", " ", padded)
