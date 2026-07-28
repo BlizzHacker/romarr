@@ -63,10 +63,22 @@ class Prowlarr:
 
     @staticmethod
     def _to_release(row: dict) -> Release:
-        # Prefer a literal magnet: it is the only link here that is safe to hand
-        # onward, because the Prowlarr-hosted alternatives carry the API key.
+        # A literal magnet is preferred because it carries no credential at all.
+        #
+        # But it was previously the ONLY thing accepted, and that quietly broke
+        # far more than it protected: usenet has no magnet equivalent, so every
+        # NZB result was refused, and so was any torrent offering only a
+        # .torrent link. Prowlarr's own URL carries its API key, which is fine
+        # to hand to a download client server-side -- that is exactly what
+        # Radarr and Sonarr do -- as long as it never reaches a browser or a
+        # log. sanitise_for_display is what enforces that at the boundary.
         magnet = row.get("magnetUrl") or ""
-        download_url = magnet if magnet.startswith("magnet:") else ""
+        if magnet.startswith("magnet:"):
+            download_url = magnet
+        else:
+            download_url = row.get("downloadUrl") or row.get("guid") or ""
+            if not download_url.lower().startswith(("http://", "https://")):
+                download_url = ""
 
         return Release(
             title=row.get("title") or "",

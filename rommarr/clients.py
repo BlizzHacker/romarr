@@ -30,6 +30,15 @@ class QbitConfig:
 class QBittorrent:
     """Just enough of the WebUI API to add a torrent and watch it finish."""
 
+    # Declared so the service can pick a client by protocol without knowing
+    # which class it is holding -- see downloaders.pick_client.
+    protocol = "torrent"
+    name = "qBittorrent"
+
+    @property
+    def configured(self) -> bool:
+        return bool(self._config.base_url)
+
     def __init__(self, config: QbitConfig, session: requests.Session | None = None):
         self._config = config
         self._session = session or requests.Session()
@@ -115,6 +124,9 @@ class Romm:
     # is how an integration quietly becomes a way to delete someone's library.
     SCOPES = "roms.read platforms.read collections.read"
 
+    # Health and badge calls get their own short budget; see count().
+    HEALTH_TIMEOUT = 5
+
     def __init__(self, config: RommConfig, session: requests.Session | None = None):
         self._config = config
         self._session = session or requests.Session()
@@ -158,7 +170,29 @@ class Romm:
             log.warning("romm unreachable: %s", err)
             return False
 
-    def games(self, limit: int = 500) -> list[dict]:
+    def count(self) -> int:
+        """How many ROMs RomM has, without fetching any of them.
+
+        The nav badge only needs the number. Asking for 500 full records to
+        call len() on them took thirty seconds against a real library and
+        stalled every page that showed the badge -- which looked like RomM
+        being down rather than a query being wrong.
+        """
+        url = f"{self._config.base_url.rstrip('/')}/api/roms"
+        # A short, separate budget on purpose. This feeds a nav badge, and a
+        # slow library endpoint must degrade to "unknown" rather than holding
+        # a page open for the full request timeout -- which reads as the whole
+        # application being broken when only one count is unavailable.
+        response = self._session.get(url, params={"limit": 1},
+                                     headers=self._headers(),
+                                     timeout=self.HEALTH_TIMEOUT)
+        response.raise_for_status()
+        payload = response.json()
+        if isinstance(payload, dict):
+            return int(payload.get("total") or len(payload.get("items") or []))
+        return len(payload)
+
+    def games(self, limit: int = 60, offset: int = 0) -> list[dict]:
         """The library, flattened to what a poster grid needs.
 
         RomM's rom payload is large and mostly irrelevant here; sending all of
@@ -167,7 +201,8 @@ class Romm:
         """
         url = f"{self._config.base_url.rstrip('/')}/api/roms"
         try:
-            response = self._session.get(url, params={"limit": limit},
+            response = self._session.get(url,
+                                         params={"limit": limit, "offset": offset},
                                          headers=self._headers(),
                                          timeout=self._config.timeout)
             response.raise_for_status()

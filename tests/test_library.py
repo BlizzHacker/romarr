@@ -110,19 +110,61 @@ def test_missing_download_is_reported_not_raised(tmp_path):
 
 # --- api key hygiene ------------------------------------------------------
 
-def test_prowlarr_download_url_never_carries_the_api_key():
+def test_a_keyed_url_is_kept_for_the_download_client():
+    """Prowlarr's link carries its API key and there is no keyless alternative
+    for usenet -- a magnet has no NZB equivalent. Refusing keyed URLs, as this
+    once did, protected nothing and meant usenet never worked at all. Radarr
+    and Sonarr both hand this URL to the download client, which fetches it
+    server-side; the key must simply never reach a browser or a log."""
     row = {
         "title": "Super Mario World (USA)",
         "size": 524288,
         "seeders": 30,
         "categories": [{"id": 1030}],
-        # Prowlarr hands back a link to ITSELF, api key included.
         "downloadUrl": "http://prowlarr:9696/1/download?apikey=SECRET123&link=x",
         "protocol": "torrent",
     }
     release = Prowlarr._to_release(row)
-    assert "SECRET123" not in release.download_url
-    assert "apikey" not in release.download_url
+    assert release.download_url.startswith("http://prowlarr:9696/")
+    # ...and it is unusable in anything user-facing.
+    assert "SECRET123" not in sanitise_for_display(release.download_url)
+
+
+def test_a_usenet_release_is_grabbable_at_all():
+    """The whole point: an NZB result used to come back with an empty
+    download_url and be refused as "no plain magnet"."""
+    row = {
+        "title": "Chrono Trigger (USA)",
+        "size": 4194304,
+        "seeders": 0,
+        "categories": [{"id": 1030}],
+        "downloadUrl": "https://indexer.example/getnzb?id=abc&apikey=SECRET",
+        "protocol": "usenet",
+    }
+    release = Prowlarr._to_release(row)
+    assert release.protocol == "usenet"
+    assert release.download_url, "a usenet release must be grabbable"
+
+
+def test_a_magnet_is_still_preferred_over_a_keyed_url():
+    row = {
+        "title": "Zelda (USA)", "size": 1024, "seeders": 5,
+        "categories": [{"id": 1030}],
+        "magnetUrl": "magnet:?xt=urn:btih:abc",
+        "downloadUrl": "http://prowlarr:9696/1/download?apikey=SECRET123",
+        "protocol": "torrent",
+    }
+    assert Prowlarr._to_release(row).download_url == "magnet:?xt=urn:btih:abc"
+
+
+def test_a_nonsense_download_link_is_dropped():
+    """Anything that is not a magnet or an http(s) URL cannot be handed to a
+    client, and passing it on would just fail later with a worse message."""
+    row = {
+        "title": "X", "size": 1, "seeders": 1, "categories": [{"id": 1030}],
+        "downloadUrl": "javascript:alert(1)", "protocol": "torrent",
+    }
+    assert Prowlarr._to_release(row).download_url == ""
 
 
 def test_plain_magnet_is_kept():
@@ -157,18 +199,18 @@ def test_a_release_without_a_plain_magnet_is_refused_not_leaked(monkeypatch):
     from rommarr.app import Rommarr
     from rommarr.selection import Release
 
-    svc = Rommarr(env={})
-    keyed = Release(title="Super Mario World (USA)", size=524288, seeders=50,
-                    categories=(1030,), download_url="", protocol="torrent")
-    monkeypatch.setattr(svc.prowlarr, "search", lambda *a, **k: [keyed])
+    svc = Rommarr(env={"QBITTORRENT_URL": "http://qbit:8090"})
+    unusable = Release(title="Super Mario World (USA)", size=524288, seeders=50,
+                       categories=(1030,), download_url="", protocol="torrent")
+    monkeypatch.setattr(svc.prowlarr, "search", lambda *a, **k: [unusable])
 
     grabbed = []
     monkeypatch.setattr(svc.qbit, "add", lambda *a, **k: grabbed.append(a) or True)
 
     out = svc.request("Super Mario World", "snes")
     assert not out["ok"]
-    assert "no plain magnet" in out["error"]
-    assert grabbed == [], "must not hand a keyed URL to the download client"
+    assert "no usable download link" in out["error"]
+    assert grabbed == [], "nothing to grab means nothing is handed to a client"
     assert svc.queue[-1].state == "failed"
 
 
@@ -176,7 +218,7 @@ def test_a_healthy_release_is_grabbed_and_queued(monkeypatch):
     from rommarr.app import Rommarr
     from rommarr.selection import Release
 
-    svc = Rommarr(env={})
+    svc = Rommarr(env={"QBITTORRENT_URL": "http://qbit:8090"})
     good = Release(title="Super Mario World (USA)", size=524288, seeders=120,
                    categories=(1030,), download_url="magnet:?xt=urn:btih:abc",
                    protocol="torrent")
@@ -189,3 +231,83 @@ def test_a_healthy_release_is_grabbed_and_queued(monkeypatch):
     assert sent == ["magnet:?xt=urn:btih:abc"]
     assert svc.queue[-1].state == "grabbed"
     assert svc.queue[-1].platform == "snes"
+
+
+# --- protocol routing ------------------------------------------------------
+
+def test_a_usenet_release_goes_to_the_usenet_client(monkeypatch):
+    """Accepting only torrents made every usenet indexer in Prowlarr dead
+    weight: results scored fine and were then refused."""
+    from rommarr.app import Rommarr
+    from rommarr.selection import Release
+
+    svc = Rommarr(env={
+        "QBITTORRENT_URL": "http://qbit:8090",
+        "SABNZBD_URL": "http://sab:8080", "SABNZBD_API_KEY": "k",
+    })
+    nzb = Release(title="Chrono Trigger (USA)", size=4 << 20, seeders=0,
+                  categories=(1030,), download_url="https://idx/get?id=1",
+                  protocol="usenet")
+    monkeypatch.setattr(svc.prowlarr, "search", lambda *a, **k: [nzb])
+
+    to_sab, to_qbit = [], []
+    monkeypatch.setattr(svc.sab, "add", lambda url, **k: to_sab.append(url) or True)
+    monkeypatch.setattr(svc.qbit, "add", lambda url, **k: to_qbit.append(url) or True)
+
+    out = svc.request("Chrono Trigger", "snes")
+    assert out["ok"], out
+    assert to_sab == ["https://idx/get?id=1"]
+    assert to_qbit == [], "a usenet release must not go to a torrent client"
+
+
+def test_a_torrent_release_goes_to_the_torrent_client(monkeypatch):
+    from rommarr.app import Rommarr
+    from rommarr.selection import Release
+
+    svc = Rommarr(env={
+        "QBITTORRENT_URL": "http://qbit:8090",
+        "SABNZBD_URL": "http://sab:8080", "SABNZBD_API_KEY": "k",
+    })
+    tor = Release(title="Zelda (USA)", size=1 << 20, seeders=40,
+                  categories=(1030,), download_url="magnet:?xt=urn:btih:abc",
+                  protocol="torrent")
+    monkeypatch.setattr(svc.prowlarr, "search", lambda *a, **k: [tor])
+
+    to_sab, to_qbit = [], []
+    monkeypatch.setattr(svc.sab, "add", lambda url, **k: to_sab.append(url) or True)
+    monkeypatch.setattr(svc.qbit, "add", lambda url, **k: to_qbit.append(url) or True)
+
+    assert svc.request("Zelda", "snes")["ok"]
+    assert to_qbit == ["magnet:?xt=urn:btih:abc"]
+    assert to_sab == []
+
+
+def test_a_protocol_with_no_client_says_so_rather_than_failing_vaguely(monkeypatch):
+    from rommarr.app import Rommarr
+    from rommarr.selection import Release
+
+    # Torrent client only; a usenet result has nowhere to go.
+    svc = Rommarr(env={"QBITTORRENT_URL": "http://qbit:8090"})
+    nzb = Release(title="Metroid (USA)", size=1 << 20, seeders=0,
+                  categories=(1030,), download_url="https://idx/get?id=2",
+                  protocol="usenet")
+    monkeypatch.setattr(svc.prowlarr, "search", lambda *a, **k: [nzb])
+
+    out = svc.request("Metroid", "nes")
+    assert not out["ok"]
+    assert "usenet" in out["error"]
+    # And it stays in Wanted, so configuring a client later retries it.
+    assert any(w["game"] == "Metroid" for w in svc.store.missing())
+
+
+def test_an_unconfigured_client_is_skipped_not_tried():
+    from rommarr.downloaders import SABnzbd, SabConfig, pick_client
+    from rommarr.clients import QBittorrent, QbitConfig
+
+    qbit = QBittorrent(QbitConfig(base_url="http://qbit:8090"))
+    sab_off = SABnzbd(SabConfig(base_url="", api_key=""))
+    assert pick_client("torrent", [qbit, sab_off]) is qbit
+    assert pick_client("usenet", [qbit, sab_off]) is None
+
+    sab_on = SABnzbd(SabConfig(base_url="http://sab:8080", api_key="k"))
+    assert pick_client("usenet", [qbit, sab_off, sab_on]) is sab_on

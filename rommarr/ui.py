@@ -319,15 +319,25 @@ RENDER.indexers=async()=>{
 
 RENDER.clients=async()=>{
   const d=await j('/api/v1/downloadclient');
+  const state=c=>!c.configured?'<span class="dot"></span>not configured'
+    :c.ok?'<span class="dot up"></span>connected'
+    :'<span class="dot down"></span>unreachable';
+  const gaps=['torrent','usenet'].filter(p=>
+    !d.items.some(c=>c.protocol===p&&c.configured));
   $('#page').innerHTML=`<div class="card"><h3>Download Clients</h3>
-    <p class="help">Where grabbed releases are sent.</p>
-    <table><thead><tr><th>Client</th><th>Address</th><th>Category</th>
-      <th>Status</th></tr></thead><tbody>
+    <p class="help">Where grabbed releases are sent. A release is routed by its
+      protocol, so an indexer type with no client configured cannot be grabbed
+      at all &mdash; which is why unconfigured clients are listed rather than hidden.</p>
+    ${gaps.length?`<p class="help" style="color:var(--warn)">
+      No client configured for: <b>${gaps.join(', ')}</b>.
+      ${gaps.join()} results will be found and then refused.</p>`:''}
+    <table><thead><tr><th>Client</th><th>Protocol</th><th>Address</th>
+      <th>Category</th><th>Status</th></tr></thead><tbody>
       ${d.items.map(c=>`<tr><td>${esc(c.name)}</td>
-        <td style="color:var(--dim)">${esc(c.url||'not configured')}</td>
+        <td><span class="pill">${esc(c.protocol)}</span></td>
+        <td style="color:var(--dim)">${esc(c.url||'—')}</td>
         <td>${esc(c.category||'—')}</td>
-        <td><span class="dot ${c.ok?'up':'down'}"></span>${c.ok?'connected':'unreachable'}</td>
-        </tr>`).join('')}</tbody></table></div>`;
+        <td>${state(c)}</td></tr>`).join('')}</tbody></table></div>`;
 };
 
 RENDER.general=()=>settingsPage('General',
@@ -352,11 +362,17 @@ RENDER.status=async()=>{
   const row=(l,ok,extra='')=>`<tr><td>${l}</td>
     <td><span class="dot ${ok?'up':'down'}"></span>${ok?'OK':'Not available'}</td>
     <td style="color:var(--dim)">${esc(extra)}</td></tr>`;
+  const g=h.ggrequestz||{};
   $('#page').innerHTML=`<div class="card"><h3>Health</h3><table><tbody>
       ${row('Prowlarr',h.prowlarr,h.prowlarr_url)}
-      ${row('Download client',h.qbittorrent,h.qbit_url)}
+      ${(h.clients||[]).map(c=>row(
+        `${c.name} <span class="pill">${esc(c.protocol)}</span>`,
+        c.ok, c.configured?c.url:'not configured')).join('')}
       ${row('RomM',h.romm,h.romm_url)}
       ${row('ROM library',h.library,h.library_path)}
+      ${g.configured?row('GG Requestz',g.ok,g.url)
+        :`<tr><td>GG Requestz</td><td><span class="dot"></span>not configured</td>
+          <td style="color:var(--dim)">set GGREQUESTZ_URL to show the link</td></tr>`}
     </tbody></table></div>
     <div class="card"><h3>About</h3><div class="st">
       <div><b>${esc(h.version)}</b><span>Version</span></div>

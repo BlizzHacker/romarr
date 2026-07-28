@@ -43,6 +43,7 @@ from urllib.parse import parse_qs, urlparse
 import time
 
 from .clients import QBittorrent, QbitConfig, Romm, RommConfig
+from .downloaders import NZBGet, NzbgetConfig, SABnzbd, SabConfig, pick_client
 from .indexers import Prowlarr, ProwlarrConfig
 from .library import import_rom, map_remote_path
 from .platforms import PLATFORMS, resolve
@@ -80,12 +81,32 @@ class Rommarr:
             username=e.get("QBITTORRENT_USER", ""),
             password=e.get("QBITTORRENT_PASS", ""),
         ))
+        # Usenet is not an afterthought: Prowlarr indexes both protocols, and
+        # accepting only torrents made every usenet indexer dead weight --
+        # results scored fine and were then refused for having no magnet.
+        self.sab = SABnzbd(SabConfig(
+            base_url=e.get("SABNZBD_URL", ""),
+            api_key=e.get("SABNZBD_API_KEY", ""),
+        ))
+        self.nzbget = NZBGet(NzbgetConfig(
+            base_url=e.get("NZBGET_URL", ""),
+            username=e.get("NZBGET_USER", ""),
+            password=e.get("NZBGET_PASS", ""),
+        ))
         self.romm = Romm(RommConfig(
             base_url=e.get("ROMM_URL", ""),
             username=e.get("ROMM_USERNAME", ""),
             password=e.get("ROMM_PASSWORD", ""),
             api_token=e.get("ROMM_API_TOKEN", ""),
         ))
+        # Ordered: the first configured client that speaks a protocol wins,
+        # which is how an operator expresses a preference between two usenet
+        # clients without a separate setting for it.
+        self.clients = [self.qbit, self.sab, self.nzbget]
+        # Where GG Requestz lives, so the status page can show the connection
+        # the same way Seerr shows Radarr.
+        self.ggrequestz_url = e.get("GGREQUESTZ_URL", "")
+
         self.library = Path(e.get("ROMM_LIBRARY", "/mnt/roms"))
         self.queue: list[QueueItem] = []
         self._lock = threading.Lock()
@@ -151,10 +172,8 @@ class Rommarr:
             return {"ok": False, "error": item.detail}
 
         if not pick.download_url:
-            # Prowlarr's own links carry its API key, so a release without a
-            # plain magnet has to be grabbed server-side by Prowlarr itself.
             item = QueueItem(game, platform.slug, pick.title, pick.seeders, "failed",
-                             "release has no plain magnet; grab via Prowlarr")
+                             "release offers no usable download link")
             with self._lock:
                 self.queue.append(item)
             self.store.want(game, platform.slug)
@@ -163,10 +182,22 @@ class Rommarr:
                                     release=pick.title, detail=item.detail))
             return {"ok": False, "error": item.detail}
 
-        ok = self.qbit.add(pick.download_url)
+        client = pick_client(pick.protocol, self.clients)
+        if client is None:
+            item = QueueItem(game, platform.slug, pick.title, pick.seeders, "failed",
+                             f"no download client configured for {pick.protocol}")
+            with self._lock:
+                self.queue.append(item)
+            self.store.want(game, platform.slug)
+            self.store.note_failure(game, platform.slug, item.detail)
+            self.store.record(Event(kind="failed", game=game, platform=platform.slug,
+                                    release=pick.title, detail=item.detail))
+            return {"ok": False, "error": item.detail}
+
+        ok = client.add(pick.download_url)
         item = QueueItem(game, platform.slug, pick.title, pick.seeders,
                          "grabbed" if ok else "failed",
-                         "" if ok else "download client rejected the magnet")
+                         "" if ok else f"{client.name} rejected the release")
         with self._lock:
             self.queue.append(item)
         if ok:
@@ -180,10 +211,53 @@ class Rommarr:
                                     release=pick.title, detail=item.detail))
         return {"ok": ok, "release": pick.title, "seeders": pick.seeders}
 
+    def download_clients(self) -> list[dict]:
+        """Every client, what it speaks, and whether it answers.
+
+        Reported for all of them rather than only the configured ones, because
+        "SABnzbd: not configured" is the answer to "why was my usenet result
+        refused" and hiding the row hides the answer.
+        """
+        out = []
+        for c in self.clients:
+            configured = getattr(c, "configured", True)
+            out.append({
+                "name": getattr(c, "name", type(c).__name__),
+                "protocol": getattr(c, "protocol", ""),
+                "url": getattr(c, "_config").base_url,
+                "category": getattr(getattr(c, "_config"), "category", ""),
+                "configured": configured,
+                "ok": bool(configured and c.reachable()),
+            })
+        return out
+
+    def ggrequestz(self) -> dict:
+        """Whether GG Requestz is reachable, the way Seerr reports Radarr.
+
+        A request front-end that cannot see its downloader is the single most
+        confusing failure in this kind of stack -- requests appear to succeed
+        and nothing ever arrives -- so the link is shown from this side too.
+        """
+        url = (self.ggrequestz_url or "").rstrip("/")
+        if not url:
+            return {"configured": False, "ok": False, "url": ""}
+        try:
+            import requests as _rq
+            r = _rq.get(url, timeout=8, allow_redirects=False)
+            # Behind SSO a 200 and a 302 to the login page both mean "it is
+            # there"; only a connection failure means it is not.
+            ok = r.status_code < 500
+        except Exception as err:
+            log.warning("ggrequestz unreachable: %s", err.__class__.__name__)
+            ok = False
+        return {"configured": True, "ok": ok, "url": url}
+
     def status(self) -> dict:
         """Everything the System status page reports on."""
         up = int(time.monotonic() - self._started)
         return {
+            "clients": self.download_clients(),
+            "ggrequestz": self.ggrequestz(),
             "version": VERSION,
             "prowlarr": bool(self.prowlarr._config.api_key),
             "prowlarr_url": self.store.settings.get("_prowlarr_url", ""),
@@ -201,7 +275,7 @@ class Rommarr:
     def counts(self) -> dict:
         """Badge numbers for the nav rail."""
         try:
-            games = len(self.romm.games())
+            games = self.romm.count()
         except Exception:
             # An unreachable RomM must not blank the whole rail.
             games = 0
@@ -228,7 +302,7 @@ class Rommarr:
             return {"imported": done, "message": f"Imported {len(done)}"}
         if name == "RefreshLibrary":
             try:
-                return {"message": f"{len(self.romm.games())} games in RomM"}
+                return {"message": f"{self.romm.count()} games in RomM"}
             except Exception as err:
                 return {"message": f"RomM unreachable: {err}"}
         return {"error": f"unknown command: {name}"}
@@ -236,7 +310,16 @@ class Rommarr:
     def import_finished(self) -> list[dict]:
         """Import anything the download client has completed."""
         results = []
-        for torrent in self.qbit.completed():
+        finished = []
+        for client in self.clients:
+            if not getattr(client, "configured", True):
+                continue
+            try:
+                finished.extend(client.completed())
+            except Exception as err:
+                # One unreachable client must not stop the others importing.
+                log.warning("%s completed() failed: %s", getattr(client, "name", client), err)
+        for torrent in finished:
             name = torrent.get("name", "")
             # The client reports the path IT sees. When it runs in a different
             # container that path means nothing here, and the import fails with
@@ -297,7 +380,12 @@ def make_handler(service: Rommarr):
             # --- *arr-shaped API ---------------------------------------
             if route.path == "/api/v1/game":
                 try:
-                    return self._json(200, {"items": service.romm.games()})
+                    limit = min(int((query.get("limit") or ["60"])[0]), 200)
+                    offset = int((query.get("offset") or ["0"])[0])
+                    return self._json(200, {
+                        "items": service.romm.games(limit=limit, offset=offset),
+                        "total": service.romm.count(),
+                    })
                 except Exception as err:
                     return self._json(200, {"items": [], "error": str(err)})
             if route.path == "/api/v1/wanted/missing":
@@ -316,11 +404,7 @@ def make_handler(service: Rommarr):
                 except Exception as err:
                     return self._json(200, {"items": [], "error": str(err)})
             if route.path == "/api/v1/downloadclient":
-                cfg = service.qbit._config
-                return self._json(200, {"items": [{
-                    "name": "qBittorrent", "url": cfg.base_url,
-                    "category": cfg.category, "ok": service.qbit.reachable(),
-                }]})
+                return self._json(200, {"items": service.download_clients()})
             if route.path == "/api/v1/config":
                 return self._json(200, service.store.settings)
             if route.path == "/api/v1/system/status":
