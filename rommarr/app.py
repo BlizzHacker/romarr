@@ -272,13 +272,26 @@ class Rommarr:
             "uptime": f"{up // 3600}h {(up % 3600) // 60}m",
         }
 
+    # How long a library count is reused. The badge polls every 15s, so without
+    # this a slow or hanging library endpoint costs its full timeout on every
+    # poll -- which is the difference between a page that feels alive and one
+    # that stalls four times a minute.
+    COUNT_TTL = 120
+
     def counts(self) -> dict:
         """Badge numbers for the nav rail."""
-        try:
-            games = self.romm.count()
-        except Exception:
-            # An unreachable RomM must not blank the whole rail.
-            games = 0
+        now = time.monotonic()
+        cached, at = getattr(self, "_count_cache", (None, 0.0))
+        if cached is not None and now - at < self.COUNT_TTL:
+            games = cached
+        else:
+            try:
+                games = self.romm.count()
+            except Exception:
+                # An unreachable RomM must not blank the whole rail, and a
+                # previous good count beats showing zero.
+                games = cached if cached is not None else 0
+            self._count_cache = (games, now)
         with self._lock:
             queued = sum(1 for i in self.queue if i.state in ("queued", "grabbed"))
         return {"games": games, "missing": len(self.store.wanted), "queued": queued}
