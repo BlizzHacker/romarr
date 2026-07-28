@@ -219,7 +219,14 @@ class Romm:
             return int(payload.get("total") or len(payload.get("items") or []))
         return len(payload)
 
-    def games(self, limit: int = 60, offset: int = 0) -> list[dict]:
+    # The background fetch gets a long budget on purpose. Nothing waits on it,
+    # and RomM's library query takes around three minutes on a large, contended
+    # library -- so a thirty-second budget could never have succeeded, which is
+    # why the shelf stayed empty no matter how often it retried.
+    BACKGROUND_TIMEOUT = 300
+
+    def games(self, limit: int = 60, offset: int = 0,
+              timeout: int | None = None) -> list[dict]:
         """The library, flattened to what a poster grid needs.
 
         RomM's rom payload is large and mostly irrelevant here; sending all of
@@ -230,7 +237,7 @@ class Romm:
         try:
             response = self._session.get(
                 url, params={"limit": limit, "offset": offset, **self.CHEAP_QUERY},
-                headers=self._headers(), timeout=self._config.timeout)
+                headers=self._headers(), timeout=timeout or self._config.timeout)
             response.raise_for_status()
             payload = response.json()
         except (requests.RequestException, ValueError) as err:

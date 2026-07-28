@@ -162,7 +162,8 @@ class Rommarr:
                 ok = False
                 log.warning("library count refresh failed: %s", err.__class__.__name__)
             try:
-                games = self.romm.games(limit=self.LIBRARY_PAGE)
+                games = self.romm.games(limit=self.LIBRARY_PAGE,
+                                        timeout=self.romm.BACKGROUND_TIMEOUT)
                 self._library_cache = (games, time.monotonic(), "")
                 log.info("library refreshed: %d games", len(games))
             except Exception as err:
