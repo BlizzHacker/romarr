@@ -25,7 +25,8 @@ Routes:
   GET  /api/v1/system/counts   badge counts for the nav
   POST /api/v1/command         run a task
   GET  /api/v1/log             recent events
-  POST /api/request            request one game (also used by GG Requestz)
+  POST /api/request            request one game
+  POST /api/v1/webhook         accept a request event from a front-end
 """
 
 from __future__ import annotations
@@ -273,6 +274,74 @@ class Rommarr:
         out["download_clients"] = [redact(c) for c in out.get("download_clients", [])]
         out["indexers"] = [redact_indexer(i) for i in out.get("indexers", [])]
         return out
+
+    # --- inbound webhooks -------------------------------------------------
+
+    @staticmethod
+    def parse_request_webhook(body: dict) -> tuple[str, str] | None:
+        """Read a game and a platform out of a request front-end's webhook.
+
+        GG Requestz posts a notification-shaped event: a human title and
+        message, with the useful parts nested under `data`. Everything needed
+        is in data.game_title and data.platforms; the rest is for a human to
+        read in a chat client.
+
+        Returns None rather than guessing when the payload is not a game
+        request -- a webhook endpoint receives whatever anybody points at it.
+        """
+        if not isinstance(body, dict):
+            return None
+        data = body.get("data")
+        if not isinstance(data, dict):
+            data = {}
+
+        kind = str(body.get("type") or data.get("request_type") or "").lower()
+        if kind and "game" not in kind:
+            return None
+
+        game = str(data.get("game_title") or body.get("game") or "").strip()
+        if not game:
+            # Fall back to the human title, which reads
+            # "New Game Request: <title>".
+            title = str(body.get("title") or "")
+            if ":" in title:
+                game = title.split(":", 1)[1].strip()
+        if not game:
+            return None
+
+        platforms = data.get("platforms") or data.get("platform") or body.get("platform")
+        if isinstance(platforms, str):
+            platforms = [platforms]
+        platform = str((platforms or [""])[0]).strip()
+        return (game, platform)
+
+    def handle_request_webhook(self, body: dict) -> dict:
+        """Accept a request event and grab it, without making the caller wait.
+
+        A search fans out across every indexer and can take most of a minute.
+        A webhook sender is entitled to a prompt answer and will retry or log a
+        failure if it does not get one -- so this acknowledges immediately and
+        does the work on a thread. What actually happened lands in History,
+        which is where somebody would look for it anyway.
+        """
+        parsed = self.parse_request_webhook(body)
+        if parsed is None:
+            return {"ok": False, "error": "not a game request"}
+        game, platform_name = parsed
+
+        platform = resolve(platform_name) if platform_name else None
+        if platform is None:
+            # Recorded rather than dropped: an unknown platform is a mapping
+            # problem somebody can fix, and silence would hide it.
+            self.store.record(Event(kind="failed", game=game,
+                                    platform=platform_name or "unknown",
+                                    detail=f"unknown platform: {platform_name!r}"))
+            return {"ok": False, "error": f"unknown platform: {platform_name!r}",
+                    "game": game}
+
+        threading.Thread(target=self.request, args=(game, platform.slug),
+                         daemon=True).start()
+        return {"ok": True, "accepted": True, "game": game, "platform": platform.slug}
 
     def test_indexer(self, cfg: dict) -> dict:
         """Try an indexer configuration without saving it."""
@@ -649,6 +718,8 @@ def make_handler(service: Rommarr):
             if route.path == "/api/v1/indexer/test":
                 existing = service.store.get_item("indexers", body.get("id"))                     if body.get("id") else None
                 return self._json(200, service.test_indexer(merge_secrets(dict(body), existing)))
+            if route.path in ("/api/v1/webhook", "/api/v1/webhook/ggrequestz"):
+                return self._json(200, service.handle_request_webhook(body))
             if route.path == "/api/v1/command":
                 name = (body.get("name") or "").strip()
                 if not name:
