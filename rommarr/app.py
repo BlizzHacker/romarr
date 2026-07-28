@@ -137,19 +137,60 @@ class Rommarr:
         # `None` means "not known yet", which the UI shows as a dash -- an
         # honest answer, where 0 would be a claim that the library is empty.
         self._count_cache: tuple[int | None, float] = (None, 0.0)
+        # The library itself is cached the same way, and for a stronger reason:
+        # RomM's /api/roms is contended on a large library -- other clients
+        # polling it hold the database for minutes at a time -- so a request
+        # that waits its turn is a page that never paints. Fetched here,
+        # retried until it lands, then served from memory.
+        self._library_cache: tuple[list | None, float, str] = (None, 0.0, "")
         self._count_thread = threading.Thread(target=self._refresh_counts, daemon=True)
         self._count_thread.start()
 
     def _refresh_counts(self) -> None:
-        """Keep the library count fresh without ever blocking a request."""
+        """Keep the count and the library fresh without ever blocking a request.
+
+        Backs off on failure rather than hammering a database that is already
+        struggling -- retrying hard against a contended table is how one slow
+        client becomes the reason nothing else can read either.
+        """
+        delay = 15
         while True:
+            ok = True
             try:
                 self._count_cache = (self.romm.count(), time.monotonic())
             except Exception as err:
-                # Keep the last good number rather than replacing it with a
-                # zero that reads as "your library is empty".
+                ok = False
                 log.warning("library count refresh failed: %s", err.__class__.__name__)
-            time.sleep(self.COUNT_TTL)
+            try:
+                games = self.romm.games(limit=self.LIBRARY_PAGE)
+                self._library_cache = (games, time.monotonic(), "")
+                log.info("library refreshed: %d games", len(games))
+            except Exception as err:
+                ok = False
+                # Keep whatever was last fetched; a transient failure should
+                # not empty a shelf that was working a minute ago.
+                cached, at, _ = self._library_cache
+                self._library_cache = (cached, at, err.__class__.__name__)
+                log.warning("library refresh failed: %s", err.__class__.__name__)
+
+            delay = self.COUNT_TTL if ok else min(delay * 2, 300)
+            time.sleep(delay)
+
+    def library_view(self) -> dict:
+        """The cached library, with enough state for the page to explain itself.
+
+        Not named `library`: that attribute is the ROM library Path and has
+        been since the first commit, so a method of the same name is shadowed
+        by it and the route ends up calling a PosixPath.
+        """
+        games, at, err = self._library_cache
+        if games is None:
+            return {"items": [], "loading": True,
+                    "error": err or "",
+                    "message": "Reading the library from RomM…"}
+        return {"items": games, "loading": False,
+                "age_seconds": int(time.monotonic() - at) if at else None,
+                "error": err}
 
     # -- configuration -----------------------------------------------------
 
@@ -411,8 +452,11 @@ class Rommarr:
             "uptime": f"{up // 3600}h {(up % 3600) // 60}m",
         }
 
-    # How often the library count is refreshed in the background.
+    # How often the count and library are refreshed in the background.
     COUNT_TTL = 300
+    # How much of the library is held for the grid. Enough to browse; the whole
+    # of a 72,000-row library is neither renderable nor wanted in memory.
+    LIBRARY_PAGE = 200
 
     def counts(self) -> dict:
         """Badge numbers for the nav rail.
@@ -524,15 +568,9 @@ def make_handler(service: Rommarr):
 
             # --- *arr-shaped API ---------------------------------------
             if route.path == "/api/v1/game":
-                try:
-                    limit = min(int((query.get("limit") or ["60"])[0]), 200)
-                    offset = int((query.get("offset") or ["0"])[0])
-                    return self._json(200, {
-                        "items": service.romm.games(limit=limit, offset=offset),
-                        "total": service.romm.count(),
-                    })
-                except Exception as err:
-                    return self._json(200, {"items": [], "error": str(err)})
+                # Served from the background cache. Calling RomM here meant the
+                # page waited behind whatever else was querying that table.
+                return self._json(200, service.library_view())
             if route.path == "/api/v1/wanted/missing":
                 return self._json(200, {"items": service.store.missing()})
             if route.path == "/api/v1/queue":

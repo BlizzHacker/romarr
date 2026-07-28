@@ -250,3 +250,18 @@ def test_prowlarr_exposes_its_indexer_listing():
     was never reachable, and the Indexers page silently showed nothing."""
     from rommarr.indexers import Prowlarr
     assert callable(getattr(Prowlarr, "indexers", None))
+
+
+def test_the_library_view_is_not_shadowed_by_the_library_path(tmp_path):
+    """`self.library` is the ROM library Path. A method of the same name is
+    shadowed by the instance attribute, so the route called a PosixPath and the
+    connection closed with no response at all."""
+    from pathlib import Path
+    from rommarr.app import Rommarr
+    svc = Rommarr(env={"ROMMARR_DATA": str(tmp_path / "r.json"),
+                       "ROMM_LIBRARY": str(tmp_path)})
+    assert isinstance(svc.library, Path)
+    view = svc.library_view()
+    assert isinstance(view, dict) and "items" in view
+    # Before the first fetch lands it must say so rather than claim emptiness.
+    assert view["loading"] is True

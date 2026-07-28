@@ -193,13 +193,28 @@ const RENDER={};
 RENDER.library=async()=>{
   const p=$('#page'); p.innerHTML='<div class="empty">Loading library…</div>';
   const d=await j('/api/v1/game').catch(()=>({items:[],error:'unreachable'}));
-  if(d.error){p.innerHTML=`<div class="card"><h3>RomM is not reachable</h3>
-    <p class="help">${esc(d.error)}. Check Settings → General.</p></div>`;return;}
+
+  if(d.loading){
+    // The first fetch has not landed yet. Say so, rather than showing an
+    // empty grid that reads as "your library is empty".
+    p.innerHTML=`<div class="card"><h3>Reading the library</h3>
+      <p class="help">${esc(d.message||'Fetching from RomM…')}
+      ${d.error?` Last attempt: <b>${esc(d.error)}</b>. Retrying with backoff.`:''}</p></div>`;
+    return;
+  }
+
   const q=($('#search').value||'').toLowerCase();
   const items=(d.items||[]).filter(g=>!q||g.name.toLowerCase().includes(q));
-  if(!items.length){p.innerHTML=`<div class="empty">
-    ${q?'No game matches that.':'No games in RomM yet. Use Add New to request one.'}</div>`;return;}
-  p.innerHTML=`<div class="grid">${items.map(g=>`<div class="tile">
+  const stale=d.error
+    ? `<p class="help" style="color:var(--warn)">RomM last refused this list
+        (${esc(d.error)}); showing the last good copy.</p>` : '';
+
+  if(!items.length){
+    p.innerHTML=stale+`<div class="empty">
+      ${q?'No game matches that.':'No games returned by RomM.'}</div>`;
+    return;
+  }
+  p.innerHTML=stale+`<div class="grid">${items.map(g=>`<div class="tile">
     <div class="art" style="background-image:url('${esc(g.cover||'')}')"></div>
     <div class="nm">${esc(g.name)}</div>
     <div class="pf">${esc(g.platform||'')}</div></div>`).join('')}</div>`;
