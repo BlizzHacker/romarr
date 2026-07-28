@@ -1,5 +1,6 @@
 import pytest
 
+from rommarr.indexers import _download_link
 from rommarr.platforms import resolve, platform_for_file, by_slug, all_extensions
 from rommarr.selection import (
     Release, best_release, is_game_release, pick_rom_file, score, title_matches,
@@ -151,3 +152,75 @@ def test_a_platforms_own_name_does_not_disqualify_it():
     gba = by_slug("gba")
     ok = rel("Pokemon Emerald (USA) Game Boy Advance", size=16 * 1024 * 1024, seeders=40)
     assert score(ok, "pokemon emerald", gba) > 0
+
+
+# --- platform evidence -------------------------------------------------------
+#
+# The search deliberately casts a wide net (see Rommarr._search_releases), so
+# scoring has to be able to tell the same game apart across consoles.
+
+def test_a_rom_extension_beats_a_bare_title():
+    # ".smc" is the strongest signal a release is a SNES cartridge dump --
+    # stronger than any words in the title.
+    snes = resolve("snes")
+    with_ext = Release(title="Super Metroid (JU) [!].smc", size=3 << 20, seeders=3,
+                       categories=(1000,), download_url="magnet:?xt=urn:btih:a",
+                       protocol="torrent", indexer="x")
+    bare = Release(title="Super Metroid", size=3 << 20, seeders=3,
+                   categories=(1000,), download_url="magnet:?xt=urn:btih:b",
+                   protocol="torrent", indexer="x")
+    assert score(with_ext, "Super Metroid", snes) > score(bare, "Super Metroid", snes)
+
+
+def test_naming_the_requested_platform_helps_but_a_foreign_one_still_disqualifies():
+    snes = resolve("snes")
+    named = Release(title="Super Metroid - Super Nintendo", size=1 << 20, seeders=1,
+                    categories=(1010,), download_url="magnet:?xt=urn:btih:c",
+                    protocol="torrent", indexer="x")
+    bare = Release(title="Super Metroid", size=1 << 20, seeders=1,
+                   categories=(1010,), download_url="magnet:?xt=urn:btih:d",
+                   protocol="torrent", indexer="x")
+    assert score(named, "Super Metroid", snes) > score(bare, "Super Metroid", snes)
+
+    # The wider net must not start accepting other consoles' releases.
+    foreign = Release(title="Super Metroid [Nintendo Switch port]", size=11 << 20,
+                      seeders=7, categories=(1010,), download_url="magnet:?xt=urn:btih:e",
+                      protocol="torrent", indexer="x")
+    assert score(foreign, "Super Metroid", snes) < 0
+
+
+# --- prowlarr download links -------------------------------------------------
+#
+# Prowlarr's field names mislead, and getting this wrong is silent: the release
+# is selected and then discarded for "no usable download link".
+
+def test_a_real_magnet_in_guid_is_used_when_magneturl_is_a_prowlarr_link():
+    # Exactly what The Pirate Bay returns through Prowlarr: magnetUrl is a
+    # proxy URL carrying the api key, and the actual magnet is in guid.
+    link = _download_link({
+        "magnetUrl": "http://192.168.0.115:9696/2/download?apikey=SECRET&link=abc",
+        "downloadUrl": None,
+        "guid": "magnet:?xt=urn:btih:633E19066F941216B22D456D57F59694E3A0C425&dn=Super+Metroid",
+        "infoHash": "633E19066F941216B22D456D57F59694E3A0C425",
+    })
+    assert link.startswith("magnet:?xt=urn:btih:633E1906")
+    assert "apikey" not in link and "SECRET" not in link
+
+
+def test_a_magnet_is_rebuilt_from_infohash_when_no_literal_one_exists():
+    link = _download_link({
+        "magnetUrl": "http://prowlarr/1/download?apikey=SECRET",
+        "guid": "http://prowlarr/1/details",
+        "infoHash": "ABCDEF0123456789ABCDEF0123456789ABCDEF01",
+        "title": "Some Game (USA)",
+    })
+    assert link.startswith("magnet:?xt=urn:btih:ABCDEF0123456789")
+    assert "SECRET" not in link
+    # Without an announce target a bare hash may never find peers.
+    assert "&tr=" in link
+
+
+def test_an_http_link_is_the_last_resort_and_nothing_is_invented():
+    assert _download_link({"downloadUrl": "https://indexer.example/x.torrent"}) \
+        == "https://indexer.example/x.torrent"
+    assert _download_link({"magnetUrl": None, "guid": None}) == ""

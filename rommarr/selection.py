@@ -124,6 +124,18 @@ def score(release: Release, wanted: str, platform: Platform | None = None) -> in
             if _mentions(lowered, marker):
                 return -300
 
+    # Positive evidence that this really is the requested system. It matters
+    # more now that the search casts a wider net: a bare title search returns
+    # the same game for several consoles, and most such releases name no
+    # platform at all. A ROM extension is the strongest signal available --
+    # ".smc" says Super Nintendo far more reliably than any title text.
+    if platform is not None:
+        if any(ext in lowered for ext in platform.extensions):
+            points += 60
+        elif _mentions(lowered, platform.slug.lower()) or any(
+                _mentions(lowered, alias) for alias in platform.aliases):
+            points += 30
+
     # A cartridge ROM is small. A multi-gigabyte "release" for a cartridge
     # platform is a romset, a PC port, or a disc image -- none of which this
     # pipeline can hand to a browser emulator.

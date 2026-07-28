@@ -31,6 +31,53 @@ log = logging.getLogger(__name__)
 SEARCH_CATEGORIES = (1000, 4050)
 
 
+# Trackers merged into a rebuilt magnet. An infoHash alone is enough only if
+# the client finds peers by DHT; indexers hand back bare hashes routinely, and
+# a magnet with no announce target can simply never start.
+_DEFAULT_TRACKERS = (
+    "udp://tracker.opentrackr.org:1337/announce",
+    "udp://open.tracker.cl:1337/announce",
+    "udp://tracker.openbittorrent.com:6969/announce",
+    "udp://exodus.desync.com:6969/announce",
+)
+
+
+def _download_link(row: dict) -> str:
+    """The safest usable link for a Prowlarr result.
+
+    Prowlarr's field names mislead. `magnetUrl` is frequently NOT a magnet: for
+    several indexers it is a link back to Prowlarr carrying `?apikey=<key>` in
+    the query string, while the real magnet sits in `guid`. Accepting `guid`
+    only when it looked like an http URL therefore discarded a perfectly good
+    magnet and reported the release as having no download link -- which is how
+    every Pirate Bay and KickassTorrents result failed.
+
+    Preference order is by safety. A literal magnet carries no credential at
+    all; one rebuilt from `infoHash` is equally safe; Prowlarr's own URL embeds
+    the API key and is a last resort, fit only to hand to a download client
+    server-side and never to a browser or a log.
+    """
+    for field in ("magnetUrl", "guid"):
+        value = str(row.get(field) or "")
+        if value.startswith("magnet:"):
+            return value
+
+    info_hash = str(row.get("infoHash") or "").strip()
+    if info_hash:
+        from urllib.parse import quote
+        magnet = f"magnet:?xt=urn:btih:{info_hash}"
+        title = str(row.get("title") or "")
+        if title:
+            magnet += f"&dn={quote(title)}"
+        return magnet + "".join(f"&tr={quote(t)}" for t in _DEFAULT_TRACKERS)
+
+    for field in ("downloadUrl", "guid"):
+        value = str(row.get(field) or "")
+        if value.lower().startswith(("http://", "https://")):
+            return value
+    return ""
+
+
 @dataclass(frozen=True)
 class ProwlarrConfig:
     base_url: str
@@ -72,13 +119,7 @@ class Prowlarr:
         # to hand to a download client server-side -- that is exactly what
         # Radarr and Sonarr do -- as long as it never reaches a browser or a
         # log. sanitise_for_display is what enforces that at the boundary.
-        magnet = row.get("magnetUrl") or ""
-        if magnet.startswith("magnet:"):
-            download_url = magnet
-        else:
-            download_url = row.get("downloadUrl") or row.get("guid") or ""
-            if not download_url.lower().startswith(("http://", "https://")):
-                download_url = ""
+        download_url = _download_link(row)
 
         return Release(
             title=row.get("title") or "",

@@ -402,12 +402,44 @@ class Rommarr:
             "best": asdict(pick) if pick else None,
         }
 
+    def _search_releases(self, game: str, platform) -> list:
+        """Find releases for a game, favouring recall over a tidy query.
+
+        Searching "<game> <platform.name>" alone was far too narrow: indexers
+        match the whole string, and almost no release is named "Super Metroid
+        Super Nintendo". A real search returned 21 releases; the qualified one
+        returned 4, none usable -- so a game that was plainly available was
+        reported as missing.
+
+        Both queries are run and the results merged. The qualified one still
+        earns its place on ambiguous titles, where it surfaces the handful of
+        releases that do name the system. Precision is not weakened by the
+        wider net: score() already rejects a release naming a foreign system,
+        one in the wrong category, or one too large to be a cartridge.
+        """
+        seen: set[tuple[str, str]] = set()
+        merged = []
+        for term in (game, f"{game} {platform.name}"):
+            try:
+                found = self.prowlarr.search(term)
+            except Exception as err:
+                # One failing query must not lose the other's results.
+                log.warning("prowlarr search failed for %r: %s", term, err)
+                continue
+            for release in found:
+                key = (release.title, release.download_url)
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged.append(release)
+        return merged
+
     def request(self, game: str, platform_name: str) -> dict:
         platform = resolve(platform_name)
         if platform is None:
             return {"ok": False, "error": f"unknown platform: {platform_name!r}"}
 
-        releases = self.prowlarr.search(f"{game} {platform.name}")
+        releases = self._search_releases(game, platform)
         pick = best_release(releases, game, platform)
         if pick is None:
             item = QueueItem(game, platform.slug, "", 0, "failed",
