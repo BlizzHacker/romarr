@@ -44,7 +44,7 @@ import time
 
 from .clients import QBittorrent, QbitConfig, Romm, RommConfig
 from .indexers import Prowlarr, ProwlarrConfig
-from .library import import_rom
+from .library import import_rom, map_remote_path
 from .platforms import PLATFORMS, resolve
 from .selection import best_release
 from .store import Event, Store
@@ -238,7 +238,13 @@ class Rommarr:
         results = []
         for torrent in self.qbit.completed():
             name = torrent.get("name", "")
-            path = Path(torrent.get("content_path") or torrent.get("save_path", ""))
+            # The client reports the path IT sees. When it runs in a different
+            # container that path means nothing here, and the import fails with
+            # "download path does not exist" while the file sits right there.
+            path = map_remote_path(
+                torrent.get("content_path") or torrent.get("save_path", ""),
+                self.store.settings.get("remote_path_mappings"),
+            )
             platform = None
             with self._lock:
                 for item in self.queue:

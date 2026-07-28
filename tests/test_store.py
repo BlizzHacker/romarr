@@ -99,3 +99,49 @@ def test_a_write_leaves_no_temp_files_behind(tmp_path):
     s.record(Event(kind="grabbed", game="A", platform="nes"))
     leftovers = [p.name for p in tmp_path.iterdir() if p.name.startswith(".rommarr-")]
     assert leftovers == []
+
+
+# --- remote path mapping ---------------------------------------------------
+
+from rommarr.library import map_remote_path  # noqa: E402
+
+
+def test_a_client_path_is_translated_to_one_we_can_open():
+    """qBittorrent said /mnt/usb1/Downloads/nestest.nes and this process had
+    that volume mounted elsewhere, so the import failed with "download path
+    does not exist" while the file was sitting right there."""
+    m = [{"remote": "/mnt/usb1/Downloads", "local": "/mnt/downloads"}]
+    assert str(map_remote_path("/mnt/usb1/Downloads/nestest.nes", m)) \
+        .replace("\\", "/") == "/mnt/downloads/nestest.nes"
+    assert str(map_remote_path("/mnt/usb1/Downloads/sub/x.nes", m)) \
+        .replace("\\", "/") == "/mnt/downloads/sub/x.nes"
+
+
+def test_an_unmapped_path_is_left_alone():
+    m = [{"remote": "/mnt/usb1/Downloads", "local": "/mnt/downloads"}]
+    assert str(map_remote_path("/elsewhere/x.nes", m)).replace("\\", "/") == "/elsewhere/x.nes"
+    assert str(map_remote_path("/x.nes", [])).replace("\\", "/") == "/x.nes"
+    assert str(map_remote_path("/x.nes", None)).replace("\\", "/") == "/x.nes"
+
+
+def test_the_most_specific_mapping_wins():
+    """Otherwise which mapping applies depends on the order they were added."""
+    m = [
+        {"remote": "/mnt", "local": "/broad"},
+        {"remote": "/mnt/usb1/Downloads", "local": "/exact"},
+    ]
+    assert str(map_remote_path("/mnt/usb1/Downloads/a.nes", m)) \
+        .replace("\\", "/") == "/exact/a.nes"
+    assert str(map_remote_path("/mnt/other/b.nes", m)).replace("\\", "/") == "/broad/other/b.nes"
+
+
+def test_a_half_written_mapping_is_ignored_rather_than_applied():
+    m = [{"remote": "/mnt/usb1", "local": ""}, {"remote": "", "local": "/x"}]
+    assert str(map_remote_path("/mnt/usb1/a.nes", m)).replace("\\", "/") == "/mnt/usb1/a.nes"
+
+
+def test_a_prefix_that_only_looks_similar_is_not_matched():
+    """/mnt/usb1/Downloads2 is not inside /mnt/usb1/Downloads."""
+    m = [{"remote": "/mnt/usb1/Downloads", "local": "/mnt/downloads"}]
+    assert str(map_remote_path("/mnt/usb1/Downloads2/a.nes", m)) \
+        .replace("\\", "/") == "/mnt/usb1/Downloads2/a.nes"

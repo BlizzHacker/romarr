@@ -78,6 +78,17 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "min_seeders": 1,
     "max_size_mb": 8192,
     "protocol": "torrent",       # torrent | usenet
+    # Remote path mappings, the same concept Radarr and Sonarr expose.
+    #
+    # A download client reports the path it sees. When the client and this
+    # service are different containers or hosts, that path means nothing here:
+    # qBittorrent says /mnt/usb1/Downloads/game.zip and this process has that
+    # volume mounted somewhere else, or not at all. Without a translation the
+    # import fails with "download path does not exist" while the file is
+    # sitting right there.
+    #
+    # Each entry is {"remote": "<what the client says>", "local": "<what we see>"}.
+    "remote_path_mappings": [],
     # Behaviour
     "auto_import": True,
     "rescan_after_import": True,

@@ -97,3 +97,31 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
 
     log.info("imported %s -> %s", chosen, destination)
     return ImportResult(True, destination)
+
+
+def map_remote_path(path, mappings):
+    """Translate a download client's path into one this process can open.
+
+    The client reports paths in ITS filesystem. When it runs in a different
+    container the same file has a different path here -- or the volume is not
+    mounted at all, which is a mount problem a mapping cannot paper over, and
+    the caller finds that out because the translated path still does not exist.
+
+    The longest matching prefix wins, so a specific mapping can override a
+    broader one rather than depending on which was added first.
+    """
+    text = str(path)
+    best = None
+    for entry in mappings or []:
+        remote = str(entry.get("remote", "")).rstrip("/\\")
+        local = str(entry.get("local", "")).rstrip("/\\")
+        if not remote or not local:
+            continue
+        if text == remote or text.startswith(remote + "/") or text.startswith(remote + "\\"):
+            if best is None or len(remote) > len(best[0]):
+                best = (remote, local)
+    if best is None:
+        return Path(text)
+    remote, local = best
+    rest = text[len(remote):].lstrip("/\\")
+    return Path(local) / rest if rest else Path(local)

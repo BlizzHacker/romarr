@@ -194,16 +194,39 @@ class Romm:
         return out
 
     def rescan(self, platform_slug: str | None = None) -> bool:
-        """Ask RomM to pick up newly-imported files."""
-        url = f"{self._config.base_url.rstrip('/')}/api/scan"
+        """Ask RomM to pick up newly-imported files.
+
+        Optional by design. The import has already put the ROM in the library
+        directory by the time this runs, so RomM finds it on its next scheduled
+        scan regardless -- this only makes it immediate. A failure here is
+        logged and reported, never raised, because a successful import must not
+        be reported as a failure over a courtesy call.
+
+        RomM 4.x runs this through its task API. The older /api/scan is gone and
+        returned 404, which looked like a broken service rather than a moved
+        endpoint.
+        """
+        base = self._config.base_url.rstrip("/")
         payload: dict = {"scan_type": "quick"}
         if platform_slug:
             payload["platforms"] = [platform_slug]
         try:
-            response = self._session.post(url, json=payload, headers=self._headers(),
-                                          timeout=self._config.timeout)
+            response = self._session.post(
+                f"{base}/api/tasks/run/scan", json=payload,
+                headers=self._headers(), timeout=self._config.timeout)
         except requests.RequestException as err:
             log.warning("romm rescan failed: %s", err)
+            return False
+
+        if response.status_code in (401, 403):
+            # Distinguished from a generic failure because the fix is specific
+            # and otherwise invisible: the service account needs the task
+            # permission in RomM. Everything else about the import worked.
+            log.warning(
+                "romm rescan refused (%s): the account %r cannot run tasks. "
+                "Grant it task permission in RomM, or the library picks the "
+                "ROM up on its next scheduled scan.",
+                response.status_code, self._config.username or "(token)")
             return False
         if not response.ok:
             log.warning("romm rescan rejected: %s", response.status_code)
