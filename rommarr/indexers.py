@@ -92,6 +92,31 @@ class Prowlarr:
             indexer=row.get("indexer") or "",
         )
 
+    def indexers(self) -> list[dict]:
+        """What Prowlarr has configured, for the Indexers page.
+
+        Read-only on purpose. Prowlarr owns indexer configuration; duplicating
+        add/remove here would give two places to edit one thing and no way to
+        tell which had won.
+        """
+        url = f"{self._config.base_url.rstrip('/')}/api/v1/indexer"
+        response = self._session.get(url, headers={"X-Api-Key": self._config.api_key},
+                                     timeout=self._config.timeout)
+        response.raise_for_status()
+        out = []
+        for row in response.json():
+            if not isinstance(row, dict):
+                continue
+            cats = [c.get("name", "") for c in (row.get("capabilities") or {})
+                    .get("categories", []) if isinstance(c, dict)]
+            out.append({
+                "name": row.get("name", ""),
+                "protocol": row.get("protocol", ""),
+                "enable": bool(row.get("enable", False)),
+                "categories": [c for c in cats if c][:4],
+            })
+        return out
+
     def grab(self, guid: str, indexer_id: int) -> bool:
         """Ask Prowlarr to push a release to its configured download client.
 
@@ -125,27 +150,72 @@ def sanitise_for_display(url: str) -> str:
     return re.sub(r"(?i)(apikey|api_key)=[^&]*", r"\1=<redacted>", url)
 
 
-    def indexers(self) -> list[dict]:
-        """What Prowlarr has configured, for the Indexers page.
 
-        Read-only on purpose. Prowlarr owns indexer configuration; duplicating
-        add/remove here would give two places to edit one thing and no way to
-        tell which had won.
-        """
-        url = f"{self._config.base_url.rstrip('/')}/api/v1/indexer"
-        response = self._session.get(url, headers={"X-Api-Key": self._config.api_key},
-                                     timeout=self._config.timeout)
-        response.raise_for_status()
-        out = []
-        for row in response.json():
-            if not isinstance(row, dict):
-                continue
-            cats = [c.get("name", "") for c in (row.get("capabilities") or {})
-                    .get("categories", []) if isinstance(c, dict)]
-            out.append({
-                "name": row.get("name", ""),
-                "protocol": row.get("protocol", ""),
-                "enable": bool(row.get("enable", False)),
-                "categories": [c for c in cats if c][:4],
-            })
-        return out
+# --- indexer configuration schema ------------------------------------------
+#
+# Radarr and Sonarr let you add an indexer directly -- Newznab for usenet,
+# Torznab for torrents -- as well as pointing at Prowlarr. Rommarr read
+# Prowlarr and nothing else, which meant an operator with a single indexer had
+# to run Prowlarr to use it at all.
+#
+# Both are Newznab-shaped: a base URL, an API key and a category list. The only
+# difference is which protocol the results are, which is why one schema covers
+# both.
+
+INDEXER_FIELD = lambda name, label, kind="text", default="", **kw: {  # noqa: E731
+    "name": name, "label": label, "type": kind, "default": default, **kw
+}
+
+# 1000-1999 is console, 4050-4069 is PC games. Anything else is not a game and
+# would only add noise to the ranking.
+DEFAULT_GAME_CATEGORIES = "1000,1010,1020,1030,1040,1050,1060,1070,1080,4050"
+
+_INDEXER_COMMON = [
+    INDEXER_FIELD("name", "Name"),
+    INDEXER_FIELD("enable", "Enable", "bool", True),
+    INDEXER_FIELD("url", "URL", help="Base URL, e.g. https://indexer.example/api"),
+    INDEXER_FIELD("api_key", "API Key", "secret"),
+    INDEXER_FIELD("categories", "Categories", default=DEFAULT_GAME_CATEGORIES,
+                  help="Newznab category ids, comma separated"),
+    INDEXER_FIELD("priority", "Priority", "int", 25,
+                  help="Lower is preferred when two indexers both have a release"),
+]
+
+INDEXER_TYPES = {
+    "prowlarr": {
+        "label": "Prowlarr",
+        "protocol": "any",
+        "managed": True,
+        "fields": [
+            INDEXER_FIELD("name", "Name", default="Prowlarr"),
+            INDEXER_FIELD("enable", "Enable", "bool", True),
+            INDEXER_FIELD("url", "URL", default="http://localhost:9696"),
+            INDEXER_FIELD("api_key", "API Key", "secret"),
+        ],
+    },
+    "torznab": {"label": "Torznab", "protocol": "torrent", "fields": _INDEXER_COMMON},
+    "newznab": {"label": "Newznab", "protocol": "usenet", "fields": _INDEXER_COMMON},
+}
+
+
+def indexer_categories(cfg: dict) -> list[int]:
+    """Parse the category field, ignoring anything that is not a number."""
+    out = []
+    for part in str(cfg.get("categories") or "").split(","):
+        part = part.strip()
+        if part.isdigit():
+            out.append(int(part))
+    return out
+
+
+SECRET_PLACEHOLDER = "********"
+
+
+def redact_indexer(cfg: dict) -> dict:
+    """An indexer configuration safe to send to a browser."""
+    spec = INDEXER_TYPES.get(str(cfg.get("type") or "").lower(), {})
+    secrets = {f["name"] for f in spec.get("fields", []) if f["type"] == "secret"}
+    return {
+        k: (SECRET_PLACEHOLDER if k in secrets and v else v)
+        for k, v in cfg.items()
+    }

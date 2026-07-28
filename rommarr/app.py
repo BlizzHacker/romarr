@@ -43,7 +43,11 @@ from urllib.parse import parse_qs, urlparse
 import time
 
 from .clients import QBittorrent, QbitConfig, Romm, RommConfig
-from .downloaders import NZBGet, NzbgetConfig, SABnzbd, SabConfig, pick_client
+from .downloaders import (
+    CLIENT_TYPES, NZBGet, NzbgetConfig, SABnzbd, SabConfig, build_client,
+    merge_secrets, pick_client, redact,
+)
+from .indexers import INDEXER_TYPES, redact_indexer
 from .indexers import Prowlarr, ProwlarrConfig
 from .library import import_rom, map_remote_path
 from .platforms import PLATFORMS, resolve
@@ -99,10 +103,8 @@ class Rommarr:
             password=e.get("ROMM_PASSWORD", ""),
             api_token=e.get("ROMM_API_TOKEN", ""),
         ))
-        # Ordered: the first configured client that speaks a protocol wins,
-        # which is how an operator expresses a preference between two usenet
-        # clients without a separate setting for it.
-        self.clients = [self.qbit, self.sab, self.nzbget]
+        # Built from stored configuration, seeded from the environment once.
+        self.clients: list = []
         # Where GG Requestz lives, so the status page can show the connection
         # the same way Seerr shows Radarr.
         self.ggrequestz_url = e.get("GGREQUESTZ_URL", "")
@@ -128,6 +130,9 @@ class Rommarr:
         self.store.settings["_qbit_url"] = e.get("QBITTORRENT_URL", "")
         self.store.settings["_romm_url"] = e.get("ROMM_URL", "")
 
+        self._seed_from_env(e)
+        self.reload_clients()
+
         # The library count is refreshed off the request path entirely.
         # `None` means "not known yet", which the UI shows as a dash -- an
         # honest answer, where 0 would be a claim that the library is empty.
@@ -145,6 +150,121 @@ class Rommarr:
                 # zero that reads as "your library is empty".
                 log.warning("library count refresh failed: %s", err.__class__.__name__)
             time.sleep(self.COUNT_TTL)
+
+    # -- configuration -----------------------------------------------------
+
+    def _seed_from_env(self, e) -> None:
+        """Turn environment variables into stored clients, once.
+
+        Clients were environment-only, so the Settings page could show them and
+        not change them. Seeding rather than continuing to read the environment
+        means an existing install comes up already configured and is then
+        editable like any other -- without the environment silently overriding
+        an edit on the next restart.
+        """
+        if self.store.settings.get("_seeded_clients"):
+            return
+
+        def add(kind: str, url: str, **extra):
+            if not url:
+                return
+            from urllib.parse import urlsplit
+            parts = urlsplit(url if "//" in url else "http://" + url)
+            self.store.put_item("download_clients", {
+                "type": kind, "name": CLIENT_TYPES[kind]["label"], "enable": True,
+                "host": parts.hostname or "localhost",
+                "port": parts.port or CLIENT_TYPES[kind]["default_port"],
+                "use_ssl": parts.scheme == "https",
+                "url_base": parts.path.strip("/"),
+                "category": "rommarr", **extra,
+            })
+
+        add("qbittorrent", e.get("QBITTORRENT_URL", ""),
+            username=e.get("QBITTORRENT_USER", ""), password=e.get("QBITTORRENT_PASS", ""))
+        add("sabnzbd", e.get("SABNZBD_URL", ""), api_key=e.get("SABNZBD_API_KEY", ""))
+        add("nzbget", e.get("NZBGET_URL", ""),
+            username=e.get("NZBGET_USER", ""), password=e.get("NZBGET_PASS", ""))
+
+        if e.get("PROWLARR_URL"):
+            self.store.put_item("indexers", {
+                "type": "prowlarr", "name": "Prowlarr", "enable": True,
+                "url": e.get("PROWLARR_URL", ""), "api_key": e.get("PROWLARR_API_KEY", ""),
+            })
+
+        self.store.settings["_seeded_clients"] = True
+        self.store.save()
+
+    def reload_clients(self) -> None:
+        """Rebuild the live clients from stored configuration.
+
+        Called after any edit so a saved change takes effect immediately --
+        an *arr that needs restarting to use a client you just added is not
+        one anybody would call configured.
+        """
+        clients = []
+        for cfg in self.store.list_items("download_clients"):
+            if not cfg.get("enable", True):
+                continue
+            client = build_client(cfg)
+            if client is not None:
+                clients.append(client)
+        self.clients = clients
+
+        # The first enabled Prowlarr entry drives search.
+        for cfg in self.store.list_items("indexers"):
+            if cfg.get("type") == "prowlarr" and cfg.get("enable", True):
+                self.prowlarr = Prowlarr(ProwlarrConfig(
+                    base_url=cfg.get("url", ""), api_key=cfg.get("api_key", "")))
+                self.store.settings["_prowlarr_url"] = cfg.get("url", "")
+                break
+
+    def safe_settings(self) -> dict:
+        """Settings with every stored credential masked.
+
+        The raw settings hold download client passwords and indexer API keys in
+        plaintext, and this endpoint feeds a browser. Returning them verbatim
+        put real credentials in a page anyone who reached the UI could read --
+        including the qBittorrent password. Masking here rather than at each
+        call site means a new secret field is covered the moment it is declared.
+        """
+        out = dict(self.store.settings)
+        out["download_clients"] = [redact(c) for c in out.get("download_clients", [])]
+        out["indexers"] = [redact_indexer(i) for i in out.get("indexers", [])]
+        return out
+
+    def test_indexer(self, cfg: dict) -> dict:
+        """Try an indexer configuration without saving it."""
+        kind = str(cfg.get("type") or "").lower()
+        url, key = cfg.get("url", ""), cfg.get("api_key", "")
+        if not url:
+            return {"ok": False, "message": "a URL is required"}
+        try:
+            if kind == "prowlarr":
+                probe = Prowlarr(ProwlarrConfig(base_url=url, api_key=key))
+                n = len(probe.indexers())
+                return {"ok": True, "message": f"Connected, {n} indexer(s)"}
+            # Newznab and Torznab both answer a caps query, which needs no
+            # search term and so tests the credential without a real query.
+            import requests as _rq
+            r = _rq.get(url.rstrip("/"), params={"t": "caps", "apikey": key}, timeout=15)
+            if r.status_code in (401, 403):
+                return {"ok": False, "message": "Rejected the API key"}
+            return ({"ok": True, "message": "Connected"} if r.ok
+                    else {"ok": False, "message": f"Answered {r.status_code}"})
+        except Exception as err:
+            return {"ok": False, "message": f"{type(err).__name__}: {err}"}
+
+    def test_client(self, cfg: dict) -> dict:
+        """Try a configuration without saving it, the way *arr's Test does."""
+        client = build_client(cfg)
+        if client is None:
+            return {"ok": False, "message": f"unknown client type: {cfg.get('type')!r}"}
+        try:
+            ok = client.reachable()
+        except Exception as err:
+            return {"ok": False, "message": f"{type(err).__name__}: {err}"}
+        return {"ok": bool(ok),
+                "message": "Connected" if ok else "Could not connect or authenticate"}
 
     # -- operations --------------------------------------------------------
 
@@ -240,7 +360,8 @@ class Rommarr:
         for c in self.clients:
             configured = getattr(c, "configured", True)
             out.append({
-                "name": getattr(c, "name", type(c).__name__),
+                "id": getattr(c, "config_id", None),
+                "name": getattr(c, "display_name", getattr(c, "name", type(c).__name__)),
                 "protocol": getattr(c, "protocol", ""),
                 "url": getattr(c, "_config").base_url,
                 "category": getattr(getattr(c, "_config"), "category", ""),
@@ -423,14 +544,25 @@ def make_handler(service: Rommarr):
                 limit = int((query.get("limit") or ["200"])[0])
                 return self._json(200, {"items": service.store.history(limit)})
             if route.path == "/api/v1/indexer":
+                # Configured entries first, then whatever Prowlarr proxies --
+                # the latter are managed there and shown read-only, the way an
+                # *arr shows an indexer it did not define.
+                items = [redact(i) for i in service.store.list_items("indexers")]
+                proxied, err = [], None
                 try:
-                    return self._json(200, {"items": service.prowlarr.indexers()})
-                except Exception as err:
-                    return self._json(200, {"items": [], "error": str(err)})
+                    proxied = service.prowlarr.indexers()
+                except Exception as exc:
+                    err = str(exc)
+                return self._json(200, {"items": items, "proxied": proxied,
+                                        "error": err})
             if route.path == "/api/v1/downloadclient":
                 return self._json(200, {"items": service.download_clients()})
+            if route.path == "/api/v1/downloadclient/schema":
+                return self._json(200, {"types": CLIENT_TYPES})
+            if route.path == "/api/v1/indexer/schema":
+                return self._json(200, {"types": INDEXER_TYPES})
             if route.path == "/api/v1/config":
-                return self._json(200, service.store.settings)
+                return self._json(200, service.safe_settings())
             if route.path == "/api/v1/system/status":
                 return self._json(200, service.status())
             if route.path == "/api/v1/system/counts":
@@ -464,11 +596,36 @@ def make_handler(service: Rommarr):
                 return self._json(200, service.request(game, platform))
             if route.path == "/api/import":
                 return self._json(200, {"imported": service.import_finished()})
+            if route.path in ("/api/v1/downloadclient", "/api/v1/indexer"):
+                key = "download_clients" if "downloadclient" in route.path else "indexers"
+                existing = service.store.get_item(key, body.get("id")) if body.get("id") else None
+                saved = service.store.put_item(key, merge_secrets(dict(body), existing))
+                service.reload_clients()
+                return self._json(200, redact(saved))
+            if route.path == "/api/v1/downloadclient/test":
+                # Tested against the submitted form, with any untouched secret
+                # filled back in, so Test reflects what Save would store.
+                existing = service.store.get_item("download_clients", body.get("id"))                     if body.get("id") else None
+                return self._json(200, service.test_client(merge_secrets(dict(body), existing)))
+            if route.path == "/api/v1/indexer/test":
+                existing = service.store.get_item("indexers", body.get("id"))                     if body.get("id") else None
+                return self._json(200, service.test_indexer(merge_secrets(dict(body), existing)))
             if route.path == "/api/v1/command":
                 name = (body.get("name") or "").strip()
                 if not name:
                     return self._json(400, {"error": "name is required"})
                 return self._json(200, service.run_command(name))
+            return self._json(404, {"error": "not found"})
+
+        def do_DELETE(self):
+            route = urlparse(self.path)
+            for prefix, key in (("/api/v1/downloadclient/", "download_clients"),
+                                ("/api/v1/indexer/", "indexers")):
+                if route.path.startswith(prefix):
+                    item_id = route.path[len(prefix):]
+                    removed = service.store.delete_item(key, item_id)
+                    service.reload_clients()
+                    return self._json(200 if removed else 404, {"deleted": removed})
             return self._json(404, {"error": "not found"})
 
         def do_PUT(self):
@@ -481,6 +638,7 @@ def make_handler(service: Rommarr):
 
             if route.path == "/api/v1/config":
                 updated = service.store.update_settings(body)
+                updated = service.safe_settings()
                 # A library path is only really changed once the running
                 # service files ROMs there, not once it is stored.
                 path = updated.get("library_path")

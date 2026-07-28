@@ -145,3 +145,108 @@ def test_a_prefix_that_only_looks_similar_is_not_matched():
     m = [{"remote": "/mnt/usb1/Downloads", "local": "/mnt/downloads"}]
     assert str(map_remote_path("/mnt/usb1/Downloads2/a.nes", m)) \
         .replace("\\", "/") == "/mnt/usb1/Downloads2/a.nes"
+
+
+def test_two_stores_do_not_share_their_default_lists(tmp_path):
+    """DEFAULT_SETTINGS holds mutable lists. A shallow copy handed every Store
+    the same list object, so a client added in one leaked into all of them --
+    and into the module default, poisoning every Store created afterwards."""
+    a = Store(tmp_path / "a.json")
+    b = Store(tmp_path / "b.json")
+    a.put_item("download_clients", {"type": "qbittorrent", "name": "only in a"})
+
+    assert len(a.list_items("download_clients")) == 1
+    assert b.list_items("download_clients") == []
+    assert DEFAULT_SETTINGS["download_clients"] == [], "the module default was mutated"
+    # A third store created after the mutation must also be clean.
+    assert Store(tmp_path / "c.json").list_items("download_clients") == []
+
+
+# --- configuration CRUD ----------------------------------------------------
+
+from rommarr.downloaders import (  # noqa: E402
+    CLIENT_TYPES, SECRET_PLACEHOLDER, base_url_for, build_client, merge_secrets, redact,
+)
+
+
+def test_a_secret_is_never_sent_back_to_a_browser():
+    cfg = {"type": "sabnzbd", "name": "sab", "api_key": "REAL-KEY", "host": "h"}
+    out = redact(cfg)
+    assert out["api_key"] == SECRET_PLACEHOLDER
+    assert "REAL-KEY" not in str(out)
+    # A blank secret stays blank rather than becoming asterisks, so the form
+    # does not claim a credential exists when none does.
+    assert redact({"type": "sabnzbd", "api_key": ""})["api_key"] == ""
+
+
+def test_saving_an_unedited_form_keeps_the_stored_secret():
+    """The edit form shows asterisks. Saving that verbatim would replace the
+    real credential with eight asterisks, and the client would then fail to
+    authenticate with nothing saying why."""
+    merged = merge_secrets(
+        {"type": "qbittorrent", "password": SECRET_PLACEHOLDER, "name": "renamed"},
+        {"type": "qbittorrent", "password": "REAL", "name": "old"})
+    assert merged["password"] == "REAL"
+    assert merged["name"] == "renamed"
+
+
+def test_a_deliberately_changed_secret_is_taken():
+    merged = merge_secrets({"type": "qbittorrent", "password": "NEW"},
+                           {"type": "qbittorrent", "password": "OLD"})
+    assert merged["password"] == "NEW"
+
+
+def test_url_is_assembled_from_the_parts_the_form_edits():
+    assert base_url_for({"host": "h", "port": 8080}) == "http://h:8080"
+    assert base_url_for({"host": "h", "port": 443, "use_ssl": True}) == "https://h:443"
+    assert base_url_for({"host": "h", "port": 80, "url_base": "/qb/"}) == "http://h:80/qb"
+    # Somebody will paste a whole URL into the host box.
+    assert base_url_for({"host": "https://h", "port": 8080}) == "https://h:8080"
+    assert base_url_for({}) == "http://localhost"
+
+
+def test_every_client_type_builds_and_declares_a_protocol():
+    for kind, spec in CLIENT_TYPES.items():
+        client = build_client({"type": kind, "host": "h", "port": 1234, "name": "x"})
+        assert client is not None, kind
+        assert client.protocol == spec["protocol"], kind
+        assert client.display_name == "x", kind
+    assert build_client({"type": "nope"}) is None
+
+
+def test_every_declared_field_has_what_the_form_needs():
+    """The form is generated from this, so a field missing a name or type
+    renders as a broken input rather than failing loudly."""
+    for kind, spec in CLIENT_TYPES.items():
+        assert spec["fields"], kind
+        for f in spec["fields"]:
+            assert f.get("name") and f.get("label") and f.get("type"), (kind, f)
+
+
+def test_the_config_endpoint_never_returns_a_stored_credential(tmp_path):
+    """This endpoint feeds a browser. Returning the raw settings put real
+    credentials -- including the qBittorrent password -- in a page anyone who
+    could reach the UI could read."""
+    from rommarr.app import Rommarr
+    svc = Rommarr(env={
+        "ROMMARR_DATA": str(tmp_path / "r.json"),
+        "QBITTORRENT_URL": "http://qbit:8090",
+        "QBITTORRENT_USER": "admin", "QBITTORRENT_PASS": "REAL-PASSWORD",
+        "PROWLARR_URL": "http://prowlarr:9696", "PROWLARR_API_KEY": "REAL-KEY",
+    })
+    body = json.dumps(svc.safe_settings())
+    assert "REAL-PASSWORD" not in body
+    assert "REAL-KEY" not in body
+    assert SECRET_PLACEHOLDER in body
+
+    # ...while the stored copy keeps the real value, or nothing could connect.
+    stored = svc.store.list_items("download_clients")[0]
+    assert stored["password"] == "REAL-PASSWORD"
+
+
+def test_prowlarr_exposes_its_indexer_listing():
+    """This method was appended below the class and Python parsed it as a
+    nested function inside sanitise_for_display -- so it existed in the file,
+    was never reachable, and the Indexers page silently showed nothing."""
+    from rommarr.indexers import Prowlarr
+    assert callable(getattr(Prowlarr, "indexers", None))

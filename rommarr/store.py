@@ -19,6 +19,7 @@ service will not start again.
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import os
@@ -89,6 +90,15 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     #
     # Each entry is {"remote": "<what the client says>", "local": "<what we see>"}.
     "remote_path_mappings": [],
+    # Download clients and indexers, each a list of stored configurations.
+    #
+    # These used to come from environment variables only, which meant the
+    # Settings pages could show them and not change them -- you had to edit a
+    # file and restart to add a client. On first run the environment is read
+    # once to seed these, so an existing install keeps working, and after that
+    # the store is authoritative.
+    "download_clients": [],
+    "indexers": [],
     # Behaviour
     "auto_import": True,
     "rescan_after_import": True,
@@ -104,7 +114,12 @@ class Store:
     def __init__(self, path: str | Path):
         self.path = Path(path)
         self._lock = threading.RLock()
-        self.settings: dict[str, Any] = dict(DEFAULT_SETTINGS)
+        # Deep, not shallow. DEFAULT_SETTINGS holds mutable lists
+        # (download_clients, indexers, preferred_regions); a shallow copy hands
+        # every Store the *same* list objects, so appending a client in one
+        # place silently appends it everywhere -- including into the module
+        # default, which then leaks into every Store created afterwards.
+        self.settings: dict[str, Any] = copy.deepcopy(DEFAULT_SETTINGS)
         self.events: list[Event] = []
         self.wanted: list[WantedItem] = []
         self.load()
@@ -124,7 +139,7 @@ class Store:
         with self._lock:
             # Merged rather than replaced, so a setting added in a later
             # version has its default instead of being absent.
-            self.settings = {**DEFAULT_SETTINGS, **(raw.get("settings") or {})}
+            self.settings = {**copy.deepcopy(DEFAULT_SETTINGS), **(raw.get("settings") or {})}
             self.events = [Event(**e) for e in raw.get("events", []) if isinstance(e, dict)]
             self.wanted = [WantedItem(**w) for w in raw.get("wanted", []) if isinstance(w, dict)]
 
@@ -208,6 +223,51 @@ class Store:
         self.save()
 
     # -- settings ----------------------------------------------------------
+
+    # -- collections (download clients, indexers) --------------------------
+
+    def _collection(self, key: str) -> list[dict]:
+        return self.settings.setdefault(key, [])
+
+    def list_items(self, key: str) -> list[dict]:
+        with self._lock:
+            return [dict(i) for i in self._collection(key)]
+
+    def get_item(self, key: str, item_id: str) -> dict | None:
+        with self._lock:
+            for item in self._collection(key):
+                if str(item.get("id")) == str(item_id):
+                    return dict(item)
+        return None
+
+    def put_item(self, key: str, item: dict) -> dict:
+        """Add or replace one entry, returning it with its id."""
+        import uuid
+        with self._lock:
+            items = self._collection(key)
+            if item.get("id"):
+                for i, existing in enumerate(items):
+                    if str(existing.get("id")) == str(item["id"]):
+                        items[i] = item
+                        break
+                else:
+                    items.append(item)
+            else:
+                item["id"] = uuid.uuid4().hex[:12]
+                items.append(item)
+            out = dict(item)
+        self.save()
+        return out
+
+    def delete_item(self, key: str, item_id: str) -> bool:
+        with self._lock:
+            items = self._collection(key)
+            before = len(items)
+            self.settings[key] = [i for i in items if str(i.get("id")) != str(item_id)]
+            changed = len(self.settings[key]) != before
+        if changed:
+            self.save()
+        return changed
 
     def update_settings(self, patch: dict[str, Any]) -> dict[str, Any]:
         """Apply a partial settings update.

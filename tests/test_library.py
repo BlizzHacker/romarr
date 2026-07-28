@@ -185,27 +185,29 @@ def test_sanitiser_redacts_keys_for_logs():
 
 # --- service wiring -------------------------------------------------------
 
-def test_request_rejects_an_unknown_platform():
+def test_request_rejects_an_unknown_platform(tmp_path):
     from rommarr.app import Rommarr
-    svc = Rommarr(env={})
+    svc = Rommarr(env={"ROMMARR_DATA": str(tmp_path / "r.json")})
     out = svc.request("Super Mario World", "PlayStation 5")
     assert not out["ok"]
     assert "unknown platform" in out["error"]
 
 
-def test_a_release_without_a_plain_magnet_is_refused_not_leaked(monkeypatch):
+def test_a_release_without_a_plain_magnet_is_refused_not_leaked(monkeypatch, tmp_path):
     """Prowlarr's own download links carry its API key, so a release that has
     no plain magnet must be refused rather than passed to a download client."""
     from rommarr.app import Rommarr
     from rommarr.selection import Release
 
-    svc = Rommarr(env={"QBITTORRENT_URL": "http://qbit:8090"})
+    svc = Rommarr(env={"QBITTORRENT_URL": "http://qbit:8090",
+                       "ROMMARR_DATA": str(tmp_path / "r.json")})
     unusable = Release(title="Super Mario World (USA)", size=524288, seeders=50,
                        categories=(1030,), download_url="", protocol="torrent")
     monkeypatch.setattr(svc.prowlarr, "search", lambda *a, **k: [unusable])
 
     grabbed = []
-    monkeypatch.setattr(svc.qbit, "add", lambda *a, **k: grabbed.append(a) or True)
+    for c in svc.clients:
+        monkeypatch.setattr(c, "add", lambda *a, **k: grabbed.append(a) or True)
 
     out = svc.request("Super Mario World", "snes")
     assert not out["ok"]
@@ -214,17 +216,19 @@ def test_a_release_without_a_plain_magnet_is_refused_not_leaked(monkeypatch):
     assert svc.queue[-1].state == "failed"
 
 
-def test_a_healthy_release_is_grabbed_and_queued(monkeypatch):
+def test_a_healthy_release_is_grabbed_and_queued(monkeypatch, tmp_path):
     from rommarr.app import Rommarr
     from rommarr.selection import Release
 
-    svc = Rommarr(env={"QBITTORRENT_URL": "http://qbit:8090"})
+    svc = Rommarr(env={"QBITTORRENT_URL": "http://qbit:8090",
+                       "ROMMARR_DATA": str(tmp_path / "r.json")})
     good = Release(title="Super Mario World (USA)", size=524288, seeders=120,
                    categories=(1030,), download_url="magnet:?xt=urn:btih:abc",
                    protocol="torrent")
     monkeypatch.setattr(svc.prowlarr, "search", lambda *a, **k: [good])
     sent = []
-    monkeypatch.setattr(svc.qbit, "add", lambda url, **k: sent.append(url) or True)
+    for c in svc.clients:
+        monkeypatch.setattr(c, "add", lambda url, **k: sent.append(url) or True)
 
     out = svc.request("Super Mario World", "Super Nintendo")
     assert out["ok"]
@@ -235,7 +239,7 @@ def test_a_healthy_release_is_grabbed_and_queued(monkeypatch):
 
 # --- protocol routing ------------------------------------------------------
 
-def test_a_usenet_release_goes_to_the_usenet_client(monkeypatch):
+def test_a_usenet_release_goes_to_the_usenet_client(monkeypatch, tmp_path):
     """Accepting only torrents made every usenet indexer in Prowlarr dead
     weight: results scored fine and were then refused."""
     from rommarr.app import Rommarr
@@ -244,6 +248,7 @@ def test_a_usenet_release_goes_to_the_usenet_client(monkeypatch):
     svc = Rommarr(env={
         "QBITTORRENT_URL": "http://qbit:8090",
         "SABNZBD_URL": "http://sab:8080", "SABNZBD_API_KEY": "k",
+        "ROMMARR_DATA": str(tmp_path / "r.json"),
     })
     nzb = Release(title="Chrono Trigger (USA)", size=4 << 20, seeders=0,
                   categories=(1030,), download_url="https://idx/get?id=1",
@@ -251,8 +256,9 @@ def test_a_usenet_release_goes_to_the_usenet_client(monkeypatch):
     monkeypatch.setattr(svc.prowlarr, "search", lambda *a, **k: [nzb])
 
     to_sab, to_qbit = [], []
-    monkeypatch.setattr(svc.sab, "add", lambda url, **k: to_sab.append(url) or True)
-    monkeypatch.setattr(svc.qbit, "add", lambda url, **k: to_qbit.append(url) or True)
+    for c in svc.clients:
+        sink = to_sab if c.protocol == "usenet" else to_qbit
+        monkeypatch.setattr(c, "add", lambda url, _s=sink, **k: _s.append(url) or True)
 
     out = svc.request("Chrono Trigger", "snes")
     assert out["ok"], out
@@ -260,13 +266,14 @@ def test_a_usenet_release_goes_to_the_usenet_client(monkeypatch):
     assert to_qbit == [], "a usenet release must not go to a torrent client"
 
 
-def test_a_torrent_release_goes_to_the_torrent_client(monkeypatch):
+def test_a_torrent_release_goes_to_the_torrent_client(monkeypatch, tmp_path):
     from rommarr.app import Rommarr
     from rommarr.selection import Release
 
     svc = Rommarr(env={
         "QBITTORRENT_URL": "http://qbit:8090",
         "SABNZBD_URL": "http://sab:8080", "SABNZBD_API_KEY": "k",
+        "ROMMARR_DATA": str(tmp_path / "r.json"),
     })
     tor = Release(title="Zelda (USA)", size=1 << 20, seeders=40,
                   categories=(1030,), download_url="magnet:?xt=urn:btih:abc",
@@ -274,20 +281,22 @@ def test_a_torrent_release_goes_to_the_torrent_client(monkeypatch):
     monkeypatch.setattr(svc.prowlarr, "search", lambda *a, **k: [tor])
 
     to_sab, to_qbit = [], []
-    monkeypatch.setattr(svc.sab, "add", lambda url, **k: to_sab.append(url) or True)
-    monkeypatch.setattr(svc.qbit, "add", lambda url, **k: to_qbit.append(url) or True)
+    for c in svc.clients:
+        sink = to_sab if c.protocol == "usenet" else to_qbit
+        monkeypatch.setattr(c, "add", lambda url, _s=sink, **k: _s.append(url) or True)
 
     assert svc.request("Zelda", "snes")["ok"]
     assert to_qbit == ["magnet:?xt=urn:btih:abc"]
     assert to_sab == []
 
 
-def test_a_protocol_with_no_client_says_so_rather_than_failing_vaguely(monkeypatch):
+def test_a_protocol_with_no_client_says_so_rather_than_failing_vaguely(monkeypatch, tmp_path):
     from rommarr.app import Rommarr
     from rommarr.selection import Release
 
     # Torrent client only; a usenet result has nowhere to go.
-    svc = Rommarr(env={"QBITTORRENT_URL": "http://qbit:8090"})
+    svc = Rommarr(env={"QBITTORRENT_URL": "http://qbit:8090",
+                       "ROMMARR_DATA": str(tmp_path / "r.json")})
     nzb = Release(title="Metroid (USA)", size=1 << 20, seeders=0,
                   categories=(1030,), download_url="https://idx/get?id=2",
                   protocol="usenet")

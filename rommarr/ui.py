@@ -103,6 +103,26 @@ input:focus,select:focus{border-color:var(--accent)}
 .tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:16px}
 .tab{padding:9px 16px;cursor:pointer;color:var(--dim);border-bottom:2px solid transparent;font-size:13px}
 .tab.on{color:var(--accent);border-bottom-color:var(--accent)}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:60;
+  display:flex;align-items:flex-start;justify-content:center;padding:60px 20px;overflow-y:auto}
+.modal .box{background:var(--panel);border:1px solid var(--line);border-radius:6px;
+  width:100%;max-width:520px;padding:20px}
+.modal h3{font-size:15px;margin-bottom:4px}
+.modal .sub{color:var(--dim);font-size:12.5px;margin-bottom:16px}
+.modal .foot{display:flex;gap:8px;margin-top:18px;align-items:center}
+.modal .foot .sp{margin-left:auto}
+.btn.danger{background:transparent;color:var(--bad);border:1px solid var(--bad)}
+.pick{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.pick button{padding:14px;background:var(--bg);border:1px solid var(--line);
+  color:var(--fg);border-radius:5px;cursor:pointer;text-align:left}
+.pick button:hover{border-color:var(--accent)}
+.pick small{display:block;color:var(--dim);font-size:11px;margin-top:3px}
+.rowact{display:flex;gap:6px;justify-content:flex-end}
+.rowact button{padding:4px 10px;font-size:12px;background:transparent;
+  color:var(--dim);border:1px solid var(--line);border-radius:4px;cursor:pointer}
+.rowact button:hover{color:var(--fg);border-color:var(--accent)}
+.testline{font-size:12.5px;margin-top:10px}
+.testline.ok{color:var(--ok)}.testline.bad{color:var(--bad)}
 .toast{position:fixed;right:20px;bottom:20px;background:var(--panel);
   border:1px solid var(--accent);border-left-width:3px;border-radius:4px;
   padding:12px 16px;max-width:380px;z-index:50;font-size:13px}
@@ -261,6 +281,120 @@ RENDER.history=async()=>{
     :'<div class="empty">No history yet.</div>';
 };
 
+
+/* ---------------- schema-driven editor ---------------- */
+/* The form is built from the server's field list, so a new client or indexer
+   type needs no change here -- the same thing the *arrs do with their schema
+   endpoints. */
+let SCHEMA = { downloadclient: {}, indexer: {} };
+
+async function loadSchema(kind){
+  if(Object.keys(SCHEMA[kind]).length) return SCHEMA[kind];
+  const d = await j(`/api/v1/${kind}/schema`);
+  SCHEMA[kind] = d.types || {};
+  return SCHEMA[kind];
+}
+
+function fieldHtml(f, value){
+  const v = value === undefined || value === null ? f.default : value;
+  const help = f.help ? `<div style="color:var(--dim);font-size:11.5px;margin-top:4px">${esc(f.help)}</div>` : '';
+  if(f.type === 'bool')
+    return `<label class="check"><input type="checkbox" data-f="${f.name}"
+      ${v ? 'checked' : ''}><span>${esc(f.label)}</span></label>${help}`;
+  const t = f.type === 'int' ? 'number' : (f.type === 'secret' ? 'password' : 'text');
+  return `<div class="field"><label>${esc(f.label)}</label>
+    <input type="${t}" data-f="${f.name}" value="${esc(v ?? '')}"
+      ${f.type === 'secret' ? 'autocomplete="new-password"' : ''}>${help}</div>`;
+}
+
+function readForm(){
+  const out = {};
+  document.querySelectorAll('[data-f]').forEach(el => {
+    out[el.dataset.f] = el.type === 'checkbox' ? el.checked
+      : el.type === 'number' ? (el.value === '' ? null : Number(el.value))
+      : el.value;
+  });
+  return out;
+}
+
+function closeModal(){ document.querySelector('.modal')?.remove(); }
+
+/** Choose a type, then edit it. */
+async function addItem(kind){
+  const types = await loadSchema(kind);
+  const m = document.createElement('div');
+  m.className = 'modal';
+  m.innerHTML = `<div class="box"><h3>Add ${kind === 'indexer' ? 'Indexer' : 'Download Client'}</h3>
+    <div class="sub">Pick a type.</div>
+    <div class="pick">${Object.entries(types).map(([k, t]) =>
+      `<button data-t="${k}">${esc(t.label)}<small>${esc(t.protocol)}</small></button>`).join('')}</div>
+    <div class="foot"><button class="btn ghost sp" data-close>Cancel</button></div></div>`;
+  document.body.append(m);
+  m.onclick = e => { if(e.target === m || e.target.dataset.close !== undefined) closeModal(); };
+  m.querySelectorAll('[data-t]').forEach(b => b.onclick = () => {
+    closeModal();
+    editItem(kind, { type: b.dataset.t });
+  });
+}
+
+async function editItem(kind, item){
+  const types = await loadSchema(kind);
+  const spec = types[item.type];
+  if(!spec){ toast('Unknown type: ' + item.type); return; }
+  const isNew = !item.id;
+  // A new entry gets the type's sensible defaults rather than an empty form.
+  if(isNew){
+    if(spec.default_port && item.port === undefined) item.port = spec.default_port;
+    if(item.name === undefined) item.name = spec.label;
+  }
+
+  const m = document.createElement('div');
+  m.className = 'modal';
+  m.innerHTML = `<div class="box">
+    <h3>${isNew ? 'Add' : 'Edit'} ${esc(spec.label)}</h3>
+    <div class="sub">${esc(spec.protocol)}${spec.managed ? ' · manages its own indexers' : ''}</div>
+    <div id="fields">${spec.fields.map(f => fieldHtml(f, item[f.name])).join('')}</div>
+    <div id="testline"></div>
+    <div class="foot">
+      <button class="btn ghost" id="m-test">Test</button>
+      ${isNew ? '' : '<button class="btn danger" id="m-del">Delete</button>'}
+      <button class="btn ghost sp" data-close>Cancel</button>
+      <button class="btn" id="m-save">Save</button>
+    </div></div>`;
+  document.body.append(m);
+  m.onclick = e => { if(e.target === m || e.target.dataset.close !== undefined) closeModal(); };
+
+  const payload = () => ({ ...readForm(), type: item.type, id: item.id });
+  const line = (ok, msg) => {
+    m.querySelector('#testline').className = 'testline ' + (ok ? 'ok' : 'bad');
+    m.querySelector('#testline').textContent = msg;
+  };
+
+  m.querySelector('#m-test').onclick = async (e) => {
+    e.target.disabled = true; line(true, 'Testing…');
+    const r = await j(`/api/v1/${kind}/test`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload()) });
+    line(r.ok, r.message || (r.ok ? 'Connected' : 'Failed'));
+    e.target.disabled = false;
+  };
+
+  m.querySelector('#m-save').onclick = async (e) => {
+    e.target.disabled = true;
+    await j(`/api/v1/${kind}`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload()) });
+    closeModal(); toast('Saved'); go(kind === 'indexer' ? 'indexers' : 'clients');
+  };
+
+  const del = m.querySelector('#m-del');
+  if(del) del.onclick = async () => {
+    if(!confirm(`Remove ${item.name || spec.label}?`)) return;
+    await fetch(`/api/v1/${kind}/${item.id}`, { method: 'DELETE' });
+    closeModal(); toast('Removed'); go(kind === 'indexer' ? 'indexers' : 'clients');
+  };
+}
+
 /* ---------------- settings ---------------- */
 function settingsPage(title, help, body){
   $('#page').innerHTML=`<div class="card"><h3>${title}</h3>
@@ -303,20 +437,6 @@ RENDER.profiles=()=>settingsPage('Release Profile',
   +fld('min_seeders','Minimum seeders',SETTINGS.min_seeders,'number')
   +fld('max_size_mb','Maximum size (MB)',SETTINGS.max_size_mb,'number'));
 
-RENDER.indexers=async()=>{
-  const d=await j('/api/v1/indexer');
-  $('#page').innerHTML=`<div class="card"><h3>Indexers</h3>
-    <p class="help">Served by Prowlarr. Add or remove them there and they appear here.</p>
-    ${d.error?`<div class="empty">${esc(d.error)}</div>`
-    :d.items.length?`<table><thead><tr><th>Indexer</th><th>Protocol</th>
-      <th>Categories</th><th>Enabled</th></tr></thead><tbody>
-      ${d.items.map(i=>`<tr><td>${esc(i.name)}</td><td>${esc(i.protocol)}</td>
-        <td style="color:var(--dim)">${esc((i.categories||[]).join(', ')||'—')}</td>
-        <td><span class="dot ${i.enable?'up':'down'}"></span>${i.enable?'yes':'no'}</td>
-        </tr>`).join('')}</tbody></table>`
-    :'<div class="empty">Prowlarr has no indexers configured.</div>'}</div>`;
-};
-
 RENDER.clients=async()=>{
   const d=await j('/api/v1/downloadclient');
   const state=c=>!c.configured?'<span class="dot"></span>not configured'
@@ -324,20 +444,72 @@ RENDER.clients=async()=>{
     :'<span class="dot down"></span>unreachable';
   const gaps=['torrent','usenet'].filter(p=>
     !d.items.some(c=>c.protocol===p&&c.configured));
-  $('#page').innerHTML=`<div class="card"><h3>Download Clients</h3>
-    <p class="help">Where grabbed releases are sent. A release is routed by its
-      protocol, so an indexer type with no client configured cannot be grabbed
-      at all &mdash; which is why unconfigured clients are listed rather than hidden.</p>
+  $('#page').innerHTML=`<div class="card">
+    <div class="row" style="margin-bottom:12px">
+      <h3 style="margin:0">Download Clients</h3>
+      <button class="btn sp" id="c-add" style="margin-left:auto">Add</button>
+    </div>
+    <p class="help">A release is routed by its protocol, so an indexer type
+      with no client configured cannot be grabbed at all &mdash; which is why
+      unconfigured clients are listed rather than hidden.</p>
     ${gaps.length?`<p class="help" style="color:var(--warn)">
       No client configured for: <b>${gaps.join(', ')}</b>.
-      ${gaps.join()} results will be found and then refused.</p>`:''}
-    <table><thead><tr><th>Client</th><th>Protocol</th><th>Address</th>
-      <th>Category</th><th>Status</th></tr></thead><tbody>
-      ${d.items.map(c=>`<tr><td>${esc(c.name)}</td>
+      Those results will be found and then refused.</p>`:''}
+    ${d.items.length?`<table><thead><tr><th>Client</th><th>Protocol</th><th>Address</th>
+      <th>Category</th><th>Status</th><th></th></tr></thead><tbody>
+      ${d.items.map((c,i)=>`<tr><td>${esc(c.name)}</td>
         <td><span class="pill">${esc(c.protocol)}</span></td>
         <td style="color:var(--dim)">${esc(c.url||'—')}</td>
         <td>${esc(c.category||'—')}</td>
-        <td>${state(c)}</td></tr>`).join('')}</tbody></table></div>`;
+        <td>${state(c)}</td>
+        <td><div class="rowact"><button data-edit="${i}">Edit</button></div></td>
+        </tr>`).join('')}</tbody></table>`
+    :'<div class="empty">No download clients yet. Add one to start grabbing.</div>'}
+  </div>`;
+  $('#c-add').onclick=()=>addItem('downloadclient');
+  document.querySelectorAll('[data-edit]').forEach(b=>b.onclick=async()=>{
+    const row=d.items[Number(b.dataset.edit)];
+    // The table is a status view; the editor needs the stored configuration.
+    const all=await j('/api/v1/config');
+    const cfg=(all.download_clients||[]).find(x=>x.id===row.id);
+    if(cfg) editItem('downloadclient', cfg);
+    else toast('That client has no stored configuration to edit');
+  });
+};
+
+RENDER.indexers=async()=>{
+  const d=await j('/api/v1/indexer');
+  $('#page').innerHTML=`<div class="card">
+    <div class="row" style="margin-bottom:12px">
+      <h3 style="margin:0">Indexers</h3>
+      <button class="btn" id="i-add" style="margin-left:auto">Add</button>
+    </div>
+    <p class="help">Add a Newznab or Torznab indexer directly, or point at
+      Prowlarr and use everything it already has configured.</p>
+    ${d.items.length?`<table><thead><tr><th>Name</th><th>Type</th><th>URL</th>
+      <th>Enabled</th><th></th></tr></thead><tbody>
+      ${d.items.map((it,i)=>`<tr><td>${esc(it.name||'—')}</td>
+        <td><span class="pill">${esc(it.type)}</span></td>
+        <td style="color:var(--dim)">${esc(it.url||'—')}</td>
+        <td><span class="dot ${it.enable?'up':'down'}"></span>${it.enable?'yes':'no'}</td>
+        <td><div class="rowact"><button data-iedit="${i}">Edit</button></div></td>
+        </tr>`).join('')}</tbody></table>`
+    :'<div class="empty">No indexers configured.</div>'}
+  </div>
+  ${(d.proxied||[]).length?`<div class="card"><h3>Via Prowlarr</h3>
+    <p class="help">Managed in Prowlarr, shown here read-only. Add or remove
+      them there and they appear or disappear from this list.</p>
+    <table><thead><tr><th>Indexer</th><th>Protocol</th><th>Categories</th>
+      <th>Enabled</th></tr></thead><tbody>
+      ${d.proxied.map(i=>`<tr><td>${esc(i.name)}</td><td>${esc(i.protocol)}</td>
+        <td style="color:var(--dim)">${esc((i.categories||[]).join(', ')||'—')}</td>
+        <td><span class="dot ${i.enable?'up':'down'}"></span>${i.enable?'yes':'no'}</td>
+        </tr>`).join('')}</tbody></table></div>`
+    :(d.error?`<div class="card"><h3>Via Prowlarr</h3>
+        <p class="help" style="color:var(--warn)">${esc(d.error)}</p></div>`:'')}`;
+  $('#i-add').onclick=()=>addItem('indexer');
+  document.querySelectorAll('[data-iedit]').forEach(b=>b.onclick=()=>
+    editItem('indexer', d.items[Number(b.dataset.iedit)]));
 };
 
 RENDER.general=()=>settingsPage('General',

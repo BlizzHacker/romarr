@@ -192,3 +192,141 @@ def pick_client(protocol: str, clients: list) -> object | None:
             continue
         return client
     return None
+
+
+# --- configuration schema --------------------------------------------------
+#
+# The *arr applications describe each client type as a field list and render
+# the add/edit form from it, so the UI never hard-codes a client's fields and a
+# new client type needs no UI change. Same here.
+#
+# `secret` fields are write-only: they are accepted from the form and stored,
+# but replaced with a placeholder on the way out so a password cannot be read
+# back out of the API by anyone who can reach it.
+
+FIELD = lambda name, label, kind="text", default="", **kw: {  # noqa: E731
+    "name": name, "label": label, "type": kind, "default": default, **kw
+}
+
+_COMMON = [
+    FIELD("name", "Name"),
+    FIELD("enable", "Enable", "bool", True),
+    FIELD("host", "Host", default="localhost"),
+    FIELD("port", "Port", "int"),
+    FIELD("use_ssl", "Use SSL", "bool", False),
+    FIELD("url_base", "URL Base", help="Adds a prefix, for use behind a reverse proxy"),
+]
+
+CLIENT_TYPES = {
+    "qbittorrent": {
+        "label": "qBittorrent",
+        "protocol": "torrent",
+        "default_port": 8080,
+        "fields": _COMMON + [
+            FIELD("username", "Username"),
+            FIELD("password", "Password", "secret"),
+            FIELD("category", "Category", default="rommarr"),
+        ],
+    },
+    "sabnzbd": {
+        "label": "SABnzbd",
+        "protocol": "usenet",
+        "default_port": 8080,
+        "fields": _COMMON + [
+            FIELD("api_key", "API Key", "secret"),
+            FIELD("category", "Category", default="rommarr"),
+        ],
+    },
+    "nzbget": {
+        "label": "NZBGet",
+        "protocol": "usenet",
+        "default_port": 6789,
+        "fields": _COMMON + [
+            FIELD("username", "Username", default="nzbget"),
+            FIELD("password", "Password", "secret"),
+            FIELD("category", "Category", default="rommarr"),
+        ],
+    },
+}
+
+SECRET_PLACEHOLDER = "********"
+
+
+def base_url_for(cfg: dict) -> str:
+    """Assemble host/port/ssl/url_base into the URL a client actually uses.
+
+    Stored as parts rather than one string because that is what the form
+    edits, and joining them in one place keeps a stray trailing slash or a
+    missing scheme from becoming three different bugs.
+    """
+    scheme = "https" if cfg.get("use_ssl") else "http"
+    host = str(cfg.get("host") or "localhost").strip().rstrip("/")
+    # Tolerate someone pasting a whole URL into the host field.
+    for prefix in ("https://", "http://"):
+        if host.startswith(prefix):
+            host = host[len(prefix):]
+            scheme = prefix[:-3]
+    port = cfg.get("port")
+    base = f"{scheme}://{host}" + (f":{int(port)}" if port else "")
+    url_base = str(cfg.get("url_base") or "").strip().strip("/")
+    return f"{base}/{url_base}" if url_base else base
+
+
+def build_client(cfg: dict):
+    """Turn a stored configuration into a live client, or None if unknown."""
+    kind = str(cfg.get("type") or "").lower()
+    spec = CLIENT_TYPES.get(kind)
+    if spec is None:
+        return None
+    url = base_url_for(cfg)
+    category = cfg.get("category") or "rommarr"
+
+    if kind == "qbittorrent":
+        from .clients import QBittorrent, QbitConfig
+        client = QBittorrent(QbitConfig(
+            base_url=url, username=cfg.get("username", ""),
+            password=cfg.get("password", ""), category=category))
+    elif kind == "sabnzbd":
+        client = SABnzbd(SabConfig(
+            base_url=url, api_key=cfg.get("api_key", ""), category=category))
+    elif kind == "nzbget":
+        client = NZBGet(NzbgetConfig(
+            base_url=url, username=cfg.get("username", ""),
+            password=cfg.get("password", ""), category=category))
+    else:
+        return None
+
+    # Carry the stored identity so callers can report which row failed.
+    client.config_id = cfg.get("id")
+    client.display_name = cfg.get("name") or spec["label"]
+    client.enabled = bool(cfg.get("enable", True))
+    return client
+
+
+def redact(cfg: dict) -> dict:
+    """A client configuration safe to send to a browser."""
+    spec = CLIENT_TYPES.get(str(cfg.get("type") or "").lower(), {})
+    secrets = {f["name"] for f in spec.get("fields", []) if f["type"] == "secret"}
+    return {
+        k: (SECRET_PLACEHOLDER if k in secrets and v else v)
+        for k, v in cfg.items()
+    }
+
+
+def merge_secrets(new: dict, old: dict | None) -> dict:
+    """Keep the stored secret when the form sends back the placeholder.
+
+    An edit form shows `********` for a password. Saving that verbatim would
+    silently replace the real credential with eight asterisks -- the client
+    would then fail to authenticate and nothing would say why.
+    """
+    if not old:
+        return new
+    spec = CLIENT_TYPES.get(str(new.get("type") or "").lower(), {})
+    for field in spec.get("fields", []):
+        if field["type"] != "secret":
+            continue
+        name = field["name"]
+        if new.get(name) in (SECRET_PLACEHOLDER, "", None):
+            new[name] = old.get(name, "")
+    return new
