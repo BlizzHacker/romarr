@@ -191,7 +191,7 @@ def test_library_view_serialises_games_and_names_the_backend(tmp_path):
 
     from romarr.app import Romarr
 
-    svc = Romarr({"ROMMARR_DATA": str(tmp_path / "s.json"),
+    svc = Romarr({"ROMARR_DATA": str(tmp_path / "s.json"),
                   "ROMM_LIBRARY": str(tmp_path / "lib"),
                   "LIBRARY_KIND": "gaseous",
                   "LIBRARY_URL": "http://gaseous.example"})
