@@ -1,6 +1,6 @@
 """The service's HTTP surface: inbound webhooks from a request front-end."""
 
-from rommarr.app import Rommarr
+from romarr.app import Romarr
 
 
 # --- inbound request webhooks ----------------------------------------------
@@ -10,7 +10,7 @@ from rommarr.app import Rommarr
 # to hold.
 
 def test_webhook_reads_gg_requestz_payload():
-    game, platform = Rommarr.parse_request_webhook({
+    game, platform = Romarr.parse_request_webhook({
         "type": "game_request",
         "title": "New Game Request: Chrono Trigger",
         "message": "requested by wade",
@@ -25,7 +25,7 @@ def test_webhook_reads_gg_requestz_payload():
 def test_webhook_falls_back_to_the_human_title():
     # data.game_title is what we want, but the title carries the same name in
     # a fixed "New Game Request: <name>" shape when it is missing.
-    assert Rommarr.parse_request_webhook({
+    assert Romarr.parse_request_webhook({
         "type": "game_request",
         "title": "New Game Request: Contra",
         "data": {"platforms": ["NES"]},
@@ -35,16 +35,16 @@ def test_webhook_falls_back_to_the_human_title():
 def test_webhook_ignores_events_that_are_not_game_requests():
     # A webhook URL receives whatever anybody points at it. Guessing a game
     # out of an unrelated event would start a download nobody asked for.
-    assert Rommarr.parse_request_webhook({"type": "user_registered",
+    assert Romarr.parse_request_webhook({"type": "user_registered",
                                           "data": {"user": "wade"}}) is None
-    assert Rommarr.parse_request_webhook({"data": {}}) is None
-    assert Rommarr.parse_request_webhook("not a dict") is None
+    assert Romarr.parse_request_webhook({"data": {}}) is None
+    assert Romarr.parse_request_webhook("not a dict") is None
 
 
 def test_webhook_records_an_unknown_platform_rather_than_dropping_it(tmp_path):
     # An unmapped platform name is a mapping problem somebody can fix. Silence
     # would leave a request that simply never happened, with nothing to look at.
-    svc = Rommarr({"ROMMARR_DATA": str(tmp_path / "s.json"),
+    svc = Romarr({"ROMARR_DATA": str(tmp_path / "s.json"),
                    "ROMM_LIBRARY": str(tmp_path / "lib")})
     result = svc.handle_request_webhook({
         "type": "game_request",

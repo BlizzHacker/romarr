@@ -2,10 +2,10 @@ import zipfile
 
 import pytest
 
-from rommarr.indexers import Prowlarr, sanitise_for_display
-from rommarr.library import import_rom, list_candidates, safe_members
-from rommarr.platforms import by_slug
-from rommarr.selection import Release
+from romarr.indexers import Prowlarr, sanitise_for_display
+from romarr.library import import_rom, list_candidates, safe_members
+from romarr.platforms import by_slug
+from romarr.selection import Release
 
 
 SNES = by_slug("snes")
@@ -186,8 +186,8 @@ def test_sanitiser_redacts_keys_for_logs():
 # --- service wiring -------------------------------------------------------
 
 def test_request_rejects_an_unknown_platform(tmp_path):
-    from rommarr.app import Rommarr
-    svc = Rommarr(env={"ROMMARR_DATA": str(tmp_path / "r.json")})
+    from romarr.app import Romarr
+    svc = Romarr(env={"ROMARR_DATA": str(tmp_path / "r.json")})
     out = svc.request("Super Mario World", "PlayStation 5")
     assert not out["ok"]
     assert "unknown platform" in out["error"]
@@ -196,11 +196,11 @@ def test_request_rejects_an_unknown_platform(tmp_path):
 def test_a_release_without_a_plain_magnet_is_refused_not_leaked(monkeypatch, tmp_path):
     """Prowlarr's own download links carry its API key, so a release that has
     no plain magnet must be refused rather than passed to a download client."""
-    from rommarr.app import Rommarr
-    from rommarr.selection import Release
+    from romarr.app import Romarr
+    from romarr.selection import Release
 
-    svc = Rommarr(env={"QBITTORRENT_URL": "http://qbit:8090",
-                       "ROMMARR_DATA": str(tmp_path / "r.json")})
+    svc = Romarr(env={"QBITTORRENT_URL": "http://qbit:8090",
+                       "ROMARR_DATA": str(tmp_path / "r.json")})
     unusable = Release(title="Super Mario World (USA)", size=524288, seeders=50,
                        categories=(1030,), download_url="", protocol="torrent")
     monkeypatch.setattr(svc.prowlarr, "search", lambda *a, **k: [unusable])
@@ -217,11 +217,11 @@ def test_a_release_without_a_plain_magnet_is_refused_not_leaked(monkeypatch, tmp
 
 
 def test_a_healthy_release_is_grabbed_and_queued(monkeypatch, tmp_path):
-    from rommarr.app import Rommarr
-    from rommarr.selection import Release
+    from romarr.app import Romarr
+    from romarr.selection import Release
 
-    svc = Rommarr(env={"QBITTORRENT_URL": "http://qbit:8090",
-                       "ROMMARR_DATA": str(tmp_path / "r.json")})
+    svc = Romarr(env={"QBITTORRENT_URL": "http://qbit:8090",
+                       "ROMARR_DATA": str(tmp_path / "r.json")})
     good = Release(title="Super Mario World (USA)", size=524288, seeders=120,
                    categories=(1030,), download_url="magnet:?xt=urn:btih:abc",
                    protocol="torrent")
@@ -242,13 +242,13 @@ def test_a_healthy_release_is_grabbed_and_queued(monkeypatch, tmp_path):
 def test_a_usenet_release_goes_to_the_usenet_client(monkeypatch, tmp_path):
     """Accepting only torrents made every usenet indexer in Prowlarr dead
     weight: results scored fine and were then refused."""
-    from rommarr.app import Rommarr
-    from rommarr.selection import Release
+    from romarr.app import Romarr
+    from romarr.selection import Release
 
-    svc = Rommarr(env={
+    svc = Romarr(env={
         "QBITTORRENT_URL": "http://qbit:8090",
         "SABNZBD_URL": "http://sab:8080", "SABNZBD_API_KEY": "k",
-        "ROMMARR_DATA": str(tmp_path / "r.json"),
+        "ROMARR_DATA": str(tmp_path / "r.json"),
     })
     nzb = Release(title="Chrono Trigger (USA)", size=4 << 20, seeders=0,
                   categories=(1030,), download_url="https://idx/get?id=1",
@@ -267,13 +267,13 @@ def test_a_usenet_release_goes_to_the_usenet_client(monkeypatch, tmp_path):
 
 
 def test_a_torrent_release_goes_to_the_torrent_client(monkeypatch, tmp_path):
-    from rommarr.app import Rommarr
-    from rommarr.selection import Release
+    from romarr.app import Romarr
+    from romarr.selection import Release
 
-    svc = Rommarr(env={
+    svc = Romarr(env={
         "QBITTORRENT_URL": "http://qbit:8090",
         "SABNZBD_URL": "http://sab:8080", "SABNZBD_API_KEY": "k",
-        "ROMMARR_DATA": str(tmp_path / "r.json"),
+        "ROMARR_DATA": str(tmp_path / "r.json"),
     })
     tor = Release(title="Zelda (USA)", size=1 << 20, seeders=40,
                   categories=(1030,), download_url="magnet:?xt=urn:btih:abc",
@@ -291,12 +291,12 @@ def test_a_torrent_release_goes_to_the_torrent_client(monkeypatch, tmp_path):
 
 
 def test_a_protocol_with_no_client_says_so_rather_than_failing_vaguely(monkeypatch, tmp_path):
-    from rommarr.app import Rommarr
-    from rommarr.selection import Release
+    from romarr.app import Romarr
+    from romarr.selection import Release
 
     # Torrent client only; a usenet result has nowhere to go.
-    svc = Rommarr(env={"QBITTORRENT_URL": "http://qbit:8090",
-                       "ROMMARR_DATA": str(tmp_path / "r.json")})
+    svc = Romarr(env={"QBITTORRENT_URL": "http://qbit:8090",
+                       "ROMARR_DATA": str(tmp_path / "r.json")})
     nzb = Release(title="Metroid (USA)", size=1 << 20, seeders=0,
                   categories=(1030,), download_url="https://idx/get?id=2",
                   protocol="usenet")
@@ -310,8 +310,8 @@ def test_a_protocol_with_no_client_says_so_rather_than_failing_vaguely(monkeypat
 
 
 def test_an_unconfigured_client_is_skipped_not_tried():
-    from rommarr.downloaders import SABnzbd, SabConfig, pick_client
-    from rommarr.clients import QBittorrent, QbitConfig
+    from romarr.downloaders import SABnzbd, SabConfig, pick_client
+    from romarr.clients import QBittorrent, QbitConfig
 
     qbit = QBittorrent(QbitConfig(base_url="http://qbit:8090"))
     sab_off = SABnzbd(SabConfig(base_url="", api_key=""))

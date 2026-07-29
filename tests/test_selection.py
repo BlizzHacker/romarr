@@ -1,8 +1,8 @@
 import pytest
 
-from rommarr.indexers import _download_link
-from rommarr.platforms import resolve, platform_for_file, by_slug, all_extensions
-from rommarr.selection import (
+from romarr.indexers import _download_link
+from romarr.platforms import resolve, platform_for_file, by_slug, all_extensions
+from romarr.selection import (
     Release, best_release, is_game_release, pick_rom_file, score, title_matches,
 )
 
@@ -41,7 +41,7 @@ def test_extension_maps_back_to_a_platform():
 
 
 def test_every_platform_declares_at_least_one_extension():
-    from rommarr.platforms import PLATFORMS
+    from romarr.platforms import PLATFORMS
     for p in PLATFORMS:
         assert p.extensions, f"{p.slug} has no extensions"
     assert ".smc" in all_extensions()
@@ -156,7 +156,7 @@ def test_a_platforms_own_name_does_not_disqualify_it():
 
 # --- platform evidence -------------------------------------------------------
 #
-# The search deliberately casts a wide net (see Rommarr._search_releases), so
+# The search deliberately casts a wide net (see Romarr._search_releases), so
 # scoring has to be able to tell the same game apart across consoles.
 
 def test_a_rom_extension_beats_a_bare_title():

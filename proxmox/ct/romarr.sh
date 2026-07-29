@@ -3,9 +3,9 @@ source "$(dirname "${BASH_SOURCE[0]}")/../misc/build.func" 2>/dev/null || source
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: BlizzHacker
 # License: MIT | https://github.com/community-scripts/ProxmoxVED/raw/main/LICENSE
-# Source: https://github.com/BlizzHacker/rommarr
+# Source: https://github.com/BlizzHacker/romarr
 
-APP="Rommarr"
+APP="Romarr"
 var_tags="${var_tags:-arr;emulation}"
 var_cpu="${var_cpu:-1}"
 var_ram="${var_ram:-512}"
@@ -25,30 +25,30 @@ function update_script() {
   check_container_storage
   check_container_resources
 
-  if [[ ! -d /opt/rommarr ]]; then
+  if [[ ! -d /opt/romarr ]]; then
     msg_error "No ${APP} Installation Found!"
     exit
   fi
 
-  if check_for_gh_release "rommarr" "BlizzHacker/rommarr"; then
+  if check_for_gh_release "romarr" "BlizzHacker/romarr"; then
     msg_info "Stopping Service"
-    systemctl stop rommarr
+    systemctl stop romarr
     msg_ok "Stopped Service"
 
     # The settings file holds the request history and the release profile, so
-    # it must survive an update -- it is the only state Rommarr keeps.
-    create_backup /opt/rommarr/.env
-    BACKUP_DIR=/opt/rommarr-data.backup create_backup /opt/rommarr/rommarr.json
+    # it must survive an update -- it is the only state Romarr keeps.
+    create_backup /opt/romarr/.env
+    BACKUP_DIR=/opt/romarr-data.backup create_backup /opt/romarr/romarr.json
 
-    CLEAN_INSTALL=1 fetch_and_deploy_gh_release "rommarr" "BlizzHacker/rommarr" "tarball" "latest" "/opt/rommarr"
+    CLEAN_INSTALL=1 fetch_and_deploy_gh_release "romarr" "BlizzHacker/romarr" "tarball" "latest" "/opt/romarr"
 
     msg_info "Updating ${APP}"
-    cd /opt/rommarr
-    $STD /opt/rommarr/.venv/bin/pip install --upgrade -r requirements.txt
+    cd /opt/romarr
+    $STD /opt/romarr/.venv/bin/pip install --upgrade -r requirements.txt
     msg_ok "Updated ${APP}"
 
     msg_info "Starting Service"
-    systemctl start rommarr
+    systemctl start romarr
     msg_ok "Started Service"
     msg_ok "Updated Successfully"
   fi

@@ -181,7 +181,7 @@ function go(page){
     queue:'Queue',history:'History',media:'Media Management',profiles:'Profiles',
     indexers:'Indexers',clients:'Download Clients',general:'General',
     status:'System Status',tasks:'Tasks',logs:'Logs'};
-  $('#top h1').textContent=titles[page]||'Rommarr';
+  $('#top h1').textContent=titles[page]||'Romarr';
   $('#search').classList.toggle('hide', !['library','add'].includes(page));
   (RENDER[page]||RENDER.library)();
 }
@@ -223,7 +223,7 @@ RENDER.library=async()=>{
 RENDER.add=async()=>{
   $('#page').innerHTML=`<div class="card">
     <h3>Request a game</h3>
-    <p class="help">Rommarr searches your indexers, picks the healthiest release
+    <p class="help">Romarr searches your indexers, picks the healthiest release
       for the platform, hands it to the download client and files the ROM into RomM.</p>
     <div class="row">
       <div class="field" style="flex:1;margin:0"><label>Game</label>
@@ -593,7 +593,7 @@ RENDER.tasks=async()=>{
 RENDER.logs=async()=>{
   const d=await j('/api/v1/log?limit=200');
   $('#page').innerHTML=`<div class="card"><h3>Recent events</h3>
-    <p class="help">Rommarr's own history. Service logs are in journalctl -u rommarr.</p>
+    <p class="help">Romarr's own history. Service logs are in journalctl -u romarr.</p>
     ${d.items.length?`<pre style="font:12px/1.6 ui-monospace,Menlo,monospace;
       color:var(--dim);white-space:pre-wrap">${d.items.map(e=>
       `${esc(e.at)}  ${esc(e.kind.toUpperCase().padEnd(9))} ${esc(e.game)} `+
@@ -626,7 +626,7 @@ async function refreshCounts(){
 
 def page() -> str:
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
-<title>Rommarr</title><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Romarr</title><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>{CSS}</style></head><body>
 <nav id="rail"><div id="brand">Romm<span>arr</span></div>{_nav_html()}</nav>
 <div id="main">

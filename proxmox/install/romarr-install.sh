@@ -3,7 +3,7 @@
 # Copyright (c) 2021-2026 community-scripts ORG
 # Author: BlizzHacker
 # License: MIT | https://github.com/community-scripts/ProxmoxVED/raw/main/LICENSE
-# Source: https://github.com/BlizzHacker/rommarr
+# Source: https://github.com/BlizzHacker/romarr
 
 source /dev/stdin <<<"$FUNCTIONS_FILE_PATH"
 color
@@ -17,19 +17,19 @@ msg_info "Installing Dependencies"
 $STD apt-get install -y python3-venv
 msg_ok "Installed Dependencies"
 
-fetch_and_deploy_gh_release "rommarr" "BlizzHacker/rommarr" "tarball" "latest" "/opt/rommarr"
+fetch_and_deploy_gh_release "romarr" "BlizzHacker/romarr" "tarball" "latest" "/opt/romarr"
 
-msg_info "Setting up Rommarr"
-cd /opt/rommarr
+msg_info "Setting up Romarr"
+cd /opt/romarr
 $STD python3 -m venv .venv
-$STD /opt/rommarr/.venv/bin/pip install --upgrade pip
-$STD /opt/rommarr/.venv/bin/pip install -r requirements.txt
+$STD /opt/romarr/.venv/bin/pip install --upgrade pip
+$STD /opt/romarr/.venv/bin/pip install -r requirements.txt
 
-# Rommarr talks to three services and stores nothing else. Every value here is
+# Romarr talks to three services and stores nothing else. Every value here is
 # a placeholder on purpose: it starts and serves its UI with none of them
 # reachable, and the Settings pages say which are missing, so a first run is
 # never a blank failure.
-cat <<EOF >/opt/rommarr/.env
+cat <<EOF >/opt/romarr/.env
 PROWLARR_URL=http://192.168.1.100:9696
 PROWLARR_API_KEY=
 
@@ -44,26 +44,26 @@ ROMM_PASSWORD=
 # Where imported ROMs are filed. This must be a path RomM also scans, or the
 # import succeeds and the game never appears.
 ROMM_LIBRARY=/mnt/roms
-ROMMARR_DATA=/opt/rommarr/rommarr.json
-ROMMARR_PORT=7878
+ROMARR_DATA=/opt/romarr/romarr.json
+ROMARR_PORT=7878
 LOG_LEVEL=INFO
 EOF
-chmod 600 /opt/rommarr/.env
+chmod 600 /opt/romarr/.env
 mkdir -p /mnt/roms
-msg_ok "Set up Rommarr"
+msg_ok "Set up Romarr"
 
 msg_info "Creating Service"
-cat <<EOF >/etc/systemd/system/rommarr.service
+cat <<EOF >/etc/systemd/system/romarr.service
 [Unit]
-Description=Rommarr - the *arr for games
+Description=Romarr - the *arr for games
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/rommarr
-EnvironmentFile=/opt/rommarr/.env
-ExecStart=/opt/rommarr/.venv/bin/python -m rommarr
+WorkingDirectory=/opt/romarr
+EnvironmentFile=/opt/romarr/.env
+ExecStart=/opt/romarr/.venv/bin/python -m romarr
 Restart=on-failure
 RestartSec=10
 
@@ -73,12 +73,12 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/opt/rommarr /mnt/roms
+ReadWritePaths=/opt/romarr /mnt/roms
 
 [Install]
 WantedBy=multi-user.target
 EOF
-systemctl enable -q --now rommarr
+systemctl enable -q --now romarr
 msg_ok "Created Service"
 
 motd_ssh

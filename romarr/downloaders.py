@@ -1,7 +1,7 @@
 """Download clients.
 
 Radarr, Sonarr and Lidarr all accept both protocols an indexer can offer and
-route each release to a client that speaks it. Rommarr accepted only torrents,
+route each release to a client that speaks it. Romarr accepted only torrents,
 and only through qBittorrent, which made every usenet indexer in Prowlarr dead
 weight -- results came back, scored fine, and were then refused.
 
@@ -37,7 +37,7 @@ log = logging.getLogger(__name__)
 class SabConfig:
     base_url: str
     api_key: str = ""
-    category: str = "rommarr"
+    category: str = "romarr"
     timeout: int = 30
 
 
@@ -112,7 +112,7 @@ class NzbgetConfig:
     base_url: str
     username: str = ""
     password: str = ""
-    category: str = "rommarr"
+    category: str = "romarr"
     timeout: int = 30
 
 
@@ -152,7 +152,7 @@ class NZBGet:
         # append(NZBFilename, Content, Category, Priority, AddToTop, AddPaused,
         #        DupeKey, DupeScore, DupeMode, PPParameters)
         result = self._rpc("append", [
-            name or "rommarr.nzb", url, self._config.category, 0,
+            name or "romarr.nzb", url, self._config.category, 0,
             False, False, "", 0, "SCORE", [],
         ])
         # A new-enough NZBGet returns the new id; anything falsy is a refusal.
@@ -225,7 +225,7 @@ CLIENT_TYPES = {
         "fields": _COMMON + [
             FIELD("username", "Username"),
             FIELD("password", "Password", "secret"),
-            FIELD("category", "Category", default="rommarr"),
+            FIELD("category", "Category", default="romarr"),
         ],
     },
     "sabnzbd": {
@@ -234,7 +234,7 @@ CLIENT_TYPES = {
         "default_port": 8080,
         "fields": _COMMON + [
             FIELD("api_key", "API Key", "secret"),
-            FIELD("category", "Category", default="rommarr"),
+            FIELD("category", "Category", default="romarr"),
         ],
     },
     "nzbget": {
@@ -244,7 +244,7 @@ CLIENT_TYPES = {
         "fields": _COMMON + [
             FIELD("username", "Username", default="nzbget"),
             FIELD("password", "Password", "secret"),
-            FIELD("category", "Category", default="rommarr"),
+            FIELD("category", "Category", default="romarr"),
         ],
     },
 }
@@ -279,7 +279,7 @@ def build_client(cfg: dict):
     if spec is None:
         return None
     url = base_url_for(cfg)
-    category = cfg.get("category") or "rommarr"
+    category = cfg.get("category") or "romarr"
 
     if kind == "qbittorrent":
         from .clients import QBittorrent, QbitConfig

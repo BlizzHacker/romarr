@@ -1,4 +1,4 @@
-"""Rommarr's HTTP service and web UI.
+"""Romarr's HTTP service and web UI.
 
 Deliberately stdlib-only for the server itself: this runs in a 512MB LXC beside
 a download client and a database, and an *arr that needs a web framework to
@@ -35,7 +35,7 @@ import json
 import logging
 import os
 import threading
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, asdict, dataclass, field
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -43,6 +43,7 @@ from urllib.parse import parse_qs, urlparse
 
 import time
 
+from .libraries import build_library
 from .clients import QBittorrent, QbitConfig, Romm, RommConfig
 from .downloaders import (
     CLIENT_TYPES, NZBGet, NzbgetConfig, SABnzbd, SabConfig, build_client,
@@ -72,7 +73,7 @@ class QueueItem:
     at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat(timespec="seconds"))
 
 
-class Rommarr:
+class Romarr:
     """The service. Holds config, clients, and the in-flight queue."""
 
     def __init__(self, env: dict[str, str] | None = None):
@@ -98,12 +99,16 @@ class Rommarr:
             username=e.get("NZBGET_USER", ""),
             password=e.get("NZBGET_PASS", ""),
         ))
-        self.romm = Romm(RommConfig(
-            base_url=e.get("ROMM_URL", ""),
-            username=e.get("ROMM_USERNAME", ""),
-            password=e.get("ROMM_PASSWORD", ""),
-            api_token=e.get("ROMM_API_TOKEN", ""),
-        ))
+        # Which game library this Romarr feeds. RomM remains the default so an
+        # install that predates the other backends keeps working untouched, and
+        # the ROMM_* variables are still honoured for the same reason.
+        # NOT self.library: that name is already the ROM directory Path, and
+        # assigning both silently leaves whichever ran last -- the same
+        # collision that forced library_view() to be renamed.
+        self.game_library = build_library(e.get("LIBRARY_KIND", "romm"), e)
+        # Kept under the old name so the rest of the service, and anything that
+        # already reads it, does not have to care which backend is attached.
+        self.romm = self.game_library
         # Built from stored configuration, seeded from the environment once.
         self.clients: list = []
         # Where GG Requestz lives, so the status page can show the connection
@@ -118,7 +123,7 @@ class Rommarr:
         # History, Wanted and settings survive a restart. Without this a restart
         # lost everything you had asked for, which is the difference between a
         # tool and a demo.
-        self.store = Store(e.get("ROMMARR_DATA", "/opt/rommarr/rommarr.json"))
+        self.store = Store(e.get("ROMARR_DATA", "/opt/romarr/romarr.json"))
         # A library path saved through the UI has to win over the environment
         # default, or the setting is one you can change but not apply.
         saved = self.store.settings.get("library_path")
@@ -189,8 +194,9 @@ class Rommarr:
         if games is None:
             return {"items": [], "loading": True,
                     "error": err or "",
-                    "message": "Reading the library from RomM…"}
-        return {"items": games, "loading": False,
+                    "message": f"Reading the library from {self.game_library.name}…"}
+        return {"items": [asdict(g) for g in games], "loading": False,
+                "library": self.game_library.name,
                 "age_seconds": int(time.monotonic() - at) if at else None,
                 "error": err}
 
@@ -219,7 +225,7 @@ class Rommarr:
                 "port": parts.port or CLIENT_TYPES[kind]["default_port"],
                 "use_ssl": parts.scheme == "https",
                 "url_base": parts.path.strip("/"),
-                "category": "rommarr", **extra,
+                "category": "romarr", **extra,
             })
 
         add("qbittorrent", e.get("QBITTORRENT_URL", ""),
@@ -593,7 +599,7 @@ class Rommarr:
             return {"imported": done, "message": f"Imported {len(done)}"}
         if name == "RefreshLibrary":
             try:
-                return {"message": f"{self.romm.count()} games in RomM"}
+                return {"message": f"{self.game_library.count()} games in {self.game_library.name}"}
             except Exception as err:
                 return {"message": f"RomM unreachable: {err}"}
         return {"error": f"unknown command: {name}"}
@@ -647,9 +653,9 @@ class Rommarr:
 
 # -- HTTP ------------------------------------------------------------------
 
-def make_handler(service: Rommarr):
+def make_handler(service: Romarr):
     class Handler(BaseHTTPRequestHandler):
-        server_version = "Rommarr"
+        server_version = "Romarr"
 
         def _send(self, code: int, body: bytes, content_type: str):
             self.send_response(code)
@@ -796,7 +802,7 @@ def make_handler(service: Rommarr):
 
 
 def serve(port: int = 7878, env: dict[str, str] | None = None):
-    service = Rommarr(env)
+    service = Romarr(env)
     httpd = ThreadingHTTPServer(("0.0.0.0", port), make_handler(service))
-    log.info("rommarr listening on :%d, library=%s", port, service.library)
+    log.info("romarr listening on :%d, library=%s", port, service.library)
     httpd.serve_forever()

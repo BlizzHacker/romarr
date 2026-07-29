@@ -1,7 +1,7 @@
 """Persistence.
 
 The *arr applications all keep the same things across a restart: what you
-asked for, what happened to it, and how you configured the thing. Rommarr kept
+asked for, what happened to it, and how you configured the thing. Romarr kept
 all of it in memory, so a restart lost your history and your settings -- which
 is the difference between a tool and a demo.
 
@@ -106,7 +106,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
 
 
 class Store:
-    """Everything Rommarr remembers."""
+    """Everything Romarr remembers."""
 
     # Past this the history file grows without bound and nobody reads the tail.
     MAX_EVENTS = 2000
@@ -153,7 +153,7 @@ class Store:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         # Atomic: a crash mid-write would otherwise leave truncated JSON and
         # the service would refuse to start.
-        fd, tmp = tempfile.mkstemp(dir=str(self.path.parent), prefix=".rommarr-", suffix=".tmp")
+        fd, tmp = tempfile.mkstemp(dir=str(self.path.parent), prefix=".romarr-", suffix=".tmp")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as fh:
                 json.dump(payload, fh, indent=1)

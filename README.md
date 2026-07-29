@@ -1,6 +1,25 @@
-# Rommarr
+# Romarr
 
-**The *arr for games.** Rommarr watches for game requests, searches your
+The *arr for games. Request a title, Romarr finds it, grabs it, and files it
+into your game library.
+
+**It is not tied to one library.** RomM, [Gaseous](https://github.com/gaseous-project/gaseous-server)
+and [Retrom](https://github.com/jmberesford/retrom) are all supported, chosen
+with a single setting:
+
+    LIBRARY_KIND=romm      # or gaseous, or retrom
+    LIBRARY_URL=http://your-library:8080
+    LIBRARY_API_KEY=...    # or LIBRARY_USERNAME / LIBRARY_PASSWORD
+
+Existing installs need no changes: `LIBRARY_KIND` defaults to `romm` and the
+old `ROMM_*` variables are still read.
+
+Adding a backend means implementing four methods -- reachable, count, games,
+rescan -- in `romarr/libraries.py`. Nothing else in the service learns which
+library is attached.
+
+
+**The *arr for games.** Romarr watches for game requests, searches your
 indexers through Prowlarr, hands the winner to your download client, and files
 the ROM into [RomM](https://github.com/rommapp/romm) where it can actually be
 played.
@@ -8,7 +27,7 @@ played.
 If you run Radarr for films and Sonarr for TV, this is the missing one.
 
 ```
-GG Requestz  ──request──▶  Rommarr  ──search──▶  Prowlarr ──▶ indexers
+GG Requestz  ──request──▶  Romarr  ──search──▶  Prowlarr ──▶ indexers
                               │                                  │
                               │◀──────────── releases ───────────┘
                               │
@@ -81,16 +100,16 @@ of feeding RomM in the first place.
 Proxmox LXC, one line:
 
 ```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/BlizzHacker/rommarr/main/proxmox/ct/rommarr.sh)"
+bash -c "$(curl -fsSL https://raw.githubusercontent.com/BlizzHacker/romarr/main/proxmox/ct/romarr.sh)"
 ```
 
 Or run it yourself:
 
 ```bash
-git clone https://github.com/BlizzHacker/rommarr.git && cd rommarr
+git clone https://github.com/BlizzHacker/romarr.git && cd romarr
 pip install -r requirements.txt
 cp .env.example .env    # then edit it
-python -m rommarr
+python -m romarr
 ```
 
 ## Configuration
@@ -104,7 +123,7 @@ python -m rommarr
 | `SABNZBD_URL` / `SABNZBD_API_KEY` | usenet client, optional |
 | `NZBGET_URL` / `NZBGET_USER` / `NZBGET_PASS` | usenet client, optional |
 | `GGREQUESTZ_URL` | shows the request front-end's status, optional |
-| `ROMMARR_DATA` | where history and settings are kept |
+| `ROMARR_DATA` | where history and settings are kept |
 
 A protocol with no client configured cannot be grabbed at all — results are
 found, ranked, and then refused. The Download Clients page names any protocol
@@ -126,7 +145,7 @@ The longest matching prefix wins. A mapping cannot help if the volume is not
 mounted here at all — that stays a mount problem, and you find out because the
 translated path still does not exist.
 
-Use a **dedicated RomM account**, not your admin one. Rommarr needs only
+Use a **dedicated RomM account**, not your admin one. Romarr needs only
 enough to trigger a scan.
 
 ## Tests

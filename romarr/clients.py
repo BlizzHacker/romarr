@@ -13,6 +13,8 @@ from dataclasses import dataclass
 
 import requests
 
+from .libraries import Game
+
 log = logging.getLogger(__name__)
 
 
@@ -23,7 +25,7 @@ class QbitConfig:
     base_url: str
     username: str = ""
     password: str = ""
-    category: str = "rommarr"
+    category: str = "romarr"
     timeout: int = 30
 
 
@@ -118,7 +120,14 @@ class RommConfig:
 
 
 class Romm:
-    """Authenticates and asks RomM to rescan after an import."""
+    """Authenticates and asks RomM to rescan after an import.
+
+    One of several libraries Romarr can drive -- see libraries.py for the
+    protocol every backend implements.
+    """
+
+    # Shown in the UI so it is obvious which library is attached.
+    name = "RomM"
 
     # Only what a rescan needs. Asking for more than that on a service account
     # is how an integration quietly becomes a way to delete someone's library.
@@ -142,6 +151,10 @@ class Romm:
         "with_char_index": "false",
         "with_filter_values": "false",
     }
+
+    @property
+    def configured(self) -> bool:
+        return bool(self._config.base_url)
 
     def __init__(self, config: RommConfig, session: requests.Session | None = None):
         self._config = config
@@ -203,7 +216,7 @@ class Romm:
 
         This feeds a status page. A dependency that is merely slow must not
         hold the page open for the whole request timeout -- that turns "RomM is
-        struggling" into "Rommarr is broken", which is the wrong diagnosis to
+        struggling" into "Romarr is broken", which is the wrong diagnosis to
         hand somebody.
 
         The heartbeat is deliberately unauthenticated here: fetching a token
@@ -275,12 +288,13 @@ class Romm:
             cover = it.get("path_cover_small") or it.get("path_cover_large") or ""
             if cover and not cover.startswith("http"):
                 cover = f"{base}/{cover.lstrip('/')}"
-            out.append({
-                "id": it.get("id"),
-                "name": it.get("name") or it.get("fs_name") or "Unknown",
-                "platform": it.get("platform_display_name") or it.get("platform_slug") or "",
-                "cover": cover,
-            })
+            out.append(Game(
+                id=str(it.get("id") or ""),
+                name=str(it.get("name") or it.get("fs_name") or "Unknown"),
+                platform=str(it.get("platform_display_name")
+                             or it.get("platform_slug") or ""),
+                cover=cover,
+            ))
         return out
 
     def rescan(self, platform_slug: str | None = None) -> bool:

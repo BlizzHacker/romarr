@@ -1,11 +1,11 @@
 import json
 
-from rommarr.store import DEFAULT_SETTINGS, Event, Store
+from romarr.store import DEFAULT_SETTINGS, Event, Store
 
 
 def test_history_and_settings_survive_a_restart(tmp_path):
     """The whole point of the store: a restart used to lose everything."""
-    path = tmp_path / "rommarr.json"
+    path = tmp_path / "romarr.json"
     s = Store(path)
     s.record(Event(kind="grabbed", game="Super Mario World", platform="snes",
                    release="Super Mario World (USA)", seeders=120))
@@ -20,7 +20,7 @@ def test_history_and_settings_survive_a_restart(tmp_path):
 
 def test_a_setting_added_later_gets_its_default(tmp_path):
     """An older file must not leave a new setting missing entirely."""
-    path = tmp_path / "rommarr.json"
+    path = tmp_path / "romarr.json"
     path.write_text(json.dumps({"settings": {"min_seeders": 9}}), encoding="utf-8")
     s = Store(path)
     assert s.settings["min_seeders"] == 9
@@ -97,13 +97,13 @@ def test_history_is_capped_so_the_file_cannot_grow_without_bound(tmp_path):
 def test_a_write_leaves_no_temp_files_behind(tmp_path):
     s = Store(tmp_path / "r.json")
     s.record(Event(kind="grabbed", game="A", platform="nes"))
-    leftovers = [p.name for p in tmp_path.iterdir() if p.name.startswith(".rommarr-")]
+    leftovers = [p.name for p in tmp_path.iterdir() if p.name.startswith(".romarr-")]
     assert leftovers == []
 
 
 # --- remote path mapping ---------------------------------------------------
 
-from rommarr.library import map_remote_path  # noqa: E402
+from romarr.library import map_remote_path  # noqa: E402
 
 
 def test_a_client_path_is_translated_to_one_we_can_open():
@@ -164,7 +164,7 @@ def test_two_stores_do_not_share_their_default_lists(tmp_path):
 
 # --- configuration CRUD ----------------------------------------------------
 
-from rommarr.downloaders import (  # noqa: E402
+from romarr.downloaders import (  # noqa: E402
     CLIENT_TYPES, SECRET_PLACEHOLDER, base_url_for, build_client, merge_secrets, redact,
 )
 
@@ -227,9 +227,9 @@ def test_the_config_endpoint_never_returns_a_stored_credential(tmp_path):
     """This endpoint feeds a browser. Returning the raw settings put real
     credentials -- including the qBittorrent password -- in a page anyone who
     could reach the UI could read."""
-    from rommarr.app import Rommarr
-    svc = Rommarr(env={
-        "ROMMARR_DATA": str(tmp_path / "r.json"),
+    from romarr.app import Romarr
+    svc = Romarr(env={
+        "ROMARR_DATA": str(tmp_path / "r.json"),
         "QBITTORRENT_URL": "http://qbit:8090",
         "QBITTORRENT_USER": "admin", "QBITTORRENT_PASS": "REAL-PASSWORD",
         "PROWLARR_URL": "http://prowlarr:9696", "PROWLARR_API_KEY": "REAL-KEY",
@@ -248,7 +248,7 @@ def test_prowlarr_exposes_its_indexer_listing():
     """This method was appended below the class and Python parsed it as a
     nested function inside sanitise_for_display -- so it existed in the file,
     was never reachable, and the Indexers page silently showed nothing."""
-    from rommarr.indexers import Prowlarr
+    from romarr.indexers import Prowlarr
     assert callable(getattr(Prowlarr, "indexers", None))
 
 
@@ -257,8 +257,8 @@ def test_the_library_view_is_not_shadowed_by_the_library_path(tmp_path):
     shadowed by the instance attribute, so the route called a PosixPath and the
     connection closed with no response at all."""
     from pathlib import Path
-    from rommarr.app import Rommarr
-    svc = Rommarr(env={"ROMMARR_DATA": str(tmp_path / "r.json"),
+    from romarr.app import Romarr
+    svc = Romarr(env={"ROMARR_DATA": str(tmp_path / "r.json"),
                        "ROMM_LIBRARY": str(tmp_path)})
     assert isinstance(svc.library, Path)
     view = svc.library_view()
@@ -292,7 +292,7 @@ class _ExpiringSession:
 
 
 def test_an_expired_romm_token_is_replaced_rather_than_returned_forever():
-    from rommarr.clients import Romm, RommConfig
+    from romarr.clients import Romm, RommConfig
     session = _ExpiringSession()
     romm = Romm(RommConfig(base_url="http://romm", username="u", password="p"),
                 session=session)
@@ -305,7 +305,7 @@ def test_an_expired_romm_token_is_replaced_rather_than_returned_forever():
 def test_a_403_is_not_retried():
     # A permissions problem; another token gives the same answer, so retrying
     # only doubles the load on an already-struggling service.
-    from rommarr.clients import Romm, RommConfig
+    from romarr.clients import Romm, RommConfig
 
     class Forbidden(_ExpiringSession):
         def get(self, url, **kw):
