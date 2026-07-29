@@ -12,12 +12,12 @@ the importer, the indexers and the UI never learn which is in use.
 Three are implemented:
 
   * RomM      -- REST, /api/roms, bearer token from a username/password grant.
-  * Gaseous   -- REST, /api/v1.1/Games. Search is a POST with a JSON body
-                 rather than a query string, which is unusual enough to be
-                 worth stating.
-  * Retrom    -- REST gateway in front of a gRPC service, so its JSON is
-                 protobuf-shaped: fields are camelCase and a "game" carries its
-                 metadata in a nested object.
+  * Gaseous   -- REST, /api/v1.1/Games. Listing is a POST with a mandatory
+                 filter body, authenticated by session cookie rather than a
+                 bearer token.
+  * Retrom    -- grpc-web. Its REST surface fetches one game by id and has no
+                 listing at all, so the protobuf wire format is spoken
+                 directly.
 """
 
 from __future__ import annotations
@@ -87,9 +87,19 @@ class GaseousConfig:
 class GaseousLibrary:
     """gaseous-server: https://github.com/gaseous-project/gaseous-server
 
-    Its games endpoint is a POST even for a plain listing -- the filter is a
-    JSON body, not a query string -- so a GET returns 405 and looks like a
-    wrong path rather than a wrong method.
+    Three things about its API are worth stating, because all three were only
+    discovered by running one:
+
+      * Listing games is a POST with a JSON body, not a query string. A GET
+        returns a redirect to the login page, which reads as a wrong path
+        rather than a wrong method.
+      * It authenticates with a session cookie, not a bearer token. An
+        unauthenticated call does not return 401 -- it 302s to
+        /Identity/Account/Login, which then 404s under /api, so the failure
+        arrives looking like a missing endpoint.
+      * The filter body is not optional. Name, Genre, Theme, GameMode,
+        Platform and PlayerPerspective are all required even when empty, and
+        omitting them is a 400 listing every one of them.
     """
 
     name = "Gaseous"
@@ -97,6 +107,7 @@ class GaseousLibrary:
     def __init__(self, config: GaseousConfig, session: requests.Session | None = None):
         self._config = config
         self._session = session or requests.Session()
+        self._logged_in = False
 
     @property
     def configured(self) -> bool:
@@ -106,9 +117,41 @@ class GaseousLibrary:
         return f"{self._config.base_url.rstrip('/')}/api/v1.1/{path.lstrip('/')}"
 
     def _headers(self) -> dict[str, str]:
+        # An API key is honoured if one is configured, but Gaseous itself
+        # issues session cookies, so this is the exception rather than the
+        # rule.
         if self._config.api_key:
             return {"Authorization": f"Bearer {self._config.api_key}"}
         return {}
+
+    def _login(self) -> bool:
+        """Establish a session, once, if credentials were supplied.
+
+        The cookie lives on the requests.Session, so every later call carries
+        it without any explicit token handling.
+        """
+        if self._logged_in or not self._config.username:
+            return self._logged_in
+        try:
+            r = self._session.post(
+                self._url("Account/Login"),
+                json={
+                    "Email": self._config.username,
+                    "Password": self._config.password,
+                    "RememberMe": True,
+                },
+                timeout=self._config.timeout,
+            )
+        except requests.RequestException as err:
+            log.warning("gaseous login failed: %s", err.__class__.__name__)
+            return False
+        if not r.ok:
+            # Never echo the body: a failed auth response can repeat the
+            # submitted credentials back at you.
+            log.warning("gaseous login rejected with status %s", r.status_code)
+            return False
+        self._logged_in = True
+        return True
 
     def reachable(self) -> bool:
         try:
@@ -119,13 +162,24 @@ class GaseousLibrary:
             log.warning("gaseous unreachable: %s", err.__class__.__name__)
             return False
 
+    # Every field here is required by the server even when empty. Kept as one
+    # constant so the requirement is stated once rather than repeated.
+    _EMPTY_FILTER = {
+        "Name": "",
+        "Genre": [],
+        "Theme": [],
+        "GameMode": [],
+        "Platform": [],
+        "PlayerPerspective": [],
+    }
+
     def _search(self, limit: int, offset: int, timeout: int | None):
-        body = {
+        self._login()
+        body = dict(self._EMPTY_FILTER)
+        body.update({
             "pageNumber": (offset // max(limit, 1)) + 1,
             "pageSize": limit,
-            "sortField": "NameThe",
-            "sortAscending": True,
-        }
+        })
         r = self._session.post(self._url("Games"), json=body, headers=self._headers(),
                                timeout=timeout or self._config.timeout)
         r.raise_for_status()
@@ -158,8 +212,8 @@ class GaseousLibrary:
                 id=gid,
                 name=str(row.get("name") or row.get("nameThe") or "Unknown"),
                 platform=str(row.get("platformName") or row.get("platform") or ""),
-                # Gaseous serves cover art from the game id rather than a path
-                # in the payload.
+                # Cover art is served from the game id rather than a path in
+                # the payload.
                 cover=_absolute(base, f"/api/v1.1/Games/{gid}/cover/image"),
             ))
         return out
@@ -169,9 +223,10 @@ class GaseousLibrary:
 
         Optional everywhere in Romarr: the ROM is already in the library
         directory by the time this runs, so a failure here is logged and
-        reported rather than raised. A successful import must never be called
-        a failure over a courtesy call.
+        reported rather than raised. A successful import must never be
+        reported as a failure over a courtesy call.
         """
+        self._login()
         try:
             r = self._session.post(self._url("ContentManager/Rescan"),
                                    headers=self._headers(),
@@ -196,12 +251,23 @@ class RetromConfig:
 class RetromLibrary:
     """retrom: https://github.com/jmberesford/retrom
 
-    Retrom is gRPC with a REST gateway in front, so its JSON is
-    protobuf-shaped: camelCase keys, and a game's human details sit in a
-    nested metadata object rather than on the row itself.
+    Retrom's REST surface fetches a single game by id and nothing else -- there
+    is no list endpoint there at all. Listing is a gRPC call, exposed over
+    grpc-web on the same port, so that is what this speaks.
+
+    Rather than pull in protobuf tooling for two messages, the wire format is
+    written and read directly. It is small and stable, and the alternative is a
+    code-generation step in a project that otherwise has none.
     """
 
     name = "Retrom"
+
+    # From packages/codegen/protos. Field numbers are part of the contract and
+    # can only change in a breaking release, so pinning them is as safe as a
+    # generated stub and far less machinery.
+    _F_GAMES, _F_METADATA = 1, 2                              # GetGamesResponse
+    _F_GAME_ID, _F_GAME_PATH, _F_GAME_PLATFORM = 1, 3, 4      # Game
+    _F_META_GAME_ID, _F_META_NAME, _F_META_COVER = 1, 2, 4    # GameMetadata
 
     def __init__(self, config: RetromConfig, session: requests.Session | None = None):
         self._config = config
@@ -211,78 +277,157 @@ class RetromLibrary:
     def configured(self) -> bool:
         return bool(self._config.base_url)
 
-    def _url(self, path: str) -> str:
-        return f"{self._config.base_url.rstrip('/')}/{path.lstrip('/')}"
-
-    def _headers(self) -> dict[str, str]:
+    def _rpc(self, method: str, body: bytes, timeout: int | None) -> bytes:
+        """One grpc-web call, returning the raw framed response."""
+        url = f"{self._config.base_url.rstrip('/')}/retrom.{method}"
+        headers = {"content-type": "application/grpc-web+proto"}
         if self._config.api_key:
-            return {"Authorization": f"Bearer {self._config.api_key}"}
-        return {}
+            headers["authorization"] = f"Bearer {self._config.api_key}"
+        # grpc-web frames a message as one flag byte, four big-endian length
+        # bytes, then the payload.
+        framed = b"\x00" + len(body).to_bytes(4, "big") + body
+        r = self._session.post(url, data=framed, headers=headers,
+                               timeout=timeout or self._config.timeout)
+        r.raise_for_status()
+        return r.content
+
+    @staticmethod
+    def _frames(raw: bytes):
+        """Yield message payloads, skipping the trailer.
+
+        The final frame sets the high bit in its flag byte and carries trailing
+        headers rather than a message; decoding it as protobuf yields nonsense.
+        """
+        i = 0
+        while i + 5 <= len(raw):
+            flag = raw[i]
+            length = int.from_bytes(raw[i + 1:i + 5], "big")
+            payload = raw[i + 5:i + 5 + length]
+            i += 5 + length
+            if flag & 0x80:
+                continue
+            yield payload
+
+    @staticmethod
+    def _varint(buf: bytes, i: int) -> tuple[int, int]:
+        value = shift = 0
+        while i < len(buf):
+            byte = buf[i]
+            i += 1
+            value |= (byte & 0x7F) << shift
+            if not byte & 0x80:
+                break
+            shift += 7
+        return value, i
+
+    @staticmethod
+    def _fields(buf: bytes):
+        """Walk a protobuf message, yielding (field_number, value).
+
+        Handles the wire types these messages actually use: varint for numbers
+        and length-delimited for strings and nested messages. Fixed-width types
+        are skipped rather than misread.
+        """
+        i = 0
+        while i < len(buf):
+            tag, i = RetromLibrary._varint(buf, i)
+            if tag == 0:
+                break
+            field, wire = tag >> 3, tag & 7
+            if wire == 0:
+                value, i = RetromLibrary._varint(buf, i)
+                yield field, value
+            elif wire == 2:
+                length, i = RetromLibrary._varint(buf, i)
+                yield field, buf[i:i + length]
+                i += length
+            elif wire == 5:
+                i += 4
+            elif wire == 1:
+                i += 8
+            else:
+                break
+
+    def _get_games(self, timeout: int | None) -> list[Game]:
+        # with_metadata is field 3, a varint set to true. Without it the
+        # response carries paths but no names, and every tile reads as a
+        # filename.
+        body = bytes([(3 << 3) | 0, 1])
+        raw = self._rpc("GameService/GetGames", body, timeout)
+
+        paths: dict[int, str] = {}
+        platforms: dict[int, str] = {}
+        names: dict[int, str] = {}
+        covers: dict[int, str] = {}
+
+        for payload in self._frames(raw):
+            for field, value in self._fields(payload):
+                if field == self._F_GAMES and isinstance(value, bytes):
+                    gid, path, platform = 0, "", ""
+                    for f, v in self._fields(value):
+                        if f == self._F_GAME_ID and isinstance(v, int):
+                            gid = v
+                        elif f == self._F_GAME_PATH and isinstance(v, bytes):
+                            path = v.decode("utf-8", "replace")
+                        elif f == self._F_GAME_PLATFORM and isinstance(v, int):
+                            platform = str(v)
+                    if gid:
+                        paths[gid] = path
+                        platforms[gid] = platform
+                elif field == self._F_METADATA and isinstance(value, bytes):
+                    gid, name, cover = 0, "", ""
+                    for f, v in self._fields(value):
+                        if f == self._F_META_GAME_ID and isinstance(v, int):
+                            gid = v
+                        elif f == self._F_META_NAME and isinstance(v, bytes):
+                            name = v.decode("utf-8", "replace")
+                        elif f == self._F_META_COVER and isinstance(v, bytes):
+                            cover = v.decode("utf-8", "replace")
+                    if gid:
+                        names[gid] = name
+                        covers[gid] = cover
+
+        out: list[Game] = []
+        for gid, path in paths.items():
+            name = names.get(gid) or ""
+            if not name:
+                # Without metadata, show the filename rather than somebody's
+                # entire filesystem path.
+                name = path.replace("\\", "/").rstrip("/").split("/")[-1] or str(gid)
+            out.append(Game(
+                id=str(gid),
+                name=name,
+                platform=platforms.get(gid, ""),
+                cover=_absolute(self._config.base_url, covers.get(gid, "")),
+            ))
+        return out
 
     def reachable(self) -> bool:
         try:
-            r = self._session.get(self._url("health"), headers=self._headers(),
-                                  timeout=HEALTH_TIMEOUT)
-            return r.ok
+            # The service redirects / to its web UI, which is a cheap and
+            # honest liveness check.
+            r = self._session.get(f"{self._config.base_url.rstrip('/')}/",
+                                  timeout=HEALTH_TIMEOUT, allow_redirects=False)
+            return r.status_code < 500
         except requests.RequestException as err:
             log.warning("retrom unreachable: %s", err.__class__.__name__)
             return False
 
-    def _fetch(self, limit: int, offset: int, timeout: int | None):
-        r = self._session.get(
-            self._url("rest/games"),
-            params={"limit": limit, "offset": offset},
-            headers=self._headers(),
-            timeout=timeout or self._config.timeout,
-        )
-        r.raise_for_status()
-        return r.json()
-
     def count(self) -> int:
-        payload = self._fetch(limit=1, offset=0, timeout=HEALTH_TIMEOUT)
-        if isinstance(payload, dict):
-            for key in ("totalCount", "total", "count"):
-                if isinstance(payload.get(key), int):
-                    return payload[key]
-            return len(payload.get("games") or [])
-        return len(payload or [])
+        return len(self._get_games(HEALTH_TIMEOUT))
 
     def games(self, limit: int = 60, offset: int = 0,
               timeout: int | None = None) -> list[Game]:
-        payload = self._fetch(limit, offset, timeout)
-        rows = payload if isinstance(payload, list) else (payload.get("games") or [])
-        base = self._config.base_url
-        out: list[Game] = []
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
-            gid = str(row.get("id") or "")
-            if not gid:
-                continue
-            name = str(meta.get("name") or row.get("path") or "Unknown")
-            # A path fallback would otherwise show the whole filesystem path.
-            if name == row.get("path"):
-                name = name.replace("\\", "/").rstrip("/").split("/")[-1]
-            out.append(Game(
-                id=gid,
-                name=name,
-                platform=str(row.get("platformId") or ""),
-                cover=_absolute(base, str(meta.get("coverUrl") or "")),
-            ))
-        return out
+        # GetGames has no paging of its own, so the window is applied here.
+        return self._get_games(timeout)[offset:offset + limit]
 
     def rescan(self, platform_slug: str | None = None) -> bool:
         try:
-            r = self._session.post(self._url("rest/library/scan"),
-                                   headers=self._headers(),
-                                   timeout=self._config.timeout)
+            self._rpc("LibraryService/UpdateLibrary", b"", self._config.timeout)
+            return True
         except requests.RequestException as err:
             log.warning("retrom rescan failed: %s", err)
             return False
-        if not r.ok:
-            log.warning("retrom rescan rejected: %s", r.status_code)
-        return r.ok
 
 
 # ----------------------------------------------------------------- registry --

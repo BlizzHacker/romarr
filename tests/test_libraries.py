@@ -14,10 +14,11 @@ from romarr.libraries import (
 
 
 class FakeResponse:
-    def __init__(self, payload, status=200):
+    def __init__(self, payload, status=200, raw=b""):
         self._payload = payload
         self.status_code = status
         self.ok = status < 400
+        self.content = raw
 
     def json(self):
         return self._payload
@@ -74,23 +75,83 @@ def test_gaseous_count_prefers_the_declared_total():
 
 # --- Retrom ----------------------------------------------------------------
 
-def test_retrom_reads_protobuf_shaped_json():
-    session = FakeSession({"totalCount": 1, "games": [
-        {"id": "11", "platformId": "3",
-         "metadata": {"name": "Chrono Trigger", "coverUrl": "/covers/11.png"}},
-    ]})
+def _varint(n: int) -> bytes:
+    out = bytearray()
+    while True:
+        b = n & 0x7F
+        n >>= 7
+        out.append(b | (0x80 if n else 0))
+        if not n:
+            return bytes(out)
+
+
+def _tag(field: int, wire: int) -> bytes:
+    return _varint((field << 3) | wire)
+
+
+def _msg(field: int, payload: bytes) -> bytes:
+    return _tag(field, 2) + _varint(len(payload)) + payload
+
+
+def _str(field: int, value: str) -> bytes:
+    raw = value.encode()
+    return _tag(field, 2) + _varint(len(raw)) + raw
+
+
+def _int(field: int, value: int) -> bytes:
+    return _tag(field, 0) + _varint(value)
+
+
+def _grpc_web(payload: bytes) -> bytes:
+    """A message frame followed by the trailer frame a real server sends."""
+    body = bytes([0]) + len(payload).to_bytes(4, "big") + payload
+    trailer = b"grpc-status:0"
+    # High bit set marks the trailer, which carries headers not a message.
+    return body + bytes([0x80]) + len(trailer).to_bytes(4, "big") + trailer
+
+
+class GrpcSession:
+    def __init__(self, payload: bytes):
+        self.payload = payload
+        self.posts = []
+
+    def post(self, url, **kw):
+        self.posts.append((url, kw))
+        return FakeResponse(None, raw=_grpc_web(self.payload))
+
+    def get(self, url, **kw):
+        return FakeResponse(None, status=303)
+
+
+def test_retrom_decodes_grpc_web_games_and_metadata():
+    """Retrom has no REST listing at all; games come back over grpc-web."""
+    game = _msg(1, _int(1, 11) + _str(3, "/library/snes/Chrono Trigger.sfc") + _int(4, 3))
+    meta = _msg(2, _int(1, 11) + _str(2, "Chrono Trigger") + _str(4, "/covers/11.png"))
+    session = GrpcSession(game + meta)
+
     lib = RetromLibrary(RetromConfig(base_url="http://r"), session=session)
-    g = lib.games()[0]
+    games = lib.games()
+    assert len(games) == 1
+    g = games[0]
+    assert g.id == "11"
     assert g.name == "Chrono Trigger"
+    assert g.platform == "3"
     assert g.cover == "http://r/covers/11.png"
+    # It must ask for metadata, or every tile shows a filename.
+    assert session.posts[0][1]["data"].endswith(bytes([(3 << 3) | 0, 1]))
+
+
+def test_retrom_ignores_the_trailer_frame():
+    """The trailer carries headers, not a message; decoding it yields nonsense."""
+    game = _msg(1, _int(1, 5) + _str(3, "/library/x.rom"))
+    lib = RetromLibrary(RetromConfig(base_url="http://r"), session=GrpcSession(game))
+    assert [g.id for g in lib.games()] == ["5"]
 
 
 def test_retrom_falls_back_to_the_filename_not_the_whole_path():
     """Without metadata a bare path would otherwise be shown to a user."""
-    session = FakeSession({"games": [
-        {"id": "12", "path": "/mnt/roms/snes/Secret of Mana.sfc"},
-    ]})
-    lib = RetromLibrary(RetromConfig(base_url="http://r"), session=session)
+    game = _msg(1, _int(1, 12) + _str(3, "/mnt/roms/snes/Secret of Mana.sfc"))
+    lib = RetromLibrary(RetromConfig(base_url="http://r"), session=GrpcSession(game))
     assert lib.games()[0].name == "Secret of Mana.sfc"
 
 
@@ -143,3 +204,42 @@ def test_library_view_serialises_games_and_names_the_backend(tmp_path):
     # Must survive json.dumps, which a dataclass would not.
     import json
     json.dumps(view)
+
+
+# --- contracts learned from running the real servers -----------------------
+
+def test_gaseous_logs_in_before_listing():
+    """Gaseous authenticates with a session cookie, not a bearer token.
+
+    An unauthenticated call does not return 401 -- it redirects to
+    /Identity/Account/Login, which 404s under /api, so the failure arrives
+    looking like a missing endpoint.
+    """
+    session = FakeSession({"count": 0, "games": []})
+    lib = GaseousLibrary(GaseousConfig(base_url="http://g", username="u", password="p"),
+                         session=session)
+    lib.games()
+    assert any(url.endswith("/Account/Login") for url, _ in session.posts), \
+        "expected a login before listing games"
+
+
+def test_gaseous_sends_every_required_filter_field():
+    """Name, Genre, Theme, GameMode, Platform and PlayerPerspective are all
+    required even when empty; omitting them is a 400 naming each one."""
+    session = FakeSession({"count": 0, "games": []})
+    GaseousLibrary(GaseousConfig(base_url="http://g"), session=session).games()
+    body = next(kw["json"] for url, kw in session.posts if url.endswith("/Games"))
+    for field in ("Name", "Genre", "Theme", "GameMode", "Platform", "PlayerPerspective"):
+        assert field in body, f"{field} missing from the filter body"
+
+
+def test_gaseous_login_is_attempted_once():
+    """The cookie lives on the session, so re-authenticating every call would
+    be pure overhead against a server that already trusts us."""
+    session = FakeSession({"count": 0, "games": []})
+    lib = GaseousLibrary(GaseousConfig(base_url="http://g", username="u", password="p"),
+                         session=session)
+    lib.games()
+    lib.games()
+    logins = [url for url, _ in session.posts if url.endswith("/Account/Login")]
+    assert len(logins) == 1, f"logged in {len(logins)} times"
