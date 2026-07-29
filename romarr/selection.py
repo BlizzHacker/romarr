@@ -40,6 +40,65 @@ _JUNK_MARKERS = (
     "translation", "trainer", "repack", "update only", "dlc",
 )
 
+# Language markers, and what they mean here.
+#
+# A release title says what was DONE to a ROM at least as often as it says
+# which ROM it is, and none of that was being read. That is how a request for
+# Chrono Trigger was answered with "[SNES] Chrono Trigger [RUS] [jRPG] [by
+# Chief-NET] [1995]" -- a Russian fan translation. It is a genuine SNES
+# cartridge dump of the right game, so every check above passes; it was simply
+# the best-seeded of thirteen results and nothing in its title says "hack" or
+# "translation" in so many words.
+#
+# Japanese is deliberately absent. "(J)" on a cartridge is a region, not a
+# translation -- the game as published -- and the region ladder already ranks
+# it below USA, World and Europe. Penalising it here would push a legitimate
+# Japanese dump below a Russian fan patch, which is the same bug facing the
+# other way.
+#
+# Two-letter codes are absent too. "(E)" is Europe and "it"/"es"/"de" appear in
+# the No-Intro language field of releases that are perfectly fine; the gain is
+# not worth the collision.
+_NON_ENGLISH_MARKERS = (
+    "rus", "russian", "ger", "german", "deu",
+    "fra", "fre", "french", "esp", "spa", "spanish",
+    "ita", "italian", "por", "portuguese", "pt br", "ptbr",
+    "kor", "korean", "chs", "cht", "chinese",
+    "pol", "polish", "dut", "ned", "dutch",
+    "swe", "swedish", "tur", "turkish", "ukr", "ukrainian",
+)
+
+# GoodTools translation marks. "(T-Eng)" is a superseded translation patch,
+# "(T+Rus)" the current one; either way the ROM has been altered after it left
+# the cartridge. Included even when the target language is English, because a
+# fan patch is still not the published game.
+_TRANSLATION_TAG = re.compile(r"[\[(]\s*t[-+]\s*[a-z]{2,4}[^\])]*[\])]")
+
+# "[MULTI5]", "[MULTi8-ENG]", "MULTi10-PLAZA". In every result seen this marks
+# a localised PC or emulator release, never a cartridge dump. `\d*` keeps it
+# off "multiplayer".
+_MULTI_LANGUAGE = re.compile(r"\bmulti-?\d*\b")
+
+# "[by Chief-NET]", "by progameroms", "by SMW Central", "[By Destrap]". On a
+# cartridge ROM a credit means somebody MADE this -- a hack, a translation, a
+# repackage -- rather than dumped it. A published cartridge has a publisher in
+# its title, not an author.
+_CREDITED_TO_A_GROUP = re.compile(r"\bby\s+\S")
+
+# Weights. The translation penalty is deliberately larger than the junk-marker
+# one: a hacked or prototype dump of the right game in the right language is
+# still closer to what was asked for than a fluent translation into a language
+# the requester cannot read. Both are penalties rather than rejections, so a
+# release can still be taken when it is genuinely the only thing that exists --
+# though at -150 it will usually fall below the zero floor best_release applies.
+_TRANSLATION_PENALTY = 150
+_CREDIT_PENALTY = 80
+_GOOD_DUMP_BONUS = 50
+
+# GoodTools "verified good dump": the strongest quality signal a ROM title
+# carries, and worth more than any region preference.
+_GOOD_DUMP_MARKER = "[!]"
+
 # Region preference: most emulator users want USA, then World, then Europe.
 _REGION_SCORE = (
     (("usa", "(u)", "[u]", "ntsc-u"), 40),
@@ -47,6 +106,20 @@ _REGION_SCORE = (
     (("europe", "(e)", "pal"), 20),
     (("japan", "(j)", "ntsc-j"), 10),
 )
+
+# The same preference as compact GoodTools region codes, which is how much of a
+# real result set is labelled. The ladder above reads only the spelled-out
+# forms and the single-letter ones, so "(UE)" and "(JU)" scored nothing at all
+# for region -- "Super Metroid (JU) [!].smc", an ideal result, was ranked as if
+# it had no region at all. A combined code is worth its best constituent: a
+# (JU) dump runs on a US console, so it is worth what (U) is worth.
+_REGION_CODES = {
+    "u": 40, "us": 40, "ue": 40, "uj": 40, "ju": 40,
+    "jue": 40, "uej": 40, "jeu": 40,
+    "w": 30,
+    "e": 20, "eu": 20, "eur": 20,
+    "j": 10, "jp": 10, "jpn": 10,
+}
 
 
 @dataclass(frozen=True)
@@ -127,13 +200,38 @@ def score(release: Release, wanted: str, platform: Platform | None = None) -> in
         else:
             points += min(release.seeders, 20) * 2
 
+    region = 0
     for markers, value in _REGION_SCORE:
         if any(m in lowered for m in markers):
-            points += value
+            region = value
             break
+    for code, value in _REGION_CODES.items():
+        if value > region and _mentions(lowered, code):
+            region = value
+    points += region
+
+    if _GOOD_DUMP_MARKER in lowered:
+        points += _GOOD_DUMP_BONUS
 
     if any(marker in lowered for marker in _JUNK_MARKERS):
         points -= 120
+
+    # What language the release is in, and whether it is the game as published.
+    #
+    # Every marker is matched as a whole word, and that is not a nicety: "ger"
+    # is inside "Trigger", "ita" inside "digital", "spa" inside "space" and
+    # "por" inside "port". A substring test would penalise a large part of
+    # every result set -- starting with the game that prompted this.
+    translated = (
+        any(_mentions(lowered, marker) for marker in _NON_ENGLISH_MARKERS)
+        or _TRANSLATION_TAG.search(lowered) is not None
+        or _MULTI_LANGUAGE.search(lowered) is not None
+    )
+    if translated:
+        points -= _TRANSLATION_PENALTY
+
+    if _CREDITED_TO_A_GROUP.search(lowered):
+        points -= _CREDIT_PENALTY
 
     # Reject a release that names a system other than the one requested. Its own
     # platform's aliases are removed from the check first, so asking for a Wii

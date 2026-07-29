@@ -443,12 +443,27 @@ class Romarr:
         scored = sorted(
             ((score(r, game, platform), r) for r in releases),
             key=lambda pair: -pair[0])
+        # Which indexers actually contributed, and how many of their results
+        # survived scoring. This is the question you have when a tracker you
+        # just configured does not seem to be doing anything: "0 of 30 kept"
+        # is a scoring problem, absent from the list entirely is a search or
+        # credential problem, and the two need different fixes.
+        by_indexer: dict[str, dict] = {}
+        for s, r in scored:
+            row = by_indexer.setdefault(
+                r.indexer or "(unknown)", {"found": 0, "kept": 0, "private": r.private})
+            row["found"] += 1
+            if s > 0:
+                row["kept"] += 1
+
         return {
             "game": game,
             "platform": platform.slug if platform else None,
             "found": len(releases),
             "rejected": sum(1 for s, _ in scored if s <= 0),
+            "private_found": sum(1 for _, r in scored if r.private),
             "best": asdict(pick) if pick else None,
+            "indexers": by_indexer,
             "top": [{"title": r.title, "score": s, "seeders": r.seeders,
                      "indexer": r.indexer, "private": r.private}
                     for s, r in scored[:5]],

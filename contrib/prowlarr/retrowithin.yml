@@ -1,0 +1,145 @@
+---
+id: retrowithin
+name: RetroWithin
+description: "RetroWithin (RW) is a Private Torrent Tracker for RETRO GAMES"
+language: en-US
+type: private
+encoding: UTF-8
+links:
+  - https://www.retrowithin.com/
+
+# RetroWithin is TBDev-derived but modified. Verified working end to end on
+# 2026-07-29 against www.retrowithin.com.
+#
+# The site serves a 101domain "coming soon" parking page to anyone not logged
+# in -- at /, at /login.php, and on retrowithin.net too. That page is
+# CAMOUFLAGE, not a dead domain: it carries a real login form posting to
+# login.php, and the response sets the uid/pass cookies of a TBDev session.
+#
+# Stock TBDev paths that do NOT exist here:
+#   /takelogin.php  404 -- login.php is both the form and the handler
+#   /my.php         404 -- so it cannot be the login test path; browse.php is
+#
+# The search parameters cost the most time to find. They were read off
+# browse.php's own search form:
+#
+#     <form method="get" action="/browse.php">
+#       <input type="hidden" name="action" value="search">
+#       <input type="text" name="search">
+#
+# There is NO category parameter. Sending cat=0, as a stock TBDev definition
+# would, makes the page render "Error: Invalid category ID 0." and return no
+# rows -- which surfaces through Prowlarr as the entirely misleading "Query
+# successful, but no results were returned from your indexer."
+#
+# Confirmed against live searches: titles, sizes and seeders all parse. Seeders
+# really are 0 across most of the catalogue (26 of 30 results on one query) --
+# this is a rare-retro tracker and that is its normal state, not a parsing
+# failure. Any consumer that rejects zero-seeder torrents discards most of this
+# site.
+#
+# KNOWN LIMITATIONS, both harmless here:
+#   * The category selector does not match, so every row falls back to the
+#     default and maps to Console/Other (1090). Real per-platform ids would
+#     need an authenticated browse.php dump. Ranking in Romarr uses the title,
+#     ROM extension and size as platform evidence rather than categories, so
+#     nothing downstream depends on this.
+#   * leechers parses as 0 everywhere; the column is probably misaligned.
+#     Nothing consumes it.
+
+caps:
+  categorymappings:
+    # Everything maps to Console/Other on purpose. Romarr rejects any result
+    # whose categories fall outside the console and PC-games ranges, so an
+    # unmapped result would be dropped before it could be ranked at all.
+    - {id: 1, cat: Console/Other, desc: "Games"}
+
+  modes:
+    search: [q]
+  allowrawsearch: true
+
+settings:
+  - name: username
+    type: text
+    label: Username
+  - name: password
+    type: password
+    label: Password
+  - name: info
+    type: info
+    label: Login
+    default: "RetroWithin serves a decoy parking page to anyone not logged in. The username and password fields on that page are the real login."
+
+login:
+  path: login.php
+  method: post
+  inputs:
+    username: "{{ .Config.username }}"
+    password: "{{ .Config.password }}"
+  error:
+    - selector: div:contains("failed"), td:contains("failed"), :contains("Username or password incorrect")
+  test:
+    # my.php is a 404 here, so the gated browse page stands in. A logged-out
+    # fetch 302s to the camouflage page, which carries no logout link, making
+    # the presence of one an accurate signal.
+    path: browse.php
+    selector: a[href*="logout.php"]
+
+search:
+  paths:
+    - path: browse.php
+  inputs:
+    # Read off browse.php's own form. See the note above on why there is no
+    # category parameter here.
+    action: search
+    search: "{{ .Keywords }}"
+
+  rows:
+    # A download link is the only reliable marker of a torrent row; header and
+    # spacer rows do not carry one.
+    selector: table tr:has(a[href^="download.php"])
+
+  fields:
+    category:
+      selector: a[href*="cat="]
+      attribute: href
+      filters:
+        - name: querystring
+          args: cat
+      optional: true
+      default: 1
+    title:
+      selector: a[href^="details.php"]
+      attribute: title
+      filters:
+        - name: replace
+          args: ["Details for ", ""]
+    details:
+      selector: a[href^="details.php"]
+      attribute: href
+    download:
+      selector: a[href^="download.php"]
+      attribute: href
+    date:
+      selector: td:nth-last-child(6)
+      optional: true
+      default: now
+    size:
+      selector: td:nth-last-child(5)
+    seeders:
+      selector: td:nth-last-child(3)
+      optional: true
+      default: 0
+    leechers:
+      selector: td:nth-last-child(2)
+      optional: true
+      default: 0
+    downloadvolumefactor:
+      case:
+        img[src*="freeleech"]: 0
+        "*": 1
+    uploadvolumefactor:
+      text: 1
+    minimumratio:
+      text: 1.0
+# engine n/a

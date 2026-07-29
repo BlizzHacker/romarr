@@ -292,3 +292,154 @@ def test_seeder_count_no_longer_outranks_being_the_right_release():
         score(public_romset, "super metroid", snes)
     assert best_release([public_romset, private_dump], "super metroid", snes) \
         is private_dump
+
+
+# --- language, translation and edit markers ---------------------------------
+#
+# A release title says what was DONE to a ROM at least as often as it says
+# which ROM it is, and none of that was read. Every title below is a real
+# Prowlarr result for one of these games, not an invented example.
+
+def test_a_fan_translation_loses_to_a_plain_dump():
+    """The failure this section exists for. A request for Chrono Trigger was
+    fulfilled with a Russian fan translation: it was the best-seeded result and
+    nothing in its title said "hack" or "translation" in so many words, so the
+    scorer had no reason to prefer the 1-seeder English dump next to it."""
+    snes = by_slug("snes")
+    russian = rel("[SNES] Chrono Trigger [RUS] [jRPG] [by Chief-NET] [1995]",
+                  size=4 * 1024 * 1024, seeders=13)
+    plain = rel("Chrono Trigger - Super Nintendo",
+                size=2 * 1024 * 1024, seeders=1)
+
+    assert score(russian, "chrono trigger", snes) < score(plain, "chrono trigger", snes)
+    assert best_release([russian, plain], "chrono trigger", snes) is plain
+
+
+def test_every_non_english_language_marker_is_penalised():
+    snes = by_slug("snes")
+    clean = score(rel("Chrono Trigger (USA)"), "chrono trigger", snes)
+    for marker in ("[RUS]", "[GER]", "[FRA]", "[ESP]", "[ITA]", "[KOR]",
+                   "[POL]", "PT-BR"):
+        tagged = rel(f"Chrono Trigger (USA) {marker}")
+        assert score(tagged, "chrono trigger", snes) < clean, marker
+
+
+def test_a_language_marker_only_counts_as_a_whole_word():
+    """"ger" is inside "Trigger" -- the game that motivated all of this. "ita"
+    is inside "digital", "spa" inside "space", "fin" inside "final". A
+    substring check penalises a large part of every result set."""
+    snes = by_slug("snes")
+    for title, wanted in (("Chrono Trigger (USA)", "chrono trigger"),
+                          ("Digital Pinball (USA)", "digital pinball"),
+                          ("Space Invaders (USA)", "space invaders"),
+                          ("Final Fantasy III (USA)", "final fantasy iii")):
+        assert score(rel(title), wanted, snes) > 0, title
+
+
+def test_a_multi_language_marker_is_penalised():
+    # "[MULTI5]", "[MULTi8-ENG]", "MULTi10-PLAZA": always a localised PC or
+    # emulator release in the results, never a cartridge dump.
+    snes = by_slug("snes")
+    clean = rel("Final Fantasy III (USA)")
+    multi = rel("Final Fantasy III (USA) [MULTI5][RELOADED]")
+    assert score(multi, "final fantasy iii", snes) < score(clean, "final fantasy iii", snes)
+
+
+def test_goodtools_translation_tags_are_penalised():
+    # (T-Eng) and (T+Rus) are the GoodTools marks for "this is a translation
+    # patch applied to the ROM". Either way it is not the published game.
+    snes = by_slug("snes")
+    clean = score(rel("Final Fantasy V (Japan)"), "final fantasy v", snes)
+    for tag in ("(T-Eng)", "(T+Eng)", "(T+Rus)", "[T+Ger1.0]"):
+        translated = rel(f"Final Fantasy V (Japan) {tag}")
+        assert score(translated, "final fantasy v", snes) < clean, tag
+
+
+def test_a_release_credited_to_a_group_is_penalised():
+    """"by <group>" on a cartridge ROM means somebody made this rather than
+    dumped it -- "[by Chief-NET]", "by progameroms", "by SMW Central"."""
+    snes = by_slug("snes")
+    clean = rel("Super Mario World (USA)")
+    credited = rel("Super Mario World (USA) [by SMW Central]")
+    assert score(credited, "super mario world", snes) < score(clean, "super mario world", snes)
+
+
+def test_hack_beta_and_proto_tags_are_penalised():
+    snes = by_slug("snes")
+    clean = score(rel("Super Mario World (USA)"), "super mario world", snes)
+    for tag in ("[Hack]", "[Beta]", "[Proto]"):
+        assert score(rel(f"Super Mario World (USA) {tag}"),
+                     "super mario world", snes) < clean, tag
+
+
+# --- region codes and dump quality ------------------------------------------
+
+def test_compact_region_codes_score_positively():
+    """"(U)", "(E)", "(UE)" and "(JU)" are the GoodTools region codes and the
+    most common labelling in a real result set. Only the spelled-out forms were
+    read, so a multi-region dump scored nothing for its region at all."""
+    snes = by_slug("snes")
+    bare = score(rel("Super Metroid"), "super metroid", snes)
+    for code in ("(U)", "(E)", "(UE)", "(JU)", "(W)"):
+        assert score(rel(f"Super Metroid {code}"), "super metroid", snes) > bare, code
+
+
+def test_a_verified_good_dump_marker_scores_positively():
+    # "[!]" is GoodTools for "this dump was verified against a known-good
+    # checksum" -- the strongest quality signal a ROM title carries.
+    snes = by_slug("snes")
+    verified = rel("Super Metroid (JU) [!].smc", size=3 * 1024 * 1024, seeders=3)
+    plain = rel("Super Metroid (JU).smc", size=3 * 1024 * 1024, seeders=3)
+    assert score(verified, "super metroid", snes) > score(plain, "super metroid", snes)
+
+
+def test_a_translation_never_outranks_a_verified_dump_on_seeders_alone():
+    """Both halves of the Chrono Trigger failure in one assertion: the
+    translation had 13 seeders and the good dump had 3."""
+    snes = by_slug("snes")
+    translation = rel("[SNES] Super Metroid [RUS] [by Chief-NET]",
+                      size=3 * 1024 * 1024, seeders=40)
+    verified = rel("Super Metroid (JU) [!].smc", size=3 * 1024 * 1024, seeders=3)
+    assert best_release([translation, verified], "super metroid", snes) is verified
+
+
+# --- how big a cartridge can be ----------------------------------------------
+#
+# One 512MB ceiling covered every platform, which is far larger than any
+# cartridge ever made. A 452MB PC build of Final Fantasy III passed it, ranked
+# top on seeders, and was picked for a SNES request -- the same class of
+# failure as the translation above, reached through size instead of language.
+
+def test_a_pc_sized_release_is_rejected_for_a_cartridge_platform():
+    snes = by_slug("snes")
+    pc_build = rel("FINAL FANTASY III v1 1 0", size=452 * 1024 * 1024, seeders=18)
+    assert score(pc_build, "final fantasy iii", snes) < 0
+
+
+def test_the_size_ceiling_is_per_platform_not_one_number():
+    """A 100MB download is absurd for a SNES cartridge and unremarkable for a
+    Game Boy Advance one. A single ceiling cannot say both."""
+    hundred_mb = 100 * 1024 * 1024
+    assert score(rel("Pokemon Emerald (U)", size=hundred_mb), "pokemon emerald",
+                 by_slug("gba")) > 0
+    assert score(rel("Chrono Trigger (U)", size=hundred_mb), "chrono trigger",
+                 by_slug("snes")) < 0
+
+
+def test_a_full_size_cartridge_dump_is_never_penalised_for_being_large():
+    # The biggest carts that actually shipped: 6MB on SNES (Tales of Phantasia),
+    # 32MB on GBA, 64MB on N64. None of these is suspicious.
+    for slug, size in (("snes", 6 * 1024 * 1024),
+                       ("gba", 32 * 1024 * 1024),
+                       ("n64", 64 * 1024 * 1024),
+                       ("genesis-slash-megadrive", 8 * 1024 * 1024)):
+        biggest = rel("Some Game (USA)", size=size)
+        assert score(biggest, "some game", by_slug(slug)) > 0, slug
+
+
+def test_every_platform_declares_a_ceiling_above_its_biggest_cartridge():
+    from romarr.platforms import PLATFORMS
+    for p in PLATFORMS:
+        assert p.max_size > 0, p.slug
+        # Nothing cartridge-era needs a third of a gigabyte.
+        assert p.max_size < 300 * 1024 * 1024, p.slug
