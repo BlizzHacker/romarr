@@ -49,11 +49,11 @@ from .downloaders import (
     CLIENT_TYPES, NZBGet, NzbgetConfig, SABnzbd, SabConfig, build_client,
     merge_secrets, pick_client, redact,
 )
-from .indexers import INDEXER_TYPES, redact_indexer
+from .indexers import INDEXER_TYPES, build_indexer, redact_indexer
 from .indexers import Prowlarr, ProwlarrConfig
 from .library import import_rom, map_remote_path
 from .platforms import PLATFORMS, resolve
-from .selection import best_release
+from .selection import best_release, score
 from .store import Event, Store
 from .ui import page as ui_page
 
@@ -111,6 +111,8 @@ class Romarr:
         self.romm = self.game_library
         # Built from stored configuration, seeded from the environment once.
         self.clients: list = []
+        # Torznab/Newznab indexers queried directly, alongside Prowlarr.
+        self.indexers: list = []
         # Where GG Requestz lives, so the status page can show the connection
         # the same way Seerr shows Radarr.
         self.ggrequestz_url = e.get("GGREQUESTZ_URL", "")
@@ -267,6 +269,18 @@ class Romarr:
                 self.store.settings["_prowlarr_url"] = cfg.get("url", "")
                 break
 
+        # Directly-configured Torznab and Newznab indexers. These were
+        # storable, editable and testable but never searched, so an operator
+        # could add one, watch Test pass, and never see a result from it.
+        direct = []
+        for cfg in self.store.list_items("indexers"):
+            if not cfg.get("enable", True):
+                continue
+            indexer = build_indexer(cfg)
+            if indexer is not None:
+                direct.append(indexer)
+        self.indexers = direct
+
     def safe_settings(self) -> dict:
         """Settings with every stored credential masked.
 
@@ -350,7 +364,13 @@ class Romarr:
         return {"ok": True, "accepted": True, "game": game, "platform": platform.slug}
 
     def test_indexer(self, cfg: dict) -> dict:
-        """Try an indexer configuration without saving it."""
+        """Try an indexer configuration without saving it.
+
+        Tested through the same client the search path uses, so a green Test
+        means the search will work. The previous version issued its own ad-hoc
+        caps request, which could pass against a URL the searcher would then
+        have handled differently.
+        """
         kind = str(cfg.get("type") or "").lower()
         url, key = cfg.get("url", ""), cfg.get("api_key", "")
         if not url:
@@ -358,17 +378,23 @@ class Romarr:
         try:
             if kind == "prowlarr":
                 probe = Prowlarr(ProwlarrConfig(base_url=url, api_key=key))
-                n = len(probe.indexers())
-                return {"ok": True, "message": f"Connected, {n} indexer(s)"}
-            # Newznab and Torznab both answer a caps query, which needs no
-            # search term and so tests the credential without a real query.
-            import requests as _rq
-            r = _rq.get(url.rstrip("/"), params={"t": "caps", "apikey": key}, timeout=15)
-            if r.status_code in (401, 403):
-                return {"ok": False, "message": "Rejected the API key"}
-            return ({"ok": True, "message": "Connected"} if r.ok
-                    else {"ok": False, "message": f"Answered {r.status_code}"})
+                indexers = probe.indexers()
+                private = sum(1 for i in indexers if i.get("privacy") == "private")
+                return {"ok": True,
+                        "message": f"Connected, {len(indexers)} indexer(s), "
+                                   f"{private} private"}
+            probe = build_indexer(cfg)
+            if probe is None:
+                return {"ok": False, "message": f"unknown indexer type: {kind!r}"}
+            # Both protocols answer a caps query, which needs no search term and
+            # so tests the credential without asking the site to run a query.
+            probe.caps()
+            return {"ok": True, "message": "Connected"}
         except Exception as err:
+            import requests as _rq
+            if isinstance(err, _rq.HTTPError) and err.response is not None \
+                    and err.response.status_code in (401, 403):
+                return {"ok": False, "message": "Rejected the API key"}
             return {"ok": False, "message": f"{type(err).__name__}: {err}"}
 
     def test_client(self, cfg: dict) -> dict:
@@ -397,15 +423,35 @@ class Romarr:
         }
 
     def search(self, game: str, platform_name: str = "") -> dict:
+        """What a request for this game would find, without grabbing it.
+
+        Runs the same search the request path runs. It previously issued only
+        the narrow `"<game> <platform>"` query against Prowlarr, so the one
+        endpoint an operator would reach for to ask "why did this fail" gave a
+        different -- and much worse -- answer than the real request: four
+        results and no pick, where the merged search finds twenty.
+
+        `rejected` is reported because "found 21, best null" is otherwise
+        unanswerable without reading the source. The top few scores say whether
+        nothing matched the title, everything was the wrong platform, or a
+        release was simply just below the bar.
+        """
         platform = resolve(platform_name) if platform_name else None
-        term = f"{game} {platform.name}" if platform else game
-        releases = self.prowlarr.search(term)
+        releases = (self._search_releases(game, platform) if platform
+                    else self.prowlarr.search(game))
         pick = best_release(releases, game, platform)
+        scored = sorted(
+            ((score(r, game, platform), r) for r in releases),
+            key=lambda pair: -pair[0])
         return {
             "game": game,
             "platform": platform.slug if platform else None,
             "found": len(releases),
+            "rejected": sum(1 for s, _ in scored if s <= 0),
             "best": asdict(pick) if pick else None,
+            "top": [{"title": r.title, "score": s, "seeders": r.seeders,
+                     "indexer": r.indexer, "private": r.private}
+                    for s, r in scored[:5]],
         }
 
     def _search_releases(self, game: str, platform) -> list:
@@ -425,19 +471,26 @@ class Romarr:
         """
         seen: set[tuple[str, str]] = set()
         merged = []
+        # Prowlarr plus every directly-configured indexer. One source failing
+        # must never lose another's results -- an indexer that is down, rate
+        # limited or mid-login is the normal case across a dozen trackers, not
+        # an outage worth abandoning the search for.
+        sources: list[tuple[str, object]] = [("prowlarr", self.prowlarr)]
+        sources += [(getattr(i, "name", "indexer"), i)
+                    for i in getattr(self, "indexers", [])]
         for term in (game, f"{game} {platform.name}"):
-            try:
-                found = self.prowlarr.search(term)
-            except Exception as err:
-                # One failing query must not lose the other's results.
-                log.warning("prowlarr search failed for %r: %s", term, err)
-                continue
-            for release in found:
-                key = (release.title, release.download_url)
-                if key in seen:
+            for label, source in sources:
+                try:
+                    found = source.search(term)
+                except Exception as err:
+                    log.warning("%s search failed for %r: %s", label, term, err)
                     continue
-                seen.add(key)
-                merged.append(release)
+                for release in found:
+                    key = (release.title, release.download_url)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    merged.append(release)
         return merged
 
     def request(self, game: str, platform_name: str) -> dict:

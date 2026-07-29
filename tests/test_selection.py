@@ -224,3 +224,71 @@ def test_an_http_link_is_the_last_resort_and_nothing_is_invented():
     assert _download_link({"downloadUrl": "https://indexer.example/x.torrent"}) \
         == "https://indexer.example/x.torrent"
     assert _download_link({"magnetUrl": None, "guid": None}) == ""
+
+
+def test_a_real_download_url_beats_a_rebuilt_magnet():
+    # A rebuilt magnet is a hash plus four guessed trackers. When the indexer
+    # offers an actual .torrent there is no reason to prefer the guess.
+    link = _download_link({
+        "downloadUrl": "http://prowlarr/1/download?apikey=SECRET",
+        "infoHash": "ABCDEF0123456789ABCDEF0123456789ABCDEF01",
+    })
+    assert link == "http://prowlarr/1/download?apikey=SECRET"
+
+
+# --- private trackers --------------------------------------------------------
+#
+# Both of these were silent: the release was selected correctly and then either
+# discarded or handed to the download client as a magnet that could never start.
+
+def test_a_private_result_never_gets_a_public_magnet():
+    """A private torrent disables DHT and PEX and announces only to its own
+    tracker with the account's passkey. A magnet rebuilt with public announce
+    URLs cannot find a peer, so preferring one over Prowlarr's download URL
+    produced a torrent that sat at zero peers forever."""
+    row = {
+        "downloadUrl": "http://prowlarr/1/download?apikey=SECRET",
+        "infoHash": "ABCDEF0123456789ABCDEF0123456789ABCDEF01",
+        "title": "Chrono Trigger (USA)",
+    }
+    assert _download_link(row, private=True) == "http://prowlarr/1/download?apikey=SECRET"
+    # And with nothing to proxy through, it reports honestly rather than
+    # inventing a magnet that cannot work.
+    assert _download_link({"infoHash": "AB" * 20}, private=True) == ""
+    # The public path is unchanged.
+    assert _download_link({"infoHash": "AB" * 20}).startswith("magnet:?xt=urn:btih:")
+
+
+def test_a_private_tracker_keeps_a_release_with_no_seeders():
+    """Zero seeders means dead on a public tracker and 'nobody is awake right
+    now' on a private one. Rejecting it outright made the entire catalogue of a
+    rare-retro tracker unreachable."""
+    dead_public = rel("Panzer Dragoon Saga (USA)", seeders=0)
+    quiet_private = Release(
+        title="Panzer Dragoon Saga (USA)", size=512 * 1024, seeders=0,
+        categories=(1090,), download_url="http://prowlarr/1/download?apikey=x",
+        protocol="torrent", indexer="RetroWithin", private=True)
+
+    assert score(dead_public, "panzer dragoon saga") < 0
+    assert score(quiet_private, "panzer dragoon saga") > 0
+
+
+def test_seeder_count_no_longer_outranks_being_the_right_release():
+    """The ranking bug that made private trackers pointless. At
+    `min(seeders, 50) * 4` availability was worth up to 200 points -- more than
+    every quality signal combined -- so a heavily-seeded public romset beat an
+    exact, correctly-labelled cartridge dump from a private tracker."""
+    snes = by_slug("snes")
+    public_romset = Release(
+        title="Super Metroid", size=400 * 1024 * 1024, seeders=500,
+        categories=(1090,), download_url="magnet:?xt=urn:btih:a",
+        protocol="torrent", indexer="Public", private=False)
+    private_dump = Release(
+        title="Super Metroid (USA).smc", size=3 * 1024 * 1024, seeders=1,
+        categories=(1090,), download_url="http://prowlarr/1/download?apikey=x",
+        protocol="torrent", indexer="bitGAMER", private=True)
+
+    assert score(private_dump, "super metroid", snes) > \
+        score(public_romset, "super metroid", snes)
+    assert best_release([public_romset, private_dump], "super metroid", snes) \
+        is private_dump

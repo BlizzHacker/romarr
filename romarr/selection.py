@@ -60,6 +60,11 @@ class Release:
     download_url: str
     protocol: str             # "torrent" | "usenet"
     indexer: str = ""
+    # Whether the indexer it came from is a private tracker. This changes two
+    # decisions that are wrong by default for private trackers: what a seeder
+    # count of zero means (see score) and whether a magnet may be rebuilt from
+    # a bare infohash (see indexers._download_link).
+    private: bool = False
 
 
 def is_game_release(release: Release) -> bool:
@@ -99,10 +104,28 @@ def score(release: Release, wanted: str, platform: Platform | None = None) -> in
     lowered = release.title.lower()
 
     # Availability. Usenet has no seeders, so it is not penalised for having none.
+    #
+    # What a zero means depends on where the result came from. On a public
+    # tracker it means the torrent is dead and nothing will ever come of it. On
+    # a private one it is routine and temporary: the rare retro content these
+    # trackers exist for often sits at zero seeders until somebody idle
+    # reconnects, and rejecting it outright means the whole catalogue of a
+    # tracker like RetroWithin is unreachable.
+    #
+    # The bonus is capped low on purpose. At `min(seeders, 50) * 4` it reached
+    # 200 -- more than every quality signal here added together -- so a
+    # well-seeded public romset outranked an exact, correctly-labelled
+    # cartridge dump, and a private tracker with a handful of seeders per
+    # torrent could never win a ranking no matter how right its release was.
+    # Capped at 40 it ranks alongside region preference, which is the weight
+    # availability actually deserves: a tie-breaker, not the deciding vote.
     if release.protocol == "torrent":
         if release.seeders <= 0:
-            return -400
-        points += min(release.seeders, 50) * 4
+            if not release.private:
+                return -400
+            points -= 20
+        else:
+            points += min(release.seeders, 20) * 2
 
     for markers, value in _REGION_SCORE:
         if any(m in lowered for m in markers):
