@@ -69,7 +69,17 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
                overwrite: bool = False) -> ImportResult:
     """Place the ROM from a finished download into RomM's library."""
     if not download.exists():
-        return ImportResult(False, None, f"download path does not exist: {download}")
+        # Almost always a mount problem rather than a missing download: the
+        # client has the file and reported where IT sees it, and this process
+        # cannot see that path. "does not exist" on its own sends people looking
+        # for a lost download that is sitting right there, so say which of the
+        # two fixes applies.
+        return ImportResult(
+            False, None,
+            f"download path does not exist in this container: {download}. "
+            "Mount the download client's completed directory at that exact "
+            "path, or add a remote path mapping under Settings -> Media "
+            "Management.")
 
     candidates = list_candidates(download)
     chosen = pick_rom_file(candidates, platform)
@@ -121,7 +131,35 @@ def map_remote_path(path, mappings):
             if best is None or len(remote) > len(best[0]):
                 best = (remote, local)
     if best is None:
-        return Path(text)
+        return _checked(Path(text), text, mapped=False)
     remote, local = best
     rest = text[len(remote):].lstrip("/\\")
-    return Path(local) / rest if rest else Path(local)
+    return _checked(Path(local) / rest if rest else Path(local), text, mapped=True)
+
+
+def _checked(result: Path, reported: str, *, mapped: bool) -> Path:
+    """Warn, once translation is done, if the result is not openable here.
+
+    This is the only point that knows both paths, and the difference between
+    them is the whole diagnosis. Without it the operator sees a download that
+    completed and never imported, and nothing that names the container path
+    Romarr actually tried -- which is the one string that makes a wrong volume
+    mount obvious.
+
+    A warning rather than a raise: the caller reports the failure per download,
+    and one unopenable path must not stop the others importing.
+    """
+    if not reported or result.exists():
+        return result
+    if mapped:
+        log.warning(
+            "download client reported %s, which a remote path mapping turns "
+            "into %s -- and that does not exist here. Check the mapping's local "
+            "side against what is really mounted.", reported, result)
+    else:
+        log.warning(
+            "download client reported %s, which does not exist here and no "
+            "remote path mapping covers it. Mount the client's completed "
+            "directory at that exact path, or add a mapping under Settings -> "
+            "Media Management.", reported)
+    return result
