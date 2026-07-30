@@ -1,0 +1,91 @@
+# Throwaway Gaseous and Retrom servers for exercising romarr/libraries.py.
+#
+# Romarr's backend tests are mocked, so nothing here is needed to run them.
+# This is for the other job: proving the mocked request shapes still match a
+# real server after an upstream release. See README.md.
+#
+#   docker compose up -d          # then: python contrib/test-backends/verify.py
+#   docker compose down -v        # leaves nothing behind
+#
+# Images are pinned by digest, not tag. These are the exact builds the Gaseous
+# and Retrom backends were corrected against, so the fixture reproduces the
+# behaviour the assertions in tests/test_libraries.py encode. Bumping a digest
+# is how you deliberately re-test against a newer release.
+services:
+  gaseous:
+    # ghcr.io/gaseous-project/gaseousserver:latest as of 2026-07-29 -- an image
+    # built 2025-07-31. Upstream's `latest` is a year stale; v2.0.0-rc.3 is far
+    # newer and has never been checked against Romarr.
+    image: ghcr.io/gaseous-project/gaseousserver@sha256:5e506593ff09533f23e742470da2ef37ffe4051f3559dad3b038e81444df75a6
+    container_name: romarr-gaseous
+    # Deliberately not `unless-stopped`. An earlier copy of this file used it,
+    # and four "temporary" containers survived every reboot for a day.
+    restart: "no"
+    depends_on:
+      gaseousdb:
+        condition: service_healthy
+    ports: ["5198:80"]
+    environment:
+      - TZ=UTC
+      - dbhost=gaseousdb
+      - dbuser=root
+      - dbpass=${GASEOUS_DB_PASSWORD:-gaseous}
+      # Only needed if you want Gaseous to enrich metadata from IGDB. Romarr
+      # never reads IGDB, and the backend answers all four of its questions
+      # with these empty -- verified 2026-07-29.
+      - igdbclientid=${IGDB_CLIENT_ID:-}
+      - igdbclientsecret=${IGDB_CLIENT_SECRET:-}
+    volumes: ["gaseous_data:/home/gaseous/.gaseous-server"]
+
+  gaseousdb:
+    # mariadb:11 as of 2026-07-29. Incidental to the test -- safe to bump.
+    image: mariadb@sha256:efb4959ef2c835cd735dbc388eb9ad6aab0c78dd64febcd51bc17481111890c4
+    container_name: romarr-gaseousdb
+    restart: "no"
+    environment:
+      - MARIADB_ROOT_PASSWORD=${GASEOUS_DB_PASSWORD:-gaseous}
+    volumes: ["gaseous_db:/var/lib/mysql"]
+    healthcheck:
+      # Gaseous fails its first-boot schema step against a MariaDB that is
+      # listening but not yet initialised, so wait for more than the socket.
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+
+  retrom:
+    # ghcr.io/jmberesford/retrom-service:latest as of 2026-07-29 (built
+    # 2026-06-14). This is the build whose grpc-web framing and protobuf field
+    # numbers RetromLibrary was written against.
+    image: ghcr.io/jmberesford/retrom-service@sha256:840c8f8da77f366a0b658661913352b860e5388d009ca4925f560ea6d200ffe5
+    container_name: romarr-retrom
+    restart: "no"
+    depends_on:
+      retromdb:
+        condition: service_healthy
+    ports: ["5101:5101"]
+    environment:
+      - RETROM_CONFIG__CONNECTION__DB_URL=postgres://retrom:${RETROM_DB_PASSWORD:-retrom}@retromdb:5432/retrom
+    volumes: ["retrom_library:/library"]
+
+  retromdb:
+    # postgres:16-alpine as of 2026-07-29. Incidental to the test.
+    image: postgres@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+    container_name: romarr-retromdb
+    restart: "no"
+    environment:
+      - POSTGRES_USER=retrom
+      - POSTGRES_PASSWORD=${RETROM_DB_PASSWORD:-retrom}
+      - POSTGRES_DB=retrom
+    volumes: ["retrom_db:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U retrom"]
+      interval: 5s
+      timeout: 5s
+      retries: 24
+
+volumes:
+  gaseous_data:
+  gaseous_db:
+  retrom_library:
+  retrom_db:
