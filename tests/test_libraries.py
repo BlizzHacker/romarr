@@ -243,3 +243,50 @@ def test_gaseous_login_is_attempted_once():
     lib.games()
     logins = [url for url, _ in session.posts if url.endswith("/Account/Login")]
     assert len(logins) == 1, f"logged in {len(logins)} times"
+
+
+def test_every_library_backend_exposes_the_background_timeout():
+    """app.py fetches the shelf on a background thread with
+    `library.BACKGROUND_TIMEOUT`, but only Romm ever defined it -- so Gaseous and
+    Retrom raised AttributeError the moment the refresh ran.
+
+    _refresh_counts catches Exception and logs the class name alone, so the
+    symptom was a Library page that stayed empty forever with nothing but the
+    word "AttributeError" to go on -- no attribute named, and on a host without
+    persistent journald, no log at all.
+
+    The timeout is part of what the service needs from a library, so it belongs
+    on the protocol rather than on whichever backend happened to be written
+    first.
+    """
+    from romarr.libraries import LIBRARY_KINDS, build_library
+    for kind in LIBRARY_KINDS:
+        lib = build_library(kind, {"LIBRARY_URL": "http://library.example:1"})
+        got = getattr(lib, "BACKGROUND_TIMEOUT", None)
+        assert isinstance(got, int) and got > 0, f"{kind} has no BACKGROUND_TIMEOUT"
+
+
+def test_gaseous_rescan_makes_no_call_because_there_is_nothing_to_call():
+    """Gaseous has no scan trigger. It used to POST ContentManager/Rescan, which
+    does not exist, so every import logged a 404 for a call that could never
+    work -- enumerated from the server's own OpenAPI documents: 89 paths under
+    /api/v1, 93 under /api/v1.1, none of them starting a scan.
+
+    True, because nothing failed. Reporting False would mark every successful
+    import as partly broken over a call that does not exist.
+    """
+    session = FakeSession({})
+    lib = GaseousLibrary(GaseousConfig(base_url="http://g", username="u", password="p"),
+                         session=session)
+    assert lib.rescan("snes") is True
+    assert session.posts == []
+    assert session.gets == []
+
+
+def test_retrom_rescan_still_asks_the_server():
+    """Retrom does have a trigger, so the no-op above must not be mistaken for
+    the protocol allowing every backend to skip it."""
+    session = GrpcSession(b"")
+    lib = RetromLibrary(RetromConfig(base_url="http://r"), session=session)
+    lib.rescan("snes")
+    assert session.posts, "Retrom rescan should reach the server"

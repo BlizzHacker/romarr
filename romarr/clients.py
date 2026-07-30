@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 import requests
 
-from .libraries import Game
+from .libraries import DEFAULT_BACKGROUND_TIMEOUT, Game
 
 log = logging.getLogger(__name__)
 
@@ -258,7 +258,10 @@ class Romm:
     # and RomM's library query takes around three minutes on a large, contended
     # library -- so a thirty-second budget could never have succeeded, which is
     # why the shelf stayed empty no matter how often it retried.
-    BACKGROUND_TIMEOUT = 300
+    #
+    # Shared with the other backends rather than owned here: the service reads
+    # this off whichever library is attached, so it is part of the protocol.
+    BACKGROUND_TIMEOUT = DEFAULT_BACKGROUND_TIMEOUT
 
     def games(self, limit: int = 60, offset: int = 0,
               timeout: int | None = None) -> list[dict]:

@@ -45,11 +45,27 @@ class Game:
     cover: str = ""
 
 
+# Budget for the background shelf fetch. Nothing waits on it, so it is
+# generous: RomM's library query takes around three minutes on a large,
+# contended library, and a short budget could never succeed.
+#
+# It belongs here rather than on one backend. It was defined only on Romm, and
+# the service reads it off whichever library is attached -- so Gaseous and
+# Retrom raised AttributeError on every refresh, which _refresh_counts catches
+# and logs as a bare class name. The Library page stayed empty forever with
+# nothing to go on.
+DEFAULT_BACKGROUND_TIMEOUT = 300
+
+
 @runtime_checkable
 class Library(Protocol):
     """What Romarr needs from a game library, and nothing more."""
 
     name: str
+
+    # Every backend carries this, so the service can ask any of them for a
+    # slow background read without knowing which one it has.
+    BACKGROUND_TIMEOUT: int
 
     @property
     def configured(self) -> bool: ...
@@ -103,6 +119,7 @@ class GaseousLibrary:
     """
 
     name = "Gaseous"
+    BACKGROUND_TIMEOUT = DEFAULT_BACKGROUND_TIMEOUT
 
     def __init__(self, config: GaseousConfig, session: requests.Session | None = None):
         self._config = config
@@ -219,24 +236,30 @@ class GaseousLibrary:
         return out
 
     def rescan(self, platform_slug: str | None = None) -> bool:
-        """Ask Gaseous to pick up new files.
+        """Nothing to ask. Gaseous has no scan trigger, so this is a no-op.
 
-        Optional everywhere in Romarr: the ROM is already in the library
-        directory by the time this runs, so a failure here is logged and
-        reported rather than raised. A successful import must never be
-        reported as a failure over a courtesy call.
+        It used to POST ContentManager/Rescan, which does not exist -- every
+        import logged a 404 for a call that was never going to work. Enumerated
+        from the server's own OpenAPI documents: 89 paths under /api/v1 and 93
+        under /api/v1.1, and not one of them starts a scan. Gaseous picks up
+        files only on its own schedule, via two background tasks:
+
+          * TitleIngestor, every 1 minute, which processes whatever is in
+            Gaseous's *Import* directory.
+          * LibraryScan, every 1440 minutes -- once a day -- which walks the
+            configured library paths.
+
+        So a ROM filed into a Gaseous library path can take up to a day to
+        appear, and that is a property of Gaseous rather than something Romarr
+        can fix from out here. Two ways to make it prompt, both in the README:
+        point this library's path at Gaseous's Import directory, or lower
+        LibraryScan's interval in Gaseous itself.
+
+        Returns True because there is nothing to do and nothing failed. A False
+        here would mark every successful import as partly broken over a call
+        that does not exist.
         """
-        self._login()
-        try:
-            r = self._session.post(self._url("ContentManager/Rescan"),
-                                   headers=self._headers(),
-                                   timeout=self._config.timeout)
-        except requests.RequestException as err:
-            log.warning("gaseous rescan failed: %s", err)
-            return False
-        if not r.ok:
-            log.warning("gaseous rescan rejected: %s", r.status_code)
-        return r.ok
+        return True
 
 
 # ------------------------------------------------------------------- Retrom --
@@ -261,6 +284,7 @@ class RetromLibrary:
     """
 
     name = "Retrom"
+    BACKGROUND_TIMEOUT = DEFAULT_BACKGROUND_TIMEOUT
 
     # From packages/codegen/protos. Field numbers are part of the contract and
     # can only change in a breaking release, so pinning them is as safe as a
