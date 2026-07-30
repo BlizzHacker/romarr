@@ -203,3 +203,27 @@ def test_a_finished_download_with_no_library_is_recorded_not_dropped(tmp_path):
     assert "no library configured" in results[0]["reason"]
     assert any(e["kind"] == "failed" and "no library configured" in e["detail"]
                for e in s.store.history())
+
+
+def test_adding_a_library_clears_the_stale_no_library_message(tmp_path):
+    """The background refresh caches "no library configured" and then sleeps for
+    COUNT_TTL. Adding a library used to leave that message on the shelf for five
+    minutes -- true when written, wrong by the time anybody read it."""
+    s = svc(tmp_path)
+    s._library_cache = (None, 0.0, "no library configured")
+
+    s.store.put_item("libraries", {
+        "type": "romm", "name": "RomM", "enable": True,
+        "url": "http://romm.example", "path": str(tmp_path / "roms"),
+    })
+    s.reload_libraries()
+
+    assert s._library_cache[2] == ""
+    assert s.library_view()["error"] == ""
+
+
+def test_a_library_change_wakes_the_refresh_rather_than_waiting_it_out(tmp_path):
+    s = svc(tmp_path)
+    s._refresh_now.clear()
+    s.reload_libraries()
+    assert s._refresh_now.is_set(), "reload must wake the background refresh"

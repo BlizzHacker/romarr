@@ -166,6 +166,10 @@ class Romarr:
         self.library = Path(e.get("LIBRARY_PATH") or e.get("ROMM_LIBRARY", "/mnt/roms"))
         self.queue: list[QueueItem] = []
         self._lock = threading.Lock()
+        # Lets a configuration change wake the background refresh instead of
+        # waiting out its interval. Created before reload_libraries, which sets
+        # it.
+        self._refresh_now = threading.Event()
         self._started = time.monotonic()
 
         # History, Wanted and settings survive a restart. Without this a restart
@@ -223,7 +227,7 @@ class Romarr:
                 # only one of them is actionable.
                 cached, at, _ = self._library_cache
                 self._library_cache = (cached, at, "no library configured")
-                time.sleep(self.COUNT_TTL)
+                self._wait(self.COUNT_TTL)
                 continue
 
             ok, total, shelf, failures = True, 0, [], []
@@ -266,7 +270,18 @@ class Romarr:
                 self._library_cache = (cached, at, "; ".join(failures))
 
             delay = self.COUNT_TTL if ok else min(delay * 2, 300)
-            time.sleep(delay)
+            self._wait(delay)
+
+    def _wait(self, seconds: float) -> None:
+        """Sleep, but wake early when the libraries change.
+
+        Without this, adding a library on the Libraries page left the shelf
+        reading "no library configured" for up to COUNT_TTL -- five minutes of a
+        message that was true when it was written and wrong by the time anybody
+        read it.
+        """
+        self._refresh_now.wait(seconds)
+        self._refresh_now.clear()
 
     def library_view(self) -> dict:
         """The cached library, with enough state for the page to explain itself.
@@ -388,6 +403,15 @@ class Romarr:
         # Keep the single-library attributes pointed at the default, so the
         # status page, the health check and anything else reading them keep
         # reporting the library most installs have exactly one of.
+        # The cached error describes a configuration that no longer exists, so
+        # it must not outlive it -- and the refresh is woken rather than left to
+        # finish its interval.
+        cached = getattr(self, "_library_cache", None)
+        if cached is not None:
+            self._library_cache = (cached[0], cached[1], "")
+        if getattr(self, "_refresh_now", None) is not None:
+            self._refresh_now.set()
+
         default = self.default_library()
         if default is not None:
             cfg, backend = default
