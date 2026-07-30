@@ -727,8 +727,20 @@ class ROMarr:
         release was simply just below the bar.
         """
         platform = resolve(platform_name) if platform_name else None
-        releases = (self._search_releases(game, platform) if platform
-                    else self.prowlarr.search(game))
+        # Both branches have to survive an indexer failing. _search_releases
+        # already isolates each source, but the no-platform branch queried
+        # Prowlarr unprotected, so one aggregate search exceeding its 60s
+        # timeout took the whole request down -- and an unrecognised platform
+        # name silently routes here, which is how `?platform=psx` returned no
+        # status code at all rather than a result or an error.
+        if platform is not None:
+            releases = self._search_releases(game, platform)
+        else:
+            try:
+                releases = self.prowlarr.search(game)
+            except Exception as err:
+                log.warning("prowlarr search failed for %r: %s", game, err)
+                releases = []
         pick = best_release(releases, game, platform)
         scored = sorted(
             ((score(r, game, platform), r) for r in releases),
@@ -749,6 +761,12 @@ class ROMarr:
         return {
             "game": game,
             "platform": platform.slug if platform else None,
+            # A name that resolves to nothing is searched without any platform
+            # evidence, which quietly changes what the scores mean. Saying so
+            # separates "I asked for no platform" from "I asked for psx and it
+            # was not recognised" -- the second is a supported-platform question,
+            # since only cartridge systems are modelled.
+            "unknown_platform": platform_name if platform_name and not platform else None,
             "found": len(releases),
             "rejected": sum(1 for s, _ in scored if s <= 0),
             "private_found": sum(1 for _, r in scored if r.private),
@@ -1057,7 +1075,39 @@ def make_handler(service: ROMarr):
         def _json(self, code: int, payload):
             self._send(code, json.dumps(payload).encode(), "application/json")
 
+        def _guard(self, handler):
+            """Turn an unhandled failure into a reply instead of a dead socket.
+
+            Without this, an exception propagates to BaseHTTPRequestHandler,
+            which logs a traceback and closes the connection having sent
+            nothing. The caller sees no status code at all -- curl reports 000 --
+            so there is nothing to search for and no way to tell a crash from a
+            network problem. A search that exceeded Prowlarr's 60s timeout did
+            exactly this.
+
+            Extended past the two verbs it was written for: a PUT that saves
+            settings and a DELETE that removes a library can fail the same way,
+            and a dead socket is no more diagnosable there.
+            """
+            try:
+                return handler()
+            except Exception as exc:
+                log.exception("%s %s failed", self.command, self.path)
+                return self._json(500, {"error": f"{type(exc).__name__}: {exc}"})
+
         def do_GET(self):
+            return self._guard(self._get)
+
+        def do_POST(self):
+            return self._guard(self._post)
+
+        def do_PUT(self):
+            return self._guard(self._put)
+
+        def do_DELETE(self):
+            return self._guard(self._delete)
+
+        def _get(self):
             route = urlparse(self.path)
             query = parse_qs(route.query)
             if route.path == "/":
@@ -1123,7 +1173,7 @@ def make_handler(service: ROMarr):
                 return self._json(200, service.search(game, (query.get("platform") or [""])[0]))
             return self._json(404, {"error": "not found"})
 
-        def do_POST(self):
+        def _post(self):
             route = urlparse(self.path)
             length = int(self.headers.get("Content-Length") or 0)
             try:
@@ -1182,7 +1232,7 @@ def make_handler(service: ROMarr):
                 return self._json(200, service.run_command(name))
             return self._json(404, {"error": "not found"})
 
-        def do_DELETE(self):
+        def _delete(self):
             route = urlparse(self.path)
             if route.path.startswith("/api/v1/library/"):
                 item_id = route.path[len("/api/v1/library/"):]
@@ -1198,7 +1248,7 @@ def make_handler(service: ROMarr):
                     return self._json(200 if removed else 404, {"deleted": removed})
             return self._json(404, {"error": "not found"})
 
-        def do_PUT(self):
+        def _put(self):
             route = urlparse(self.path)
             length = int(self.headers.get("Content-Length") or 0)
             try:

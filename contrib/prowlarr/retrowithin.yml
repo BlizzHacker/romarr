@@ -48,11 +48,30 @@ links:
 #     Nothing consumes it.
 
 caps:
+  # RetroWithin carries no numeric category id in its markup. The category is
+  # the alt text of an img.catimg -- "Nintendo : SNES/SFC", "(Music : OST)",
+  # "Literature: Magazines" -- and the img's CSS class is a trap, because the
+  # class on a soundtrack row is literally `game`.
+  #
+  # The category field collapses that alt text into four buckets rather than
+  # enumerating every subcategory, because the observed list is only a sample of
+  # what the tracker has: harvested across nine searches it produced eighteen
+  # distinct values including six non-game ones, and Sega, Atari, Neo Geo and
+  # the rest never appeared. Matching on a prefix means an unobserved
+  # "(Music : Chiptune)" or "Literature: Comics" still lands in the right place,
+  # where an exact-id mapping would silently let it through as a game.
+  #
+  # Getting the non-game buckets right is the point. This is not a ROM-only
+  # tracker: a Chrono Trigger search returns FLAC soundtracks, an OVA and a
+  # book. Mapped to Audio/Books/Movies, ROMarr rejects them on category, which
+  # is what should happen. Left as Console/Other -- as they were -- they are
+  # scored as games and only a size ceiling stops them, so a *small* soundtrack
+  # rip passes as a ROM.
   categorymappings:
-    # Everything maps to Console/Other on purpose. ROMarr rejects any result
-    # whose categories fall outside the console and PC-games ranges, so an
-    # unmapped result would be dropped before it could be ranked at all.
-    - {id: 1, cat: Console/Other, desc: "Games"}
+    - {id: games,  cat: Console/Other, desc: "Games and ROMs"}
+    - {id: music,  cat: Audio/Other,   desc: "Music and OSTs"}
+    - {id: books,  cat: Books/Other,   desc: "Literature"}
+    - {id: movies, cat: Movies/Other,  desc: "Movies, TV and video"}
 
   modes:
     search: [q]
@@ -93,6 +112,11 @@ search:
     # category parameter here.
     action: search
     search: "{{ .Keywords }}"
+    # 1 = "Including dead torrents", which is browse.php's own default (0 is
+    # "Active torrents" only). Explicit because it is load-bearing here: most of
+    # this tracker's catalogue sits at zero seeders, so excluding dead torrents
+    # would hide the rare content it exists for.
+    incldead: 1
 
   rows:
     # A download link is the only reliable marker of a torrent row; header and
@@ -101,13 +125,24 @@ search:
 
   fields:
     category:
-      selector: a[href*="cat="]
-      attribute: href
+      # See the note on caps.categorymappings. Order matters: the three specific
+      # prefixes run first, then the catch-all takes anything still starting
+      # with a non-lowercase character -- every vendor string does
+      # ("Nintendo : 64", "PC : Other", "(Misc.)", "Misc. Roms") while the three
+      # buckets already assigned do not.
+      selector: img.catimg
+      attribute: alt
       filters:
-        - name: querystring
-          args: cat
+        - name: re_replace
+          args: ["^\\(Music.*$", "music"]
+        - name: re_replace
+          args: ["^Literature.*$", "books"]
+        - name: re_replace
+          args: ["^\\(Movies.*$", "movies"]
+        - name: re_replace
+          args: ["^[^a-z].*$", "games"]
       optional: true
-      default: 1
+      default: games
     title:
       selector: a[href^="details.php"]
       attribute: title

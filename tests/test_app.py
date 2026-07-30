@@ -151,3 +151,35 @@ def test_an_empty_category_variable_falls_back_rather_than_sending_nothing(tmp_p
                   "SABNZBD_URL": "http://sab:8080",
                   "SABNZBD_CATEGORY": ""})
     assert svc.sab._config.category == "romarr"
+
+
+# --- failures must arrive as replies ----------------------------------------
+
+def test_every_verb_is_guarded_so_a_crash_is_a_500_not_a_dead_socket():
+    """An exception reaching BaseHTTPRequestHandler logs a traceback and closes
+    the connection having sent nothing: the caller sees no status code at all --
+    curl reports 000 -- so there is nothing to search for and no way to tell a
+    crash from a network problem. A search that exceeded Prowlarr's 60s timeout
+    did exactly this.
+    """
+    import io as _io
+    import pathlib
+    src = _io.open(pathlib.Path(__file__).resolve().parents[1] / "romarr" / "app.py",
+                   encoding="utf-8").read()
+    for verb, inner in (("do_GET", "_get"), ("do_POST", "_post"),
+                        ("do_PUT", "_put"), ("do_DELETE", "_delete")):
+        assert f"def {verb}(self):\n            return self._guard(self.{inner})" in src, verb
+    assert "def _guard(self, handler):" in src
+
+
+def test_an_unresolvable_platform_is_reported_rather_than_silently_ignored(tmp_path):
+    """A name that resolves to nothing is searched with no platform evidence,
+    which quietly changes what the scores mean. `?platform=psx` should say the
+    name was not recognised -- only cartridge systems are modelled."""
+    svc = ROMarr({"ROMARR_DATA": str(tmp_path / "s.json")})
+    out = svc.search("Final Fantasy VII", "psx")
+    assert out["unknown_platform"] == "psx"
+    assert out["platform"] is None
+
+    known = svc.search("Super Metroid", "snes")
+    assert known["unknown_platform"] is None
