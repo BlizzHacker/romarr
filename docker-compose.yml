@@ -68,10 +68,30 @@ services:
 
       # Your download client's completed directory.
       #
-      # Mount it at the SAME path your download client reports, or Romarr looks
-      # for a finished download where it is not. If qBittorrent says
-      # /downloads/complete, mount it at /downloads/complete here. When that is
-      # impossible, set a mapping under Settings -> Media Management instead.
+      # Left side is the host. The RIGHT side must be the path your download
+      # client reports, character for character -- Romarr asks the client where
+      # a finished download is and then opens that path itself, so the two have
+      # to agree. The host side only has to be the directory actually holding
+      # those files; it does not have to resemble the container path.
+      #
+      # So if the files live at /mnt/downloads/complete on the host and SABnzbd
+      # reports /downloads/complete, both sides change:
+      #
+      #     - /mnt/downloads/complete:/downloads/complete
+      #
+      # A client running on the host rather than in a container reports host
+      # paths, which makes the two sides identical:
+      #
+      #     - /mnt/downloads:/mnt/downloads
+      #
+      # Not sure what your client reports? qBittorrent shows it as "Save path"
+      # in Options -> Downloads; SABnzbd as "Completed Download Folder" in
+      # Config -> Folders. Romarr uses whatever the client's API returns, which
+      # is that setting.
+      #
+      # When the paths genuinely cannot be made to match, leave this as-is and
+      # add a mapping under Settings -> Media Management, which rewrites the
+      # client's prefix into a local one.
       - /path/to/downloads:/downloads
 
 # Prefer an env file to editing this one? Delete the `environment:` block and
