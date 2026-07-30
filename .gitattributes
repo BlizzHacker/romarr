@@ -1,0 +1,6 @@
+# Shell scripts must keep LF endings. A CRLF entrypoint fails inside the
+# container as "/entrypoint.sh: not found", because the kernel reads the \r as
+# part of the interpreter path -- an error that names the file it just found.
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.yml text eol=lf

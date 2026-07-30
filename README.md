@@ -100,18 +100,55 @@ of feeding RomM in the first place.
 
 ## Install
 
-Proxmox LXC, one line:
+### Docker
+
+```bash
+docker run -d --name romarr -p 7878:7878 \
+  -e PUID=1000 -e PGID=1000 \
+  -e PROWLARR_URL=http://prowlarr:9696 -e PROWLARR_API_KEY=... \
+  -e LIBRARY_URL=http://romm:8080 -e LIBRARY_USERNAME=romarr -e LIBRARY_PASSWORD=... \
+  -e QBITTORRENT_URL=http://qbittorrent:8080 \
+  -v ./config:/config -v /path/to/roms:/roms -v /path/to/downloads:/downloads \
+  ghcr.io/blizzhacker/romarr:latest
+```
+
+There is a [`docker-compose.yml`](docker-compose.yml) with every setting
+commented, which is the easier way in. Images are published for `linux/amd64`,
+`linux/arm64` and `linux/arm/v7`, so the same tag runs on a NAS, a Pi or a
+server.
+
+Three things worth knowing:
+
+- **`PUID`/`PGID` decide who owns the ROMs.** Romarr writes files that your
+  library application has to read. Give it the same ids as that application, or
+  `id -u` / `id -g` for your media user. Only `/config` is chowned — never the
+  library or downloads volumes, because a recursive chown of a multi-terabyte
+  share at every boot is not something an image should do to you.
+- **Mount the downloads volume at the path your download client reports.** If
+  qBittorrent says `/downloads/complete`, mount it there here too. Otherwise
+  the import looks for a finished file where it is not, and you get "download
+  path does not exist" while the file sits in plain sight. If matching the path
+  is impossible, set a mapping under Settings → Media Management instead.
+- **`/config` holds the decisions you make in the UI**, and a setting saved
+  there outranks the environment from then on. That is deliberate — an
+  environment default must not silently undo a choice — but it means changing
+  `LIBRARY_PATH` after first run has no effect. Change it on the Settings page.
+
+### Proxmox LXC
+
+One line:
 
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/BlizzHacker/romarr/main/proxmox/ct/romarr.sh)"
 ```
 
-Or run it yourself:
+### From source
 
 ```bash
 git clone https://github.com/BlizzHacker/romarr.git && cd romarr
 pip install -r requirements.txt
 cp .env.example .env    # then edit it
+set -a; . ./.env; set +a    # nothing loads .env for you -- no dotenv dependency
 python -m romarr
 ```
 
@@ -120,13 +157,39 @@ python -m romarr
 | Variable | What it is |
 |---|---|
 | `PROWLARR_URL` / `PROWLARR_API_KEY` | your Prowlarr, for searching |
-| `ROMM_URL` / `ROMM_USERNAME` / `ROMM_PASSWORD` | RomM, for the rescan trigger |
-| `ROMM_LIBRARY` | path to RomM's library root, e.g. `/mnt/roms` |
+| `LIBRARY_KIND` | `romm`, `gaseous` or `retrom` (default `romm`) |
+| `LIBRARY_URL` / `LIBRARY_USERNAME` / `LIBRARY_PASSWORD` | your game library, for the rescan trigger. `ROMM_*` still works |
+| `LIBRARY_PATH` | path to the library root, e.g. `/mnt/roms`. Formerly `ROMM_LIBRARY`, still accepted |
 | `QBITTORRENT_URL` / `QBITTORRENT_USER` / `QBITTORRENT_PASS` | torrent client |
 | `SABNZBD_URL` / `SABNZBD_API_KEY` | usenet client, optional |
 | `NZBGET_URL` / `NZBGET_USER` / `NZBGET_PASS` | usenet client, optional |
+| `QBITTORRENT_CATEGORY` / `SABNZBD_CATEGORY` / `NZBGET_CATEGORY` | what Romarr labels its own downloads with, per client. Default `romarr` |
 | `GGREQUESTZ_URL` | shows the request front-end's status, optional |
 | `ROMARR_DATA` | where history and settings are kept |
+| `PUID` / `PGID` / `TZ` | Docker image only — see above |
+
+A protocol with no client configured cannot be grabbed at all — results are
+found, ranked, and then refused. The Download Clients page names any protocol
+in that state rather than leaving you to work it out.
+
+### Download categories
+
+Romarr labels its downloads `romarr`, so its jobs are distinguishable from
+everything else in a client you already use for other things — the same reason
+Radarr and Sonarr each use their own.
+
+**The category does not have to exist in the client first.** SABnzbd 5.0.4
+ships `*`, `movies`, `tv`, `audio` and `software`, and `romarr` is none of
+them; an undefined category is accepted, kept verbatim on the job, and still
+matched by the history filter Romarr uses to notice a finished download.
+Defining it is still worth doing if you want the download in a folder of its
+own or a post-processing script — Romarr does not care either way, because it
+takes the finished path from SABnzbd's own `storage` field rather than guessing
+where the category put it.
+
+Set `SABNZBD_CATEGORY=software` if you would rather use a built-in, or give two
+Romarrs sharing one client different categories so they stop claiming each
+other's downloads.
 
 A protocol with no client configured cannot be grabbed at all — results are
 found, ranked, and then refused. The Download Clients page names any protocol
