@@ -24,33 +24,62 @@ class Platform:
     name: str                      # human label
     extensions: tuple[str, ...]    # ROM extensions, most-preferred first
     aliases: tuple[str, ...] = field(default=())
+    # The largest plausible download for ONE game on this system. See MB below.
+    max_size: int = 32 * 1024 * 1024
 
 
-# Cartridge-era systems only. Disc-based platforms are deliberately excluded:
-# their images are gigabytes, frequently multi-file, and cannot be streamed to
-# a browser emulator, which is the point of this pipeline.
+MB = 1024 * 1024
+
+# How big a release for each system can plausibly be.
+#
+# Scoring used a single 512MB ceiling for every platform, which is roughly
+# eighty times the largest SNES cartridge ever made. A 452MB PC build of Final
+# Fantasy III sailed under it, ranked top on seeders and was picked for a SNES
+# request -- the same failure as a translation hack, arrived at through size.
+#
+# Each number is the biggest cartridge the system shipped, rounded up hard for
+# headroom, because a release is not always a bare ROM: it may be zipped, carry
+# box art and a readme, or hold several regional dumps. The headroom is what
+# makes this safe to tighten -- the job is to exclude disc images and PC ports,
+# not to second-guess how a dump was packaged.
+#
+#   system   biggest cartridge          ceiling here
+#   NES      1MB   (mapper-heavy carts)  8MB
+#   SNES     6MB   (Tales of Phantasia)  24MB
+#   GBA      32MB  (full 256Mbit carts)  128MB
+#   N64      64MB  (Resident Evil 2)     256MB
+#   Genesis  8MB   (Pier Solar)          32MB
 PLATFORMS: tuple[Platform, ...] = (
     Platform("nes", "Nintendo Entertainment System", (".nes", ".fds", ".unf"),
-             ("nintendo", "famicom", "nintendo entertainment system")),
+             ("nintendo", "famicom", "nintendo entertainment system"),
+             max_size=8 * MB),
     Platform("snes", "Super Nintendo", (".smc", ".sfc", ".swc", ".fig"),
-             ("super nintendo", "super famicom", "sfc", "super nes")),
-    Platform("gb", "Game Boy", (".gb",), ("gameboy", "game boy")),
-    Platform("gbc", "Game Boy Color", (".gbc",), ("gameboy color", "game boy color")),
-    Platform("gba", "Game Boy Advance", (".gba",), ("gameboy advance", "game boy advance")),
+             ("super nintendo", "super famicom", "sfc", "super nes"),
+             max_size=24 * MB),
+    Platform("gb", "Game Boy", (".gb",), ("gameboy", "game boy"),
+             max_size=8 * MB),
+    Platform("gbc", "Game Boy Color", (".gbc",), ("gameboy color", "game boy color"),
+             max_size=16 * MB),
+    Platform("gba", "Game Boy Advance", (".gba",), ("gameboy advance", "game boy advance"),
+             max_size=128 * MB),
     Platform("n64", "Nintendo 64", (".z64", ".n64", ".v64"),
-             ("nintendo 64", "n 64")),
+             ("nintendo 64", "n 64"), max_size=256 * MB),
     Platform("genesis-slash-megadrive", "Sega Genesis / Mega Drive",
              (".md", ".gen", ".smd", ".bin"),
-             ("genesis", "mega drive", "megadrive", "sega genesis")),
-    Platform("sms", "Sega Master System", (".sms",), ("master system",)),
-    Platform("gamegear", "Game Gear", (".gg",), ("game gear",)),
-    Platform("atari2600", "Atari 2600", (".a26", ".bin"), ("2600", "vcs")),
-    Platform("atari7800", "Atari 7800", (".a78",), ("7800",)),
-    Platform("lynx", "Atari Lynx", (".lnx",), ()),
-    Platform("turbografx16--1", "TurboGrafx-16", (".pce",), ("pc engine", "turbografx")),
-    Platform("wonderswan", "WonderSwan", (".ws", ".wsc"), ()),
-    Platform("neo-geo-pocket", "Neo Geo Pocket", (".ngp", ".ngc"), ()),
-    Platform("virtualboy", "Virtual Boy", (".vb",), ("virtual boy",)),
+             ("genesis", "mega drive", "megadrive", "sega genesis"),
+             max_size=32 * MB),
+    Platform("sms", "Sega Master System", (".sms",), ("master system",),
+             max_size=8 * MB),
+    Platform("gamegear", "Game Gear", (".gg",), ("game gear",), max_size=8 * MB),
+    Platform("atari2600", "Atari 2600", (".a26", ".bin"), ("2600", "vcs"),
+             max_size=8 * MB),
+    Platform("atari7800", "Atari 7800", (".a78",), ("7800",), max_size=8 * MB),
+    Platform("lynx", "Atari Lynx", (".lnx",), (), max_size=8 * MB),
+    Platform("turbografx16--1", "TurboGrafx-16", (".pce",), ("pc engine", "turbografx"),
+             max_size=16 * MB),
+    Platform("wonderswan", "WonderSwan", (".ws", ".wsc"), (), max_size=16 * MB),
+    Platform("neo-geo-pocket", "Neo Geo Pocket", (".ngp", ".ngc"), (), max_size=8 * MB),
+    Platform("virtualboy", "Virtual Boy", (".vb",), ("virtual boy",), max_size=8 * MB),
 )
 
 _BY_SLUG = {p.slug: p for p in PLATFORMS}

@@ -437,6 +437,17 @@ def test_a_full_size_cartridge_dump_is_never_penalised_for_being_large():
         assert score(biggest, "some game", by_slug(slug)) > 0, slug
 
 
+def test_a_retranslation_is_penalised_like_a_translation():
+    """"Chrono Trigger (Retranslated)" is a real RetroWithin title. The junk
+    marker was the exact word "translation", so every other form of the word --
+    translated, retranslated, retranslation -- went unnoticed."""
+    snes = by_slug("snes")
+    clean = rel("Chrono Trigger (USA)")
+    for word in ("(Retranslated)", "(Translated)", "(Retranslation)"):
+        assert score(rel(f"Chrono Trigger (USA) {word}"), "chrono trigger", snes) \
+            < score(clean, "chrono trigger", snes), word
+
+
 def test_every_platform_declares_a_ceiling_above_its_biggest_cartridge():
     from romarr.platforms import PLATFORMS
     for p in PLATFORMS:

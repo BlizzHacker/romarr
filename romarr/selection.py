@@ -34,10 +34,13 @@ FOREIGN_PLATFORM_MARKERS = {
     "dreamcast", "saturn", "psvr",
 }
 
-# Words that mean "this is not a plain cartridge dump".
+# Words that mean "this is not a plain cartridge dump". Matched as substrings,
+# which is why the stem "translat" is listed rather than "translation": it also
+# catches "translated", "retranslated" and "retranslation", and RetroWithin
+# publishes "Chrono Trigger (Retranslated)" -- a hack the exact word missed.
 _JUNK_MARKERS = (
     "beta", "proto", "prototype", "demo", "sample", "hack", "patched",
-    "translation", "trainer", "repack", "update only", "dlc",
+    "translat", "trainer", "repack", "update only", "dlc",
 )
 
 # Language markers, and what they mean here.
@@ -257,11 +260,17 @@ def score(release: Release, wanted: str, platform: Platform | None = None) -> in
                 _mentions(lowered, alias) for alias in platform.aliases):
             points += 30
 
-    # A cartridge ROM is small. A multi-gigabyte "release" for a cartridge
-    # platform is a romset, a PC port, or a disc image -- none of which this
-    # pipeline can hand to a browser emulator.
+    # A cartridge ROM is small. An oversized "release" for a cartridge platform
+    # is a romset, a PC port, or a disc image -- none of which this pipeline can
+    # hand to a browser emulator.
+    #
+    # The ceiling is per platform (Platform.max_size) because one number cannot
+    # describe both a 32KB Atari cartridge and a 64MB N64 one. The single 512MB
+    # limit this replaces was larger than every cartridge ever made, so a 452MB
+    # PC build of Final Fantasy III passed it and, being the best-seeded result,
+    # was picked for a SNES request.
     if platform is not None:
-        if release.size > 512 * 1024 * 1024:
+        if release.size > platform.max_size:
             points -= 200
         elif release.size < 4 * 1024:
             points -= 200
