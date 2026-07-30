@@ -1,0 +1,85 @@
+# Romarr. Copy this file, edit the two paths and the four URLs, and start it.
+#
+# Prowlarr, your download client and your game library are not started here --
+# you already run them, and a compose file that spawned its own copies would
+# fight the stack it is meant to join.
+
+volumes:
+  romarr_config:
+
+services:
+  romarr:
+    image: ghcr.io/blizzhacker/romarr:latest
+    container_name: romarr
+    restart: unless-stopped
+    ports:
+      - "7878:7878"
+    environment:
+      # Who owns the ROMs Romarr writes. Use the same ids as your library app,
+      # or `id -u` / `id -g` for your media user.
+      PUID: 1000
+      PGID: 1000
+      TZ: Etc/UTC
+
+      # Prowlarr -- how Romarr finds releases.
+      PROWLARR_URL: http://prowlarr:9696
+      # :-?ERROR fails fast on startup rather than connecting with an empty credential.
+      PROWLARR_API_KEY: ${PROWLARR_API_KEY:-?ERROR}
+
+      # Your game library. LIBRARY_KIND is romm, gaseous or retrom.
+      LIBRARY_KIND: romm
+      LIBRARY_URL: http://romm:8080
+      LIBRARY_USERNAME: romarr
+      LIBRARY_PASSWORD: ${LIBRARY_PASSWORD:-?ERROR}
+      # Where finished ROMs are filed, as seen inside THIS container. It is the
+      # container path, not the host path -- see the volume below.
+      LIBRARY_PATH: /roms
+
+      # Download client. At least one is required: a release found with no
+      # client that speaks its protocol is ranked and then refused.
+      # Since QBITTORRENT can run without auth, no :-?ERROR or default username is required.
+      QBITTORRENT_URL: http://qbittorrent:8080
+      QBITTORRENT_USER: ${QBITTORRENT_USER}
+      QBITTORRENT_PASS: ${QBITTORRENT_PASS}
+
+      # Optional usenet clients.
+      # SABNZBD_URL: http://sabnzbd:8080
+      # SABNZBD_API_KEY: ${SABNZBD_API_KEY}
+      # NZBGET_URL: http://nzbget:6789
+      # NZBGET_USER: ${NZBGET_USER}
+      # NZBGET_PASS: ${NZBGET_PASS}
+
+      # What Romarr labels its own downloads with, per client. Defaults to
+      # "romarr". The category does NOT have to exist in the client first --
+      # SABnzbd keeps an undefined one verbatim and Romarr still matches it.
+      # Define it there anyway if you want its own folder or a post-processing
+      # script, or point this at a built-in like "software".
+      # When creating a new category in sabnzbd for romarr, the indexer category is 'console'
+      # SABNZBD_CATEGORY: romarr
+      # QBITTORRENT_CATEGORY: romarr
+      # NZBGET_CATEGORY: romarr
+
+      # Optional request front-end, shown on the System page.
+      # GGREQUESTZ_URL: http://ggrequestz:3000
+
+      LOG_LEVEL: INFO
+
+    volumes:
+      # History, settings and indexer configuration. Keep this one.
+      - romarr_config:/config
+
+      # Your library root. The left side is the host; the right side must match
+      # LIBRARY_PATH above.
+      - /path/to/roms:/mnt/roms
+
+      # Your download client's completed directory.
+      #
+      # Mount it at the SAME path your download client reports, or Romarr looks
+      # for a finished download where it is not. If qBittorrent says
+      # /downloads/complete, mount it at /downloads/complete here. When that is
+      # impossible, set a mapping under Settings -> Media Management instead.
+      - /path/to/downloads:/downloads
+
+# Prefer an env file to editing this one? Delete the `environment:` block and
+# use `env_file: .env` -- compose turns those entries into real environment
+# variables, which is what Romarr reads.
