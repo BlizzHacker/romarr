@@ -454,3 +454,80 @@ def test_every_platform_declares_a_ceiling_above_its_biggest_cartridge():
         assert p.max_size > 0, p.slug
         # Nothing cartridge-era needs a third of a gigabyte.
         assert p.max_size < 300 * 1024 * 1024, p.slug
+
+
+# --- repackaged games are not cartridge dumps -------------------------------
+
+def test_a_wii_virtual_console_wad_is_not_a_genesis_cartridge():
+    """Reported live: a Genesis request grabbed
+    "Phantasy.Star.IV.USA.SMD.Virtual.Console" -- a Wii Virtual Console WAD. It
+    cannot be played as a Genesis ROM, and it could not even have been imported,
+    because no Genesis extension appears among its files (a .wad and a pile of
+    .par2 volumes).
+
+    Two faults compounded. Nothing named Virtual Console, so the foreign-platform
+    check passed: _mentions flattens the dots, and the title says "Virtual
+    Console" rather than "Wii". Then the ROM-extension bonus was a plain
+    substring test, and the dot-separated scene name contains ".smd" -- so the
+    release earned the strongest platform signal the scorer has, for being a Wii
+    package. ".md" matched as well, nested inside ".smd".
+    """
+    genesis = by_slug("genesis-slash-megadrive")
+    wad = rel("Phantasy.Star.IV.USA.SMD.Virtual.Console", size=14_660_000)
+    assert score(wad, "phantasy star iv", genesis) < 0
+
+
+def test_an_extension_only_counts_where_a_filename_would_end():
+    """The bonus exists because ".smc" identifies a cartridge better than any
+    words in a title. That is only true of a real extension: mid-name, between
+    dots, it is a platform token in a scene release and evidence of nothing.
+    """
+    snes = by_slug("snes")
+    ends = rel("Super Metroid (JU) [!].smc")
+    delimited = rel("Super Metroid.smc (USA)")
+    mid_token = rel("Super.Metroid.smc.Virtual.Console.Collection")
+
+    assert score(ends, "super metroid", snes) > 0
+    assert score(delimited, "super metroid", snes) > 0
+    assert score(mid_token, "super metroid", snes) < score(ends, "super metroid", snes)
+
+
+def test_a_shorter_extension_does_not_match_inside_a_longer_one():
+    """Genesis declares both .md and .smd, and ".md" is a substring of ".smd" --
+    so any .smd release scored the bonus twice over, and any dotted name with
+    "SMD" in it scored it at all."""
+    genesis = by_slug("genesis-slash-megadrive")
+    real = rel("Phantasy Star IV (USA).smd")
+    assert score(real, "phantasy star iv", genesis) > 0
+
+
+def test_a_compilation_does_not_win_a_single_game_request():
+    """Both titles are real, from one live Genesis search for Phantasy Star IV.
+    The compilation was ranked first and the cartridge second:
+
+        44   17.5MB  SEGA Genesis Classics Phantasy Star IV
+        32    2.3MB  Phantasy Star IV - Mega Drive - Genesis
+
+    "SEGA Genesis Classics" is the Steam package. It says "Genesis", so it
+    collected the platform bonus, and 17.5MB sits inside the headroom the size
+    ceiling deliberately leaves for zipped dumps with box art. Nothing rejected
+    it, and a PC installer holds no .smd for the importer to find -- so the grab
+    succeeds and the import cannot.
+
+    A compilation is the same class of thing as a romset: not a cartridge dump,
+    and not importable as one.
+    """
+    genesis = by_slug("genesis-slash-megadrive")
+    compilation = rel("SEGA Genesis Classics Phantasy Star IV", size=17_500_000)
+    cartridge = rel("Phantasy Star IV - Mega Drive - Genesis", size=2_300_000)
+
+    assert score(compilation, "phantasy star iv", genesis) < 0
+    assert score(cartridge, "phantasy star iv", genesis) > 0
+
+
+def test_a_romset_or_anthology_is_refused_too():
+    snes = by_slug("snes")
+    for title in ("Super Nintendo Complete Romset (No-Intro)",
+                  "SNES Game Collection 2024",
+                  "Super Mario Anthology"):
+        assert score(rel(title, size=8_000_000), "super mario world", snes) < 0, title

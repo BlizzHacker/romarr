@@ -32,7 +32,25 @@ FOREIGN_PLATFORM_MARKERS = {
     "android", "apk", "ios",
     "pc", "windows", "steam", "gog", "repack",
     "dreamcast", "saturn", "psvr",
+    # Repackaged for a console that is not this one. A Wii Virtual Console WAD
+    # of a Genesis game is not a Genesis cartridge: it cannot be played as one,
+    # and it cannot even be imported, since no Genesis extension appears among
+    # its files. Reported live -- a Genesis request grabbed
+    # "Phantasy.Star.IV.USA.SMD.Virtual.Console", 14MB of .wad and .par2.
+    #
+    # "wii" alone does not catch it, because the title says Virtual Console and
+    # never says Wii.
+    "virtual console", "wiiware", "wad", "eshop",
 }
+
+# Names for "several games in one box", which a single-game request cannot use.
+# Kept apart from _JUNK_MARKERS because these are matched as whole words: the
+# substring "set" is inside "Sunset", and "classics" must not catch "Classic".
+COMPILATION_MARKERS = (
+    "classics", "collection", "compilation", "anthology", "romset",
+    "rom set", "complete set", "full set", "no-intro", "nointro", "goodgen",
+    "tosec", "redump", "everdrive", "megaset", "mega set", "all games",
+)
 
 # Words that mean "this is not a plain cartridge dump". Matched as substrings,
 # which is why the stem "translat" is listed rather than "translation": it also
@@ -248,13 +266,32 @@ def score(release: Release, wanted: str, platform: Platform | None = None) -> in
             if _mentions(lowered, marker):
                 return -300
 
+    # A compilation is not a cartridge dump, and cannot be imported as one.
+    #
+    # Same class of thing as a romset: it holds the requested game, so the title
+    # matches, and it frequently names the platform, so it collects the platform
+    # bonus too. Live evidence -- one Genesis search for Phantasy Star IV ranked
+    # "SEGA Genesis Classics Phantasy Star IV" (17.5MB, the Steam package) above
+    # "Phantasy Star IV - Mega Drive - Genesis" (2.3MB, the actual dump). The
+    # size ceiling could not catch it, because 17.5MB sits inside the headroom
+    # deliberately left for a zipped dump carrying box art.
+    #
+    # Rejected rather than penalised: a PC installer or a multi-game set holds no
+    # single cartridge for the importer to choose, so the grab would succeed and
+    # the import could not. Whole-word matched, so "Collector" and "Classic
+    # Edition" as part of a real game name are untouched.
+    if platform is not None:
+        for marker in COMPILATION_MARKERS:
+            if _mentions(lowered, marker):
+                return -250
+
     # Positive evidence that this really is the requested system. It matters
     # more now that the search casts a wider net: a bare title search returns
     # the same game for several consoles, and most such releases name no
     # platform at all. A ROM extension is the strongest signal available --
     # ".smc" says Super Nintendo far more reliably than any title text.
     if platform is not None:
-        if any(ext in lowered for ext in platform.extensions):
+        if _has_extension(lowered, platform.extensions):
             points += 60
         elif _mentions(lowered, platform.slug.lower()) or any(
                 _mentions(lowered, alias) for alias in platform.aliases):
@@ -324,6 +361,36 @@ def _region_rank(name: str) -> int:
         if any(m in lowered for m in markers):
             return value
     return 0
+
+
+# What can follow an extension and still leave it an extension: nothing, or a
+# delimiter. A dot cannot -- ".smd." is followed by more name, which makes it a
+# token in a scene release rather than the end of a filename.
+_AFTER_EXTENSION = ("", " ", ")", "]", "}", ",", ";", '"', "'", "	")
+
+
+def _has_extension(lowered: str, extensions: tuple[str, ...]) -> bool:
+    """Whether a real ROM extension appears, not merely those characters.
+
+    The bonus this feeds is the strongest platform signal the scorer has, on the
+    grounds that ".smc" identifies a Super Nintendo cartridge better than any
+    words in a title. That is only true of an actual extension. It used to be a
+    plain substring test, and scene releases are dot-separated, so
+    "Phantasy.Star.IV.USA.SMD.Virtual.Console" contained ".smd" and earned the
+    full bonus for being a Wii package.
+
+    It also matched a shorter extension inside a longer one -- Genesis declares
+    both .md and .smd, and ".md" is inside ".smd" -- so a genuine .smd release
+    matched twice and a dotted name containing "SMD" matched at all.
+    """
+    for ext in extensions:
+        at = lowered.find(ext)
+        while at != -1:
+            end = at + len(ext)
+            if lowered[end:end + 1] in _AFTER_EXTENSION:
+                return True
+            at = lowered.find(ext, at + 1)
+    return False
 
 
 def _mentions(haystack: str, marker: str) -> bool:
