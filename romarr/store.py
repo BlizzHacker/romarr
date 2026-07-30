@@ -49,6 +49,9 @@ class Event:
     seeders: int = 0
     size: int = 0
     indexer: str = ""
+    # Which library server received it. Empty for events that predate multiple
+    # libraries, and for events that never reached one.
+    library: str = ""
     at: str = field(default_factory=now_iso)
 
 

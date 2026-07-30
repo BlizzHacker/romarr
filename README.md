@@ -195,6 +195,44 @@ A protocol with no client configured cannot be grabbed at all — results are
 found, ranked, and then refused. The Download Clients page names any protocol
 in that state rather than leaving you to work it out.
 
+### More than one library
+
+Romarr drives several library servers at once. Add them under **Settings →
+Libraries**: each carries its own address, credentials and filesystem path, and
+one is marked default.
+
+Routing is by platform. A library with platform rules receives only those
+platforms; anything unmatched goes to the default — so "N64 goes to Retrom" is
+one row on that page rather than a second Romarr. A platform rule beats the
+default, because naming a platform is the more specific statement. Two servers
+of the *same* kind are fine, and are the common case: a RomM for the house and a
+RomM for a child's device.
+
+Each server needs its own path, **as Romarr sees it**. Two libraries may share a
+path if you genuinely point both applications at one tree, but nothing assumes
+it. The Libraries page flags a server that answers while its path is missing
+here, which is almost always a volume that was never mounted into Romarr.
+
+The environment seeds the first library on first run, so an existing install
+comes up already configured. Everything after that is managed on the page.
+
+The Library view aggregates every server and badges each poster with its source;
+one unreachable server is reported as a named row rather than an empty shelf.
+
+#### Gaseous appears on its own schedule
+
+Gaseous has no scan trigger — there is no such call in its API. It picks up new
+files through two background tasks of its own: `TitleIngestor` every minute,
+which processes Gaseous's **Import** directory, and `LibraryScan` every 1440
+minutes, which walks the configured library paths. A ROM filed into a Gaseous
+library path can therefore take up to a day to appear, and nothing Romarr sends
+changes that. Either point that library's path at Gaseous's Import directory, or
+lower `LibraryScan`'s interval in Gaseous.
+
+RomM and Retrom are both told directly and appear at once. For RomM, the account
+Romarr uses needs permission to run tasks — without it the rescan is refused with
+a 403 and the ROM waits for RomM's next scheduled scan.
+
 ### Remote path mapping
 
 If your download client runs in a different container or host, it reports paths

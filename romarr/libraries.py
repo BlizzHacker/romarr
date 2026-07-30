@@ -43,6 +43,9 @@ class Game:
     name: str
     platform: str = ""
     cover: str = ""
+    # Which library server this came from. Empty when there is only one, so a
+    # single-library install shows no redundant badge on every poster.
+    source: str = ""
 
 
 # Budget for the background shelf fetch. Nothing waits on it, so it is
@@ -489,3 +492,140 @@ def build_library(kind: str, env: dict[str, str]):
     if kind == "retrom":
         return RetromLibrary(RetromConfig(base_url=url, api_key=key))
     return Romm(RommConfig(base_url=url, username=user, password=pw, api_token=key))
+
+
+# ------------------------------------------------------- many servers, one arr --
+#
+# One library was a fair simplification until it wasn't. People run more than
+# one: a RomM for the household and a second for a child's device, a Retrom
+# next to a RomM, or a spare instance on a NAS. Radarr and Sonarr solved the
+# same shape with multiple root folders, and Overseerr with multiple downstream
+# servers and per-request routing, which is the model borrowed here.
+#
+# Each server carries its own filesystem path, because they are separate
+# applications with separate library roots. Sharing one path between two
+# libraries is allowed -- some people do point RomM and Retrom at the same tree
+# -- but it is not assumed.
+
+SECRET_PLACEHOLDER = "********"
+
+_FIELD = lambda name, label, kind="text", default="", **kw: {  # noqa: E731
+    "name": name, "label": label, "type": kind, "default": default, **kw
+}
+
+_COMMON_LIBRARY_FIELDS = [
+    _FIELD("name", "Name"),
+    _FIELD("enable", "Enable", "bool", True),
+    _FIELD("url", "URL", default="http://localhost:8080"),
+    _FIELD("path", "Library path", help="Where ROMs are filed for THIS server, "
+                                       "as Romarr sees it"),
+    _FIELD("is_default", "Default", "bool", False,
+           help="Requests with no matching platform rule are filed here"),
+    _FIELD("platforms", "Platforms", "list",
+           help="Route only these platforms here. Empty means any platform."),
+]
+
+LIBRARY_TYPES = {
+    "romm": {
+        "label": "RomM",
+        "default_port": 8080,
+        "fields": _COMMON_LIBRARY_FIELDS + [
+            _FIELD("username", "Username"),
+            _FIELD("password", "Password", "secret"),
+            _FIELD("api_key", "API Token", "secret"),
+        ],
+    },
+    "gaseous": {
+        "label": "Gaseous",
+        "default_port": 80,
+        "fields": _COMMON_LIBRARY_FIELDS + [
+            _FIELD("username", "Email", help="Gaseous logs in with an email address"),
+            _FIELD("password", "Password", "secret"),
+            _FIELD("api_key", "API Key", "secret"),
+        ],
+    },
+    "retrom": {
+        "label": "Retrom",
+        "default_port": 5101,
+        "fields": _COMMON_LIBRARY_FIELDS + [
+            _FIELD("api_key", "API Key", "secret"),
+        ],
+    },
+}
+
+
+def redact_library(cfg: dict) -> dict:
+    """A library configuration safe to send to a browser."""
+    spec = LIBRARY_TYPES.get(str(cfg.get("type") or "").lower(), {})
+    secrets = {f["name"] for f in spec.get("fields", []) if f["type"] == "secret"}
+    return {
+        k: (SECRET_PLACEHOLDER if k in secrets and v else v)
+        for k, v in cfg.items()
+    }
+
+
+def merge_library_secrets(new: dict, old: dict | None) -> dict:
+    """Keep the stored secret when the form sends back the placeholder."""
+    if not old:
+        return new
+    spec = LIBRARY_TYPES.get(str(new.get("type") or "").lower(), {})
+    for field in spec.get("fields", []):
+        if field["type"] != "secret":
+            continue
+        name = field["name"]
+        if new.get(name) in (SECRET_PLACEHOLDER, "", None):
+            new[name] = old.get(name, "")
+    return new
+
+
+def build_library_from_config(cfg: dict):
+    """Construct one backend from a stored library entry.
+
+    Returns None for an unknown kind rather than raising: one bad row in the
+    settings file must not stop the service from starting, or a typo in the
+    Libraries page becomes an outage that cannot be fixed through the UI that
+    caused it.
+    """
+    from .clients import Romm, RommConfig  # local import: avoids a cycle
+
+    kind = str(cfg.get("type") or "").strip().lower()
+    url = cfg.get("url", "")
+    key = cfg.get("api_key", "")
+    user = cfg.get("username", "")
+    pw = cfg.get("password", "")
+
+    if kind == "gaseous":
+        return GaseousLibrary(GaseousConfig(base_url=url, api_key=key,
+                                            username=user, password=pw))
+    if kind == "retrom":
+        return RetromLibrary(RetromConfig(base_url=url, api_key=key))
+    if kind == "romm":
+        return Romm(RommConfig(base_url=url, username=user, password=pw,
+                               api_token=key))
+    log.warning("ignoring library of unknown kind %r", kind)
+    return None
+
+
+def route_library(configs: list[dict], platform_slug: str) -> dict | None:
+    """Which library entry a request for this platform belongs to.
+
+    A platform rule wins over the default, because naming a platform is the more
+    specific statement -- the same precedence a longest-prefix path mapping uses.
+    With no rule and no default marked, the first enabled entry is used rather
+    than none: an install with exactly one library must not have to know that
+    "default" was a box it needed to tick.
+    """
+    enabled = [c for c in configs if c.get("enable", True)]
+    if not enabled:
+        return None
+    if platform_slug:
+        for cfg in enabled:
+            platforms = cfg.get("platforms") or []
+            if isinstance(platforms, str):
+                platforms = [p.strip() for p in platforms.split(",") if p.strip()]
+            if platform_slug in platforms:
+                return cfg
+    for cfg in enabled:
+        if cfg.get("is_default"):
+            return cfg
+    return enabled[0]

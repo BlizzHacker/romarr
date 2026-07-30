@@ -100,6 +100,7 @@ input:focus,select:focus{border-color:var(--accent)}
 .st span{font-size:12px;color:var(--dim)}
 .dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:7px}
 .dot.up{background:var(--ok)}.dot.down{background:var(--bad)}
+.dot.warn{background:var(--warn)}
 .tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:16px}
 .tab{padding:9px 16px;cursor:pointer;color:var(--dim);border-bottom:2px solid transparent;font-size:13px}
 .tab.on{color:var(--accent);border-bottom-color:var(--accent)}
@@ -139,7 +140,7 @@ NAV = [
     ("Activity", [("queue", "Queue", "queued"), ("history", "History", None)]),
     ("Settings", [("media", "Media Management", None), ("profiles", "Profiles", None),
                   ("indexers", "Indexers", None), ("clients", "Download Clients", None),
-                  ("general", "General", None)]),
+                  ("libraries", "Libraries", None), ("general", "General", None)]),
     ("System",   [("status", "Status", None), ("tasks", "Tasks", None),
                   ("logs", "Logs", None)]),
 ]
@@ -179,7 +180,8 @@ function go(page){
     n.classList.toggle('on', n.dataset.page===page));
   const titles={library:'Games',add:'Add New Game',missing:'Wanted — Missing',
     queue:'Queue',history:'History',media:'Media Management',profiles:'Profiles',
-    indexers:'Indexers',clients:'Download Clients',general:'General',
+    indexers:'Indexers',clients:'Download Clients',libraries:'Libraries',
+    general:'General',
     status:'System Status',tasks:'Tasks',logs:'Logs'};
   $('#top h1').textContent=titles[page]||'Romarr';
   $('#search').classList.toggle('hide', !['library','add'].includes(page));
@@ -301,7 +303,7 @@ RENDER.history=async()=>{
 /* The form is built from the server's field list, so a new client or indexer
    type needs no change here -- the same thing the *arrs do with their schema
    endpoints. */
-let SCHEMA = { downloadclient: {}, indexer: {} };
+let SCHEMA = { downloadclient: {}, indexer: {}, library: {} };
 
 async function loadSchema(kind){
   if(Object.keys(SCHEMA[kind]).length) return SCHEMA[kind];
@@ -316,6 +318,12 @@ function fieldHtml(f, value){
   if(f.type === 'bool')
     return `<label class="check"><input type="checkbox" data-f="${f.name}"
       ${v ? 'checked' : ''}><span>${esc(f.label)}</span></label>${help}`;
+  // A list is edited as comma-separated text, which is what the settings file
+  // holds anyway, and readForm splits it back apart.
+  if(f.type === 'list')
+    return `<div class="field"><label>${esc(f.label)}</label>
+      <input type="text" data-f="${f.name}" data-list="1"
+        value="${esc(Array.isArray(v) ? v.join(', ') : (v ?? ''))}">${help}</div>`;
   const t = f.type === 'int' ? 'number' : (f.type === 'secret' ? 'password' : 'text');
   return `<div class="field"><label>${esc(f.label)}</label>
     <input type="${t}" data-f="${f.name}" value="${esc(v ?? '')}"
@@ -327,6 +335,7 @@ function readForm(){
   document.querySelectorAll('[data-f]').forEach(el => {
     out[el.dataset.f] = el.type === 'checkbox' ? el.checked
       : el.type === 'number' ? (el.value === '' ? null : Number(el.value))
+      : el.dataset.list ? el.value.split(',').map(x => x.trim()).filter(Boolean)
       : el.value;
   });
   return out;
@@ -334,15 +343,23 @@ function readForm(){
 
 function closeModal(){ document.querySelector('.modal')?.remove(); }
 
+/* What each editable kind is called, and which page lists it. Stated once so a
+   fourth kind does not mean hunting for three ternaries. */
+const KINDS = {
+  downloadclient: { label: 'Download Client', page: 'clients' },
+  indexer:        { label: 'Indexer',         page: 'indexers' },
+  library:        { label: 'Library',         page: 'libraries' },
+};
+
 /** Choose a type, then edit it. */
 async function addItem(kind){
   const types = await loadSchema(kind);
   const m = document.createElement('div');
   m.className = 'modal';
-  m.innerHTML = `<div class="box"><h3>Add ${kind === 'indexer' ? 'Indexer' : 'Download Client'}</h3>
+  m.innerHTML = `<div class="box"><h3>Add ${esc((KINDS[kind]||{}).label || kind)}</h3>
     <div class="sub">Pick a type.</div>
     <div class="pick">${Object.entries(types).map(([k, t]) =>
-      `<button data-t="${k}">${esc(t.label)}<small>${esc(t.protocol)}</small></button>`).join('')}</div>
+      `<button data-t="${k}">${esc(t.label)}<small>${esc(t.protocol || k)}</small></button>`).join('')}</div>
     <div class="foot"><button class="btn ghost sp" data-close>Cancel</button></div></div>`;
   document.body.append(m);
   m.onclick = e => { if(e.target === m || e.target.dataset.close !== undefined) closeModal(); };
@@ -367,7 +384,7 @@ async function editItem(kind, item){
   m.className = 'modal';
   m.innerHTML = `<div class="box">
     <h3>${isNew ? 'Add' : 'Edit'} ${esc(spec.label)}</h3>
-    <div class="sub">${esc(spec.protocol)}${spec.managed ? ' · manages its own indexers' : ''}</div>
+    <div class="sub">${esc(spec.protocol || (KINDS[kind]||{}).label || '')}${spec.managed ? ' · manages its own indexers' : ''}</div>
     <div id="fields">${spec.fields.map(f => fieldHtml(f, item[f.name])).join('')}</div>
     <div id="testline"></div>
     <div class="foot">
@@ -399,14 +416,14 @@ async function editItem(kind, item){
     await j(`/api/v1/${kind}`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload()) });
-    closeModal(); toast('Saved'); go(kind === 'indexer' ? 'indexers' : 'clients');
+    closeModal(); toast('Saved'); go((KINDS[kind] || {}).page || 'clients');
   };
 
   const del = m.querySelector('#m-del');
   if(del) del.onclick = async () => {
     if(!confirm(`Remove ${item.name || spec.label}?`)) return;
     await fetch(`/api/v1/${kind}/${item.id}`, { method: 'DELETE' });
-    closeModal(); toast('Removed'); go(kind === 'indexer' ? 'indexers' : 'clients');
+    closeModal(); toast('Removed'); go((KINDS[kind] || {}).page || 'clients');
   };
 }
 
@@ -492,6 +509,59 @@ RENDER.clients=async()=>{
   });
 };
 
+RENDER.libraries=async()=>{
+  const d=await j('/api/v1/library');
+  const state=l=>!l.ok?'<span class="dot down"></span>unreachable'
+    :!l.path_exists?'<span class="dot warn"></span>path missing'
+    :'<span class="dot up"></span>connected';
+  const rules=l=>(l.platforms&&l.platforms.length)
+    ? l.platforms.map(p=>`<span class="pill">${esc(p)}</span>`).join(' ')
+    : (l.is_default?'<span style="color:var(--dim)">any platform</span>'
+                   :'<span style="color:var(--warn)">nothing routes here</span>');
+  const noDefault=d.items.length>1&&!d.items.some(l=>l.is_default);
+  const unmounted=d.items.filter(l=>l.ok&&!l.path_exists);
+  $('#page').innerHTML=`<div class="card">
+    <div class="row" style="margin-bottom:12px">
+      <h3 style="margin:0">Libraries</h3>
+      <button class="btn sp" id="l-add" style="margin-left:auto">Add</button>
+    </div>
+    <p class="help">Where finished ROMs are filed. Add more than one to send
+      some platforms elsewhere &mdash; a platform rule wins over the default,
+      so &ldquo;N64 goes to Retrom&rdquo; is one row here rather than a second
+      Romarr. Each server needs its own path, as <b>Romarr</b> sees it.</p>
+    ${noDefault?`<p class="help" style="color:var(--warn)">
+      No library is marked default, so anything without a matching platform rule
+      goes to the first one listed. Mark one to make that a decision.</p>`:''}
+    ${unmounted.length?`<p class="help" style="color:var(--warn)">
+      Answering but the path does not exist here:
+      <b>${unmounted.map(l=>esc(l.name)).join(', ')}</b>.
+      Nothing can be imported into those until the volume is mounted into
+      Romarr.</p>`:''}
+    ${d.items.length?`<table><thead><tr><th>Library</th><th>Type</th>
+      <th>Address</th><th>Path</th><th>Platforms</th><th>Status</th><th></th></tr>
+      </thead><tbody>
+      ${d.items.map((l,i)=>`<tr><td>${esc(l.name)}
+        ${l.is_default?'<span class="pill">default</span>':''}</td>
+        <td><span class="pill">${esc(l.type)}</span></td>
+        <td style="color:var(--dim)">${esc(l.url||'—')}</td>
+        <td style="color:var(--dim)">${esc(l.path||'—')}</td>
+        <td>${rules(l)}</td>
+        <td>${state(l)}</td>
+        <td><div class="rowact"><button data-ledit="${i}">Edit</button></div></td>
+        </tr>`).join('')}</tbody></table>`
+    :'<div class="empty">No library yet. Add one, or nothing can be imported.</div>'}
+  </div>`;
+  $('#l-add').onclick=()=>addItem('library');
+  document.querySelectorAll('[data-ledit]').forEach(b=>b.onclick=async()=>{
+    const row=d.items[Number(b.dataset.ledit)];
+    // The table is a status view; the editor needs the stored configuration.
+    const all=await j('/api/v1/library/config');
+    const cfg=(all.items||[]).find(x=>x.id===row.id);
+    if(cfg) editItem('library', cfg);
+    else toast('That library has no stored configuration to edit');
+  });
+};
+
 RENDER.indexers=async()=>{
   const d=await j('/api/v1/indexer');
   $('#page').innerHTML=`<div class="card">
@@ -555,8 +625,14 @@ RENDER.status=async()=>{
       ${(h.clients||[]).map(c=>row(
         `${c.name} <span class="pill">${esc(c.protocol)}</span>`,
         c.ok, c.configured?c.url:'not configured')).join('')}
-      ${row('RomM',h.romm,h.romm_url)}
-      ${row('ROM library',h.library,h.library_path)}
+      ${(h.libraries||[]).length
+        ? (h.libraries||[]).map(l=>row(
+            `${esc(l.name)} <span class="pill">${esc(l.type)}</span>${
+              l.is_default?' <span class="pill">default</span>':''}`,
+            l.ok && l.path_exists,
+            !l.ok ? (l.url||'unreachable')
+                  : (l.path_exists ? l.path : l.path+' does not exist here'))).join('')
+        : row('RomM',h.romm,h.romm_url)+row('ROM library',h.library,h.library_path)}
       ${g.configured?row('GG Requestz',g.ok,g.url)
         :`<tr><td>GG Requestz</td><td><span class="dot"></span>not configured</td>
           <td style="color:var(--dim)">set GGREQUESTZ_URL to show the link</td></tr>`}

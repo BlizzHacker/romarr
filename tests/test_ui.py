@@ -31,3 +31,31 @@ def test_the_old_name_appears_nowhere_a_user_can_read_it():
 
 def test_the_document_title_is_the_product_name():
     assert re.search(r"<title>Romarr</title>", page())
+
+
+def test_the_libraries_page_is_in_the_nav_and_rendered():
+    """A feature configured only by hand-editing settings.json is not one most
+    people can use."""
+    html = page()
+    assert 'data-page="libraries"' in html
+    assert "RENDER.libraries" in html
+    # The generic editor is driven by kind, so the library kind has to be known
+    # to the schema cache or Add silently does nothing.
+    assert "library: {}" in html
+    assert "libraries:'Libraries'" in html
+
+
+def test_the_status_page_names_each_library_rather_than_saying_romm():
+    """With several libraries a hardcoded "RomM" row is both wrong and less
+    informative than naming the servers actually configured."""
+    html = page()
+    assert "h.libraries||[]" in html
+
+
+def test_a_list_field_round_trips_through_the_form():
+    """Platform routing rules are a list. Without list handling the form would
+    save the string "n64, snes" as a single platform name that matches nothing.
+    """
+    html = page()
+    assert "f.type === 'list'" in html
+    assert "el.dataset.list ? el.value.split(',')" in html

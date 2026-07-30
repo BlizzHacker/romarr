@@ -35,7 +35,7 @@ import json
 import logging
 import os
 import threading
-from dataclasses import asdict, asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -43,7 +43,10 @@ from urllib.parse import parse_qs, urlparse
 
 import time
 
-from .libraries import build_library
+from .libraries import (
+    LIBRARY_TYPES, build_library, build_library_from_config,
+    merge_library_secrets, redact_library, route_library,
+)
 from .clients import QBittorrent, QbitConfig, Romm, RommConfig
 from .downloaders import (
     CLIENT_TYPES, NZBGet, NzbgetConfig, SABnzbd, SabConfig, build_client,
@@ -107,6 +110,9 @@ class Romarr:
 
     def __init__(self, env: dict[str, str] | None = None):
         e = env if env is not None else os.environ
+        # Kept so reload_libraries can seed from the environment on first run
+        # without the caller having to hand it back in.
+        self._env = e
         self.prowlarr = Prowlarr(ProwlarrConfig(
             base_url=e.get("PROWLARR_URL", ""),
             api_key=e.get("PROWLARR_API_KEY", ""),
@@ -141,6 +147,11 @@ class Romarr:
         # Kept under the old name so the rest of the service, and anything that
         # already reads it, does not have to care which backend is attached.
         self.romm = self.game_library
+        # Every configured library, as (stored config, live backend) pairs.
+        # Built from the store by reload_libraries(); the environment seeds the
+        # first entry. game_library and romm above stay pointed at the default
+        # one, so every existing call site keeps working.
+        self.game_libraries: list[tuple[dict, object]] = []
         # Built from stored configuration, seeded from the environment once.
         self.clients: list = []
         # Torznab/Newznab indexers queried directly, alongside Prowlarr.
@@ -181,6 +192,7 @@ class Romarr:
 
         self._seed_from_env(e)
         self.reload_clients()
+        self.reload_libraries()
 
         # The library count is refreshed off the request path entirely.
         # `None` means "not known yet", which the UI shows as a dash -- an
@@ -204,24 +216,54 @@ class Romarr:
         """
         delay = 15
         while True:
-            ok = True
-            try:
-                self._count_cache = (self.romm.count(), time.monotonic())
-            except Exception as err:
-                ok = False
-                log.warning("library count refresh failed: %s", err.__class__.__name__)
-            try:
-                games = self.romm.games(limit=self.LIBRARY_PAGE,
-                                        timeout=self.romm.BACKGROUND_TIMEOUT)
-                self._library_cache = (games, time.monotonic(), "")
-                log.info("library refreshed: %d games", len(games))
-            except Exception as err:
-                ok = False
+            if not self.game_libraries:
+                # Nothing configured. The shelf stays unknown rather than
+                # becoming an empty list, because "no library is set up" and
+                # "your library has no games in it" are different answers and
+                # only one of them is actionable.
+                cached, at, _ = self._library_cache
+                self._library_cache = (cached, at, "no library configured")
+                time.sleep(self.COUNT_TTL)
+                continue
+
+            ok, total, shelf, failures = True, 0, [], []
+            # Every library is read, and one failing does not lose the others.
+            # A single unreachable server used to be indistinguishable from an
+            # empty shelf; now it is one named row that did not answer.
+            multiple = len(self.game_libraries) > 1
+            for cfg, backend in self.game_libraries:
+                label = cfg.get("name") or getattr(backend, "name", "library")
+                try:
+                    total += backend.count()
+                except Exception as err:
+                    ok = False
+                    failures.append(f"{label}: {err.__class__.__name__}")
+                    log.warning("library count refresh failed for %s: %s",
+                                label, err.__class__.__name__)
+                try:
+                    games = backend.games(limit=self.LIBRARY_PAGE,
+                                          timeout=backend.BACKGROUND_TIMEOUT)
+                    # Tag the source only when there is more than one library,
+                    # so a single-library install shows no redundant badge.
+                    shelf.extend(replace(g, source=label) if multiple else g
+                                 for g in games)
+                except Exception as err:
+                    ok = False
+                    failures.append(f"{label}: {err.__class__.__name__}")
+                    log.warning("library refresh failed for %s: %s",
+                                label, err.__class__.__name__)
+
+            if shelf or ok:
+                self._count_cache = (total, time.monotonic())
+                self._library_cache = (shelf, time.monotonic(), "; ".join(failures))
+                log.info("library refreshed: %d games across %d librar%s",
+                         len(shelf), len(self.game_libraries),
+                         "y" if len(self.game_libraries) == 1 else "ies")
+            else:
                 # Keep whatever was last fetched; a transient failure should
                 # not empty a shelf that was working a minute ago.
                 cached, at, _ = self._library_cache
-                self._library_cache = (cached, at, err.__class__.__name__)
-                log.warning("library refresh failed: %s", err.__class__.__name__)
+                self._library_cache = (cached, at, "; ".join(failures))
 
             delay = self.COUNT_TTL if ok else min(delay * 2, 300)
             time.sleep(delay)
@@ -233,12 +275,17 @@ class Romarr:
         been since the first commit, so a method of the same name is shadowed
         by it and the route ends up calling a PosixPath.
         """
+        names = [cfg.get("name") or getattr(b, "name", "library")
+                 for cfg, b in self.game_libraries]
         games, at, err = self._library_cache
         if games is None:
+            where = ", ".join(names) or getattr(self.game_library, "name", "library")
             return {"items": [], "loading": True,
                     "error": err or "",
-                    "message": f"Reading the library from {self.game_library.name}…"}
+                    "libraries": names,
+                    "message": f"Reading the library from {where}…"}
         return {"items": [asdict(g) for g in games], "loading": False,
+                "libraries": names,
                 "library": self.game_library.name,
                 "age_seconds": int(time.monotonic() - at) if at else None,
                 "error": err}
@@ -285,6 +332,116 @@ class Romarr:
 
         self.store.settings["_seeded_clients"] = True
         self.store.save()
+
+    def _seed_libraries_from_env(self, e) -> None:
+        """Turn the single environment library into the first stored entry.
+
+        Gated separately from _seeded_clients, and this matters: an install that
+        predates multiple libraries already has _seeded_clients set, so reusing
+        that flag would leave it with an empty Libraries page and nothing to
+        import into -- an upgrade that silently unconfigures the thing.
+        """
+        if self.store.settings.get("_seeded_libraries"):
+            return
+        self.store.settings["_seeded_libraries"] = True
+
+        url = e.get("LIBRARY_URL") or e.get("ROMM_URL", "")
+        if not url:
+            # Nothing to seed. Still marked as seeded, so a library added by
+            # hand later is not joined by a surprise second entry on the next
+            # restart if the environment gains a URL.
+            self.store.save()
+            return
+
+        kind = (e.get("LIBRARY_KIND") or "romm").strip().lower()
+        self.store.put_item("libraries", {
+            "type": kind,
+            "name": LIBRARY_TYPES.get(kind, {}).get("label", kind.title()),
+            "enable": True,
+            "url": url,
+            "username": e.get("LIBRARY_USERNAME") or e.get("ROMM_USERNAME", ""),
+            "password": e.get("LIBRARY_PASSWORD") or e.get("ROMM_PASSWORD", ""),
+            "api_key": e.get("LIBRARY_API_KEY") or e.get("ROMM_API_TOKEN", ""),
+            "path": str(self.library),
+            "is_default": True,
+            "platforms": [],
+        })
+        self.store.save()
+
+    def reload_libraries(self) -> None:
+        """Rebuild every live library from stored configuration.
+
+        Mirrors reload_clients, for the same reason: a library added on the
+        Libraries page has to work without a restart.
+        """
+        self._seed_libraries_from_env(self._env)
+
+        built: list[tuple[dict, object]] = []
+        for cfg in self.store.list_items("libraries"):
+            if not cfg.get("enable", True):
+                continue
+            backend = build_library_from_config(cfg)
+            if backend is not None:
+                built.append((cfg, backend))
+        self.game_libraries = built
+
+        # Keep the single-library attributes pointed at the default, so the
+        # status page, the health check and anything else reading them keep
+        # reporting the library most installs have exactly one of.
+        default = self.default_library()
+        if default is not None:
+            cfg, backend = default
+            self.game_library = backend
+            self.romm = backend
+            if cfg.get("path"):
+                self.library = Path(cfg["path"])
+
+    def default_library(self) -> tuple[dict, object] | None:
+        """The library a request goes to when no platform rule matches."""
+        cfg = route_library([c for c, _ in self.game_libraries], "")
+        if cfg is None:
+            return None
+        for candidate, backend in self.game_libraries:
+            if candidate.get("id") == cfg.get("id"):
+                return candidate, backend
+        return None
+
+    def library_for(self, platform_slug: str) -> tuple[dict, object] | None:
+        """Which library a request for this platform is filed into."""
+        cfg = route_library([c for c, _ in self.game_libraries], platform_slug)
+        if cfg is None:
+            return None
+        for candidate, backend in self.game_libraries:
+            if candidate.get("id") == cfg.get("id"):
+                return candidate, backend
+        return None
+
+    def library_root(self, cfg: dict) -> Path:
+        """Where ROMs are filed for one library, falling back to the default."""
+        return Path(cfg.get("path") or self.library)
+
+    def libraries_status(self) -> list[dict]:
+        """Every library, whether it answers, and where it files ROMs.
+
+        Reported for all of them rather than only the reachable ones: "Retrom:
+        not answering" is the answer to "why did my PSX request go to RomM", and
+        hiding the row hides the answer.
+        """
+        out = []
+        for cfg, backend in self.game_libraries:
+            root = self.library_root(cfg)
+            out.append({
+                "id": cfg.get("id"),
+                "name": cfg.get("name") or getattr(backend, "name", ""),
+                "type": cfg.get("type", ""),
+                "url": cfg.get("url", ""),
+                "path": str(root),
+                "path_exists": root.exists(),
+                "is_default": bool(cfg.get("is_default")),
+                "platforms": cfg.get("platforms") or [],
+                "ok": bool(backend.reachable()),
+            })
+        return out
 
     def reload_clients(self) -> None:
         """Rebuild the live clients from stored configuration.
@@ -334,6 +491,7 @@ class Romarr:
         out = dict(self.store.settings)
         out["download_clients"] = [redact(c) for c in out.get("download_clients", [])]
         out["indexers"] = [redact_indexer(i) for i in out.get("indexers", [])]
+        out["libraries"] = [redact_library(lib) for lib in out.get("libraries", [])]
         return out
 
     # --- inbound webhooks -------------------------------------------------
@@ -450,15 +608,54 @@ class Romarr:
         return {"ok": bool(ok),
                 "message": "Connected" if ok else "Could not connect or authenticate"}
 
+    def test_library(self, cfg: dict) -> dict:
+        """Try a library configuration without saving it.
+
+        Reports the path separately from the connection, because they fail for
+        unrelated reasons and the fix differs: an unreachable URL is a wrong
+        address or a stopped server, while a missing path on a reachable library
+        is almost always a volume that was never mounted into this container.
+        """
+        backend = build_library_from_config(cfg)
+        if backend is None:
+            return {"ok": False, "message": f"unknown library type: {cfg.get('type')!r}"}
+
+        root = Path(cfg.get("path") or "")
+        path_ok = bool(cfg.get("path")) and root.exists()
+        try:
+            ok = backend.reachable()
+        except Exception as err:
+            return {"ok": False, "path_ok": path_ok,
+                    "message": f"{type(err).__name__}: {err}"}
+
+        if not ok:
+            return {"ok": False, "path_ok": path_ok,
+                    "message": "Could not connect or authenticate"}
+        if not cfg.get("path"):
+            return {"ok": False, "path_ok": False,
+                    "message": "Connected, but no library path is set -- "
+                               "nothing can be imported"}
+        if not path_ok:
+            return {"ok": False, "path_ok": False,
+                    "message": f"Connected, but {root} does not exist here. "
+                               "Mount it into Romarr, or correct the path."}
+        return {"ok": True, "path_ok": True, "message": "Connected"}
+
     # -- operations --------------------------------------------------------
 
     def health(self) -> dict:
+        libraries = self.libraries_status()
         return {
             "ok": True,
             "prowlarr": bool(self.prowlarr._config.api_key),
+            # The default library, kept under the old key so anything already
+            # watching /api/health -- a monitor, a healthcheck -- keeps working.
             "romm": self.romm.reachable(),
             "library": self.library.exists(),
             "library_path": str(self.library),
+            "libraries": libraries,
+            "libraries_ok": sum(1 for lib in libraries if lib["ok"]),
+            "libraries_total": len(libraries),
             "platforms": len(PLATFORMS),
             "queued": len(self.queue),
         }
@@ -664,6 +861,7 @@ class Romarr:
             "romm_url": self.store.settings.get("_romm_url", ""),
             "library": self.library.exists(),
             "library_path": str(self.library),
+            "libraries": self.libraries_status(),
             "platforms": len(PLATFORMS),
             "events": len(self.store.events),
             "uptime": f"{up // 3600}h {(up % 3600) // 60}m",
@@ -707,10 +905,21 @@ class Romarr:
             done = self.import_finished()
             return {"imported": done, "message": f"Imported {len(done)}"}
         if name == "RefreshLibrary":
-            try:
-                return {"message": f"{self.game_library.count()} games in {self.game_library.name}"}
-            except Exception as err:
-                return {"message": f"RomM unreachable: {err}"}
+            counted, failed = 0, []
+            for cfg, backend in self.game_libraries:
+                label = cfg.get("name") or getattr(backend, "name", "library")
+                try:
+                    counted += backend.count()
+                except Exception as err:
+                    # Named, because "unreachable" without saying which server
+                    # is useless once there is more than one.
+                    failed.append(f"{label} unreachable ({err.__class__.__name__})")
+            if not self.game_libraries:
+                return {"message": "no library configured"}
+            where = f"{len(self.game_libraries)} librar" + \
+                    ("y" if len(self.game_libraries) == 1 else "ies")
+            msg = f"{counted} games across {where}"
+            return {"message": msg + ("; " + ", ".join(failed) if failed else "")}
         return {"error": f"unknown command: {name}"}
 
     def import_finished(self) -> list[dict]:
@@ -742,12 +951,30 @@ class Romarr:
                         break
             if platform is None:
                 continue
-            outcome = import_rom(path, platform, self.library)
+            # Which library this platform belongs to. A platform rule wins over
+            # the default, so "PSX goes to Gaseous" is one row in the Libraries
+            # page rather than a second Romarr.
+            target = self.library_for(platform.slug)
+            if target is None:
+                # Nothing to import into. Recorded rather than skipped: a
+                # finished download with nowhere to go is a configuration
+                # problem somebody can fix, and silence would leave a download
+                # that completed and simply never appeared.
+                detail = "no library configured to import into"
+                self.store.record(Event(kind="failed", game=name,
+                                        platform=platform.slug, detail=detail))
+                results.append({"name": name, "ok": False, "reason": detail})
+                continue
+            target_cfg, target_lib = target
+            label = target_cfg.get("name") or getattr(target_lib, "name", "library")
+
+            outcome = import_rom(path, platform, self.library_root(target_cfg))
             if outcome.ok:
                 if self.store.settings.get("rescan_after_import", True):
-                    self.romm.rescan(platform.slug)
+                    target_lib.rescan(platform.slug)
                 self.store.record(Event(kind="imported", game=name,
                                         platform=platform.slug, release=name,
+                                        library=label,
                                         detail=str(outcome.destination)))
                 # It has arrived, so it is no longer wanted.
                 for w in list(self.store.wanted):
@@ -756,7 +983,8 @@ class Romarr:
             else:
                 self.store.record(Event(kind="failed", game=name,
                                         platform=platform.slug, detail=outcome.reason))
-            results.append({"name": name, "ok": outcome.ok, "reason": outcome.reason})
+            results.append({"name": name, "ok": outcome.ok,
+                            "reason": outcome.reason, "library": label})
         return results
 
 
@@ -816,6 +1044,13 @@ def make_handler(service: Romarr):
                 return self._json(200, {"types": CLIENT_TYPES})
             if route.path == "/api/v1/indexer/schema":
                 return self._json(200, {"types": INDEXER_TYPES})
+            if route.path == "/api/v1/library":
+                return self._json(200, {"items": service.libraries_status()})
+            if route.path == "/api/v1/library/config":
+                return self._json(200, {"items": [
+                    redact_library(lib) for lib in service.store.list_items("libraries")]})
+            if route.path == "/api/v1/library/schema":
+                return self._json(200, {"types": LIBRARY_TYPES})
             if route.path == "/api/v1/config":
                 return self._json(200, service.safe_settings())
             if route.path == "/api/v1/system/status":
@@ -857,6 +1092,26 @@ def make_handler(service: Romarr):
                 saved = service.store.put_item(key, merge_secrets(dict(body), existing))
                 service.reload_clients()
                 return self._json(200, redact(saved))
+            if route.path == "/api/v1/library":
+                existing = (service.store.get_item("libraries", body.get("id"))
+                            if body.get("id") else None)
+                incoming = merge_library_secrets(dict(body), existing)
+                # Exactly one default. Marking a second would make routing
+                # depend on stored order, which is not something anybody can
+                # see, let alone reason about.
+                if incoming.get("is_default"):
+                    for other in service.store.list_items("libraries"):
+                        if other.get("id") != incoming.get("id") and other.get("is_default"):
+                            other["is_default"] = False
+                            service.store.put_item("libraries", other)
+                saved = service.store.put_item("libraries", incoming)
+                service.reload_libraries()
+                return self._json(200, redact_library(saved))
+            if route.path == "/api/v1/library/test":
+                existing = (service.store.get_item("libraries", body.get("id"))
+                            if body.get("id") else None)
+                return self._json(200, service.test_library(
+                    merge_library_secrets(dict(body), existing)))
             if route.path == "/api/v1/downloadclient/test":
                 # Tested against the submitted form, with any untouched secret
                 # filled back in, so Test reflects what Save would store.
@@ -876,6 +1131,11 @@ def make_handler(service: Romarr):
 
         def do_DELETE(self):
             route = urlparse(self.path)
+            if route.path.startswith("/api/v1/library/"):
+                item_id = route.path[len("/api/v1/library/"):]
+                removed = service.store.delete_item("libraries", item_id)
+                service.reload_libraries()
+                return self._json(200 if removed else 404, {"deleted": removed})
             for prefix, key in (("/api/v1/downloadclient/", "download_clients"),
                                 ("/api/v1/indexer/", "indexers")):
                 if route.path.startswith(prefix):
