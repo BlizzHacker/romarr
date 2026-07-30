@@ -124,11 +124,18 @@ Three things worth knowing:
   `id -u` / `id -g` for your media user. Only `/config` is chowned — never the
   library or downloads volumes, because a recursive chown of a multi-terabyte
   share at every boot is not something an image should do to you.
-- **Mount the downloads volume at the path your download client reports.** If
-  qBittorrent says `/downloads/complete`, mount it there here too. Otherwise
-  the import looks for a finished file where it is not, and you get "download
-  path does not exist" while the file sits in plain sight. If matching the path
-  is impossible, set a mapping under Settings → Media Management instead.
+- **On the downloads volume, the container side is the one that has to match
+  your download client.** In `-v /mnt/downloads/complete:/downloads/complete`
+  the left side is wherever the files really live on the host, and the right
+  side has to be the path the client *reports* — Romarr asks the client where a
+  finished download is and then opens that path itself, so the two have to
+  agree. qBittorrent shows it as "Save path" under Options → Downloads, SABnzbd
+  as "Completed Download Folder" under Config → Folders. A client running on the
+  host rather than in a container reports host paths, which makes both sides
+  identical. Get this wrong and the import looks for a finished file where it is
+  not: you get "download path does not exist in this container" while the file
+  sits in plain sight. When the paths genuinely cannot be made to match, set a
+  mapping under Settings → Media Management instead.
 - **`/config` holds the decisions you make in the UI**, and a setting saved
   there outranks the environment from then on. That is deliberate — an
   environment default must not silently undo a choice — but it means changing
@@ -207,9 +214,12 @@ the settings file:
 ]
 ```
 
-The longest matching prefix wins. A mapping cannot help if the volume is not
-mounted here at all — that stays a mount problem, and you find out because the
-translated path still does not exist.
+The longest matching prefix wins, so a specific mapping overrides a broader one
+rather than depending on which was added first. A mapping cannot help if the
+volume is not mounted here at all — that stays a mount problem. Either way the
+log names both the path the client reported and what Romarr made of it, which is
+what tells the two apart: no mapping matched, or a mapping matched and its local
+side is wrong.
 
 Use a **dedicated RomM account**, not your admin one. Romarr needs only
 enough to trigger a scan.
