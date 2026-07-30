@@ -61,6 +61,35 @@ log = logging.getLogger(__name__)
 
 VERSION = "0.2.0"
 
+# What Romarr labels its own downloads with, so its jobs are distinguishable
+# from everything else in a shared client -- the same reason Radarr and Sonarr
+# each use a category of their own.
+DEFAULT_CATEGORY = "romarr"
+
+
+def category_for(env: dict[str, str], client: str) -> str:
+    """The download category for one client, e.g. SABNZBD_CATEGORY.
+
+    Configurable per client because the clients are separate installs with
+    separate category lists, and because somebody running two Romarrs against
+    one SABnzbd needs to tell their downloads apart.
+
+    The category does not have to exist in the client beforehand. SABnzbd 5.0.4
+    defines *, movies, tv, audio and software out of the box, and `romarr` is
+    none of them -- but an undefined category is accepted, kept verbatim on the
+    job, and still matched by the history and queue filters this service uses to
+    notice a finished download. Verified against a real instance, because the
+    alternative reading -- that SABnzbd silently reassigns the job to Default
+    and the history filter then never matches -- would be a download that
+    completes and is never imported, with nothing anywhere saying why.
+
+    Defining it in SABnzbd is still worth doing if you want the download to land
+    in a folder of its own or run a post-processing script. Romarr does not need
+    it either way: it takes the finished path from SABnzbd's own `storage`
+    field rather than assuming where the category put it.
+    """
+    return env.get(f"{client}_CATEGORY") or DEFAULT_CATEGORY
+
 
 @dataclass
 class QueueItem:
@@ -86,6 +115,7 @@ class Romarr:
             base_url=e.get("QBITTORRENT_URL", ""),
             username=e.get("QBITTORRENT_USER", ""),
             password=e.get("QBITTORRENT_PASS", ""),
+            category=category_for(e, "QBITTORRENT"),
         ))
         # Usenet is not an afterthought: Prowlarr indexes both protocols, and
         # accepting only torrents made every usenet indexer dead weight --
@@ -93,11 +123,13 @@ class Romarr:
         self.sab = SABnzbd(SabConfig(
             base_url=e.get("SABNZBD_URL", ""),
             api_key=e.get("SABNZBD_API_KEY", ""),
+            category=category_for(e, "SABNZBD"),
         ))
         self.nzbget = NZBGet(NzbgetConfig(
             base_url=e.get("NZBGET_URL", ""),
             username=e.get("NZBGET_USER", ""),
             password=e.get("NZBGET_PASS", ""),
+            category=category_for(e, "NZBGET"),
         ))
         # Which game library this Romarr feeds. RomM remains the default so an
         # install that predates the other backends keeps working untouched, and
@@ -117,7 +149,10 @@ class Romarr:
         # the same way Seerr shows Radarr.
         self.ggrequestz_url = e.get("GGREQUESTZ_URL", "")
 
-        self.library = Path(e.get("ROMM_LIBRARY", "/mnt/roms"))
+        # Where ROMs are filed. LIBRARY_PATH is the name that matches a
+        # pluggable library; ROMM_LIBRARY still works, the same way LIBRARY_URL
+        # falls back to ROMM_URL, so no existing install has to be edited.
+        self.library = Path(e.get("LIBRARY_PATH") or e.get("ROMM_LIBRARY", "/mnt/roms"))
         self.queue: list[QueueItem] = []
         self._lock = threading.Lock()
         self._started = time.monotonic()
@@ -126,11 +161,17 @@ class Romarr:
         # lost everything you had asked for, which is the difference between a
         # tool and a demo.
         self.store = Store(e.get("ROMARR_DATA", "/opt/romarr/romarr.json"))
-        # A library path saved through the UI has to win over the environment
-        # default, or the setting is one you can change but not apply.
+        # A library path saved through the UI has to win over the environment,
+        # or the setting is one you can change but not apply. A *default* must
+        # not, which is why the stored default is empty: otherwise it outranks
+        # the environment on a fresh install and LIBRARY_PATH does nothing.
         saved = self.store.settings.get("library_path")
         if saved:
             self.library = Path(saved)
+        else:
+            # Record what the environment decided, so the Settings page shows
+            # the path ROMs are actually filed into rather than a blank field.
+            self.store.update_settings({"library_path": str(self.library)})
 
         # Shown on the General page so an operator can see what is wired up
         # without opening a shell. URLs only -- never a credential.
@@ -227,7 +268,7 @@ class Romarr:
                 "port": parts.port or CLIENT_TYPES[kind]["default_port"],
                 "use_ssl": parts.scheme == "https",
                 "url_base": parts.path.strip("/"),
-                "category": "romarr", **extra,
+                "category": category_for(e, kind.upper()), **extra,
             })
 
         add("qbittorrent", e.get("QBITTORRENT_URL", ""),

@@ -67,7 +67,14 @@ class WantedItem:
 # install and a configured one disagree about nothing.
 DEFAULT_SETTINGS: dict[str, Any] = {
     # Media management
-    "library_path": "/mnt/roms",
+    #
+    # Empty means "nobody has chosen one", which is what a fresh install is.
+    # It used to default to /mnt/roms, and because the service treats a stored
+    # path as an operator's decision that outranks the environment, that
+    # default silently outranked LIBRARY_PATH and ROMM_LIBRARY on every install
+    # -- making both documented variables do nothing at all. It looked correct
+    # only because the default matched the path the docs used as an example.
+    "library_path": "",
     "rename_on_import": True,
     "overwrite_existing": False,
     # Profile: for ROMs the meaningful axis is region and revision, not
