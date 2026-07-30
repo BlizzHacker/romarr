@@ -62,7 +62,7 @@ from .ui import page as ui_page
 
 log = logging.getLogger(__name__)
 
-VERSION = "0.4.1"
+VERSION = "0.4.2"
 
 # What Romarr labels its own downloads with, so its jobs are distinguishable
 # from everything else in a shared client -- the same reason Radarr and Sonarr
