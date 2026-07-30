@@ -1,9 +1,11 @@
+import logging
 import zipfile
+from pathlib import Path
 
 import pytest
 
 from romarr.indexers import Prowlarr, sanitise_for_display
-from romarr.library import import_rom, list_candidates, safe_members
+from romarr.library import import_rom, list_candidates, map_remote_path, safe_members
 from romarr.platforms import by_slug
 from romarr.selection import Release
 
@@ -106,6 +108,84 @@ def test_missing_download_is_reported_not_raised(tmp_path):
     result = import_rom(tmp_path / "nope.zip", SNES, tmp_path / "library")
     assert not result.ok
     assert "does not exist" in result.reason
+
+
+def test_a_missing_download_names_both_ways_to_fix_it(tmp_path):
+    """The overwhelmingly common cause is a wrong volume mount, not a lost
+    download. Reporting only "does not exist" sends people hunting for a file
+    that is sitting in their download client, so the reason has to name the
+    container path that was tried and both remedies."""
+    result = import_rom(tmp_path / "nope.zip", SNES, tmp_path / "library")
+    assert "in this container" in result.reason
+    assert str(tmp_path / "nope.zip") in result.reason
+    assert "Mount" in result.reason and "remote path mapping" in result.reason
+
+
+# --- remote path mapping -----------------------------------------------------
+#
+# The client reports paths in ITS filesystem. Getting this wrong is the single
+# most common Docker misconfiguration for this kind of app, and it presents as a
+# download that completes and then silently never appears.
+
+def test_an_unmapped_path_is_returned_unchanged():
+    assert map_remote_path("/downloads/complete/Game", []) \
+        == Path("/downloads/complete/Game")
+    assert map_remote_path("/downloads/x", None) == Path("/downloads/x")
+
+
+def test_a_mapping_rewrites_only_the_prefix():
+    mappings = [{"remote": "/downloads", "local": "/mnt/dl"}]
+    assert map_remote_path("/downloads/complete/Game.zip", mappings) \
+        == Path("/mnt/dl/complete/Game.zip")
+    # An exact match maps to the local root rather than appending an empty part.
+    assert map_remote_path("/downloads", mappings) == Path("/mnt/dl")
+
+
+def test_the_longest_matching_prefix_wins_regardless_of_order():
+    # Otherwise a broad mapping added first shadows the specific one that was
+    # added to correct it.
+    mappings = [
+        {"remote": "/downloads", "local": "/mnt/all"},
+        {"remote": "/downloads/complete", "local": "/mnt/done"},
+    ]
+    assert map_remote_path("/downloads/complete/G", mappings) == Path("/mnt/done/G")
+    assert map_remote_path("/downloads/incomplete/G", mappings) == Path("/mnt/all/incomplete/G")
+
+
+def test_incomplete_mapping_rows_are_ignored():
+    # A half-filled row in the settings UI must not swallow every path.
+    mappings = [{"remote": "/downloads", "local": ""}, {"remote": "", "local": "/mnt"}]
+    assert map_remote_path("/downloads/G", mappings) == Path("/downloads/G")
+
+
+def test_a_windows_style_remote_path_maps(tmp_path):
+    mappings = [{"remote": "D:\\torrents", "local": "/downloads"}]
+    assert map_remote_path("D:\\torrents\\Game", mappings) == Path("/downloads/Game")
+
+
+def test_an_unopenable_result_warns_and_names_both_paths(caplog):
+    """The warning is the only place both paths appear together, and the
+    difference between them is the entire diagnosis."""
+    with caplog.at_level(logging.WARNING):
+        map_remote_path("/downloads/complete/Game", [])
+    assert "/downloads/complete/Game" in caplog.text
+    assert "no remote path mapping covers it" in caplog.text
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        map_remote_path("/downloads/G", [{"remote": "/downloads", "local": "/mnt/dl"}])
+    # Both the reported path and what the mapping made of it, so a mapping whose
+    # local side is wrong is distinguishable from a missing mount.
+    assert "/downloads/G" in caplog.text
+    assert str(Path("/mnt/dl/G")) in caplog.text
+
+
+def test_a_path_that_does_exist_warns_about_nothing(tmp_path, caplog):
+    real = tmp_path / "here.zip"
+    real.write_bytes(b"x")
+    with caplog.at_level(logging.WARNING):
+        assert map_remote_path(str(real), []) == real
+    assert caplog.text == ""
 
 
 # --- api key hygiene ------------------------------------------------------
