@@ -166,7 +166,7 @@ python -m romarr
 | `PROWLARR_URL` / `PROWLARR_API_KEY` | your Prowlarr, for searching |
 | `LIBRARY_KIND` | `romm`, `gaseous` or `retrom` (default `romm`) |
 | `LIBRARY_URL` / `LIBRARY_USERNAME` / `LIBRARY_PASSWORD` | your game library, for the rescan trigger. `ROMM_*` still works |
-| `LIBRARY_PATH` | path to the library root, e.g. `/mnt/roms`. Formerly `ROMM_LIBRARY`, still accepted |
+| `LIBRARY_PATH` | path to the library root — **inside the container** when using Docker, where the compose files use `/roms`. Formerly `ROMM_LIBRARY`, still accepted. Stored on first run; change it on the Settings page afterwards |
 | `QBITTORRENT_URL` / `QBITTORRENT_USER` / `QBITTORRENT_PASS` | torrent client |
 | `SABNZBD_URL` / `SABNZBD_API_KEY` | usenet client, optional |
 | `NZBGET_URL` / `NZBGET_USER` / `NZBGET_PASS` | usenet client, optional |

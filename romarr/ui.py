@@ -532,11 +532,9 @@ RENDER.libraries=async()=>{
     ${noDefault?`<p class="help" style="color:var(--warn)">
       No library is marked default, so anything without a matching platform rule
       goes to the first one listed. Mark one to make that a decision.</p>`:''}
-    ${unmounted.length?`<p class="help" style="color:var(--warn)">
-      Answering but the path does not exist here:
-      <b>${unmounted.map(l=>esc(l.name)).join(', ')}</b>.
-      Nothing can be imported into those until the volume is mounted into
-      Romarr.</p>`:''}
+    ${unmounted.map(l=>`<p class="help" style="color:var(--warn)">
+      <b>${esc(l.name)}</b> answers, but nothing can be imported into it yet.
+      ${esc(l.path_hint||'')}</p>`).join('')}
     ${d.items.length?`<table><thead><tr><th>Library</th><th>Type</th>
       <th>Address</th><th>Path</th><th>Platforms</th><th>Status</th><th></th></tr>
       </thead><tbody>
@@ -631,8 +629,9 @@ RENDER.status=async()=>{
               l.is_default?' <span class="pill">default</span>':''}`,
             l.ok && l.path_exists,
             !l.ok ? (l.url||'unreachable')
-                  : (l.path_exists ? l.path : l.path+' does not exist here'))).join('')
-        : row('RomM',h.romm,h.romm_url)+row('ROM library',h.library,h.library_path)}
+                  : (l.path_exists ? l.path : (l.path_hint||l.path)))).join('')
+        : row('RomM',h.romm,h.romm_url)
+          +row('ROM library',h.library,h.library?h.library_path:(h.library_path_hint||h.library_path))}
       ${g.configured?row('GG Requestz',g.ok,g.url)
         :`<tr><td>GG Requestz</td><td><span class="dot"></span>not configured</td>
           <td style="color:var(--dim)">set GGREQUESTZ_URL to show the link</td></tr>`}

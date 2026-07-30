@@ -444,6 +444,32 @@ class Romarr:
         """Where ROMs are filed for one library, falling back to the default."""
         return Path(cfg.get("path") or self.library)
 
+    def path_hint(self, root: Path) -> str:
+        """Why a library path is missing, and which fix applies.
+
+        "ROM library: Not available /mnt/roms" is a true statement that helps
+        nobody -- it was the first thing a new user reported, having mounted the
+        volume somewhere else entirely. Two different mistakes produce it and
+        they need opposite fixes, so this distinguishes them.
+
+        The nastier one is second: a path stored on first run outranks the
+        environment forever after, deliberately, so that a saved decision is not
+        undone by a restart. The cost is that correcting LIBRARY_PATH in compose
+        appears to do nothing at all. If the environment names a path that does
+        exist while the stored one does not, that is almost certainly what has
+        happened, and the fix is the Settings page rather than the compose file.
+        """
+        if root.exists():
+            return ""
+        env_path = self._env.get("LIBRARY_PATH") or self._env.get("ROMM_LIBRARY", "")
+        if env_path and str(root) != env_path and Path(env_path).exists():
+            return (f"{root} does not exist in this container, but {env_path} "
+                    f"does. {root} was stored on first run, and a stored path "
+                    "outranks the environment -- change it on the Settings page, "
+                    "because editing the environment will not move it.")
+        return (f"{root} does not exist in this container. Mount your library "
+                "volume there, or change the path on the Settings page.")
+
     def libraries_status(self) -> list[dict]:
         """Every library, whether it answers, and where it files ROMs.
 
@@ -461,6 +487,7 @@ class Romarr:
                 "url": cfg.get("url", ""),
                 "path": str(root),
                 "path_exists": root.exists(),
+                "path_hint": self.path_hint(root),
                 "is_default": bool(cfg.get("is_default")),
                 "platforms": cfg.get("platforms") or [],
                 "ok": bool(backend.reachable()),
@@ -677,6 +704,7 @@ class Romarr:
             "romm": self.romm.reachable(),
             "library": self.library.exists(),
             "library_path": str(self.library),
+            "library_path_hint": self.path_hint(self.library),
             "libraries": libraries,
             "libraries_ok": sum(1 for lib in libraries if lib["ok"]),
             "libraries_total": len(libraries),
@@ -885,6 +913,7 @@ class Romarr:
             "romm_url": self.store.settings.get("_romm_url", ""),
             "library": self.library.exists(),
             "library_path": str(self.library),
+            "library_path_hint": self.path_hint(self.library),
             "libraries": self.libraries_status(),
             "platforms": len(PLATFORMS),
             "events": len(self.store.events),

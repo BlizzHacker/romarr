@@ -227,3 +227,54 @@ def test_a_library_change_wakes_the_refresh_rather_than_waiting_it_out(tmp_path)
     s._refresh_now.clear()
     s.reload_libraries()
     assert s._refresh_now.is_set(), "reload must wake the background refresh"
+
+
+# --- diagnosing a missing library path --------------------------------------
+#
+# "ROM library: Not available /mnt/roms" was the first thing a new user
+# reported. It is true and it helps nobody: two different mistakes produce it and
+# they need opposite fixes.
+
+def test_a_missing_path_says_to_mount_it(tmp_path):
+    s = svc(tmp_path, LIBRARY_URL="http://romm.example",
+            LIBRARY_PATH=str(tmp_path / "never-made"))
+    hint = s.path_hint(tmp_path / "never-made")
+    assert "does not exist in this container" in hint
+    assert "Mount your library volume there" in hint
+
+
+def test_a_stored_path_that_lost_to_the_environment_says_to_use_settings(tmp_path):
+    """The trap worth naming: a path stored on first run outranks the
+    environment forever, so correcting LIBRARY_PATH in compose appears to do
+    nothing. If the environment names a path that exists and the stored one does
+    not, that is what happened."""
+    mounted = tmp_path / "roms"
+    mounted.mkdir()
+    data = str(tmp_path / "s.json")
+
+    first = Romarr({"ROMARR_DATA": data, "LIBRARY_PATH": str(tmp_path / "mnt-roms")})
+    assert first.store.settings["library_path"] == str(tmp_path / "mnt-roms")
+
+    # Operator corrects compose to the path they actually mounted.
+    second = Romarr({"ROMARR_DATA": data, "LIBRARY_PATH": str(mounted)})
+    assert second.library == tmp_path / "mnt-roms"        # stored value still wins
+
+    hint = second.path_hint(second.library)
+    assert str(mounted) in hint
+    assert "stored path" in hint and "Settings page" in hint
+
+
+def test_a_path_that_exists_has_no_hint(tmp_path):
+    (tmp_path / "roms").mkdir()
+    s = svc(tmp_path, LIBRARY_URL="http://romm.example",
+            LIBRARY_PATH=str(tmp_path / "roms"))
+    assert s.path_hint(tmp_path / "roms") == ""
+    assert s.health()["library_path_hint"] == ""
+
+
+def test_the_hint_reaches_every_surface_that_reports_the_path(tmp_path):
+    s = svc(tmp_path, LIBRARY_URL="http://romm.example",
+            LIBRARY_PATH=str(tmp_path / "gone"))
+    assert s.health()["library_path_hint"]
+    assert s.status()["library_path_hint"]
+    assert s.libraries_status()[0]["path_hint"]
