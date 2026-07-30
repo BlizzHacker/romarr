@@ -593,7 +593,8 @@ RENDER.tasks=async()=>{
 RENDER.logs=async()=>{
   const d=await j('/api/v1/log?limit=200');
   $('#page').innerHTML=`<div class="card"><h3>Recent events</h3>
-    <p class="help">Romarr's own history. Service logs are in journalctl -u romarr.</p>
+    <p class="help">Romarr's own history. Service logs are in journalctl -u romarr,
+    or docker logs romarr.</p>
     ${d.items.length?`<pre style="font:12px/1.6 ui-monospace,Menlo,monospace;
       color:var(--dim);white-space:pre-wrap">${d.items.map(e=>
       `${esc(e.at)}  ${esc(e.kind.toUpperCase().padEnd(9))} ${esc(e.game)} `+
@@ -628,7 +629,7 @@ def page() -> str:
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <title>Romarr</title><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>{CSS}</style></head><body>
-<nav id="rail"><div id="brand">Romm<span>arr</span></div>{_nav_html()}</nav>
+<nav id="rail"><div id="brand">Rom<span>arr</span></div>{_nav_html()}</nav>
 <div id="main">
   <div id="top"><h1>Games</h1><input id="search" placeholder="Filter…" autocomplete="off"></div>
   <div class="page" id="page"></div>
