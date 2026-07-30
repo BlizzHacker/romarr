@@ -1,7 +1,7 @@
 #!/bin/sh
-# Run Romarr as the user who owns the media, not as root.
+# Run ROMarr as the user who owns the media, not as root.
 #
-# Romarr writes ROM files into a library directory that another application --
+# ROMarr writes ROM files into a library directory that another application --
 # RomM, Gaseous or Retrom -- has to read. If those files land owned by root, the
 # library either cannot read them or has to be run as root too. PUID/PGID is the
 # convention every *arr user already has in their compose file, so it is the one
@@ -26,7 +26,7 @@ if [ "$(id -u)" != "0" ]; then
     # Already unprivileged: `docker run --user`, rootless Docker, Kubernetes
     # runAsUser, or a Podman userns. There is nothing to drop to and no
     # authority to chown with, so respect the decision and start.
-    echo "Romarr: running as uid $(id -u), PUID/PGID ignored"
+    echo "ROMarr: running as uid $(id -u), PUID/PGID ignored"
     exec "$@"
 fi
 
@@ -37,10 +37,10 @@ mkdir -p /config
 chown "${PUID}:${PGID}" /config
 
 if [ ! -w /config ]; then
-    echo "Romarr: /config is not writable by ${PUID}:${PGID} -- history and" >&2
+    echo "ROMarr: /config is not writable by ${PUID}:${PGID} -- history and" >&2
     echo "settings cannot be saved. Check the ownership of the host directory." >&2
     exit 1
 fi
 
-echo "Romarr: starting as ${PUID}:${PGID}"
+echo "ROMarr: starting as ${PUID}:${PGID}"
 exec su-exec "${PUID}:${PGID}" "$@"

@@ -5,7 +5,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/../misc/build.func" 2>/dev/null || source
 # License: MIT | https://github.com/community-scripts/ProxmoxVED/raw/main/LICENSE
 # Source: https://github.com/BlizzHacker/romarr
 
-APP="Romarr"
+APP="ROMarr"
 var_tags="${var_tags:-arr;emulation}"
 var_cpu="${var_cpu:-1}"
 var_ram="${var_ram:-512}"
@@ -36,7 +36,7 @@ function update_script() {
     msg_ok "Stopped Service"
 
     # The settings file holds the request history and the release profile, so
-    # it must survive an update -- it is the only state Romarr keeps.
+    # it must survive an update -- it is the only state ROMarr keeps.
     create_backup /opt/romarr/.env
     BACKUP_DIR=/opt/romarr-data.backup create_backup /opt/romarr/romarr.json
 

@@ -41,7 +41,7 @@ links:
 # KNOWN LIMITATIONS, both harmless here:
 #   * The category selector does not match, so every row falls back to the
 #     default and maps to Console/Other (1090). Real per-platform ids would
-#     need an authenticated browse.php dump. Ranking in Romarr uses the title,
+#     need an authenticated browse.php dump. Ranking in ROMarr uses the title,
 #     ROM extension and size as platform evidence rather than categories, so
 #     nothing downstream depends on this.
 #   * leechers parses as 0 everywhere; the column is probably misaligned.
@@ -49,7 +49,7 @@ links:
 
 caps:
   categorymappings:
-    # Everything maps to Console/Other on purpose. Romarr rejects any result
+    # Everything maps to Console/Other on purpose. ROMarr rejects any result
     # whose categories fall outside the console and PC-games ranges, so an
     # unmapped result would be dropped before it could be ranked at all.
     - {id: 1, cat: Console/Other, desc: "Games"}

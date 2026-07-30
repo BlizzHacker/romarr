@@ -1,6 +1,6 @@
-# Romarr -- the *arr for games.
+# ROMarr -- the *arr for games.
 #
-# Two stages, because of one dependency. Romarr is stdlib plus `requests`, and
+# Two stages, because of one dependency. ROMarr is stdlib plus `requests`, and
 # requests pulls in charset-normalizer, which ships no musl wheel for every
 # architecture. On linux/arm/v7 pip therefore compiles it, and a compiler in
 # the final image would be ~180MB of toolchain nobody runs. So the build stage
@@ -50,8 +50,8 @@ EXPOSE 7878
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD python -c "import os,urllib.request;urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('ROMARR_PORT','7878')+'/api/health',timeout=4)"
 
-LABEL org.opencontainers.image.title="Romarr" \
-      org.opencontainers.image.description="The *arr for games: request a ROM, Romarr finds it via Prowlarr, grabs it, and files it into your game library" \
+LABEL org.opencontainers.image.title="ROMarr" \
+      org.opencontainers.image.description="The *arr for games: request a ROM, ROMarr finds it via Prowlarr, grabs it, and files it into your game library" \
       org.opencontainers.image.source="https://github.com/BlizzHacker/romarr" \
       org.opencontainers.image.licenses="MIT"
 

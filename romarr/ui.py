@@ -183,7 +183,7 @@ function go(page){
     indexers:'Indexers',clients:'Download Clients',libraries:'Libraries',
     general:'General',
     status:'System Status',tasks:'Tasks',logs:'Logs'};
-  $('#top h1').textContent=titles[page]||'Romarr';
+  $('#top h1').textContent=titles[page]||'ROMarr';
   $('#search').classList.toggle('hide', !['library','add'].includes(page));
   (RENDER[page]||RENDER.library)();
 }
@@ -225,7 +225,7 @@ RENDER.library=async()=>{
 RENDER.add=async()=>{
   $('#page').innerHTML=`<div class="card">
     <h3>Request a game</h3>
-    <p class="help">Romarr searches your indexers, picks the healthiest release
+    <p class="help">ROMarr searches your indexers, picks the healthiest release
       for the platform, hands it to the download client and files the ROM into RomM.</p>
     <div class="row">
       <div class="field" style="flex:1;margin:0"><label>Game</label>
@@ -528,7 +528,7 @@ RENDER.libraries=async()=>{
     <p class="help">Where finished ROMs are filed. Add more than one to send
       some platforms elsewhere &mdash; a platform rule wins over the default,
       so &ldquo;N64 goes to Retrom&rdquo; is one row here rather than a second
-      Romarr. Each server needs its own path, as <b>Romarr</b> sees it.</p>
+      ROMarr. Each server needs its own path, as <b>ROMarr</b> sees it.</p>
     ${noDefault?`<p class="help" style="color:var(--warn)">
       No library is marked default, so anything without a matching platform rule
       goes to the first one listed. Mark one to make that a decision.</p>`:''}
@@ -668,7 +668,7 @@ RENDER.tasks=async()=>{
 RENDER.logs=async()=>{
   const d=await j('/api/v1/log?limit=200');
   $('#page').innerHTML=`<div class="card"><h3>Recent events</h3>
-    <p class="help">Romarr's own history. Service logs are in journalctl -u romarr,
+    <p class="help">ROMarr's own history. Service logs are in journalctl -u romarr,
     or docker logs romarr.</p>
     ${d.items.length?`<pre style="font:12px/1.6 ui-monospace,Menlo,monospace;
       color:var(--dim);white-space:pre-wrap">${d.items.map(e=>
@@ -702,9 +702,9 @@ async function refreshCounts(){
 
 def page() -> str:
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
-<title>Romarr</title><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ROMarr</title><meta name="viewport" content="width=device-width,initial-scale=1">
 <style>{CSS}</style></head><body>
-<nav id="rail"><div id="brand">Rom<span>arr</span></div>{_nav_html()}</nav>
+<nav id="rail"><div id="brand">ROM<span>arr</span></div>{_nav_html()}</nav>
 <div id="main">
   <div id="top"><h1>Games</h1><input id="search" placeholder="Filter…" autocomplete="off"></div>
   <div class="page" id="page"></div>

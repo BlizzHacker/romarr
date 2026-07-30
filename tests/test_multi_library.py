@@ -5,14 +5,14 @@ Retrom, or two RomMs, and "the *arr for games" has to mean the same thing for
 them as for somebody with exactly one.
 """
 
-from romarr.app import QueueItem, Romarr
+from romarr.app import QueueItem, ROMarr
 from romarr.libraries import route_library
 
 
 def svc(tmp_path, **env):
     base = {"ROMARR_DATA": str(tmp_path / "s.json")}
     base.update(env)
-    return Romarr(base)
+    return ROMarr(base)
 
 
 # --- routing ----------------------------------------------------------------
@@ -76,7 +76,7 @@ def test_an_install_that_predates_libraries_still_gets_one_seeded(tmp_path):
     data = str(tmp_path / "s.json")
     env = {"ROMARR_DATA": data, "LIBRARY_URL": "http://romm.example",
            "LIBRARY_PATH": str(tmp_path / "roms")}
-    first = Romarr(env)
+    first = ROMarr(env)
     # Rewind to what an older settings file looks like: clients seeded, and no
     # knowledge of libraries at all.
     first.store.settings.pop("_seeded_libraries", None)
@@ -84,16 +84,16 @@ def test_an_install_that_predates_libraries_still_gets_one_seeded(tmp_path):
     first.store.settings["_seeded_clients"] = True
     first.store.save()
 
-    assert len(Romarr(env).store.list_items("libraries")) == 1
+    assert len(ROMarr(env).store.list_items("libraries")) == 1
 
 
 def test_seeding_happens_once_not_on_every_restart(tmp_path):
     data = str(tmp_path / "s.json")
     env = {"ROMARR_DATA": data, "LIBRARY_URL": "http://romm.example",
            "LIBRARY_PATH": str(tmp_path / "roms")}
-    Romarr(env)
-    Romarr(env)
-    assert len(Romarr(env).store.list_items("libraries")) == 1
+    ROMarr(env)
+    ROMarr(env)
+    assert len(ROMarr(env).store.list_items("libraries")) == 1
 
 
 def test_each_library_keeps_its_own_path(tmp_path):
@@ -252,11 +252,11 @@ def test_a_stored_path_that_lost_to_the_environment_says_to_use_settings(tmp_pat
     mounted.mkdir()
     data = str(tmp_path / "s.json")
 
-    first = Romarr({"ROMARR_DATA": data, "LIBRARY_PATH": str(tmp_path / "mnt-roms")})
+    first = ROMarr({"ROMARR_DATA": data, "LIBRARY_PATH": str(tmp_path / "mnt-roms")})
     assert first.store.settings["library_path"] == str(tmp_path / "mnt-roms")
 
     # Operator corrects compose to the path they actually mounted.
-    second = Romarr({"ROMARR_DATA": data, "LIBRARY_PATH": str(mounted)})
+    second = ROMarr({"ROMARR_DATA": data, "LIBRARY_PATH": str(mounted)})
     assert second.library == tmp_path / "mnt-roms"        # stored value still wins
 
     hint = second.path_hint(second.library)

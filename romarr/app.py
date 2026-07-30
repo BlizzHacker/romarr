@@ -1,4 +1,4 @@
-"""Romarr's HTTP service and web UI.
+"""ROMarr's HTTP service and web UI.
 
 Deliberately stdlib-only for the server itself: this runs in a 512MB LXC beside
 a download client and a database, and an *arr that needs a web framework to
@@ -62,9 +62,9 @@ from .ui import page as ui_page
 
 log = logging.getLogger(__name__)
 
-VERSION = "0.4.2"
+VERSION = "0.5.0"
 
-# What Romarr labels its own downloads with, so its jobs are distinguishable
+# What ROMarr labels its own downloads with, so its jobs are distinguishable
 # from everything else in a shared client -- the same reason Radarr and Sonarr
 # each use a category of their own.
 DEFAULT_CATEGORY = "romarr"
@@ -74,7 +74,7 @@ def category_for(env: dict[str, str], client: str) -> str:
     """The download category for one client, e.g. SABNZBD_CATEGORY.
 
     Configurable per client because the clients are separate installs with
-    separate category lists, and because somebody running two Romarrs against
+    separate category lists, and because somebody running two ROMarrs against
     one SABnzbd needs to tell their downloads apart.
 
     The category does not have to exist in the client beforehand. SABnzbd 5.0.4
@@ -87,7 +87,7 @@ def category_for(env: dict[str, str], client: str) -> str:
     completes and is never imported, with nothing anywhere saying why.
 
     Defining it in SABnzbd is still worth doing if you want the download to land
-    in a folder of its own or run a post-processing script. Romarr does not need
+    in a folder of its own or run a post-processing script. ROMarr does not need
     it either way: it takes the finished path from SABnzbd's own `storage`
     field rather than assuming where the category put it.
     """
@@ -105,7 +105,7 @@ class QueueItem:
     at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat(timespec="seconds"))
 
 
-class Romarr:
+class ROMarr:
     """The service. Holds config, clients, and the in-flight queue."""
 
     def __init__(self, env: dict[str, str] | None = None):
@@ -137,7 +137,7 @@ class Romarr:
             password=e.get("NZBGET_PASS", ""),
             category=category_for(e, "NZBGET"),
         ))
-        # Which game library this Romarr feeds. RomM remains the default so an
+        # Which game library this ROMarr feeds. RomM remains the default so an
         # install that predates the other backends keeps working untouched, and
         # the ROMM_* variables are still honoured for the same reason.
         # NOT self.library: that name is already the ROM directory Path, and
@@ -689,7 +689,7 @@ class Romarr:
         if not path_ok:
             return {"ok": False, "path_ok": False,
                     "message": f"Connected, but {root} does not exist here. "
-                               "Mount it into Romarr, or correct the path."}
+                               "Mount it into ROMarr, or correct the path."}
         return {"ok": True, "path_ok": True, "message": "Connected"}
 
     # -- operations --------------------------------------------------------
@@ -1006,7 +1006,7 @@ class Romarr:
                 continue
             # Which library this platform belongs to. A platform rule wins over
             # the default, so "PSX goes to Gaseous" is one row in the Libraries
-            # page rather than a second Romarr.
+            # page rather than a second ROMarr.
             target = self.library_for(platform.slug)
             if target is None:
                 # Nothing to import into. Recorded rather than skipped: a
@@ -1043,9 +1043,9 @@ class Romarr:
 
 # -- HTTP ------------------------------------------------------------------
 
-def make_handler(service: Romarr):
+def make_handler(service: ROMarr):
     class Handler(BaseHTTPRequestHandler):
-        server_version = "Romarr"
+        server_version = "ROMarr"
 
         def _send(self, code: int, body: bytes, content_type: str):
             self.send_response(code)
@@ -1224,7 +1224,7 @@ def make_handler(service: Romarr):
 
 
 def serve(port: int = 7878, env: dict[str, str] | None = None):
-    service = Romarr(env)
+    service = ROMarr(env)
     httpd = ThreadingHTTPServer(("0.0.0.0", port), make_handler(service))
-    log.info("romarr listening on :%d, library=%s", port, service.library)
+    log.info("ROMarr listening on :%d, library=%s", port, service.library)
     httpd.serve_forever()

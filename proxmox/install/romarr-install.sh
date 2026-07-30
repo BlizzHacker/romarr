@@ -19,13 +19,13 @@ msg_ok "Installed Dependencies"
 
 fetch_and_deploy_gh_release "romarr" "BlizzHacker/romarr" "tarball" "latest" "/opt/romarr"
 
-msg_info "Setting up Romarr"
+msg_info "Setting up ROMarr"
 cd /opt/romarr
 $STD python3 -m venv .venv
 $STD /opt/romarr/.venv/bin/pip install --upgrade pip
 $STD /opt/romarr/.venv/bin/pip install -r requirements.txt
 
-# Romarr talks to three services and stores nothing else. Every value here is
+# ROMarr talks to three services and stores nothing else. Every value here is
 # a placeholder on purpose: it starts and serves its UI with none of them
 # reachable, and the Settings pages say which are missing, so a first run is
 # never a blank failure.
@@ -50,12 +50,12 @@ LOG_LEVEL=INFO
 EOF
 chmod 600 /opt/romarr/.env
 mkdir -p /mnt/roms
-msg_ok "Set up Romarr"
+msg_ok "Set up ROMarr"
 
 msg_info "Creating Service"
 cat <<EOF >/etc/systemd/system/romarr.service
 [Unit]
-Description=Romarr - the *arr for games
+Description=ROMarr - the *arr for games
 After=network-online.target
 Wants=network-online.target
 

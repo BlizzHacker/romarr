@@ -1,4 +1,4 @@
-# Romarr. Copy this file, edit the two paths and the four URLs, and start it.
+# ROMarr. Copy this file, edit the two paths and the four URLs, and start it.
 #
 # Prowlarr, your download client and your game library are not started here --
 # you already run them, and a compose file that spawned its own copies would
@@ -12,13 +12,13 @@ services:
     ports:
       - "7878:7878"
     environment:
-      # Who owns the ROMs Romarr writes. Use the same ids as your library app,
+      # Who owns the ROMs ROMarr writes. Use the same ids as your library app,
       # or `id -u` / `id -g` for your media user.
       PUID: 1000
       PGID: 1000
       TZ: Etc/UTC
 
-      # Prowlarr -- how Romarr finds releases.
+      # Prowlarr -- how ROMarr finds releases.
       PROWLARR_URL: http://prowlarr:9696
       PROWLARR_API_KEY: ""
 
@@ -44,9 +44,9 @@ services:
       # NZBGET_USER: ""
       # NZBGET_PASS: ""
 
-      # What Romarr labels its own downloads with, per client. Defaults to
+      # What ROMarr labels its own downloads with, per client. Defaults to
       # "romarr". The category does NOT have to exist in the client first --
-      # SABnzbd keeps an undefined one verbatim and Romarr still matches it.
+      # SABnzbd keeps an undefined one verbatim and ROMarr still matches it.
       # Define it there anyway if you want its own folder or a post-processing
       # script, or point this at a built-in like "software".
       # SABNZBD_CATEGORY: romarr
@@ -69,7 +69,7 @@ services:
       # Your download client's completed directory.
       #
       # Left side is the host. The RIGHT side must be the path your download
-      # client reports, character for character -- Romarr asks the client where
+      # client reports, character for character -- ROMarr asks the client where
       # a finished download is and then opens that path itself, so the two have
       # to agree. The host side only has to be the directory actually holding
       # those files; it does not have to resemble the container path.
@@ -86,7 +86,7 @@ services:
       #
       # Not sure what your client reports? qBittorrent shows it as "Save path"
       # in Options -> Downloads; SABnzbd as "Completed Download Folder" in
-      # Config -> Folders. Romarr uses whatever the client's API returns, which
+      # Config -> Folders. ROMarr uses whatever the client's API returns, which
       # is that setting.
       #
       # When the paths genuinely cannot be made to match, leave this as-is and
@@ -96,4 +96,4 @@ services:
 
 # Prefer an env file to editing this one? Delete the `environment:` block and
 # use `env_file: .env` -- compose turns those entries into real environment
-# variables, which is what Romarr reads.
+# variables, which is what ROMarr reads.

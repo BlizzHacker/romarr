@@ -1,9 +1,9 @@
-# Romarr
+# ROMarr
 
 A project of the [Move Weight Foundation](https://foundation.moveweight.com), an
 Oklahoma non-profit corporation with 501(c)(3) status pending.
 
-The *arr for games. Request a title, Romarr finds it, grabs it, and files it
+The *arr for games. Request a title, ROMarr finds it, grabs it, and files it
 into your game library.
 
 **It is not tied to one library.** RomM, [Gaseous](https://github.com/gaseous-project/gaseous-server)
@@ -22,7 +22,7 @@ rescan -- in `romarr/libraries.py`. Nothing else in the service learns which
 library is attached.
 
 
-**The *arr for games.** Romarr watches for game requests, searches your
+**The *arr for games.** ROMarr watches for game requests, searches your
 indexers through Prowlarr, hands the winner to your download client, and files
 the ROM into [RomM](https://github.com/rommapp/romm) where it can actually be
 played.
@@ -30,7 +30,7 @@ played.
 If you run Radarr for films and Sonarr for TV, this is the missing one.
 
 ```
-GG Requestz  ──request──▶  Romarr  ──search──▶  Prowlarr ──▶ indexers
+GG Requestz  ──request──▶  ROMarr  ──search──▶  Prowlarr ──▶ indexers
                               │                                  │
                               │◀──────────── releases ───────────┘
                               │
@@ -119,7 +119,7 @@ server.
 
 Three things worth knowing:
 
-- **`PUID`/`PGID` decide who owns the ROMs.** Romarr writes files that your
+- **`PUID`/`PGID` decide who owns the ROMs.** ROMarr writes files that your
   library application has to read. Give it the same ids as that application, or
   `id -u` / `id -g` for your media user. Only `/config` is chowned — never the
   library or downloads volumes, because a recursive chown of a multi-terabyte
@@ -127,7 +127,7 @@ Three things worth knowing:
 - **On the downloads volume, the container side is the one that has to match
   your download client.** In `-v /mnt/downloads/complete:/downloads/complete`
   the left side is wherever the files really live on the host, and the right
-  side has to be the path the client *reports* — Romarr asks the client where a
+  side has to be the path the client *reports* — ROMarr asks the client where a
   finished download is and then opens that path itself, so the two have to
   agree. qBittorrent shows it as "Save path" under Options → Downloads, SABnzbd
   as "Completed Download Folder" under Config → Folders. A client running on the
@@ -170,7 +170,7 @@ python -m romarr
 | `QBITTORRENT_URL` / `QBITTORRENT_USER` / `QBITTORRENT_PASS` | torrent client |
 | `SABNZBD_URL` / `SABNZBD_API_KEY` | usenet client, optional |
 | `NZBGET_URL` / `NZBGET_USER` / `NZBGET_PASS` | usenet client, optional |
-| `QBITTORRENT_CATEGORY` / `SABNZBD_CATEGORY` / `NZBGET_CATEGORY` | what Romarr labels its own downloads with, per client. Default `romarr` |
+| `QBITTORRENT_CATEGORY` / `SABNZBD_CATEGORY` / `NZBGET_CATEGORY` | what ROMarr labels its own downloads with, per client. Default `romarr` |
 | `GGREQUESTZ_URL` | shows the request front-end's status, optional |
 | `ROMARR_DATA` | where history and settings are kept |
 | `PUID` / `PGID` / `TZ` | Docker image only — see above |
@@ -181,21 +181,21 @@ in that state rather than leaving you to work it out.
 
 ### Download categories
 
-Romarr labels its downloads `romarr`, so its jobs are distinguishable from
+ROMarr labels its downloads `romarr`, so its jobs are distinguishable from
 everything else in a client you already use for other things — the same reason
 Radarr and Sonarr each use their own.
 
 **The category does not have to exist in the client first.** SABnzbd 5.0.4
 ships `*`, `movies`, `tv`, `audio` and `software`, and `romarr` is none of
 them; an undefined category is accepted, kept verbatim on the job, and still
-matched by the history filter Romarr uses to notice a finished download.
+matched by the history filter ROMarr uses to notice a finished download.
 Defining it is still worth doing if you want the download in a folder of its
-own or a post-processing script — Romarr does not care either way, because it
+own or a post-processing script — ROMarr does not care either way, because it
 takes the finished path from SABnzbd's own `storage` field rather than guessing
 where the category put it.
 
 Set `SABNZBD_CATEGORY=software` if you would rather use a built-in, or give two
-Romarrs sharing one client different categories so they stop claiming each
+ROMarrs sharing one client different categories so they stop claiming each
 other's downloads.
 
 A protocol with no client configured cannot be grabbed at all — results are
@@ -204,21 +204,21 @@ in that state rather than leaving you to work it out.
 
 ### More than one library
 
-Romarr drives several library servers at once. Add them under **Settings →
+ROMarr drives several library servers at once. Add them under **Settings →
 Libraries**: each carries its own address, credentials and filesystem path, and
 one is marked default.
 
 Routing is by platform. A library with platform rules receives only those
 platforms; anything unmatched goes to the default — so "N64 goes to Retrom" is
-one row on that page rather than a second Romarr. A platform rule beats the
+one row on that page rather than a second ROMarr. A platform rule beats the
 default, because naming a platform is the more specific statement. Two servers
 of the *same* kind are fine, and are the common case: a RomM for the house and a
 RomM for a child's device.
 
-Each server needs its own path, **as Romarr sees it**. Two libraries may share a
+Each server needs its own path, **as ROMarr sees it**. Two libraries may share a
 path if you genuinely point both applications at one tree, but nothing assumes
 it. The Libraries page flags a server that answers while its path is missing
-here, which is almost always a volume that was never mounted into Romarr.
+here, which is almost always a volume that was never mounted into ROMarr.
 
 The environment seeds the first library on first run, so an existing install
 comes up already configured. Everything after that is managed on the page.
@@ -232,12 +232,12 @@ Gaseous has no scan trigger — there is no such call in its API. It picks up ne
 files through two background tasks of its own: `TitleIngestor` every minute,
 which processes Gaseous's **Import** directory, and `LibraryScan` every 1440
 minutes, which walks the configured library paths. A ROM filed into a Gaseous
-library path can therefore take up to a day to appear, and nothing Romarr sends
+library path can therefore take up to a day to appear, and nothing ROMarr sends
 changes that. Either point that library's path at Gaseous's Import directory, or
 lower `LibraryScan`'s interval in Gaseous.
 
 RomM and Retrom are both told directly and appear at once. For RomM, the account
-Romarr uses needs permission to run tasks — without it the rescan is refused with
+ROMarr uses needs permission to run tasks — without it the rescan is refused with
 a 403 and the ROM waits for RomM's next scheduled scan.
 
 ### Remote path mapping
@@ -255,11 +255,11 @@ the settings file:
 The longest matching prefix wins, so a specific mapping overrides a broader one
 rather than depending on which was added first. A mapping cannot help if the
 volume is not mounted here at all — that stays a mount problem. Either way the
-log names both the path the client reported and what Romarr made of it, which is
+log names both the path the client reported and what ROMarr made of it, which is
 what tells the two apart: no mapping matched, or a mapping matched and its local
 side is wrong.
 
-Use a **dedicated RomM account**, not your admin one. Romarr needs only
+Use a **dedicated RomM account**, not your admin one. ROMarr needs only
 enough to trigger a scan.
 
 ## Tests

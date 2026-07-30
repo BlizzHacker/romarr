@@ -185,13 +185,13 @@ def test_every_backend_satisfies_the_protocol():
 
 def test_library_view_serialises_games_and_names_the_backend(tmp_path):
     """The HTTP layer must emit plain JSON, not dataclasses, and say which
-    library it is reading -- a Romarr pointed at the wrong one should be
+    library it is reading -- a ROMarr pointed at the wrong one should be
     obvious from the page rather than from a config file."""
     from dataclasses import asdict
 
-    from romarr.app import Romarr
+    from romarr.app import ROMarr
 
-    svc = Romarr({"ROMARR_DATA": str(tmp_path / "s.json"),
+    svc = ROMarr({"ROMARR_DATA": str(tmp_path / "s.json"),
                   "ROMM_LIBRARY": str(tmp_path / "lib"),
                   "LIBRARY_KIND": "gaseous",
                   "LIBRARY_URL": "http://gaseous.example"})

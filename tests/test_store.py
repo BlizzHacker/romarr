@@ -227,8 +227,8 @@ def test_the_config_endpoint_never_returns_a_stored_credential(tmp_path):
     """This endpoint feeds a browser. Returning the raw settings put real
     credentials -- including the qBittorrent password -- in a page anyone who
     could reach the UI could read."""
-    from romarr.app import Romarr
-    svc = Romarr(env={
+    from romarr.app import ROMarr
+    svc = ROMarr(env={
         "ROMARR_DATA": str(tmp_path / "r.json"),
         "QBITTORRENT_URL": "http://qbit:8090",
         "QBITTORRENT_USER": "admin", "QBITTORRENT_PASS": "REAL-PASSWORD",
@@ -257,8 +257,8 @@ def test_the_library_view_is_not_shadowed_by_the_library_path(tmp_path):
     shadowed by the instance attribute, so the route called a PosixPath and the
     connection closed with no response at all."""
     from pathlib import Path
-    from romarr.app import Romarr
-    svc = Romarr(env={"ROMARR_DATA": str(tmp_path / "r.json"),
+    from romarr.app import ROMarr
+    svc = ROMarr(env={"ROMARR_DATA": str(tmp_path / "r.json"),
                        "ROMM_LIBRARY": str(tmp_path)})
     assert isinstance(svc.library, Path)
     view = svc.library_view()

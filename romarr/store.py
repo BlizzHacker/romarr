@@ -1,7 +1,7 @@
 """Persistence.
 
 The *arr applications all keep the same things across a restart: what you
-asked for, what happened to it, and how you configured the thing. Romarr kept
+asked for, what happened to it, and how you configured the thing. ROMarr kept
 all of it in memory, so a restart lost your history and your settings -- which
 is the difference between a tool and a demo.
 
@@ -116,7 +116,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
 
 
 class Store:
-    """Everything Romarr remembers."""
+    """Everything ROMarr remembers."""
 
     # Past this the history file grows without bound and nobody reads the tail.
     MAX_EVENTS = 2000

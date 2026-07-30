@@ -143,7 +143,7 @@ def _checked(result: Path, reported: str, *, mapped: bool) -> Path:
     This is the only point that knows both paths, and the difference between
     them is the whole diagnosis. Without it the operator sees a download that
     completed and never imported, and nothing that names the container path
-    Romarr actually tried -- which is the one string that makes a wrong volume
+    ROMarr actually tried -- which is the one string that makes a wrong volume
     mount obvious.
 
     A warning rather than a raise: the caller reports the failure per download,

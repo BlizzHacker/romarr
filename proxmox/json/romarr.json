@@ -1,5 +1,5 @@
 {
-  "name": "Romarr",
+  "name": "ROMarr",
   "slug": "romarr",
   "categories": [
     14
@@ -13,7 +13,7 @@
   "documentation": "https://github.com/BlizzHacker/romarr#readme",
   "website": "https://github.com/BlizzHacker/romarr",
   "logo": "https://cdn.jsdelivr.net/gh/selfhst/icons@main/webp/romm.webp",
-  "description": "Romarr is the *arr for games. It watches for game requests, searches your indexers through Prowlarr, hands the winner to qBittorrent, SABnzbd or NZBGet depending on the release's protocol, picks the ROM out of the finished download and files it into RomM where it can be played. Release ranking is built for cartridges rather than video: it scores region and revision instead of bitrate, treats a large result as a warning rather than a preference, and rejects prototypes, hacks and cross-console mismatches.",
+  "description": "ROMarr is the *arr for games. It watches for game requests, searches your indexers through Prowlarr, hands the winner to qBittorrent, SABnzbd or NZBGet depending on the release's protocol, picks the ROM out of the finished download and files it into RomM where it can be played. Release ranking is built for cartridges rather than video: it scores region and revision instead of bitrate, treats a large result as a warning rather than a preference, and rejects prototypes, hacks and cross-console mismatches.",
   "install_methods": [
     {
       "type": "default",
@@ -34,7 +34,7 @@
   },
   "notes": [
     {
-      "text": "Edit /opt/romarr/.env after install. Romarr needs a Prowlarr URL and API key, at least one download client, and the path to RomM's library root. It starts and serves its UI with none of them reachable, and the Settings pages say which are missing.",
+      "text": "Edit /opt/romarr/.env after install. ROMarr needs a Prowlarr URL and API key, at least one download client, and the path to RomM's library root. It starts and serves its UI with none of them reachable, and the Settings pages say which are missing.",
       "type": "info"
     },
     {
@@ -46,7 +46,7 @@
       "type": "warning"
     },
     {
-      "text": "Use a dedicated RomM account rather than your admin one. Romarr only reads the library and triggers a rescan.",
+      "text": "Use a dedicated RomM account rather than your admin one. ROMarr only reads the library and triggers a rescan.",
       "type": "info"
     }
   ]

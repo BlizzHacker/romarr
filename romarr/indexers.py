@@ -1,8 +1,8 @@
 """Prowlarr search, the way the *arrs do it.
 
 Prowlarr aggregates every configured torrent and usenet indexer behind one
-Torznab-ish API, which is why Romarr talks to it rather than to indexers
-directly: adding a new tracker becomes a Prowlarr concern, not a Romarr one.
+Torznab-ish API, which is why ROMarr talks to it rather than to indexers
+directly: adding a new tracker becomes a Prowlarr concern, not a ROMarr one.
 
 Two things here are load-bearing and easy to get wrong:
 
@@ -237,7 +237,7 @@ class Prowlarr:
 
         This is the safe path for results with no plain magnet: Prowlarr already
         holds the credentials for both the indexer and the download client, so
-        nothing sensitive has to travel through Romarr.
+        nothing sensitive has to travel through ROMarr.
         """
         url = self._url("search")
         response = self._session.post(
@@ -268,7 +268,7 @@ class Torznab:
 
     Prowlarr is still the recommended way to add a tracker -- it maintains the
     definitions, handles logins and Cloudflare, and one credential set serves
-    every *arr on the network. This exists because Romarr already offered
+    every *arr on the network. This exists because ROMarr already offered
     `torznab` and `newznab` indexer types and could test them, but searched
     only Prowlarr: an operator could configure an indexer, see Test pass, and
     then never get a single result from it. Dead configuration that reports
@@ -432,7 +432,7 @@ def sanitise_for_display(url: str) -> str:
 # --- indexer configuration schema ------------------------------------------
 #
 # Radarr and Sonarr let you add an indexer directly -- Newznab for usenet,
-# Torznab for torrents -- as well as pointing at Prowlarr. Romarr read
+# Torznab for torrents -- as well as pointing at Prowlarr. ROMarr read
 # Prowlarr and nothing else, which meant an operator with a single indexer had
 # to run Prowlarr to use it at all.
 #

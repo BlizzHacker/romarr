@@ -22,7 +22,7 @@ def test_the_brand_reads_romarr():
     html = page()
     brand = re.search(r'<div id="brand">(.*?)</div>', html, re.S)
     assert brand, "the page no longer has a brand element"
-    assert _text(brand.group(1)).strip() == "Romarr"
+    assert _text(brand.group(1)).strip() == "ROMarr"
 
 
 def test_the_old_name_appears_nowhere_a_user_can_read_it():
@@ -30,7 +30,7 @@ def test_the_old_name_appears_nowhere_a_user_can_read_it():
 
 
 def test_the_document_title_is_the_product_name():
-    assert re.search(r"<title>Romarr</title>", page())
+    assert re.search(r"<title>ROMarr</title>", page())
 
 
 def test_the_libraries_page_is_in_the_nav_and_rendered():

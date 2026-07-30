@@ -1,7 +1,7 @@
 """Download clients.
 
 Radarr, Sonarr and Lidarr all accept both protocols an indexer can offer and
-route each release to a client that speaks it. Romarr accepted only torrents,
+route each release to a client that speaks it. ROMarr accepted only torrents,
 and only through qBittorrent, which made every usenet indexer in Prowlarr dead
 weight -- results came back, scored fine, and were then refused.
 

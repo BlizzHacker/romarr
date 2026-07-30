@@ -1,6 +1,6 @@
-"""Game libraries Romarr can hand a finished ROM to.
+"""Game libraries ROMarr can hand a finished ROM to.
 
-Romarr started against RomM and grew its assumptions: a `/api/roms` shape, a
+ROMarr started against RomM and grew its assumptions: a `/api/roms` shape, a
 RomM token, RomM's idea of a platform slug. That made "the *arr for games" true
 only for people who had already chosen RomM.
 
@@ -31,7 +31,7 @@ import requests
 log = logging.getLogger(__name__)
 
 # Short budget for anything a page waits on. A library that is merely slow must
-# not read as Romarr being broken.
+# not read as ROMarr being broken.
 HEALTH_TIMEOUT = 5
 
 
@@ -62,7 +62,7 @@ DEFAULT_BACKGROUND_TIMEOUT = 300
 
 @runtime_checkable
 class Library(Protocol):
-    """What Romarr needs from a game library, and nothing more."""
+    """What ROMarr needs from a game library, and nothing more."""
 
     name: str
 
@@ -253,7 +253,7 @@ class GaseousLibrary:
             configured library paths.
 
         So a ROM filed into a Gaseous library path can take up to a day to
-        appear, and that is a property of Gaseous rather than something Romarr
+        appear, and that is a property of Gaseous rather than something ROMarr
         can fix from out here. Two ways to make it prompt, both in the README:
         point this library's path at Gaseous's Import directory, or lower
         LibraryScan's interval in Gaseous itself.
@@ -518,7 +518,7 @@ _COMMON_LIBRARY_FIELDS = [
     _FIELD("enable", "Enable", "bool", True),
     _FIELD("url", "URL", default="http://localhost:8080"),
     _FIELD("path", "Library path", help="Where ROMs are filed for THIS server, "
-                                       "as Romarr sees it"),
+                                       "as ROMarr sees it"),
     _FIELD("is_default", "Default", "bool", False,
            help="Requests with no matching platform rule are filed here"),
     _FIELD("platforms", "Platforms", "list",

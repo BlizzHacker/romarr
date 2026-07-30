@@ -122,7 +122,7 @@ class RommConfig:
 class Romm:
     """Authenticates and asks RomM to rescan after an import.
 
-    One of several libraries Romarr can drive -- see libraries.py for the
+    One of several libraries ROMarr can drive -- see libraries.py for the
     protocol every backend implements.
     """
 
@@ -216,7 +216,7 @@ class Romm:
 
         This feeds a status page. A dependency that is merely slow must not
         hold the page open for the whole request timeout -- that turns "RomM is
-        struggling" into "Romarr is broken", which is the wrong diagnosis to
+        struggling" into "ROMarr is broken", which is the wrong diagnosis to
         hand somebody.
 
         The heartbeat is deliberately unauthenticated here: fetching a token

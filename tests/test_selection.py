@@ -156,7 +156,7 @@ def test_a_platforms_own_name_does_not_disqualify_it():
 
 # --- platform evidence -------------------------------------------------------
 #
-# The search deliberately casts a wide net (see Romarr._search_releases), so
+# The search deliberately casts a wide net (see ROMarr._search_releases), so
 # scoring has to be able to tell the same game apart across consoles.
 
 def test_a_rom_extension_beats_a_bare_title():
