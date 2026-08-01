@@ -1,5 +1,7 @@
 # ROMarr
 
+> **[ROMarr](https://github.com/BlizzHacker/romarr)** is the acquisition pillar of **[Cartridge](https://github.com/BlizzHacker/rom-hub/blob/master/BRAND.md)** by MoveWeight — request a ROM, ROMarr finds it, grabs it, and files it into your library. Unofficial; not affiliated with RomM, Gaseous or Retrom.
+
 The *arr for games. Request a title, ROMarr finds it, grabs it, and files it
 into your game library.
 
