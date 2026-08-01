@@ -39,6 +39,12 @@ played.
 
 If you run Radarr for films and Sonarr for TV, this is the missing one.
 
+![Interactive search: every release scored, with the reasoning shown](docs/img/interactive-search.png)
+
+*Interactive search: every release your indexers returned, scored, with the
+reason for each score written next to it — and a Grab button, so you can
+overrule the ranking when you disagree with it.*
+
 ```
 GG Requestz  ──request──▶  ROMarr  ──search──▶  Prowlarr ──▶ indexers
                               │                                  │
@@ -48,6 +54,11 @@ GG Requestz  ──request──▶  ROMarr  ──search──▶  Prowlarr ─
                               │
                               └──import──▶  RomM library  ──▶  playable
 ```
+
+![The library, read from RomM](docs/img/library.png)
+
+*The library itself, read from whichever backend is attached — 72,162 games on
+the instance this was captured from.*
 
 ## Why it exists
 
@@ -263,6 +274,11 @@ here, which is almost always a volume that was never mounted into ROMarr.
 
 The environment seeds the first library on first run, so an existing install
 comes up already configured. Everything after that is managed on the page.
+
+![Three libraries: RomM as default, two folders with platform routing](docs/img/libraries.png)
+
+*One RomM as the default, plus a Batocera handheld and an ES-DE cabinet — both
+plain folders — taking Game Boy and N64 respectively.*
 
 The Library view aggregates every server and badges each poster with its source;
 one unreachable server is reported as a named row rather than an empty shelf.
