@@ -271,6 +271,30 @@ Download links are deliberately absent from both: Prowlarr's `downloadUrl`
 carries its API key in the query string, so the release is grabbed by the id
 issued with the search and the URL is looked up server-side.
 
+### Plugins — the ROM Hub
+
+Library → **Hub**. ROMarr's sources are not hard-coded: they are **ROM Hub**
+plugins, a backend-agnostic catalogue you browse and manage from inside ROMarr.
+Each plugin adds a place to search and import from — the Internet Archive, Aminet,
+Demozoo, homebrew hubs, hash-identity providers like Hasheous, and more — and the
+Hub tab lists the whole catalogue with its capabilities, platforms and network
+reach, one click to install, enable or disable.
+
+![The Hub tab: the ROM Hub plugin catalogue, installable in-app](docs/img/hub-plugins.png)
+
+*The Hub tab reading the live catalogue — Archive.org and Hasheous installed and
+enabled, the rest one click away. Plugins are sandboxed and third-party; install
+only ones you trust.*
+
+This is the seam that makes the **Cartridge** hierarchy real: ROMarr acquires,
+ROM Hub is where the sources it acquires from live. The Hub and its plugins are a
+separate project — [ROM Hub](https://github.com/BlizzHacker/rom-hub) — installed
+beside ROMarr; when it is present, this tab lights up, and when it is not, the
+tab explains how to add it. The same catalogue is on the API:
+`GET /api/v1/hub/plugins` lists it with install/enabled state, and
+`POST /api/v1/hub/plugin` installs, enables, disables or uninstalls one.
+
+
 ### More than one library
 
 ROMarr drives several library servers at once. Add them under **Settings →
