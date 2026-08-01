@@ -48,6 +48,7 @@ from .libraries import (
     merge_library_secrets, redact_library, route_library,
 )
 from .clients import QBittorrent, QbitConfig, Romm, RommConfig
+from . import hub  # ROM Hub bridge -- the Cartridge plugin layer
 from .downloaders import (
     CLIENT_TYPES, NZBGet, NzbgetConfig, SABnzbd, SabConfig, build_client,
     merge_secrets, pick_client, redact,
@@ -1281,6 +1282,10 @@ def make_handler(service: ROMarr):
                     return self._json(400, {"error": "game is required"})
                 return self._json(200, service.candidates(
                     game, (query.get("platform") or [""])[0]))
+            if route.path == "/api/v1/hub/plugins":
+                return self._json(200, hub.plugins())
+            if route.path == "/api/v1/hub/status":
+                return self._json(200, {"available": hub.available()})
             if route.path == "/api/search":
                 game = (query.get("game") or [""])[0]
                 if not game:
@@ -1296,6 +1301,15 @@ def make_handler(service: ROMarr):
             except json.JSONDecodeError:
                 return self._json(400, {"error": "invalid json"})
 
+            if route.path == "/api/v1/hub/plugin":
+                slug = (body.get("slug") or "").strip()
+                action = (body.get("action") or "").strip()
+                if not slug or action not in ("install", "enable", "disable", "uninstall"):
+                    return self._json(400, {"error": "slug and a valid action are required"})
+                fn = {"install": hub.install, "enable": hub.enable,
+                      "disable": hub.disable, "uninstall": hub.uninstall}[action]
+                result = fn(slug)
+                return self._json(200 if result.get("ok") else 500, result)
             if route.path == "/api/request":
                 game = (body.get("game") or "").strip()
                 platform = (body.get("platform") or "").strip()
