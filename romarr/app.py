@@ -361,14 +361,17 @@ class ROMarr:
         self.store.settings["_seeded_libraries"] = True
 
         url = e.get("LIBRARY_URL") or e.get("ROMM_URL", "")
-        if not url:
+        kind = (e.get("LIBRARY_KIND") or "romm").strip().lower()
+        # A folder library has no server, so requiring a URL would silently
+        # leave the one kind that needs no configuration with nothing
+        # configured. Its path is the whole of it.
+        if not url and not (kind == "folder" and str(self.library)):
             # Nothing to seed. Still marked as seeded, so a library added by
             # hand later is not joined by a surprise second entry on the next
             # restart if the environment gains a URL.
             self.store.save()
             return
 
-        kind = (e.get("LIBRARY_KIND") or "romm").strip().lower()
         self.store.put_item("libraries", {
             "type": kind,
             "name": LIBRARY_TYPES.get(kind, {}).get("label", kind.title()),

@@ -462,7 +462,7 @@ class RetromLibrary:
 # What an operator may put in LIBRARY_KIND. Unknown values are refused rather
 # than defaulting: silently importing into the wrong library, or into none at
 # all, is worse than starting with a clear error.
-LIBRARY_KINDS = ("romm", "gaseous", "retrom")
+LIBRARY_KINDS = ("romm", "gaseous", "retrom", "folder")
 
 
 def build_library(kind: str, env: dict[str, str]):
@@ -491,7 +491,125 @@ def build_library(kind: str, env: dict[str, str]):
                                             username=user, password=pw))
     if kind == "retrom":
         return RetromLibrary(RetromConfig(base_url=url, api_key=key))
+    if kind == "folder":
+        # No server, so the path is the whole configuration.
+        return FolderLibrary(FolderConfig(
+            root=env.get("LIBRARY_PATH") or env.get("ROMM_LIBRARY", "")))
     return Romm(RommConfig(base_url=url, username=user, password=pw, api_token=key))
+
+
+# -------------------------------------------------------------------- Folder --
+
+@dataclass(frozen=True)
+class FolderConfig:
+    root: str
+
+
+class FolderLibrary:
+    """A directory, which is what most of the emulation world actually uses.
+
+    RomM, Gaseous and Retrom are servers with APIs. Almost everything else is
+    not: Batocera, RetroPie, Recalbox, EmulationStation and ES-DE, EmuDeck,
+    Pegasus, Lakka, muOS, ArkOS, LaunchBox, Playnite and Steam ROM Manager all
+    read ROMs from a folder laid out by platform. Supporting "a folder" supports
+    every one of them at once, and it is also the honest answer for somebody who
+    just wants the file in the right place.
+
+    There is no server to talk to, so three of the four questions are answered
+    from the filesystem and the fourth is a no-op: nothing needs telling, the
+    frontend picks the file up the next time it scans. That is not a limitation
+    being papered over -- it is what those frontends do.
+    """
+
+    name = "Folder"
+    BACKGROUND_TIMEOUT = DEFAULT_BACKGROUND_TIMEOUT
+
+    # Archives count: a zipped ROM is the normal shipping form, and every
+    # frontend listed above reads them.
+    ARCHIVES = (".zip", ".7z", ".rar")
+
+    # Walking a library of tens of thousands of files on every refresh is not
+    # worth it for a number on a badge, so the walk stops here and the count is
+    # reported as at-least. An honest ceiling beats a slow exact answer.
+    MAX_SCAN = 50_000
+
+    def __init__(self, config: FolderConfig):
+        self._config = config
+
+    @property
+    def configured(self) -> bool:
+        return bool(self._config.root)
+
+    @property
+    def _root(self):
+        from pathlib import Path
+        return Path(self._config.root)
+
+    def _extensions(self) -> set[str]:
+        from .platforms import PLATFORMS
+        known = {ext for p in PLATFORMS for ext in p.extensions}
+        return known | set(self.ARCHIVES)
+
+    def _walk(self, limit: int):
+        """ROM-looking files under the root, newest-shallowest first."""
+        if not self.configured:
+            return
+        exts = self._extensions()
+        seen = 0
+        for path in sorted(self._root.rglob("*")):
+            if seen >= limit:
+                return
+            if not path.is_file():
+                continue
+            if path.suffix.lower() not in exts:
+                continue
+            seen += 1
+            yield path
+
+    def reachable(self) -> bool:
+        """Whether the directory is there. Cheap, because a page waits on it."""
+        try:
+            return self.configured and self._root.is_dir()
+        except OSError as err:
+            log.warning("folder library unreachable: %s", err.__class__.__name__)
+            return False
+
+    def count(self) -> int:
+        try:
+            return sum(1 for _ in self._walk(self.MAX_SCAN))
+        except OSError as err:
+            log.warning("folder library count failed: %s", err.__class__.__name__)
+            return 0
+
+    def games(self, limit: int = 60, offset: int = 0,
+              timeout: int | None = None) -> list[Game]:
+        """One game per ROM file.
+
+        The platform is the containing directory, because that is the layout
+        every one of these frontends imposes -- and it is the same layout the
+        importer writes, so a ROM filed by ROMarr lands where it will be found.
+        """
+        out: list[Game] = []
+        try:
+            for n, path in enumerate(self._walk(offset + limit)):
+                if n < offset:
+                    continue
+                out.append(Game(
+                    id=str(path),
+                    name=path.stem,
+                    platform=path.parent.name if path.parent != self._root else "",
+                ))
+        except OSError as err:
+            log.warning("folder library read failed: %s", err.__class__.__name__)
+        return out
+
+    def rescan(self, platform_slug: str | None = None) -> bool:
+        """Nothing to tell. The file is on disk; the frontend finds it.
+
+        True rather than False for the same reason as Gaseous: nothing failed,
+        and reporting failure would mark every successful import as half-broken.
+        """
+        return True
 
 
 # ------------------------------------------------------- many servers, one arr --
@@ -551,6 +669,14 @@ LIBRARY_TYPES = {
             _FIELD("api_key", "API Key", "secret"),
         ],
     },
+    "folder": {
+        "label": "Folder",
+        "default_port": 0,
+        # No URL and no credentials: there is no server. Offering an address
+        # field would invite somebody to fill it in and then wonder why nothing
+        # connects.
+        "fields": [f for f in _COMMON_LIBRARY_FIELDS if f["name"] != "url"],
+    },
 }
 
 
@@ -599,6 +725,8 @@ def build_library_from_config(cfg: dict):
                                             username=user, password=pw))
     if kind == "retrom":
         return RetromLibrary(RetromConfig(base_url=url, api_key=key))
+    if kind == "folder":
+        return FolderLibrary(FolderConfig(root=cfg.get("path", "")))
     if kind == "romm":
         return Romm(RommConfig(base_url=url, username=user, password=pw,
                                api_token=key))

@@ -6,9 +6,10 @@ Oklahoma non-profit corporation with 501(c)(3) status pending.
 The *arr for games. Request a title, ROMarr finds it, grabs it, and files it
 into your game library.
 
-**It is not tied to one library.** RomM, [Gaseous](https://github.com/gaseous-project/gaseous-server)
-and [Retrom](https://github.com/jmberesford/retrom) are all supported, chosen
-with a single setting:
+**It is not tied to one library.** RomM,
+[Gaseous](https://github.com/gaseous-project/gaseous-server),
+[Retrom](https://github.com/jmberesford/retrom) and *a plain folder* are all
+supported, chosen with a single setting:
 
     LIBRARY_KIND=romm      # or gaseous, or retrom
     LIBRARY_URL=http://your-library:8080
@@ -16,6 +17,15 @@ with a single setting:
 
 Existing installs need no changes: `LIBRARY_KIND` defaults to `romm` and the
 old `ROMM_*` variables are still read.
+
+`folder` is the one that covers everything else. Batocera, RetroPie, Recalbox,
+EmulationStation, ES-DE, EmuDeck, Pegasus, Lakka, muOS, ArkOS, LaunchBox,
+Playnite and Steam ROM Manager are not servers with APIs -- they read ROMs out
+of a directory laid out by platform, which is exactly what ROMarr writes. No
+URL, no account, no API key: point it at the path and it works.
+
+    LIBRARY_KIND=folder
+    LIBRARY_PATH=/mnt/roms
 
 Adding a backend means implementing four methods -- reachable, count, games,
 rescan -- in `romarr/libraries.py`. Nothing else in the service learns which
@@ -164,7 +174,7 @@ python -m romarr
 | Variable | What it is |
 |---|---|
 | `PROWLARR_URL` / `PROWLARR_API_KEY` | your Prowlarr, for searching |
-| `LIBRARY_KIND` | `romm`, `gaseous` or `retrom` (default `romm`) |
+| `LIBRARY_KIND` | `romm`, `gaseous`, `retrom` or `folder` (default `romm`) |
 | `LIBRARY_URL` / `LIBRARY_USERNAME` / `LIBRARY_PASSWORD` | your game library, for the rescan trigger. `ROMM_*` still works |
 | `LIBRARY_PATH` | path to the library root — **inside the container** when using Docker, where the compose files use `/roms`. Formerly `ROMM_LIBRARY`, still accepted. Stored on first run; change it on the Settings page afterwards |
 | `QBITTORRENT_URL` / `QBITTORRENT_USER` / `QBITTORRENT_PASS` | torrent client |
