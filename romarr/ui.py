@@ -33,7 +33,9 @@ a{color:var(--accent);text-decoration:none}
 /* ---- rail ---- */
 #rail{position:fixed;left:0;top:0;bottom:0;width:210px;background:var(--rail);
   border-right:1px solid var(--line);overflow-y:auto;z-index:20}
-#brand{display:flex;align-items:center;gap:9px;padding:16px 18px;
+/* No gap: the brand is one word split into two nodes so that "arr" can
+   carry the accent colour, and a flex gap renders it as "ROM arr". */
+#brand{display:flex;align-items:center;gap:0;padding:16px 18px;
   font-size:19px;font-weight:700;letter-spacing:-.02em;border-bottom:1px solid var(--line)}
 #brand span{color:var(--accent)}
 .navgroup{padding:10px 0 4px}

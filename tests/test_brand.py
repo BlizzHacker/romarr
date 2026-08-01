@@ -114,3 +114,20 @@ def test_the_technical_identifiers_are_deliberately_left_lowercase():
     assert '"ROMARR_PORT"' in entry
     assert 'DEFAULT_CATEGORY = "romarr"' in app
     assert VERSION
+
+
+def test_the_brand_is_not_split_apart_by_a_flex_gap():
+    """The one defect the text assertions above structurally cannot see.
+
+    #brand is a flexbox holding two text nodes -- "ROM" and a coloured span
+    "arr" -- so a gap between flex children renders the word as "ROM arr". The
+    rendered *text* is still "ROMarr", which is why every test above passed
+    while a screenshot of the running app showed the brand with a space in it.
+    """
+    import re as _re
+    css = _re.search(r"#brand\{([^}]*)\}", page())
+    assert css, "the brand rule is gone"
+    gap = _re.search(r"gap:\s*([^;]+)", css.group(1))
+    assert gap, "#brand should state its gap explicitly, so this cannot regress"
+    assert gap.group(1).strip() in ("0", "0px"), \
+        f"a flex gap of {gap.group(1)!r} splits the brand into two words"
