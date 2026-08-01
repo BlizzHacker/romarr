@@ -25,6 +25,31 @@ os.environ.setdefault("ROM_HUB_ALLOW_UNSANDBOXED", "1")
 os.environ.setdefault("ROM_HUB_HOME", str(HOME))
 
 
+def _backend_env() -> dict:
+    """Hand ROMarr's own library credentials to the Hub.
+
+    ROMarr already knows which library it files into and how to authenticate to
+    it; the Hub needs the same thing to run `import` and `enrich`. Left to
+    itself the Hub reads its own variables and finds nothing, so a plugin
+    installed from the Hub tab could be listed but never used. The names differ
+    by one word -- ROMarr reads ROMM_USERNAME, the Hub reads ROMM_USER -- so the
+    mapping is explicit rather than assumed.
+    """
+    env = {}
+    url = os.environ.get("LIBRARY_URL") or os.environ.get("ROMM_URL", "")
+    user = os.environ.get("LIBRARY_USERNAME") or os.environ.get("ROMM_USERNAME", "")
+    pw = os.environ.get("LIBRARY_PASSWORD") or os.environ.get("ROMM_PASSWORD", "")
+    kind = (os.environ.get("LIBRARY_KIND") or "romm").strip().lower()
+    if url:
+        env["ROMM_URL"] = url
+        env["ROM_HUB_BACKEND"] = kind
+    if user:
+        env["ROMM_USER"] = user
+    if pw:
+        env["ROMM_PASSWORD"] = pw
+    return env
+
+
 def _import():
     """Import the Hub lazily so ROMarr still starts if it isn't installed."""
     from rom_hub import catalog_sources, registry  # noqa: WPS433
@@ -125,6 +150,7 @@ def _run_cli(*args, timeout=180):
         cmd = [sys.executable, "-c",
                "import sys; from rom_hub.cli import main; sys.exit(main())", *args]
     env = dict(os.environ, ROM_HUB_HOME=str(HOME), ROM_HUB_ALLOW_UNSANDBOXED="1")
+    env.update(_backend_env())
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
         ok = p.returncode == 0
@@ -137,12 +163,12 @@ def _run_cli(*args, timeout=180):
 
 
 def install(slug: str) -> dict:
-    # A catalog plugin is third-party, so the CLI asks to confirm; --yes answers
-    # it non-interactively (we already show the trust warning in the UI).
-    r = _run_cli("plugin", "install", slug, "--yes")
-    if not r["ok"] and "unrecognized arguments" in (r.get("err") or ""):
-        r = _run_cli("plugin", "install", slug)   # older CLI without --yes
-    return r
+    """Install one catalog plugin.
+
+    `plugin install` is non-interactive and takes no confirmation flag; the
+    trust warning a human needs is shown in the UI before the button is pressed.
+    """
+    return _run_cli("plugin", "install", slug)
 
 
 def _set_enabled(slug: str, on: bool) -> dict:
@@ -167,4 +193,9 @@ def disable(slug: str) -> dict:
 
 
 def uninstall(slug: str) -> dict:
-    return _run_cli("plugin", "uninstall", slug, "--yes")
+    return _run_cli("plugin", "uninstall", slug)
+
+
+# Applied at import so in-process Hub calls see the same backend the CLI does.
+for _k, _v in _backend_env().items():
+    os.environ.setdefault(_k, _v)
