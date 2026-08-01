@@ -135,7 +135,8 @@ input:focus,select:focus{border-color:var(--accent)}
 
 # The nav, in *arr order. `count` names a stat the badge reads.
 NAV = [
-    ("Library",  [("library", "Games", "games"), ("add", "Add New", None)]),
+    ("Library",  [("library", "Games", "games"), ("add", "Add New", None),
+                  ("search", "Interactive Search", None)]),
     ("Wanted",   [("missing", "Missing", "missing")]),
     ("Activity", [("queue", "Queue", "queued"), ("history", "History", None)]),
     ("Settings", [("media", "Media Management", None), ("profiles", "Profiles", None),
@@ -178,7 +179,8 @@ function go(page){
   location.hash=page;
   document.querySelectorAll('.nav').forEach(n=>
     n.classList.toggle('on', n.dataset.page===page));
-  const titles={library:'Games',add:'Add New Game',missing:'Wanted — Missing',
+  const titles={library:'Games',add:'Add New Game',search:'Interactive Search',
+    missing:'Wanted — Missing',
     queue:'Queue',history:'History',media:'Media Management',profiles:'Profiles',
     indexers:'Indexers',clients:'Download Clients',libraries:'Libraries',
     general:'General',
@@ -250,6 +252,79 @@ RENDER.add=async()=>{
          <p class="help">${esc(r.error||'no usable release')}</p></div>`;
     refreshCounts();
   };
+};
+
+RENDER.search=async()=>{
+  $('#page').innerHTML=`<div class="card">
+    <h3>Interactive search</h3>
+    <p class="help">Every release your indexers returned, scored, with the
+      reasoning shown &mdash; and a Grab button, so you can overrule the ranking
+      when you disagree with it. This is the page to reach for when a request
+      took the wrong release: the reason it outranked the one you wanted is
+      written next to it.</p>
+    <div class="row">
+      <div class="field" style="flex:1;margin:0"><label>Game</label>
+        <input type="text" id="s-name" placeholder="Phantasy Star IV"></div>
+      <div class="field" style="width:230px;margin:0"><label>Platform</label>
+        <select id="s-plat"><option value="">Any platform</option>${PLATFORMS.map(p=>
+          `<option value="${esc(p.slug)}">${esc(p.name)}</option>`).join('')}</select></div>
+      <button class="btn" id="s-go" style="margin-top:20px">Search</button>
+    </div>
+    <p class="help" style="margin-top:10px">Without a platform there is no
+      platform evidence to score on, so the ranking means less. Pick one when
+      you can.</p>
+    <div id="s-out" style="margin-top:16px"></div></div>`;
+
+  const mb=n=>n>=1048576?(n/1048576).toFixed(1)+' MB'
+    :n>0?(n/1024).toFixed(0)+' KB':'—';
+
+  const run=async()=>{
+    const game=$('#s-name').value.trim(), platform=$('#s-plat').value;
+    if(!game){toast('Enter a game name');return;}
+    $('#s-out').innerHTML='<div class="empty">Searching every indexer…</div>';
+    const d=await j(`/api/v1/release?game=${encodeURIComponent(game)}`
+      +`&platform=${encodeURIComponent(platform)}`);
+    if(d.error){
+      $('#s-out').innerHTML=`<p class="help" style="color:var(--warn)">${esc(d.error)}</p>`;
+      return;
+    }
+    if(!d.items.length){
+      $('#s-out').innerHTML='<div class="empty">Nothing found. A search where '
+        +'every indexer fails looks exactly like one that found nothing &mdash; '
+        +'check Indexers if this is unexpected.</div>';
+      return;
+    }
+    $('#s-out').innerHTML=`
+      <p class="help"><b>${d.found}</b> releases, <b>${d.accepted}</b> of them
+        acceptable. Rejected rows are shown too, because why a release was
+        refused is usually the answer you came for.</p>
+      <table><thead><tr><th>Score</th><th>Release</th><th>Size</th>
+        <th>Seeders</th><th>Indexer</th><th>Why</th><th></th></tr></thead><tbody>
+      ${d.items.map((r,i)=>`<tr style="${r.accepted?'':'opacity:.62'}">
+        <td><span class="pill ${r.accepted?'imported':'failed'}">${r.score}</span></td>
+        <td>${esc(r.title)}${r.private?' <span class="pill">private</span>':''}
+          ${r.protocol==='usenet'?' <span class="pill">usenet</span>':''}</td>
+        <td style="white-space:nowrap">${mb(r.size)}</td>
+        <td>${r.seeders}</td>
+        <td style="color:var(--dim)">${esc(r.indexer||'—')}</td>
+        <td style="color:var(--dim);font-size:12px">${r.reasons.map(esc).join('<br>')}</td>
+        <td><div class="rowact">${r.grabbable
+          ? `<button data-grab="${esc(r.id)}">Grab</button>`
+          : '<span style="color:var(--dim);font-size:12px">no link</span>'}</div></td>
+        </tr>`).join('')}</tbody></table>`;
+
+    document.querySelectorAll('[data-grab]').forEach(b=>b.onclick=async()=>{
+      b.disabled=true; b.textContent='Grabbing…';
+      const r=await j('/api/v1/release/grab',{method:'POST',
+        headers:{'content-type':'application/json'},
+        body:JSON.stringify({id:b.dataset.grab})});
+      b.textContent=r.ok?'Grabbed':'Failed';
+      toast(r.ok?`Grabbed ${r.release}`:(r.error||'Could not grab that release'));
+      refreshCounts();
+    });
+  };
+  $('#s-go').onclick=run;
+  $('#s-name').onkeydown=e=>{ if(e.key==='Enter') run(); };
 };
 
 RENDER.missing=async()=>{

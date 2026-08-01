@@ -56,13 +56,13 @@ from .indexers import INDEXER_TYPES, build_indexer, redact_indexer
 from .indexers import Prowlarr, ProwlarrConfig
 from .library import import_rom, map_remote_path
 from .platforms import PLATFORMS, resolve
-from .selection import best_release, score
+from .selection import best_release, judge, score
 from .store import Event, Store
 from .ui import page as ui_page
 
 log = logging.getLogger(__name__)
 
-VERSION = "0.5.0"
+VERSION = "0.6.0"
 
 # What ROMarr labels its own downloads with, so its jobs are distinguishable
 # from everything else in a shared client -- the same reason Radarr and Sonarr
@@ -165,6 +165,10 @@ class ROMarr:
         # falls back to ROMM_URL, so no existing install has to be edited.
         self.library = Path(e.get("LIBRARY_PATH") or e.get("ROMM_LIBRARY", "/mnt/roms"))
         self.queue: list[QueueItem] = []
+        # Releases offered by a search, keyed by search then by release id, so
+        # the Search page can grab one without ever being handed a download URL
+        # carrying Prowlarr's API key.
+        self._candidates: dict[str, dict] = {}
         self._lock = threading.Lock()
         # Lets a configuration change wake the background refresh instead of
         # waiting out its interval. Created before reload_libraries, which sets
@@ -848,34 +852,136 @@ class ROMarr:
                                     release=pick.title, detail=item.detail))
             return {"ok": False, "error": item.detail}
 
+        return self.grab(pick, game, platform.slug)
+
+    def grab(self, pick, game: str, platform_slug: str, *, manual: bool = False) -> dict:
+        """Hand one release to a download client and record what happened.
+
+        Shared by the automatic path and the Search page, deliberately: a
+        release chosen by hand must be queued, recorded and fulfilled exactly
+        like one the scorer picked, or Activity and Wanted start disagreeing
+        with each other depending on how a game was requested.
+        """
         client = pick_client(pick.protocol, self.clients)
         if client is None:
-            item = QueueItem(game, platform.slug, pick.title, pick.seeders, "failed",
+            item = QueueItem(game, platform_slug, pick.title, pick.seeders, "failed",
                              f"no download client configured for {pick.protocol}")
             with self._lock:
                 self.queue.append(item)
-            self.store.want(game, platform.slug)
-            self.store.note_failure(game, platform.slug, item.detail)
-            self.store.record(Event(kind="failed", game=game, platform=platform.slug,
+            self.store.want(game, platform_slug)
+            self.store.note_failure(game, platform_slug, item.detail)
+            self.store.record(Event(kind="failed", game=game, platform=platform_slug,
                                     release=pick.title, detail=item.detail))
             return {"ok": False, "error": item.detail}
 
         ok = client.add(pick.download_url)
-        item = QueueItem(game, platform.slug, pick.title, pick.seeders,
+        item = QueueItem(game, platform_slug, pick.title, pick.seeders,
                          "grabbed" if ok else "failed",
                          "" if ok else f"{client.name} rejected the release")
         with self._lock:
             self.queue.append(item)
         if ok:
-            self.store.record(Event(kind="grabbed", game=game, platform=platform.slug,
+            self.store.record(Event(kind="grabbed", game=game, platform=platform_slug,
                                     release=pick.title, seeders=pick.seeders,
-                                    size=getattr(pick, "size", 0)))
+                                    size=getattr(pick, "size", 0),
+                                    indexer=getattr(pick, "indexer", ""),
+                                    detail="chosen by hand" if manual else ""))
         else:
-            self.store.want(game, platform.slug)
-            self.store.note_failure(game, platform.slug, item.detail)
-            self.store.record(Event(kind="failed", game=game, platform=platform.slug,
+            self.store.want(game, platform_slug)
+            self.store.note_failure(game, platform_slug, item.detail)
+            self.store.record(Event(kind="failed", game=game, platform=platform_slug,
                                     release=pick.title, detail=item.detail))
         return {"ok": ok, "release": pick.title, "seeders": pick.seeders}
+
+    # -- interactive search -------------------------------------------------
+    #
+    # The scorer is opinionated, and every opinion in it is one somebody may
+    # disagree with. Radarr and Sonarr both answer this the same way: show the
+    # candidates, show why each was ranked where it was, and let a human take
+    # one. Without it, a wrong pick is a bug report; with it, it is a click.
+
+    # How many searches to keep grabbable at once. Small on purpose: this is a
+    # handle for a button the user is looking at, not a cache.
+    CANDIDATE_SEARCHES = 8
+
+    def candidates(self, game: str, platform_name: str = "") -> dict:
+        """Every release found, scored, with the reasoning shown.
+
+        Download links are deliberately absent from the reply. Prowlarr's
+        downloadUrl carries its API key in the query string, so it must never
+        reach a browser -- the release is grabbed later by the id issued here,
+        and the URL is looked up server-side.
+        """
+        platform = resolve(platform_name) if platform_name else None
+        if platform_name and platform is None:
+            return {"error": f"unknown platform: {platform_name!r}",
+                    "game": game, "platform": None, "unknown_platform": platform_name,
+                    "items": []}
+
+        try:
+            releases = (self._search_releases(game, platform) if platform
+                        else self.prowlarr.search(game))
+        except Exception as err:
+            log.warning("interactive search failed for %r: %s", game, err)
+            return {"error": f"search failed: {type(err).__name__}",
+                    "game": game, "platform": platform.slug if platform else None,
+                    "items": []}
+
+        judged = [(judge(r, game, platform), r) for r in releases]
+        judged.sort(key=lambda pair: (-pair[0].points, pair[1].size))
+
+        key = f"{game}|{platform.slug if platform else ''}"
+        held = {}
+        items = []
+        for n, (verdict, r) in enumerate(judged):
+            rid = f"{abs(hash((key, r.title, r.size, r.indexer))):x}{n:02d}"
+            held[rid] = (r, game, platform.slug if platform else "")
+            items.append({
+                "id": rid,
+                "title": r.title,
+                "size": r.size,
+                "seeders": r.seeders,
+                "indexer": r.indexer,
+                "protocol": r.protocol,
+                "private": r.private,
+                "score": verdict.points,
+                "accepted": verdict.accepted,
+                "reasons": verdict.why(),
+                "grabbable": bool(r.download_url),
+            })
+
+        with self._lock:
+            self._candidates[key] = held
+            # Bounded, and oldest-first: Python dicts keep insertion order, so
+            # this drops the search the user is least likely to still be
+            # looking at.
+            while len(self._candidates) > self.CANDIDATE_SEARCHES:
+                self._candidates.pop(next(iter(self._candidates)))
+
+        return {
+            "game": game,
+            "platform": platform.slug if platform else None,
+            "found": len(items),
+            "accepted": sum(1 for i in items if i["accepted"]),
+            "items": items,
+        }
+
+    def grab_candidate(self, release_id: str) -> dict:
+        """Grab one release the user picked out of a search."""
+        found = None
+        with self._lock:
+            for held in self._candidates.values():
+                if release_id in held:
+                    found = held[release_id]
+                    break
+        if found is None:
+            # Searches expire, and a stale button is not an error worth a 500.
+            return {"ok": False, "error": "that search has expired -- run it again"}
+
+        release, game, platform_slug = found
+        if not release.download_url:
+            return {"ok": False, "error": "release offers no usable download link"}
+        return self.grab(release, game, platform_slug, manual=True)
 
     def download_clients(self) -> list[dict]:
         """Every client, what it speaks, and whether it answers.
@@ -1169,6 +1275,12 @@ def make_handler(service: ROMarr):
                 return self._json(200, [{"slug": p.slug, "name": p.name} for p in PLATFORMS])
             if route.path == "/api/queue":
                 return self._json(200, [asdict(i) for i in service.queue])
+            if route.path == "/api/v1/release":
+                game = (query.get("game") or [""])[0].strip()
+                if not game:
+                    return self._json(400, {"error": "game is required"})
+                return self._json(200, service.candidates(
+                    game, (query.get("platform") or [""])[0]))
             if route.path == "/api/search":
                 game = (query.get("game") or [""])[0]
                 if not game:
@@ -1190,6 +1302,11 @@ def make_handler(service: ROMarr):
                 if not game or not platform:
                     return self._json(400, {"error": "game and platform are required"})
                 return self._json(200, service.request(game, platform))
+            if route.path == "/api/v1/release/grab":
+                release_id = (body.get("id") or "").strip()
+                if not release_id:
+                    return self._json(400, {"error": "id is required"})
+                return self._json(200, service.grab_candidate(release_id))
             if route.path == "/api/import":
                 return self._json(200, {"imported": service.import_finished()})
             if route.path in ("/api/v1/downloadclient", "/api/v1/indexer"):

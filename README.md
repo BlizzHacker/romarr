@@ -82,6 +82,10 @@ downloader does not:
   and Sonarr's remote path mappings do — without it the import fails with
   "download path does not exist" while the file sits right there
 - Keeps **History, Wanted and settings** across a restart
+- **Interactive search**, the way Radarr and Sonarr do it: every release your
+  indexers returned, scored, *with the reasoning shown next to it*, and a Grab
+  button so you can overrule the ranking. Every scoring rule here is an opinion
+  somebody may disagree with; this is where you disagree with it
 - A web UI shaped like the other *arrs: Library, Wanted, Activity, Settings,
   System
 
@@ -211,6 +215,33 @@ other's downloads.
 A protocol with no client configured cannot be grabbed at all — results are
 found, ranked, and then refused. The Download Clients page names any protocol
 in that state rather than leaving you to work it out.
+
+### Interactive search
+
+Library → **Interactive Search**. Type a game, pick a platform, and every
+release comes back scored, with the reasons written beside it:
+
+    +40  20 seeders
+    +60  carries a Super Nintendo ROM extension
+    +25  region (USA)
+    -120 looks like a hack, beta or repack ('hack')
+
+Rejected releases are listed too, greyed out, because *why* something was
+refused is usually the answer you came for:
+
+    a compilation, not a single cartridge (classics)
+    names another platform (wii)
+    too big for a Sega Genesis / Mega Drive cartridge (452MB, ceiling 32MB)
+
+Then take whichever one you actually wanted. A release grabbed by hand goes
+through the same queue, history and Wanted handling as one the scorer picked --
+Activity does not care how a game was requested.
+
+The same information is on the API: `GET /api/v1/release?game=…&platform=…`
+returns the scored list, and `POST /api/v1/release/grab` takes an id from it.
+Download links are deliberately absent from both: Prowlarr's `downloadUrl`
+carries its API key in the query string, so the release is grabbed by the id
+issued with the search and the URL is looked up server-side.
 
 ### More than one library
 

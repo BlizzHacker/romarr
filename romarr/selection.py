@@ -187,15 +187,55 @@ def title_matches(release_title: str, wanted: str) -> bool:
     return all(w in haystack for w in words)
 
 
-def score(release: Release, wanted: str, platform: Platform | None = None) -> int:
-    """Rank a release. Higher is better; negative means "do not take this"."""
+@dataclass(frozen=True)
+class Judgement:
+    """Why a release scored what it did.
+
+    The scorer used to return a bare integer. That is enough to rank releases
+    and useless for the only question anybody actually asks: why did it take
+    *that* one. Every rejection in this file is a decision somebody may
+    disagree with, and disagreeing requires seeing it.
+
+    One implementation produces both views. A separate "explain" function that
+    mirrored the scoring would drift from it, and a scorer that disagrees with
+    its own explanation is worse than no explanation at all.
+    """
+
+    points: int
+    reasons: tuple[tuple[int, str], ...] = ()
+    # Set when a single rule disqualified the release outright, in which case
+    # points is that rule's value and anything accumulated before it is void.
+    verdict: str = ""
+
+    @property
+    def accepted(self) -> bool:
+        return self.points > 0
+
+    def why(self) -> list[str]:
+        """Readable lines, worst first, for a UI or a log."""
+        if self.verdict:
+            return [self.verdict]
+        return [f"{d:+d} {text}" for d, text in
+                sorted(self.reasons, key=lambda pair: pair[0])]
+
+
+def judge(release: Release, wanted: str,
+          platform: Platform | None = None) -> Judgement:
+    """Rank a release and record why. Higher is better; negative means no."""
     if not is_game_release(release):
-        return -1000
+        return Judgement(-1000, verdict="not a game release (wrong category)")
     if not title_matches(release.title, wanted):
-        return -500
+        return Judgement(-500, verdict=f"title does not match {wanted!r}")
 
     points = 0
+    reasons: list[tuple[int, str]] = []
     lowered = release.title.lower()
+
+    def add(delta: int, text: str) -> None:
+        nonlocal points
+        points += delta
+        if delta:
+            reasons.append((delta, text))
 
     # Availability. Usenet has no seeders, so it is not penalised for having none.
     #
@@ -216,26 +256,28 @@ def score(release: Release, wanted: str, platform: Platform | None = None) -> in
     if release.protocol == "torrent":
         if release.seeders <= 0:
             if not release.private:
-                return -400
-            points -= 20
+                return Judgement(-400, verdict="no seeders on a public tracker")
+            add(-20, "no seeders (private tracker, often temporary)")
         else:
-            points += min(release.seeders, 20) * 2
+            add(min(release.seeders, 20) * 2, f"{release.seeders} seeders")
 
     region = 0
+    label = ""
     for markers, value in _REGION_SCORE:
         if any(m in lowered for m in markers):
-            region = value
+            region, label = value, markers[0]
             break
     for code, value in _REGION_CODES.items():
         if value > region and _mentions(lowered, code):
-            region = value
-    points += region
+            region, label = value, code
+    add(region, f"region {label}" if label else "region")
 
     if _GOOD_DUMP_MARKER in lowered:
-        points += _GOOD_DUMP_BONUS
+        add(_GOOD_DUMP_BONUS, "verified good dump [!]")
 
-    if any(marker in lowered for marker in _JUNK_MARKERS):
-        points -= 120
+    hit = next((m for m in _JUNK_MARKERS if m in lowered), "")
+    if hit:
+        add(-120, f"looks like a hack, beta or repack ({hit!r})")
 
     # What language the release is in, and whether it is the game as published.
     #
@@ -249,22 +291,23 @@ def score(release: Release, wanted: str, platform: Platform | None = None) -> in
         or _MULTI_LANGUAGE.search(lowered) is not None
     )
     if translated:
-        points -= _TRANSLATION_PENALTY
+        add(-_TRANSLATION_PENALTY, "not English, or a fan translation")
 
     if _CREDITED_TO_A_GROUP.search(lowered):
-        points -= _CREDIT_PENALTY
+        add(-_CREDIT_PENALTY, "credited to a group, which usually means a hack")
 
     # Reject a release that names a system other than the one requested. Its own
     # platform's aliases are removed from the check first, so asking for a Wii
     # game does not disqualify a title that says "Wii".
     if platform is not None:
         own = {platform.slug.lower(), platform.name.lower(), *platform.aliases}
-        own_words = {w for label in own for w in label.split()}
+        own_words = {w for entry in own for w in entry.split()}
         for marker in FOREIGN_PLATFORM_MARKERS:
             if marker in own or marker in own_words:
                 continue
             if _mentions(lowered, marker):
-                return -300
+                return Judgement(-300,
+                                 verdict=f"names another platform ({marker})")
 
     # A compilation is not a cartridge dump, and cannot be imported as one.
     #
@@ -283,7 +326,9 @@ def score(release: Release, wanted: str, platform: Platform | None = None) -> in
     if platform is not None:
         for marker in COMPILATION_MARKERS:
             if _mentions(lowered, marker):
-                return -250
+                return Judgement(
+                    -250,
+                    verdict=f"a compilation, not a single cartridge ({marker})")
 
     # Positive evidence that this really is the requested system. It matters
     # more now that the search casts a wider net: a bare title search returns
@@ -292,10 +337,10 @@ def score(release: Release, wanted: str, platform: Platform | None = None) -> in
     # ".smc" says Super Nintendo far more reliably than any title text.
     if platform is not None:
         if _has_extension(lowered, platform.extensions):
-            points += 60
+            add(60, f"carries a {platform.name} ROM extension")
         elif _mentions(lowered, platform.slug.lower()) or any(
                 _mentions(lowered, alias) for alias in platform.aliases):
-            points += 30
+            add(30, f"names {platform.name}")
 
     # A cartridge ROM is small. An oversized "release" for a cartridge platform
     # is a romset, a PC port, or a disc image -- none of which this pipeline can
@@ -308,11 +353,25 @@ def score(release: Release, wanted: str, platform: Platform | None = None) -> in
     # was picked for a SNES request.
     if platform is not None:
         if release.size > platform.max_size:
-            points -= 200
+            add(-200,
+                f"too big for a {platform.name} cartridge "
+                f"({release.size // 1048576}MB, ceiling "
+                f"{platform.max_size // 1048576}MB)")
         elif release.size < 4 * 1024:
-            points -= 200
+            add(-200, "too small to be a ROM")
 
-    return points
+    return Judgement(points, tuple(reasons))
+
+
+def score(release: Release, wanted: str, platform: Platform | None = None) -> int:
+    """Rank a release. Higher is better; negative means "do not take this"."""
+    return judge(release, wanted, platform).points
+
+
+def explain(release: Release, wanted: str,
+            platform: Platform | None = None) -> list[str]:
+    """Why this release scored what it did, worst reason first."""
+    return judge(release, wanted, platform).why()
 
 
 def best_release(releases: list[Release], wanted: str,
