@@ -1,8 +1,5 @@
 # ROMarr
 
-A project of the [Move Weight Foundation](https://foundation.moveweight.com), an
-Oklahoma non-profit corporation with 501(c)(3) status pending.
-
 The *arr for games. Request a title, ROMarr finds it, grabs it, and files it
 into your game library.
 
