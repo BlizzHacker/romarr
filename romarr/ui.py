@@ -76,6 +76,7 @@ th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);
   vertical-align:top;font-size:13px}
 th{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.05em}
 tr:hover td{background:#2b2b2b}
+.mini{padding:3px 11px;font-size:12px;border:1px solid var(--line);background:var(--panel);color:var(--fg);border-radius:6px;cursor:pointer;margin-left:6px}.mini.accent{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}.okt{color:var(--ok);font-size:12px}
 .pill{font-size:11px;padding:2px 9px;border-radius:10px;border:1px solid var(--line);
   display:inline-block;white-space:nowrap}
 .pill.grabbed{color:var(--info);border-color:var(--info)}
@@ -141,6 +142,7 @@ NAV = [
                   ("search", "Interactive Search", None)]),
     ("Wanted",   [("missing", "Missing", "missing")]),
     ("Activity", [("queue", "Queue", "queued"), ("history", "History", None)]),
+    ("Hub",      [("hub", "Plugins", None)]),
     ("Settings", [("media", "Media Management", None), ("profiles", "Profiles", None),
                   ("indexers", "Indexers", None), ("clients", "Download Clients", None),
                   ("libraries", "Libraries", None), ("general", "General", None)]),
@@ -186,7 +188,8 @@ function go(page){
     queue:'Queue',history:'History',media:'Media Management',profiles:'Profiles',
     indexers:'Indexers',clients:'Download Clients',libraries:'Libraries',
     general:'General',
-    status:'System Status',tasks:'Tasks',logs:'Logs'};
+    status:'System Status',tasks:'Tasks',logs:'Logs',
+    hub:'ROM Hub — Plugins'};
   $('#top h1').textContent=titles[page]||'ROMarr';
   $('#search').classList.toggle('hide', !['library','add'].includes(page));
   (RENDER[page]||RENDER.library)();
@@ -195,6 +198,55 @@ addEventListener('hashchange',()=>go(location.hash.slice(1)||'library'));
 
 /* ---------------- pages ---------------- */
 const RENDER={};
+RENDER.hub=async()=>{
+  const p=$('#page'); p.innerHTML='<div class="empty">Reading the plugin catalogue…</div>';
+  const d=await j('/api/v1/hub/plugins').catch(()=>({items:[],error:'ROM Hub unreachable'}));
+  if(d.error && !(d.items||[]).length){
+    p.innerHTML='<div class="card"><h3>ROM Hub</h3><p class="help">'+esc(d.error)+'</p>'
+      +'<p class="help">The Hub is the plugin layer of the Cartridge ecosystem — the sources '
+      +'ROMarr can acquire from. Install it beside ROMarr to light this up.</p></div>';
+    return;
+  }
+  const items=d.items||[];
+  const cap=c=>'<span class="pill">'+esc(c)+'</span>';
+  const rows=items.map(pl=>{
+    const status = pl.installed
+      ? '<span class="okt">'+(pl.enabled?'● enabled':'○ disabled')+'</span>'
+        +'<button class="mini" data-act="'+(pl.enabled?'disable':'enable')+'" data-slug="'+esc(pl.slug)+'">'
+        +(pl.enabled?'Disable':'Enable')+'</button>'
+      : '<button class="mini accent" data-act="install" data-slug="'+esc(pl.slug)+'">'
+        +'Install'+(pl.key_required?' (needs key)':'')+'</button>';
+    return '<tr><td><b>'+esc(pl.name)+'</b><div class="help" style="margin:2px 0 0">'
+      +esc(pl.description||'')+'</div></td>'
+      +'<td>'+((pl.capabilities||[]).map(cap).join(' ')||'—')+'</td>'
+      +'<td style="white-space:nowrap">'+(esc((pl.platforms||[]).slice(0,3).join(', '))||'—')+'</td>'
+      +'<td style="color:var(--dim);font-size:12px">'+esc((pl.network||[]).slice(0,2).join(', '))+'</td>'
+      +'<td style="white-space:nowrap">'+status+'</td></tr>';
+  }).join('');
+  p.innerHTML='<div class="card"><h3>Plugins <span class="help">'
+    +(d.installed_count||0)+' of '+(d.total||items.length)+' installed</span></h3>'
+    +'<p class="help">Sources ROMarr can search and import from — part of the <b>Cartridge</b> '
+    +'ecosystem. Plugins are sandboxed and third-party; install only ones you trust.</p>'
+    +'<table><thead><tr><th>Plugin</th><th>Capabilities</th><th>Platforms</th><th>Network</th>'
+    +'<th>Status</th></tr></thead><tbody>'
+    +(rows||'<tr><td colspan=5 class="empty">No plugins in the catalogue.</td></tr>')
+    +'</tbody></table><p id="hub-msg" class="help"></p></div>';
+  document.querySelectorAll('[data-act]').forEach(b=>b.onclick=async()=>{
+    const slug=b.dataset.slug, action=b.dataset.act;
+    b.disabled=true; b.textContent='…';
+    const msg=$('#hub-msg');
+    try{
+      const r=await fetch('/api/v1/hub/plugin',{method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({slug:slug,action:action})}).then(x=>x.json());
+      if(msg) msg.innerHTML = r.ok
+        ? '<span class="okt">'+esc(action)+' '+esc(slug)+' ✓</span>'
+        : '<span style="color:var(--bad)">'+esc(action)+' '+esc(slug)+' failed: '
+          +esc((r.err||r.error||'').slice(0,200))+'</span>';
+    }catch(e){ if(msg) msg.textContent='request failed: '+e; }
+    go('hub');
+  });
+};
 
 RENDER.library=async()=>{
   const p=$('#page'); p.innerHTML='<div class="empty">Loading library…</div>';
