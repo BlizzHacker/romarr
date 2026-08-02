@@ -20,7 +20,13 @@ FROM python:3.13-alpine
 
 # su-exec drops privileges in the entrypoint; it takes numeric ids, so no
 # shadow package and no user has to exist in the image. tzdata makes TZ work.
-RUN apk add --no-cache su-exec tzdata
+#
+# libarchive-tools provides bsdtar, which is what reads .7z and .rar. It is
+# not optional cargo: the disc platforms this image now supports ship almost
+# entirely as .7z, so without it every PlayStation, PS2 and Wii import fails
+# on a format it cannot open. Alpine's busybox `tar` is not a substitute and
+# is deliberately not accepted -- see romarr/library.py::_bsdtar.
+RUN apk add --no-cache su-exec tzdata libarchive-tools
 
 COPY --from=builder /install /usr/local
 
