@@ -4,6 +4,7 @@ Nothing here is a fixture: the .7z is a real PlayStation release copied out of
 /mnt/usb1/roms/psx, and the .gdi is the real sheet from the live Dreamcast
 entry `dc/Pop'n Music (JP, Rev 1.2)/`.
 """
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -97,13 +98,42 @@ for title, size, want, platform, expected in cases:
 
 print()
 print("=" * 74)
-print("4. Play routes, against the REAL stream server on 192.168.0.94:8090")
+print("4. Every platform has a route -- against the REAL stream server")
 print("=" * 74)
-stream = StreamServer("http://192.168.0.94:8090")
-for slug in ("psx", "psp", "saturn", "segacd", "3do", "ps2", "ngc", "wii", "dc"):
-    got = routes_for(by_slug(slug), stream=stream)
-    print(f"  {slug:10} {','.join(got.kinds)}")
-    check(f"{slug} has a route", bool(got.kinds))
+from romarr.platforms import PLATFORMS
+
+stream = StreamServer(os.environ.get("STREAM_SERVER_URL",
+                                    "http://192.168.0.94:8090"))
+by_kind: dict[str, int] = {}
+no_player = []
+for platform in PLATFORMS:
+    got = routes_for(platform, stream=stream)
+    check(f"{platform.slug} has a route", bool(got.kinds))
+    for kind in got.kinds:
+        by_kind[kind] = by_kind.get(kind, 0) + 1
+    if not got.plays_without_downloading:
+        no_player.append(got.summary())
+
+print()
+print(f"  {len(PLATFORMS)} platforms: " +
+      ", ".join(f"{k} {v}" for k, v in sorted(by_kind.items())))
+print()
+print("  No player (each must state a specific reason, not a generic one):")
+for line in no_player:
+    print("   -", line)
+    check("the reason is specific",
+          "no browser core for this platform" not in line)
+
+# The exclusion this whole change exists to remove: every disc platform must
+# be requestable, and all but Jaguar CD must be playable somewhere.
+disc = [p for p in PLATFORMS if p.is_disc]
+playable_disc = [p for p in disc
+                 if routes_for(p, stream=stream).plays_without_downloading]
+print()
+check(f"disc platforms present ({len(disc)})", len(disc) >= 15)
+check(f"disc platforms playable ({len(playable_disc)}/{len(disc)})",
+      len(playable_disc) >= len(disc) - 1,
+      "only Atari Jaguar CD may lack a player -- no emulator exists for it")
 
 print()
 print("=" * 74)
