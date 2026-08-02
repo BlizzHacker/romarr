@@ -57,6 +57,7 @@ from .indexers import INDEXER_TYPES, build_indexer, redact_indexer
 from .indexers import Prowlarr, ProwlarrConfig
 from .library import import_rom, map_remote_path
 from .platforms import PLATFORMS, resolve
+from .playability import DOWNLOAD, StreamServer, routes_for
 from .selection import best_release, judge, score
 from .store import Event, Store
 from .ui import page as ui_page
@@ -198,6 +199,17 @@ class ROMarr:
         self.store.settings["_prowlarr_url"] = e.get("PROWLARR_URL", "")
         self.store.settings["_qbit_url"] = e.get("QBITTORRENT_URL", "")
         self.store.settings["_romm_url"] = e.get("ROMM_URL", "")
+
+        # The headless RetroArch stream server, if the operator runs one. It is
+        # what plays the machines EmulatorJS has no core for -- PS2, GameCube,
+        # Wii, Dreamcast, 3DS -- so whether one is configured changes the
+        # honest answer to "will this play", and nothing else here.
+        #
+        # Optional by design: ROMarr must work identically without it, minus
+        # the routes only it can offer.
+        stream_url = e.get("STREAM_SERVER_URL", "")
+        self.store.settings["_stream_url"] = stream_url
+        self.stream = StreamServer(stream_url) if stream_url else None
 
         self._seed_from_env(e)
         self.reload_clients()
@@ -1044,9 +1056,49 @@ class ROMarr:
             "library_path_hint": self.path_hint(self.library),
             "libraries": self.libraries_status(),
             "platforms": len(PLATFORMS),
+            "play_routes": self.play_route_counts(),
+            "stream_url": self.store.settings.get("_stream_url", ""),
             "events": len(self.store.events),
             "uptime": f"{up // 3600}h {(up % 3600) // 60}m",
         }
+
+    def play_route_counts(self) -> dict:
+        """How many supported platforms are playable, and by which route.
+
+        On the status page because the answer changes with the operator's own
+        setup -- configuring a stream server moves five platforms out of
+        `download_only` -- and because an install where that number is
+        surprising is one where something is misconfigured.
+        """
+        counts: dict[str, int] = {}
+        download_only = 0
+        for platform in PLATFORMS:
+            routes = routes_for(platform, stream=self.stream)
+            if not routes.plays_without_downloading:
+                download_only += 1
+            for kind in routes.kinds:
+                if kind != DOWNLOAD:
+                    counts[kind] = counts.get(kind, 0) + 1
+        counts["download_only"] = download_only
+        counts["total"] = len(PLATFORMS)
+        return counts
+
+    def platform_directory(self) -> list[dict]:
+        """Every platform with how it plays, for the API and the UI."""
+        out = []
+        for platform in PLATFORMS:
+            routes = routes_for(platform, stream=self.stream)
+            out.append({
+                "slug": platform.slug,
+                "name": platform.name,
+                "media": platform.media,
+                "extensions": list(platform.extensions),
+                "max_size_mb": platform.max_size // (1024 * 1024),
+                "play_routes": list(routes.kinds),
+                "plays": routes.plays_without_downloading,
+                "how": routes.summary(),
+            })
+        return out
 
     # How often the count and library are refreshed in the background.
     COUNT_TTL = 300
@@ -1273,7 +1325,7 @@ def make_handler(service: ROMarr):
             if route.path == "/api/health":
                 return self._json(200, service.health())
             if route.path == "/api/platforms":
-                return self._json(200, [{"slug": p.slug, "name": p.name} for p in PLATFORMS])
+                return self._json(200, service.platform_directory())
             if route.path == "/api/queue":
                 return self._json(200, [asdict(i) for i in service.queue])
             if route.path == "/api/v1/release":
