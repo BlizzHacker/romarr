@@ -185,7 +185,19 @@ def test_a_path_that_does_exist_warns_about_nothing(tmp_path, caplog):
     real.write_bytes(b"x")
     with caplog.at_level(logging.WARNING):
         assert map_remote_path(str(real), []) == real
-    assert caplog.text == ""
+    # Asserting caplog.text == "" asserts that *nothing in the process* logged,
+    # which is a much larger claim than this test means to make. An App built by
+    # an earlier test keeps a library-refresh thread alive, and when it loses a
+    # race it lands "library refresh failed for Gaseous" in this window and
+    # fails a test about path mapping. That is exactly what happened on the
+    # v0.7.0 tag build while the identical commit passed on main.
+    #
+    # What is actually being claimed is narrower: map_remote_path said nothing
+    # about this path. Assert that, and unrelated threads cannot break it.
+    assert not [
+        r for r in caplog.records
+        if str(real) in r.getMessage() or "remote path mapping" in r.getMessage()
+    ]
 
 
 # --- api key hygiene ------------------------------------------------------
