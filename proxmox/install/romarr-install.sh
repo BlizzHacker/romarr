@@ -45,7 +45,7 @@ ROMM_PASSWORD=
 # import succeeds and the game never appears.
 ROMM_LIBRARY=/mnt/roms
 ROMARR_DATA=/opt/romarr/romarr.json
-ROMARR_PORT=7878
+ROMARR_PORT=6868
 LOG_LEVEL=INFO
 EOF
 chmod 600 /opt/romarr/.env

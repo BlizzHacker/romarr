@@ -56,7 +56,7 @@ If you run Radarr for films and Sonarr for TV, this is the missing one.
 ### Docker
 
 ```bash
-docker run -d --name romarr -p 7878:7878 \
+docker run -d --name romarr -p 6868:6868 \
   -e PUID=1000 -e PGID=1000 \
   -e PROWLARR_URL=http://prowlarr:9696 -e PROWLARR_API_KEY=... \
   -e LIBRARY_URL=http://romm:8080 -e LIBRARY_USERNAME=romarr -e LIBRARY_PASSWORD=... \
@@ -67,7 +67,17 @@ docker run -d --name romarr -p 7878:7878 \
   ghcr.io/blizzhacker/romarr:latest
 ```
 
-Open `http://localhost:7878`.
+Open `http://localhost:6868`.
+
+> **Upgrading from 0.6.x?** The default port changed from **7878 to 6868**.
+> 7878 is Radarr's port, and running both is the normal case rather than the
+> exception, so ROMarr was colliding with it on a default install. 6868 sits in
+> the gap the \*arr family left between Bazarr (6767) and Whisparr (6969).
+>
+> If you pinned the port yourself — `ROMARR_PORT`, or a `7878:7878` mapping —
+> nothing changes until you remove the pin. If you relied on the default,
+> update your port mapping to `6868:6868`, or set `ROMARR_PORT=7878` to keep
+> the old one.
 
 Images are published for `linux/amd64`, `linux/arm64` and `linux/arm/v7`.
 

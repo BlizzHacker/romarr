@@ -10,7 +10,7 @@ services:
     container_name: romarr
     restart: unless-stopped
     ports:
-      - "7878:7878"
+      - "6868:6868"
     environment:
       # Who owns the ROMs ROMarr writes. Use the same ids as your library app,
       # or `id -u` / `id -g` for your media user.
