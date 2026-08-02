@@ -174,11 +174,15 @@ def test_every_verb_is_guarded_so_a_crash_is_a_500_not_a_dead_socket():
 
 def test_an_unresolvable_platform_is_reported_rather_than_silently_ignored(tmp_path):
     """A name that resolves to nothing is searched with no platform evidence,
-    which quietly changes what the scores mean. `?platform=psx` should say the
-    name was not recognised -- only cartridge systems are modelled."""
+    which quietly changes what the scores mean, so it has to be said out loud.
+
+    This used to use `psx` as its example of an unmodelled platform. It is
+    modelled now -- that is the point of the disc work -- so the example moved
+    to a console generation nothing in this project can acquire or play.
+    """
     svc = ROMarr({"ROMARR_DATA": str(tmp_path / "s.json")})
-    out = svc.search("Final Fantasy VII", "psx")
-    assert out["unknown_platform"] == "psx"
+    out = svc.search("Astro Bot", "playstation 5")
+    assert out["unknown_platform"] == "playstation 5"
     assert out["platform"] is None
 
     known = svc.search("Super Metroid", "snes")

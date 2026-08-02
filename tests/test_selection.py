@@ -448,12 +448,30 @@ def test_a_retranslation_is_penalised_like_a_translation():
             < score(clean, "chrono trigger", snes), word
 
 
-def test_every_platform_declares_a_ceiling_above_its_biggest_cartridge():
-    from romarr.platforms import PLATFORMS
+def test_every_platform_declares_a_ceiling_matched_to_its_medium():
+    """A ceiling has to be loose enough to admit the game and tight enough to
+    keep a PC repack out, and where that line sits depends on the medium.
+
+    This was one number for every platform, because every platform was a
+    cartridge. Splitting it by medium is what lets a 4GB PS2 image through
+    while a 452MB PC build of Final Fantasy III still cannot pass for a SNES
+    cartridge -- the failure the per-platform ceiling was introduced for.
+    """
+    from romarr.platforms import CARTRIDGE, COMPUTER, DISC, GB, PLATFORMS
+    limits = {
+        # Nothing cartridge-era needs a third of a gigabyte -- except the two
+        # late handhelds, whose cards genuinely are that big.
+        CARTRIDGE: 300 * 1024 * 1024,
+        DISC: 16 * GB,
+        COMPUTER: 4 * GB,
+    }
+    big_cards = {"nds", "3ds"}
     for p in PLATFORMS:
         assert p.max_size > 0, p.slug
-        # Nothing cartridge-era needs a third of a gigabyte.
-        assert p.max_size < 300 * 1024 * 1024, p.slug
+        if p.slug in big_cards:
+            assert p.max_size <= 8 * GB, p.slug
+            continue
+        assert p.max_size < limits[p.media], p.slug
 
 
 # --- repackaged games are not cartridge dumps -------------------------------

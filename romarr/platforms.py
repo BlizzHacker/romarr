@@ -13,7 +13,22 @@ readmes, box art, and sometimes several regional dumps in one archive.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
+
+
+#: What kind of medium a game shipped on. This is not decoration: it decides
+#: the magnitude of the size ceiling, the wording when a release is rejected
+#: for size, and -- the part that actually mattered -- whether one file is a
+#: complete game or the first of several.
+#:
+#: A cartridge dump is one file. A disc rip is a `.cue` naming `.bin` tracks,
+#: or a `.gdi` naming five of them, and importing the sheet alone produces a
+#: library entry that looks correct and boots nothing. `selection.pick_rom_set`
+#: exists because of this field.
+CARTRIDGE = "cartridge"
+DISC = "disc"
+COMPUTER = "computer"
 
 
 @dataclass(frozen=True)
@@ -26,9 +41,25 @@ class Platform:
     aliases: tuple[str, ...] = field(default=())
     # The largest plausible download for ONE game on this system. See MB below.
     max_size: int = 32 * 1024 * 1024
+    media: str = CARTRIDGE
+    # Words in FOREIGN_PLATFORM_MARKERS that are native here, and so must not
+    # disqualify a release.
+    #
+    # The marker list is shared, and a marker that names another system for
+    # fifteen platforms can name *this* one for the sixteenth. "wad" is the
+    # case that forced this: it is the marker that catches a Wii Virtual
+    # Console repackage of a Genesis game, and it is also the extension every
+    # legitimate WiiWare title ships as. Without an exemption, adding Wii as a
+    # platform would have made most of its catalogue unrequestable.
+    native_markers: tuple[str, ...] = field(default=())
+
+    @property
+    def is_disc(self) -> bool:
+        return self.media == DISC
 
 
 MB = 1024 * 1024
+GB = 1024 * MB
 
 # How big a release for each system can plausibly be.
 #
@@ -40,8 +71,8 @@ MB = 1024 * 1024
 # Each number is the biggest cartridge the system shipped, rounded up hard for
 # headroom, because a release is not always a bare ROM: it may be zipped, carry
 # box art and a readme, or hold several regional dumps. The headroom is what
-# makes this safe to tighten -- the job is to exclude disc images and PC ports,
-# not to second-guess how a dump was packaged.
+# makes this safe to tighten -- the job is to exclude PC ports and romsets, not
+# to second-guess how a dump was packaged.
 #
 #   system   biggest cartridge          ceiling here
 #   NES      1MB   (mapper-heavy carts)  8MB
@@ -49,6 +80,21 @@ MB = 1024 * 1024
 #   GBA      32MB  (full 256Mbit carts)  128MB
 #   N64      64MB  (Resident Evil 2)     256MB
 #   Genesis  8MB   (Pier Solar)          32MB
+#
+# Disc ceilings follow the same rule one medium up: the capacity of the disc,
+# rounded for a rip that may carry uncompressed audio tracks. They still do
+# real work -- a 12GB PS2 ceiling is what keeps a 60GB PC repack out of a PS2
+# request, which is the same job the 24MB SNES ceiling does against a 452MB PC
+# build.
+#
+#   system   disc capacity              ceiling here
+#   PSX      700MB (CD)                  2GB
+#   Saturn   700MB (CD)                  2GB
+#   Dreamcast 1.2GB (GD-ROM)             3GB
+#   GameCube 1.5GB (miniDVD)             4GB
+#   PSP      1.8GB (UMD)                 4GB
+#   PS2      8.5GB (dual-layer DVD)      12GB
+#   Wii      8.5GB (dual-layer DVD)      12GB
 PLATFORMS: tuple[Platform, ...] = (
     Platform("nes", "Nintendo Entertainment System", (".nes", ".fds", ".unf"),
              ("nintendo", "famicom", "nintendo entertainment system"),
@@ -80,6 +126,89 @@ PLATFORMS: tuple[Platform, ...] = (
     Platform("wonderswan", "WonderSwan", (".ws", ".wsc"), (), max_size=16 * MB),
     Platform("neo-geo-pocket", "Neo Geo Pocket", (".ngp", ".ngc"), (), max_size=8 * MB),
     Platform("virtualboy", "Virtual Boy", (".vb",), ("virtual boy",), max_size=8 * MB),
+
+    # -- large cartridges ---------------------------------------------------
+    #
+    # Excluded before for the same reason discs were, and just as wrongly: a
+    # DS cartridge is 512MB at the very most and EmulatorJS runs `melonds` for
+    # it out of the box.
+    Platform("nds", "Nintendo DS", (".nds", ".dsi", ".ids"),
+             ("nintendo ds", "ds"), max_size=512 * MB),
+    Platform("3ds", "Nintendo 3DS", (".3ds", ".cci", ".cxi", ".cia"),
+             ("nintendo 3ds", "3ds"), max_size=8 * GB),
+
+    # -- optical media ------------------------------------------------------
+    #
+    # Extension order is preference order, and for a disc that ordering is a
+    # correctness rule rather than a taste: a `.chd` or `.rvz` is ONE file that
+    # cannot be separated from its tracks, while a `.cue` is a text file that
+    # is worthless without the `.bin` beside it. Preferring the whole-disc
+    # image makes the fragile case the fallback rather than the default.
+    #
+    # `.cue` and `.bin` are always declared together. A platform that named
+    # the sheet without the tracks would import a pointer to nothing --
+    # `test_a_cue_never_appears_without_its_bin` fails if that is ever
+    # narrowed.
+    Platform("psx", "Sony PlayStation",
+             (".chd", ".pbp", ".cue", ".bin", ".img", ".ccd", ".iso", ".m3u"),
+             ("playstation", "sony playstation", "ps1", "psone", "psx"),
+             max_size=2 * GB, media=DISC),
+    Platform("ps2", "Sony PlayStation 2",
+             (".chd", ".iso", ".cso", ".bin", ".gz"),
+             ("playstation 2", "sony playstation 2", "ps2"),
+             max_size=12 * GB, media=DISC),
+    Platform("psp", "Sony PlayStation Portable",
+             (".cso", ".iso", ".chd", ".pbp"),
+             ("playstation portable", "psp"),
+             max_size=4 * GB, media=DISC),
+    Platform("saturn", "Sega Saturn",
+             (".chd", ".cue", ".bin", ".iso", ".ccd", ".mds"),
+             ("sega saturn",), max_size=2 * GB, media=DISC),
+    Platform("segacd", "Sega CD / Mega-CD",
+             (".chd", ".cue", ".bin", ".iso"),
+             ("sega cd", "mega cd", "megacd", "mega-cd", "sega mega-cd"),
+             max_size=2 * GB, media=DISC),
+    Platform("dc", "Sega Dreamcast",
+             (".chd", ".gdi", ".cdi", ".cue", ".bin"),
+             ("dreamcast", "sega dreamcast"), max_size=3 * GB, media=DISC),
+    Platform("ngc", "Nintendo GameCube",
+             (".rvz", ".iso", ".gcm", ".ciso", ".gcz"),
+             ("gamecube", "nintendo gamecube", "game cube", "gcn"),
+             max_size=4 * GB, media=DISC),
+    Platform("wii", "Nintendo Wii",
+             (".rvz", ".wbfs", ".iso", ".wad", ".ciso", ".gcz"),
+             ("nintendo wii",), max_size=12 * GB, media=DISC,
+             # See Platform.native_markers. Every Wii release that is a
+             # WiiWare or Virtual Console title says so, and those are the
+             # markers that exist to catch such a title being offered for a
+             # *cartridge* platform. Here they are the catalogue.
+             native_markers=("wad", "wiiware", "virtual console", "eshop")),
+    Platform("3do", "3DO Interactive Multiplayer",
+             (".chd", ".cue", ".bin", ".iso"),
+             ("3do interactive", "panasonic 3do"), max_size=2 * GB, media=DISC),
+    Platform("philips-cd-i", "Philips CD-i",
+             (".chd", ".cue", ".bin", ".iso"),
+             ("cd-i", "cdi", "philips cdi"), max_size=2 * GB, media=DISC),
+    Platform("pc-fx", "NEC PC-FX",
+             (".chd", ".cue", ".bin", ".iso"),
+             ("pcfx", "nec pc-fx"), max_size=2 * GB, media=DISC),
+    # RomM has two slugs for this machine. This is the one the live library
+    # materialises and the one `RommStreamServer/tiers.py` routes, so it is the
+    # one that can actually be filed into and played.
+    Platform("turbografx-16-slash-pc-engine-cd", "TurboGrafx-CD / PC Engine CD",
+             (".chd", ".cue", ".bin", ".iso"),
+             ("turbografx cd", "turbografx-cd", "pc engine cd", "pcecd",
+              "super cd-rom"),
+             max_size=2 * GB, media=DISC),
+    Platform("amiga-cd32", "Amiga CD32",
+             (".chd", ".cue", ".bin", ".iso"),
+             ("cd32", "amiga cd32"), max_size=2 * GB, media=DISC),
+    Platform("neo-geo-cd", "Neo Geo CD",
+             (".chd", ".cue", ".bin", ".iso"),
+             ("neogeo cd", "neo geo cd"), max_size=2 * GB, media=DISC),
+    Platform("atari-jaguar-cd", "Atari Jaguar CD",
+             (".chd", ".cue", ".bin", ".iso"),
+             ("jaguar cd",), max_size=2 * GB, media=DISC),
 )
 
 _BY_SLUG = {p.slug: p for p in PLATFORMS}
@@ -120,13 +249,41 @@ def resolve(text: str) -> Platform | None:
             if label == needle:
                 return platform
             start = needle.find(label)
-            if start >= 0:
+            if start >= 0 and not _leaves_a_model_number(needle, start + len(label)):
                 candidates.append((start, -len(label), platform))
 
     if not candidates:
         return None
     candidates.sort()
     return candidates[0][2]
+
+
+# A model number left over after a partial alias match, e.g. the "5" in
+# "playstation 5" once "playstation" has matched.
+_MODEL_NUMBER = re.compile(r"\s*\d")
+
+
+def _leaves_a_model_number(needle: str, end: int) -> bool:
+    """Whether a partial match leaves a digit that names a different machine.
+
+    Console families number their successors, so a partial match on the family
+    name is the *most* dangerous kind: "playstation" is inside "playstation 2",
+    "playstation 3", "playstation 4" and "playstation 5" alike, and the
+    position-ranked match that correctly picks SNES out of "super nintendo
+    entertainment system" happily answers a PlayStation 5 request with a
+    PlayStation 1 folder.
+
+    An exact alias is unaffected -- `resolve` returns those before it gets
+    here, which is how "playstation 2" still reaches the PS2 row. What this
+    rejects is only the case where an alias matched a prefix and the part it
+    did not match begins with a number. That is never a decoration; it is the
+    generation.
+
+    Trailing words are deliberately still allowed. "super nintendo
+    entertainment system" has to keep working, and no console family
+    distinguishes its generations by a trailing word alone.
+    """
+    return _MODEL_NUMBER.match(needle, end) is not None
 
 
 def platform_for_file(filename: str) -> Platform | None:
