@@ -244,3 +244,35 @@ def test_a_slug_string_works_as_well_as_a_platform():
 def test_an_unknown_platform_is_not_guessed_at():
     got = routes_for("playstation 5")
     assert got.kinds == (DOWNLOAD,)
+
+
+# --- the cache must not outlive the fact it caches -------------------------
+
+def test_a_successful_answer_expires_so_a_new_core_is_noticed():
+    """Found by installing one.
+
+    The cache was for the process lifetime, on the reasoning that a routing
+    table built from what is on disk does not change while the server is up.
+    Installing `neocd_libretro.so` and restarting the stream server falsified
+    that: Neo Geo CD went from unplayable to streaming, and ROMarr kept
+    reporting "no emulator exists" until it too was restarted -- a confusing
+    way to be told that your work succeeded.
+    """
+    from romarr.playability import StreamServer
+
+    server = StreamServer("http://stream.test")
+    server._cache["neo-geo-cd"] = ("stream", 0.0)      # already expired
+    # An expired entry must not be returned; with no reachable server the call
+    # falls through to the network and fails closed rather than serving stale.
+    server.timeout = 0.01
+    assert server.tier("neo-geo-cd") is None
+
+
+def test_a_live_answer_inside_the_ttl_is_reused():
+    import time as _time
+
+    from romarr.playability import StreamServer
+
+    server = StreamServer("http://stream.test")
+    server._cache["psx"] = ("local", _time.monotonic() + 300)
+    assert server.tier("psx") == "local"

@@ -114,8 +114,14 @@ NO_EJS_CORE: dict[str, str] = {
     "wii": "EmulatorJS ships no Wii core; Dolphin is server-side only",
     "dc": "EmulatorJS ships no Dreamcast core; flycast is server-side only",
     "3ds": "azahar is in RomM's nightly cores, which need netplay enabled",
-    "neo-geo-cd": "no Neo Geo CD core in RomM's map or on the stream server",
-    "atari-jaguar-cd": "no Jaguar CD core in RomM's map or on the stream server",
+    "neo-geo-cd": (
+        "EmulatorJS ships no Neo Geo CD core; NeoCD is server-side only "
+        "(fbneo's AES/MVS drivers are cartridge hardware and cannot open a "
+        "cue or a chd)"),
+    "atari-jaguar-cd": (
+        "no emulator plays Jaguar CD. virtualjaguar is the only Jaguar core "
+        "in libretro and declares j64|jag|rom|abs|cof|bin|prg -- cartridges "
+        "only, no cue and no chd"),
 }
 
 #: When ARCHIVE_EMULATED was measured, and against what.
@@ -290,9 +296,14 @@ class StreamServer:
     take a ROM name that must resolve inside the server's own directory, so
     there is nothing here for ROMarr to hand them anyway.
 
-    Answers are cached for the process lifetime. The routing table is built
-    from what is installed on disk, which does not change while the server is
-    up, and a Library page must not make one HTTP call per row.
+    Answers are cached, because a Library page must not make one HTTP call per
+    row. **With a TTL, not for the process lifetime**, which is what it was
+    until installing a core proved the assumption wrong: the routing table is
+    built from what is on disk, and "that does not change while the server is
+    up" is false the moment somebody installs a core and restarts it. Neo Geo
+    CD went from unplayable to streaming and ROMarr kept saying "no emulator
+    exists" until it was restarted, which is a confusing way to be told that
+    your work succeeded.
 
     **A server that is down stops being asked**, which is not an optimisation.
     Only successful answers are cached -- a failure must not be remembered as
@@ -308,10 +319,15 @@ class StreamServer:
     #: restarted one is picked up without restarting ROMarr.
     DOWN_COOLDOWN = 30.0
 
+    #: How long a successful answer is trusted. Short enough that installing a
+    #: core is visible without restarting ROMarr, long enough that browsing
+    #: costs nothing.
+    CACHE_TTL = 300.0
+
     def __init__(self, base_url: str, timeout: float = STREAM_TIMEOUT):
         self.base_url = (base_url or "").rstrip("/")
         self.timeout = timeout
-        self._cache: dict[str, str | None] = {}
+        self._cache: dict[str, tuple[str | None, float]] = {}
         self._reachable = True
         self._problem = ""
         self._down_until = 0.0
@@ -344,8 +360,9 @@ class StreamServer:
         """
         if not self.base_url or not slug:
             return None
-        if slug in self._cache:
-            return self._cache[slug]
+        cached = self._cache.get(slug)
+        if cached is not None and time.monotonic() < cached[1]:
+            return cached[0]
         if time.monotonic() < self._down_until:
             self._reachable = False
             return None
@@ -377,7 +394,7 @@ class StreamServer:
             tier = None
 
         if self._reachable:
-            self._cache[slug] = tier
+            self._cache[slug] = (tier, time.monotonic() + self.CACHE_TTL)
             self._down_until = 0.0
         else:
             self._down_until = time.monotonic() + self.DOWN_COOLDOWN

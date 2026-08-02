@@ -190,9 +190,14 @@ are four routes and the last one is not a failure:
 | Route | What it is |
 |---|---|
 | **EmulatorJS** | In the browser, from your library server. Covers nine optical systems on a stock RomM: PlayStation, PSP, Saturn, Sega CD, 3DO, CD-i, PC-FX, TurboGrafx-CD and Amiga CD32. |
-| **Stream** | A headless RetroArch server renders server-side and streams the video. This is how PS2, GameCube, Wii, Dreamcast and 3DS play. Set `STREAM_SERVER_URL`. |
+| **Stream** | A headless RetroArch server renders server-side and streams the video. This is how PS2, GameCube, Wii, Dreamcast, 3DS and Neo Geo CD play. Set `STREAM_SERVER_URL`. |
 | **Archive.org** | Their in-page emulator. Real for cartridge and home-computer systems; Archive.org does **not** emulate disc systems, so ROMarr does not claim it for them. |
 | **Download** | Always. |
+
+One platform has no player anywhere: **Atari Jaguar CD**. `virtualjaguar` is
+the only Jaguar core in libretro and declares `j64|jag|rom|abs|cof|bin|prg` —
+cartridges, no `cue` and no `chd`. ROMarr reports that rather than pretending
+otherwise. Jaguar *cartridges* play fine.
 
 Nothing is refused on these grounds — cataloguing a platform you play
 elsewhere is a legitimate thing to want. ROMarr tells you which route applies
