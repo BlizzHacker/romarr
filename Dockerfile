@@ -37,18 +37,18 @@ RUN chmod +x /entrypoint.sh && mkdir -p /config /roms
 # setting it here would silently ignore the ROMM_LIBRARY an existing install
 # brought with it. The entrypoint defaults it only when neither name is given.
 ENV ROMARR_DATA=/config/romarr.json \
-    ROMARR_PORT=7878 \
+    ROMARR_PORT=6868 \
     PUID=1000 \
     PGID=1000 \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
 VOLUME /config
-EXPOSE 7878
+EXPOSE 6868
 
 # Python is already here, so the healthcheck needs no curl. A non-200 raises.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD python -c "import os,urllib.request;urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('ROMARR_PORT','7878')+'/api/health',timeout=4)"
+    CMD python -c "import os,urllib.request;urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('ROMARR_PORT','6868')+'/api/health',timeout=4)"
 
 LABEL org.opencontainers.image.title="ROMarr" \
       org.opencontainers.image.description="The *arr for games: request a ROM, ROMarr finds it via Prowlarr, grabs it, and files it into your game library" \

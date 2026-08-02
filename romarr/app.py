@@ -63,7 +63,7 @@ from .ui import page as ui_page
 
 log = logging.getLogger(__name__)
 
-VERSION = "0.6.1"
+VERSION = "0.7.0"
 
 # What ROMarr labels its own downloads with, so its jobs are distinguishable
 # from everything else in a shared client -- the same reason Radarr and Sonarr
@@ -1407,7 +1407,7 @@ def make_handler(service: ROMarr):
     return Handler
 
 
-def serve(port: int = 7878, env: dict[str, str] | None = None):
+def serve(port: int = 6868, env: dict[str, str] | None = None):
     service = ROMarr(env)
     httpd = ThreadingHTTPServer(("0.0.0.0", port), make_handler(service))
     log.info("ROMarr listening on :%d, library=%s", port, service.library)

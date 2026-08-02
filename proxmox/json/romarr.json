@@ -9,7 +9,7 @@
   "updateable": true,
   "privileged": false,
   "has_arm": true,
-  "interface_port": 7878,
+  "interface_port": 6868,
   "documentation": "https://github.com/BlizzHacker/romarr#readme",
   "website": "https://github.com/BlizzHacker/romarr",
   "logo": "https://cdn.jsdelivr.net/gh/selfhst/icons@main/webp/romm.webp",
