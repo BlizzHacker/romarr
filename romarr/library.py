@@ -221,7 +221,15 @@ class MissingArchiveTool(Exception):
     """The download is in a format no installed tool can open."""
 
 
-def _source_for(download: Path) -> _Source:
+def _source_for(download: Path, platform: Platform | None = None) -> _Source:
+    # For MAME, FBNeo and DOSBox the archive IS the ROM: the core opens it and
+    # expects its internal layout. Looking inside would pick one chip dump out
+    # of a romset and import that, which succeeds and leaves an entry no core
+    # can load. Treat it as a plain file.
+    if (platform is not None and platform.archive_is_the_rom
+            and download.is_file()):
+        return _PathSource(download)
+
     suffix = download.suffix.lower()
     if download.is_file() and suffix in _STDLIB_ARCHIVES:
         return _ZipSource(download)
@@ -265,7 +273,7 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
             "Management.")
 
     try:
-        source = _source_for(download)
+        source = _source_for(download, platform)
         candidates = source.names()
     except MissingArchiveTool as exc:
         return ImportResult(False, None, str(exc))

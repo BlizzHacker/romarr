@@ -52,6 +52,15 @@ class Platform:
     # legitimate WiiWare title ships as. Without an exemption, adding Wii as a
     # platform would have made most of its catalogue unrequestable.
     native_markers: tuple[str, ...] = field(default=())
+    # Whether an archive IS the ROM here rather than something to look inside.
+    #
+    # For MAME and FBNeo the `.zip` is the romset: the core opens it itself and
+    # expects its internal layout of chip dumps. Extracting one produces a
+    # directory of `.u1`/`.c1`/`.v1` files that no core can load, so the import
+    # would "succeed" and leave an unplayable entry. `RommStreamServer` has the
+    # same rule in `archives.py` under the same reasoning -- extraction is
+    # opt-in per platform, never "expand anything compressed".
+    archive_is_the_rom: bool = False
 
     @property
     def is_disc(self) -> bool:
@@ -96,11 +105,16 @@ GB = 1024 * MB
 #   PS2      8.5GB (dual-layer DVD)      12GB
 #   Wii      8.5GB (dual-layer DVD)      12GB
 PLATFORMS: tuple[Platform, ...] = (
+    # "famicom" and "super famicom" were aliases here until those became
+    # platforms in their own right. RomM keeps separate folders for them and
+    # the live library fills both -- 106 famicom, 968 fds, 127 sfam -- so a
+    # request naming the Japanese machine now reaches the Japanese folder
+    # instead of being filed under its western twin.
     Platform("nes", "Nintendo Entertainment System", (".nes", ".fds", ".unf"),
-             ("nintendo", "famicom", "nintendo entertainment system"),
+             ("nintendo", "nintendo entertainment system"),
              max_size=8 * MB),
     Platform("snes", "Super Nintendo", (".smc", ".sfc", ".swc", ".fig"),
-             ("super nintendo", "super famicom", "sfc", "super nes"),
+             ("super nintendo", "sfc", "super nes"),
              max_size=24 * MB),
     Platform("gb", "Game Boy", (".gb",), ("gameboy", "game boy"),
              max_size=8 * MB),
@@ -209,6 +223,92 @@ PLATFORMS: tuple[Platform, ...] = (
     Platform("atari-jaguar-cd", "Atari Jaguar CD",
              (".chd", ".cue", ".bin", ".iso"),
              ("jaguar cd",), max_size=2 * GB, media=DISC),
+
+    # -- everything else with a player --------------------------------------
+    #
+    # Extensions and ceilings below are read off the live library rather than
+    # recalled: the counts came from sampling each platform's folder, so
+    # `.a52` is here because 320 Atari 5200 files end in it and `.col` because
+    # 172 ColecoVision ones do.
+    #
+    # The bar for inclusion is a real play route -- a core in RomM's base
+    # EmulatorJS map, or one installed on the stream server. Every platform
+    # here has one, and together they were 17,000-odd games in the library
+    # that ROMarr had no way to request.
+    Platform("jaguar", "Atari Jaguar",
+             (".jag", ".j64", ".rom", ".abs", ".cof", ".prg"),
+             ("atari jaguar",), max_size=32 * MB),
+    # For MAME and FBNeo the zip is the romset, not a container -- see
+    # Platform.archive_is_the_rom.
+    Platform("arcade", "Arcade", (".zip", ".7z", ".chd"),
+             ("mame", "coin-op"), max_size=256 * MB,
+             archive_is_the_rom=True),
+    Platform("neogeoaes", "Neo Geo AES", (".zip", ".7z"),
+             ("neo geo aes", "neogeo aes"), max_size=256 * MB,
+             archive_is_the_rom=True),
+    Platform("neogeomvs", "Neo Geo MVS", (".zip", ".7z"),
+             ("neo geo mvs", "neogeo mvs"), max_size=256 * MB,
+             archive_is_the_rom=True),
+    Platform("atari5200", "Atari 5200", (".a52", ".bin"), ("5200",),
+             max_size=8 * MB),
+    Platform("colecovision", "ColecoVision", (".col", ".rom", ".bin", ".zip"),
+             ("coleco",), max_size=8 * MB),
+    Platform("sega32", "Sega 32X", (".32x", ".bin", ".zip"),
+             ("32x", "sega 32x", "mega 32x"), max_size=32 * MB),
+    Platform("supergrafx", "PC Engine SuperGrafx", (".sgx", ".pce", ".zip"),
+             ("super grafx",), max_size=16 * MB),
+    Platform("vectrex", "Vectrex", (".vec", ".bin", ".zip"), (),
+             max_size=8 * MB),
+    Platform("intellivision", "Intellivision", (".int", ".rom", ".bin", ".zip"),
+             ("intv",), max_size=8 * MB),
+    Platform("wonderswan-color", "WonderSwan Color", (".wsc", ".zip"),
+             ("wonderswan colour",), max_size=16 * MB),
+    Platform("neo-geo-pocket-color", "Neo Geo Pocket Color", (".ngc", ".ngp"),
+             ("neo geo pocket colour", "ngpc"), max_size=16 * MB),
+    # Regional twins of platforms already here. They are separate RomM folders
+    # with their own catalogues -- 968 fds, 127 sfam, 106 famicom -- so a
+    # request for one must not be filed under the other.
+    Platform("fds", "Famicom Disk System", (".fds", ".zip"),
+             ("famicom disk system", "disk system"), max_size=8 * MB),
+    Platform("famicom", "Famicom", (".nes", ".zip"), (), max_size=8 * MB),
+    Platform("sfam", "Super Famicom", (".sfc", ".smc", ".zip"), (),
+             max_size=24 * MB),
+
+    # -- home computers -----------------------------------------------------
+    #
+    # Disk images, not cartridges, and often several per title -- which is why
+    # `.m3u` is declared where the library actually uses it (99 of the Sharp
+    # X68000 entries).
+    Platform("c64", "Commodore 64",
+             (".d64", ".t64", ".d81", ".tap", ".prg", ".crt", ".zip"),
+             ("commodore 64", "c 64"), max_size=16 * MB, media=COMPUTER),
+    Platform("c128", "Commodore 128", (".d64", ".d81", ".t64", ".prg"),
+             ("commodore 128",), max_size=16 * MB, media=COMPUTER),
+    Platform("vic-20", "Commodore VIC-20", (".prg", ".d64", ".t64", ".crt"),
+             ("vic 20", "vic20"), max_size=16 * MB, media=COMPUTER),
+    Platform("amiga", "Commodore Amiga",
+             (".adf", ".hdf", ".ipf", ".lha", ".zip"),
+             ("commodore amiga",), max_size=512 * MB, media=COMPUTER),
+    Platform("acpc", "Amstrad CPC", (".dsk", ".sna", ".cdt", ".zip"),
+             ("amstrad cpc", "cpc"), max_size=32 * MB, media=COMPUTER),
+    Platform("zxs", "Sinclair ZX Spectrum",
+             (".tzx", ".tap", ".z80", ".sna", ".zip"),
+             ("zx spectrum", "spectrum", "speccy"),
+             max_size=16 * MB, media=COMPUTER),
+    Platform("msx", "MSX", (".rom", ".cas", ".dsk", ".mx1", ".zip"), (),
+             max_size=32 * MB, media=COMPUTER),
+    Platform("msx2", "MSX2", (".rom", ".dsk", ".mx2", ".zip"), (),
+             max_size=32 * MB, media=COMPUTER),
+    Platform("sharp-x68000", "Sharp X68000",
+             (".m3u", ".dim", ".xdf", ".d88", ".zip"),
+             ("x68000", "sharp x 68000"), max_size=256 * MB, media=COMPUTER),
+    Platform("dos", "MS-DOS", (".dosz", ".zip", ".dos", ".img", ".chd"),
+             ("ms-dos", "ms dos", "pc dos"), max_size=2 * GB, media=COMPUTER,
+             archive_is_the_rom=True,
+             # `dos` and `pc` are in FOREIGN_PLATFORM_MARKERS because they mean
+             # "this is a PC port" for every console. Here they are the
+             # platform.
+             native_markers=("dos", "pc", "windows")),
 )
 
 _BY_SLUG = {p.slug: p for p in PLATFORMS}

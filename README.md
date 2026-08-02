@@ -167,13 +167,25 @@ LIBRARY_PATH=/mnt/roms
 
 ### Supported platforms
 
-**Cartridge** — NES, SNES, Game Boy / Color / Advance, N64, Genesis / Mega
-Drive, Master System, Game Gear, Atari 2600 / 7800, Lynx, TurboGrafx-16,
-WonderSwan, Neo Geo Pocket, Virtual Boy, Nintendo DS, Nintendo 3DS.
+58 platforms. The bar for inclusion is a real play route — a core in RomM's
+base EmulatorJS map, or one installed on a stream server.
+
+**Cartridge** — NES, Famicom, Famicom Disk System, SNES, Super Famicom, Game
+Boy / Color / Advance, N64, Genesis / Mega Drive, Sega 32X, Master System,
+Game Gear, Atari 2600 / 5200 / 7800, Lynx, Jaguar, TurboGrafx-16, SuperGrafx,
+ColecoVision, Intellivision, Vectrex, WonderSwan / Color, Neo Geo Pocket /
+Color, Neo Geo AES / MVS, Arcade, Virtual Boy, Nintendo DS, Nintendo 3DS.
 
 **Disc** — PlayStation, PlayStation 2, PSP, Saturn, Sega CD / Mega-CD,
 Dreamcast, GameCube, Wii, 3DO, Philips CD-i, PC-FX, TurboGrafx-CD / PC Engine
 CD, Amiga CD32, Neo Geo CD, Atari Jaguar CD.
+
+**Home computer** — Commodore 64 / 128 / VIC-20, Amiga, Amstrad CPC, ZX
+Spectrum, MSX / MSX2, Sharp X68000, MS-DOS.
+
+For Arcade, Neo Geo and DOS the archive **is** the ROM — MAME, FBNeo and
+dosbox_pure open the `.zip` themselves and expect its internal layout, so
+ROMarr imports it whole instead of unpacking a romset into loose chip dumps.
 
 Disc images are multi-file. A `.cue` is a few hundred bytes of text naming
 tracks, and importing it on its own gives you a library entry with a title, a
@@ -194,10 +206,18 @@ are four routes and the last one is not a failure:
 | **Archive.org** | Their in-page emulator. Real for cartridge and home-computer systems; Archive.org does **not** emulate disc systems, so ROMarr does not claim it for them. |
 | **Download** | Always. |
 
-One platform has no player anywhere: **Atari Jaguar CD**. `virtualjaguar` is
-the only Jaguar core in libretro and declares `j64|jag|rom|abs|cof|bin|prg` —
-cartridges, no `cue` and no `chd`. ROMarr reports that rather than pretending
-otherwise. Jaguar *cartridges* play fine.
+**What still cannot play, and why.** ROMarr says this per platform on the
+Platforms page rather than making you find out at the point of clicking play.
+
+- **Atari Jaguar CD** — no emulator plays it. `virtualjaguar` is the only
+  Jaguar core in libretro and declares `j64|jag|rom|abs|cof|bin|prg`:
+  cartridges, no `cue`, no `chd`. Jaguar *cartridges* play fine.
+- **MSX, MSX2, Sharp X68000** — the cores are installed; they need system
+  firmware you supply from your own hardware. ROMarr names the exact files.
+
+Everything else plays. Where a stream server has the core but not the
+firmware it says *that*, because a core with no BIOS does not fail loudly: it
+draws an error screen and streams it at a perfectly healthy 30 fps.
 
 Nothing is refused on these grounds — cataloguing a platform you play
 elsewhere is a legitimate thing to want. ROMarr tells you which route applies

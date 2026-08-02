@@ -18,9 +18,25 @@ def rel(title, *, size=512 * 1024, seeders=20, cats=(1030,),
 def test_resolves_common_names_and_aliases():
     assert resolve("SNES").slug == "snes"
     assert resolve("Super Nintendo").slug == "snes"
-    assert resolve("super famicom").slug == "snes"
     assert resolve("Nintendo 64").slug == "n64"
     assert resolve("mega drive").slug == "genesis-slash-megadrive"
+
+
+def test_the_japanese_machines_reach_their_own_folders():
+    """"famicom" and "super famicom" were aliases of nes and snes, which was
+    right while those were the only folders ROMarr could file into.
+
+    RomM keeps them separate and the live library fills both -- 106 famicom,
+    968 fds, 127 sfam -- so filing a Super Famicom request under `snes` puts
+    it in a folder its requester did not ask for and leaves the one they did
+    ask for empty.
+    """
+    assert resolve("super famicom").slug == "sfam"
+    assert resolve("famicom").slug == "famicom"
+    assert resolve("famicom disk system").slug == "fds"
+    # The western twins are untouched.
+    assert resolve("nes").slug == "nes"
+    assert resolve("snes").slug == "snes"
 
 
 def test_longer_alias_wins_over_shorter_substring():

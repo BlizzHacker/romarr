@@ -101,6 +101,29 @@ EJS_CORES: dict[str, tuple[str, ...]] = {
     "pc-fx": ("mednafen_pcfx",),
     "turbografx-16-slash-pc-engine-cd": ("mednafen_pce",),  # RomM: turbografx-cd
     "amiga-cd32": ("puae",),
+    # -- consoles, handhelds and boards -------------------------------------
+    "jaguar": ("virtualjaguar",),
+    "arcade": ("mame2003", "mame2003_plus", "fbneo",
+               "fbalpha2012_cps1", "fbalpha2012_cps2"),
+    "neogeoaes": ("fbneo",),
+    "neogeomvs": ("fbneo",),
+    "atari5200": ("a5200",),
+    "colecovision": ("gearcoleco",),
+    "sega32": ("picodrive",),
+    "supergrafx": ("mednafen_pce",),
+    "wonderswan-color": ("mednafen_wswan",),
+    "neo-geo-pocket-color": ("mednafen_ngp",),
+    "fds": ("fceumm", "nestopia"),
+    "famicom": ("fceumm", "nestopia"),
+    "sfam": ("snes9x",),
+    # -- home computers -----------------------------------------------------
+    "c64": ("vice_x64sc", "vice_x64"),
+    "c128": ("vice_x128",),
+    "vic-20": ("vice_xvic",),
+    "amiga": ("puae",),
+    "acpc": ("cap32", "crocods"),
+    "zxs": ("fuse",),
+    "dos": ("dosbox_pure",),
 }
 
 #: Deliberately absent from the table above, and why, so that "we checked"
@@ -122,6 +145,17 @@ NO_EJS_CORE: dict[str, str] = {
         "no emulator plays Jaguar CD. virtualjaguar is the only Jaguar core "
         "in libretro and declares j64|jag|rom|abs|cof|bin|prg -- cartridges "
         "only, no cue and no chd"),
+    # Home computers EmulatorJS has no core for. All four run on the stream
+    # tier, and all four want firmware the operator supplies -- which is a
+    # different problem from having no emulator, and is said differently.
+    "msx": "EmulatorJS ships no MSX core; blueMSX is server-side only",
+    "msx2": "EmulatorJS ships no MSX2 core; blueMSX is server-side only",
+    "vectrex": "EmulatorJS ships no Vectrex core; vecx is server-side only",
+    "intellivision": (
+        "freeintv is in RomM's nightly cores, which need netplay enabled; "
+        "the stream server runs it server-side"),
+    "sharp-x68000": (
+        "EmulatorJS ships no X68000 core; px68k is server-side only"),
 }
 
 #: When ARCHIVE_EMULATED was measured, and against what.

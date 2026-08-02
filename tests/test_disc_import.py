@@ -243,3 +243,56 @@ def test_a_finished_torrent_directory_imports_as_a_set(tmp_path):
     assert result.ok, result.reason
     assert sorted(p.name for p in result.destination.iterdir()) == [
         "Game (USA).bin", "Game (USA).cue"]
+
+
+# --- an archive is not always a container ----------------------------------
+
+ARCADE = by_slug("arcade")
+DOS = by_slug("dos")
+
+
+def test_an_arcade_romset_is_imported_whole(tmp_path):
+    """For MAME and FBNeo the .zip IS the ROM.
+
+    The core opens it and expects its internal layout of chip dumps. Looking
+    inside picks one `.u1` out of a romset and imports that -- which succeeds,
+    and leaves an entry no core can load. RommStreamServer has the same rule
+    in archives.py for the same reason.
+    """
+    downloads, lib = tmp_path / "dl", tmp_path / "lib"
+    downloads.mkdir()
+    make_zip(downloads / "sf2ce.zip",
+             {"sf2ce.03c": b"chip", "sf2ce.04a": b"chip", "sf2ce.05b": b"chip"})
+
+    result = import_rom(downloads / "sf2ce.zip", ARCADE, lib)
+
+    assert result.ok, result.reason
+    assert result.destination == lib / "arcade" / "sf2ce.zip"
+    assert result.destination.is_file()
+    # The romset arrived intact, not unpacked into loose chip dumps.
+    with zipfile.ZipFile(result.destination) as landed:
+        assert sorted(landed.namelist()) == ["sf2ce.03c", "sf2ce.04a", "sf2ce.05b"]
+
+
+def test_a_dos_zip_is_imported_whole(tmp_path):
+    """dosbox_pure loads a .zip directly; unpacking it is the same mistake."""
+    downloads, lib = tmp_path / "dl", tmp_path / "lib"
+    downloads.mkdir()
+    make_zip(downloads / "DOOM.zip", {"DOOM.EXE": b"mz", "DOOM.WAD": b"wad"})
+
+    result = import_rom(downloads / "DOOM.zip", DOS, lib)
+
+    assert result.ok, result.reason
+    assert result.destination.name == "DOOM.zip"
+    assert result.destination.is_file()
+
+
+def test_a_platform_without_the_flag_still_looks_inside(tmp_path):
+    """The flag is opt-in; nothing else changes behaviour."""
+    downloads, lib = tmp_path / "dl", tmp_path / "lib"
+    downloads.mkdir()
+    make_zip(downloads / "g.zip", {"Zelda.smc": b"rom", "readme.nfo": b"x"})
+
+    result = import_rom(downloads / "g.zip", SNES, lib)
+
+    assert result.destination.name == "Zelda.smc"
