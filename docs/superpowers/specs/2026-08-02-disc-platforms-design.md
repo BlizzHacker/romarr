@@ -17,8 +17,8 @@ vendored verbatim in `rom-hub/src/rom_hub/playability.py`, gives EmulatorJS
 cores for `psx` (`pcsx_rearmed`, `mednafen_psx_hw`), `psp` (`ppsspp`),
 `saturn` (`yabause`), `segacd` (`genesis_plus_gx`, `picodrive`), `3do`
 (`opera`), `philips-cd-i` (`same_cdi`), `pc-fx` (`mednafen_pcfx`),
-`turbografx-cd` (`mednafen_pce`), `amiga-cd32` (`puae`) and `dos`
-(`dosbox_pure`). Ten optical systems, in the base map, on any stock RomM.
+`turbografx-cd` (`mednafen_pce`) and `amiga-cd32` (`puae`). Nine optical
+systems, in the base map, on any stock RomM, with no configuration.
 
 **What EmulatorJS cannot run, the stream server already does.**
 `RommStreamServer/tiers.py` routes `ps2` → `pcsx2`, `ngc`/`wii` → `dolphin`,
@@ -117,7 +117,13 @@ this play?** Four answers, in preference order:
 - `stream` — the headless RetroArch stream server, when one is configured and
   says it can.
 - `archive` — an Archive.org `/details/` page, which runs Emularity in the
-  page; the Hub's existing `browser` handover.
+  page; the Hub's existing `browser` handover. **Measured, not assumed:**
+  Archive.org records the emulator for an item in its `emulator` metadata
+  field, which 272,424 items carry. The disc drivers return nothing —
+  `psj`/`psu`/`pse` 0 items, `saturn` 0, `3do` 0, `dc` 2, `segacd` 1, against
+  `genesis` 12,877 and `a2600` 3,123. Archive.org is a *source* for disc
+  images and not a player of them, so this route is offered only where it is
+  real.
 - `download` — always true. A ROM in the library is a ROM you can download,
   and that is a legitimate answer rather than a failure.
 
@@ -138,11 +144,24 @@ to `local`/`archive`/`download` — never to an error.
   removal already exempts the requested platform's own aliases, and each new
   platform declares aliases covering the markers that name it (`psx` declares
   `ps1`, `psx`, `playstation`).
-- `COMPILATION_MARKERS` is unchanged and still correct: a multi-game disc
-  collection is no more importable for a single-game request than a romset.
+- **`COMPILATION_MARKERS` needed one change, found during implementation.**
+  This section originally said it was "unchanged and still correct". It was
+  not: `redump` is in that list, and Redump is the disc-preservation project —
+  what No-Intro is for cartridges. Rejecting on it would have thrown out every
+  correctly-labelled disc dump and left the unlabelled ones standing, so the
+  scorer would have systematically preferred worse dumps while reporting "a
+  compilation, not a single cartridge". It is a +40 signal on disc platforms
+  and unchanged elsewhere; `Redump - … Collection` is still rejected on the
+  word that actually makes it a set.
 - **Multi-disc releases are not compilations.** `(Disc 1)` / `(Disc 2)` must
   survive scoring, because that is how the live library stores them. A new
   test pins this.
+- **`best_release`'s size tie-break inverts for discs.** Preferring the
+  smaller file is right for a cartridge, where a bigger file at the same score
+  is a romset. Two rips of one disc differ by how much of the disc was kept,
+  so the smaller is the one missing audio or video.
+- **The size floor is per medium too.** 4KB is a real floor for an Atari
+  cartridge and no floor at all for a disc.
 
 ## Testing
 

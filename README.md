@@ -138,6 +138,7 @@ application. Only `/config` is chowned.
 | `NZBGET_URL` / `NZBGET_USER` / `NZBGET_PASS` | — | Usenet client |
 | `QBITTORRENT_CATEGORY` etc. | no | Download category per client (default `romarr`) |
 | `GGREQUESTZ_URL` | no | Request front-end, shown on the status page |
+| `STREAM_SERVER_URL` | no | Headless RetroArch stream server. Read-only; it is asked which platforms it can play, so PS2, GameCube, Wii, Dreamcast and 3DS are reported as playable rather than download-only |
 | `ROMARR_DATA` | no | Path to the state file |
 | `PUID` / `PGID` / `TZ` | Docker | Process user, group, timezone |
 
@@ -166,12 +167,40 @@ LIBRARY_PATH=/mnt/roms
 
 ### Supported platforms
 
-Cartridge-era systems: NES, SNES, Game Boy / Color / Advance, N64, Genesis /
-Mega Drive, Master System, Game Gear, Atari 2600 / 7800, Lynx, TurboGrafx-16,
-WonderSwan, Neo Geo Pocket, Virtual Boy.
+**Cartridge** — NES, SNES, Game Boy / Color / Advance, N64, Genesis / Mega
+Drive, Master System, Game Gear, Atari 2600 / 7800, Lynx, TurboGrafx-16,
+WonderSwan, Neo Geo Pocket, Virtual Boy, Nintendo DS, Nintendo 3DS.
 
-Disc-based platforms are excluded — multi-gigabyte images that browser emulators
-cannot stream.
+**Disc** — PlayStation, PlayStation 2, PSP, Saturn, Sega CD / Mega-CD,
+Dreamcast, GameCube, Wii, 3DO, Philips CD-i, PC-FX, TurboGrafx-CD / PC Engine
+CD, Amiga CD32, Neo Geo CD, Atari Jaguar CD.
+
+Disc images are multi-file. A `.cue` is a few hundred bytes of text naming
+tracks, and importing it on its own gives you a library entry with a title, a
+cover and no game — so ROMarr reads the sheet, takes every track it names, and
+files the set as a directory, which is the layout RomM's scanner treats as one
+multi-part ROM. `.7z` and `.rar` are read as well as `.zip`, because that is
+what disc releases actually ship as.
+
+### How each platform plays
+
+**System → Platforms** answers this per platform for your own install. There
+are four routes and the last one is not a failure:
+
+| Route | What it is |
+|---|---|
+| **EmulatorJS** | In the browser, from your library server. Covers nine optical systems on a stock RomM: PlayStation, PSP, Saturn, Sega CD, 3DO, CD-i, PC-FX, TurboGrafx-CD and Amiga CD32. |
+| **Stream** | A headless RetroArch server renders server-side and streams the video. This is how PS2, GameCube, Wii, Dreamcast and 3DS play. Set `STREAM_SERVER_URL`. |
+| **Archive.org** | Their in-page emulator. Real for cartridge and home-computer systems; Archive.org does **not** emulate disc systems, so ROMarr does not claim it for them. |
+| **Download** | Always. |
+
+Nothing is refused on these grounds — cataloguing a platform you play
+elsewhere is a legitimate thing to want. ROMarr tells you which route applies
+before the grab instead of leaving you to find out at the point of clicking
+play, and where a platform has no player it says what would fix it. If your
+stream server has the core but not the firmware, it says *that*, because a
+core with no BIOS does not fail loudly: it draws an error screen and streams
+it at a perfectly healthy 30 fps.
 
 ---
 

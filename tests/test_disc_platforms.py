@@ -1,10 +1,11 @@
 """Disc-based platforms are supported, and the table that says so is honest.
 
 The README used to claim disc platforms were excluded because "browser
-emulators cannot stream" them. RomM 4.9.2's own core map runs ten optical
-systems, and the stream server runs the rest, so the exclusion described
-ROMarr's importer rather than any limitation. These tests pin the platform
-table that replaces it.
+emulators cannot stream" them. RomM 4.9.2's own core map runs nine optical
+systems -- psx, psp, saturn, segacd, 3do, philips-cd-i, pc-fx, turbografx-cd
+and amiga-cd32 -- and the stream server runs the rest, so the exclusion
+described ROMarr's importer rather than any limitation. These tests pin the
+platform table that replaces it.
 """
 
 from __future__ import annotations
@@ -152,3 +153,39 @@ def test_disc_platforms_are_reported_as_such():
     disc = {p.slug for p in platforms.PLATFORMS if p.media == DISC}
     assert set(DISC_SLUGS) <= disc
     assert "snes" not in disc
+
+
+# --- the documentation has to agree with the code --------------------------
+
+def _readme() -> str:
+    from pathlib import Path
+    return (Path(__file__).resolve().parents[1] / "README.md").read_text(
+        encoding="utf-8")
+
+
+def test_the_readme_no_longer_excludes_disc_platforms():
+    """The claim that started this, pinned so it cannot come back.
+
+    "Disc-based platforms are excluded -- multi-gigabyte images that browser
+    emulators cannot stream." Both halves were false: RomM 4.9.2's own core
+    map runs nine optical systems in a browser, and the stream server runs the
+    rest server-side.
+    """
+    readme = _readme().lower()
+    assert "disc-based platforms are excluded" not in readme
+    assert "cannot stream" not in readme
+
+
+def test_the_readme_lists_the_disc_platforms_the_code_supports():
+    """A README that names a platform the code cannot request, or omits one it
+    can, is the same defect facing either way."""
+    readme = _readme()
+    for name in ("PlayStation 2", "Dreamcast", "GameCube", "Saturn", "PSP",
+                 "Neo Geo CD", "Amiga CD32"):
+        assert name in readme, name
+
+
+def test_the_readme_documents_every_play_route():
+    readme = _readme()
+    for route in ("EmulatorJS", "Archive.org", "Download", "STREAM_SERVER_URL"):
+        assert route in readme, route
