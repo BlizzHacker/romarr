@@ -9,10 +9,13 @@ and RomM imports a readme.
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
 
 from .platforms import Platform
+
+log = logging.getLogger(__name__)
 
 # Newznab/Torznab categories. 1000-1999 is Console, 4000-4999 is PC; only the
 # console range and the PC-games sub-range are of interest here.
@@ -387,31 +390,273 @@ def best_release(releases: list[Release], wanted: str,
     return ranked[0][1]
 
 
+_EXTRA_SUFFIXES = (
+    ".nfo", ".txt", ".diz", ".sfv", ".jpg", ".jpeg", ".png",
+    ".url", ".md5", ".sha1", ".par2", ".exe", ".bat",
+)
+
+
+def _is_extra(name: str) -> bool:
+    return name.lower().endswith(_EXTRA_SUFFIXES)
+
+
+@dataclass(frozen=True)
+class RomSet:
+    """Every file that has to be imported for one game to work.
+
+    A cartridge is a set of one and always was. A disc is not, and treating it
+    as one is the quietest way to break a library: a `.cue` is a few hundred
+    bytes of text naming tracks, so importing it alone produces an entry with a
+    title, a cover, a plausible size and no game. Nothing downstream can tell
+    that apart from a working import -- not the scanner, not the player, not
+    the operator until they press play.
+
+    `primary` is the file an emulator is pointed at. `members` is everything
+    that has to travel with it, `primary` included.
+    """
+
+    primary: str
+    members: tuple[str, ...]
+
+    @property
+    def is_multi_file(self) -> bool:
+        return len(self.members) > 1
+
+
+#: What a sheet names its tracks with. Read out of `SIDECAR_FOR` in
+#: `RommStreamServer/archives.py` rather than derived again here: that table
+#: is already proven against this library, and two copies of the same
+#: knowledge would drift in opposite directions.
+_SIDECAR_FOR: dict[str, tuple[str, ...]] = {
+    ".cue": (".bin", ".img", ".iso"),
+    ".gdi": (".bin", ".raw"),
+    ".ccd": (".img", ".sub"),
+    ".mds": (".mdf",),
+}
+
+#: A playlist binds the discs of one game together. RetroArch and EmulatorJS
+#: both take an `.m3u` as the thing you load for a multi-disc game, so when one
+#: is present it is the primary regardless of what else the release holds --
+#: importing disc one of three is not importing the game.
+_PLAYLIST = ".m3u"
+
+
 def pick_rom_file(filenames: list[str], platform: Platform) -> str | None:
     """Which file in a finished download is the ROM to import.
+
+    Kept for callers that want a single name, and implemented on top of
+    `pick_rom_set` so the two can never disagree about which file is the ROM.
+    """
+    chosen = pick_rom_set(filenames, platform)
+    return chosen.primary if chosen else None
+
+
+def pick_rom_set(filenames: list[str], platform: Platform, *,
+                 read=None) -> RomSet | None:
+    """Which files in a finished download make up the game.
 
     Prefers the platform's own extensions in declared order, then falls back to
     any file that is not obviously an extra. Returns None when the download
     holds nothing playable, which is a real outcome worth reporting rather than
     guessing at.
+
+    `read(name) -> bytes | None` gives access to a sheet's contents. The caller
+    owns it because only the caller knows whether a name is a path on disk or a
+    member of an archive. It is optional: without it the sidecar fallback still
+    produces a complete set, just a more generous one.
     """
     if not filenames:
         return None
 
-    def is_extra(name: str) -> bool:
-        lowered = name.lower()
-        return lowered.endswith(
-            (".nfo", ".txt", ".diz", ".sfv", ".jpg", ".jpeg", ".png",
-             ".url", ".md5", ".sha1", ".par2", ".exe", ".bat")
-        )
+    playable = [f for f in filenames if not _is_extra(f)]
+
+    # A playlist first, and only for a platform that declares it -- an .m3u
+    # beside a SNES rom is somebody else's file.
+    if _PLAYLIST in platform.extensions:
+        playlists = [f for f in playable if f.lower().endswith(_PLAYLIST)]
+        if playlists:
+            primary = sorted(playlists, key=lambda f: (-_region_rank(f), len(f)))[0]
+            listed = _playlist_members(primary, playable, read)
+            return RomSet(primary, (primary, *listed))
 
     for ext in platform.extensions:
-        matches = [f for f in filenames if f.lower().endswith(ext) and not is_extra(f)]
-        if matches:
-            # A multi-dump archive: prefer the region the scorer prefers too.
-            matches.sort(key=lambda f: (-_region_rank(f), len(f)))
-            return matches[0]
+        matches = [f for f in playable if f.lower().endswith(ext)]
+        if not matches:
+            continue
+        # A multi-dump archive: prefer the region the scorer prefers too.
+        matches.sort(key=lambda f: (-_region_rank(f), len(f)))
+        primary = matches[0]
+        sidecars = _sidecars_for(primary, playable, read)
+        return RomSet(primary, (primary, *sidecars))
     return None
+
+
+def _sidecars_for(primary: str, filenames: list[str], read) -> tuple[str, ...]:
+    """The track files `primary` cannot boot without.
+
+    Read out of the sheet where possible. A sheet states its tracks by name,
+    and that is the only source that gets a directory holding two discs right:
+    both cues may say `game.bin`, and each means the one beside it.
+    """
+    ext = _suffix(primary)
+    wanted = _SIDECAR_FOR.get(ext)
+    if not wanted:
+        return ()
+
+    named = _names_in_sheet(primary, read, _cue_and_gdi_names)
+    if named is not None:
+        found = _resolve_beside(primary, named, filenames)
+        if found:
+            return found
+
+    # The sheet could not be read, or named nothing this download holds.
+    #
+    # Deliberately over-inclusive from here. A file too many costs disk; a file
+    # too few costs a game that imports, displays and does not boot -- and the
+    # operator finds out at the point where they have already committed.
+    return _companions(primary, filenames, wanted)
+
+
+def _playlist_members(primary: str, filenames: list[str], read) -> tuple[str, ...]:
+    """The disc images an `.m3u` lists, and their own sidecars.
+
+    A playlist may name `.cue` files rather than whole-disc images, in which
+    case each of those drags its own tracks along -- which is why this recurses
+    through `_sidecars_for` rather than stopping at the names in the file.
+    """
+    named = _names_in_sheet(primary, read, _playlist_names)
+    listed = _resolve_beside(primary, named or (), filenames)
+    if not listed:
+        # No readable playlist: take every disc image beside it. A playlist
+        # with nothing under it is not a game.
+        listed = tuple(f for f in filenames
+                       if f != primary and _same_parent(primary, f)
+                       and _suffix(f) != _PLAYLIST)
+    out: list[str] = []
+    for disc in listed:
+        for name in (disc, *_sidecars_for(disc, filenames, read)):
+            if name not in out:
+                out.append(name)
+    return tuple(out)
+
+
+def _names_in_sheet(primary: str, read, parse) -> tuple[str, ...] | None:
+    """Filenames a sheet refers to, or None when it could not be read.
+
+    None and () mean different things and both are real: None is "no answer
+    available, fall back", () is "the sheet was read and named nothing".
+    """
+    if read is None:
+        return None
+    try:
+        raw = read(primary)
+    except Exception:  # an unreadable member must not end the import
+        log.warning("could not read %r to find its tracks", primary)
+        return None
+    if raw is None:
+        return None
+    if isinstance(raw, bytes):
+        raw = raw.decode("utf-8", errors="replace")
+    return parse(raw)
+
+
+# `FILE "Track 01.bin" BINARY`, and the unquoted form some writers emit.
+#
+# Every gap is `[ \t]`, never `\s`. `\s` matches a newline, and a sheet is a
+# line-oriented format where that is the difference between reading it and
+# reading through it: a .gdi opens with a bare track count, and `\s+` let the
+# first pattern start on that count, run over the line break, and capture the
+# *sector size* of track one as its filename -- silently dropping track one
+# from every Dreamcast import.
+_CUE_FILE = re.compile(r'^[ \t]*FILE[ \t]+(?:"([^"]+)"|(\S+))',
+                       re.IGNORECASE | re.MULTILINE)
+
+# A gdi track line: index, LBA, type, sector size, filename, offset. The
+# filename is the first field that is not a bare number.
+_GDI_LINE = re.compile(
+    r'^[ \t]*\d+[ \t]+\d+[ \t]+\d+[ \t]+\d+[ \t]+(?:"([^"]+)"|(\S+))',
+    re.MULTILINE)
+
+
+def _cue_and_gdi_names(text: str) -> tuple[str, ...]:
+    out: list[str] = []
+    for pattern in (_CUE_FILE, _GDI_LINE):
+        for match in pattern.finditer(text):
+            name = match.group(1) or match.group(2)
+            if name and name not in out:
+                out.append(name)
+    return tuple(out)
+
+
+def _playlist_names(text: str) -> tuple[str, ...]:
+    """An m3u is one path per line; `#` is a comment."""
+    return tuple(
+        line.strip() for line in text.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    )
+
+
+def _resolve_beside(primary: str, named, filenames: list[str]) -> tuple[str, ...]:
+    """Match names from a sheet against what the download actually holds.
+
+    A sheet names its tracks relative to itself, so the match is made within
+    the sheet's own directory. That is the whole reason two discs in one
+    download do not bleed into each other: both sheets may say `game.bin`.
+    """
+    parent = _parent(primary)
+    by_key = {}
+    for f in filenames:
+        if _parent(f) == parent:
+            by_key.setdefault(_basename(f).lower(), f)
+    out: list[str] = []
+    for name in named:
+        got = by_key.get(_basename(name.replace("\\", "/")).lower())
+        if got and got != primary and got not in out:
+            out.append(got)
+    return tuple(out)
+
+
+def _companions(primary: str, filenames: list[str],
+                wanted: tuple[str, ...]) -> tuple[str, ...]:
+    """Track files beside `primary`, when the sheet could not name them.
+
+    Two passes, because the two real layouts need different answers. A
+    download holding several games names each game's tracks after the game
+    ("Game A (Track 01).bin"), so a shared stem is the right filter. A
+    download holding one game names them `track01.bin`, sharing nothing with
+    the sheet -- so when nothing shares the stem, everything beside it is
+    taken.
+    """
+    stem = _stem(primary).lower()
+    beside = [f for f in filenames
+              if f != primary and _same_parent(primary, f)
+              and _suffix(f) in wanted]
+    shared = [f for f in beside if _stem(f).lower().startswith(stem)]
+    return tuple(shared or beside)
+
+
+def _parent(path: str) -> str:
+    normalised = path.replace("\\", "/")
+    return normalised.rsplit("/", 1)[0] if "/" in normalised else ""
+
+
+def _basename(path: str) -> str:
+    normalised = path.replace("\\", "/")
+    return normalised.rsplit("/", 1)[-1]
+
+
+def _stem(path: str) -> str:
+    base = _basename(path)
+    return base.rsplit(".", 1)[0] if "." in base else base
+
+
+def _suffix(path: str) -> str:
+    base = _basename(path)
+    return ("." + base.rsplit(".", 1)[-1]).lower() if "." in base else ""
+
+
+def _same_parent(a: str, b: str) -> bool:
+    return _parent(a) == _parent(b)
 
 
 def _region_rank(name: str) -> int:
