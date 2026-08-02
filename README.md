@@ -211,9 +211,13 @@ Platforms page rather than making you find out at the point of clicking play.
 
 - **Atari Jaguar CD** — no emulator plays it. `virtualjaguar` is the only
   Jaguar core in libretro and declares `j64|jag|rom|abs|cof|bin|prg`:
-  cartridges, no `cue`, no `chd`. Jaguar *cartridges* play fine.
-- **MSX, MSX2, Sharp X68000** — the cores are installed; they need system
-  firmware you supply from your own hardware. ROMarr names the exact files.
+  cartridges, no `cue`, no `chd`. MAME's own source marks its `jaguarcd`
+  driver `MACHINE_NOT_WORKING`. Jaguar *cartridges* play fine.
+- **Sharp X68000** — `px68k` is installed and needs Sharp's `iplrom.dat` and
+  `cgrom.dat`, which you supply from your own hardware. There is no free
+  equivalent the way C-BIOS exists for MSX.
+
+Everything else on the list plays.
 
 Everything else plays. Where a stream server has the core but not the
 firmware it says *that*, because a core with no BIOS does not fail loudly: it
