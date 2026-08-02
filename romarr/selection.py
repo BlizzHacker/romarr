@@ -13,7 +13,7 @@ import logging
 import re
 from dataclasses import dataclass
 
-from .platforms import Platform
+from .platforms import DISC, Platform
 
 log = logging.getLogger(__name__)
 
@@ -54,6 +54,24 @@ COMPILATION_MARKERS = (
     "rom set", "complete set", "full set", "no-intro", "nointro", "goodgen",
     "tosec", "redump", "everdrive", "megaset", "mega set", "all games",
 )
+
+# Dump-project names that mean "this dump is correct" on the medium the
+# project actually covers, and "this is their whole set" everywhere else.
+#
+# Redump is the disc-preservation project -- what No-Intro is for cartridges.
+# On a disc release its name is the single most reliable quality signal
+# available, and it was in COMPILATION_MARKERS, which rejects outright. Every
+# correctly-labelled disc dump would have been thrown out and the releases
+# left standing would have been the unlabelled ones: the scorer would have
+# systematically preferred worse dumps, and the reason it gave would have been
+# "a compilation, not a single cartridge".
+#
+# Only the medium's own project is exempted, and only for that medium. A
+# Redump-labelled SNES release really is a set, because Redump does not dump
+# cartridges. `_is_a_set` still rejects "Redump - Sony PlayStation Collection"
+# on the word "collection", which is what actually makes it a set.
+_DUMP_PROJECT_FOR_MEDIUM = {DISC: ("redump",)}
+_DUMP_PROJECT_BONUS = 40
 
 # Words that mean "this is not a plain cartridge dump". Matched as substrings,
 # which is why the stem "translat" is listed rather than "translation": it also
@@ -303,7 +321,8 @@ def judge(release: Release, wanted: str,
     # platform's aliases are removed from the check first, so asking for a Wii
     # game does not disqualify a title that says "Wii".
     if platform is not None:
-        own = {platform.slug.lower(), platform.name.lower(), *platform.aliases}
+        own = {platform.slug.lower(), platform.name.lower(), *platform.aliases,
+               *platform.native_markers}
         own_words = {w for entry in own for w in entry.split()}
         for marker in FOREIGN_PLATFORM_MARKERS:
             if marker in own or marker in own_words:
@@ -327,11 +346,18 @@ def judge(release: Release, wanted: str,
     # the import could not. Whole-word matched, so "Collector" and "Classic
     # Edition" as part of a real game name are untouched.
     if platform is not None:
+        native_projects = _DUMP_PROJECT_FOR_MEDIUM.get(platform.media, ())
         for marker in COMPILATION_MARKERS:
+            if marker in native_projects:
+                continue
             if _mentions(lowered, marker):
                 return Judgement(
                     -250,
-                    verdict=f"a compilation, not a single cartridge ({marker})")
+                    verdict=f"a compilation, not a single game ({marker})")
+        for project in native_projects:
+            if _mentions(lowered, project):
+                add(_DUMP_PROJECT_BONUS, f"a {project.title()} dump")
+                break
 
     # Positive evidence that this really is the requested system. It matters
     # more now that the search casts a wider net: a bare title search returns
@@ -355,15 +381,33 @@ def judge(release: Release, wanted: str,
     # PC build of Final Fantasy III passed it and, being the best-seeded result,
     # was picked for a SNES request.
     if platform is not None:
+        medium = "disc image" if platform.is_disc else "cartridge"
         if release.size > platform.max_size:
             add(-200,
-                f"too big for a {platform.name} cartridge "
+                f"too big for a {platform.name} {medium} "
                 f"({release.size // 1048576}MB, ceiling "
                 f"{platform.max_size // 1048576}MB)")
-        elif release.size < 4 * 1024:
-            add(-200, "too small to be a ROM")
+        elif release.size < _size_floor(platform):
+            # The floor is per medium for the same reason the ceiling is. Four
+            # kilobytes is a real floor for an Atari cartridge and no floor at
+            # all for a disc: a few hundred KB offered for a PlayStation
+            # request is a patch, a cheat file or a lone .cue, and every one of
+            # those imports cleanly and boots nothing.
+            add(-200, f"too small to be a {platform.name} {medium}")
 
     return Judgement(points, tuple(reasons))
+
+
+#: The smallest plausible download, per medium. A CD-based game can genuinely
+#: be small -- some are a few megabytes of data and a lot of silence -- so this
+#: is set to catch a file that is not a disc at all rather than to judge how
+#: much of the disc was used.
+_DISC_FLOOR = 1024 * 1024
+_CARTRIDGE_FLOOR = 4 * 1024
+
+
+def _size_floor(platform: Platform) -> int:
+    return _DISC_FLOOR if platform.is_disc else _CARTRIDGE_FLOOR
 
 
 def score(release: Release, wanted: str, platform: Platform | None = None) -> int:
@@ -384,9 +428,22 @@ def best_release(releases: list[Release], wanted: str,
     ranked = [(s, r) for s, r in ranked if s > 0]
     if not ranked:
         return None
-    # Sort by score, then prefer the smaller file: for cartridge ROMs a bigger
-    # file is almost always a romset or a bad dump, not a better copy.
-    ranked.sort(key=lambda pair: (-pair[0], pair[1].size))
+    # Sort by score, then break the tie on size -- in the direction the medium
+    # calls for.
+    #
+    # For a cartridge, smaller wins: a bigger file at the same score is almost
+    # always a romset or a bad dump, not a better copy.
+    #
+    # For a disc that reasoning inverts. Two rips of the same game differ by
+    # how much of the disc was kept -- audio tracks, video, the lot -- so the
+    # smaller of two PlayStation releases scoring alike is the one with
+    # something missing. The ceiling above already excludes anything that is
+    # too big to be the game at all, so preferring the larger here can only
+    # choose between plausible rips.
+    if platform is not None and platform.is_disc:
+        ranked.sort(key=lambda pair: (-pair[0], -pair[1].size))
+    else:
+        ranked.sort(key=lambda pair: (-pair[0], pair[1].size))
     return ranked[0][1]
 
 
