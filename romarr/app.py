@@ -56,6 +56,8 @@ from .downloaders import (
 from .indexers import INDEXER_TYPES, build_indexer, redact_indexer
 from .indexers import Prowlarr, ProwlarrConfig
 from .library import import_rom, map_remote_path
+from .auth import DISABLED as AUTH_DISABLED
+from .auth import SESSION_COOKIE, Auth, new_api_key, parse_cookies
 from .platforms import PLATFORMS, resolve
 from .playability import DOWNLOAD, StreamServer, routes_for
 from .selection import best_release, judge, score
@@ -210,6 +212,25 @@ class ROMarr:
         stream_url = e.get("STREAM_SERVER_URL", "")
         self.store.settings["_stream_url"] = stream_url
         self.stream = StreamServer(stream_url) if stream_url else None
+
+        # Authentication, on unless deliberately turned off.
+        #
+        # The key is generated and stored on first run rather than left blank,
+        # because an install that is open until somebody reads the
+        # documentation is an open install. It is kept under a leading
+        # underscore so `safe_settings` never has to learn about it -- that
+        # method masks known credential shapes, and a key it had not been told
+        # about would have gone straight into the browser.
+        api_key = e.get("ROMARR_API_KEY", "") or self.store.settings.get("_api_key", "")
+        if not api_key:
+            api_key = new_api_key()
+            log.info("generated an API key; find it under Settings -> General")
+        self.store.settings["_api_key"] = api_key
+        self.auth = Auth(
+            api_key=api_key,
+            password_hash=self.store.settings.get("_password_hash", ""),
+            enabled=e.get("ROMARR_AUTH", "").strip().lower() != AUTH_DISABLED,
+        )
 
         self._seed_from_env(e)
         self.reload_clients()
@@ -563,6 +584,12 @@ class ROMarr:
         out["download_clients"] = [redact(c) for c in out.get("download_clients", [])]
         out["indexers"] = [redact_indexer(i) for i in out.get("indexers", [])]
         out["libraries"] = [redact_library(lib) for lib in out.get("libraries", [])]
+        # The two settings that ARE the credential. Removed by name rather
+        # than by a leading-underscore rule, because the other underscore keys
+        # (`_prowlarr_url`, `_romm_url`, `_stream_url`) are deliberately shown
+        # -- a rule would have hidden the wrong half of them.
+        for secret in ("_api_key", "_password_hash"):
+            out.pop(secret, None)
         return out
 
     # --- inbound webhooks -------------------------------------------------
@@ -1257,17 +1284,62 @@ def make_handler(service: ROMarr):
                 log.exception("%s %s failed", self.command, self.path)
                 return self._json(500, {"error": f"{type(exc).__name__}: {exc}"})
 
+        #: Paths that answer without a credential, and nothing else.
+        #:
+        #: `/` is the UI shell, which holds no data and is where somebody logs
+        #: in. `/api/v1/login` is how they do it. `/api/health` is the
+        #: container's HEALTHCHECK, which has no credential to offer -- it
+        #: answers, but see `_get`: unauthenticated it returns one bit rather
+        #: than the library paths and client URLs it used to hand out for free.
+        OPEN_PATHS = ("/", "/api/health", "/api/v1/login")
+
+        def _authorised(self) -> bool:
+            cookies = parse_cookies(self.headers.get("Cookie", ""))
+            query = parse_qs(urlparse(self.path).query)
+            return service.auth.authorised(self.headers, query, cookies)
+
+        def _gate(self, handler):
+            """Refuse before doing anything, unless the path is open.
+
+            Wrapped around every verb rather than checked inside each route:
+            a route added later is protected by default, and forgetting to
+            call a per-route check is exactly how the endpoints that queue
+            downloads end up answering strangers.
+            """
+            path = urlparse(self.path).path
+            if path in self.OPEN_PATHS or self._authorised():
+                return self._guard(handler)
+            # Drain the request body before refusing.
+            #
+            # A POST or PUT has already sent its body; replying without
+            # reading it leaves those bytes in the socket, and the client sees
+            # its connection aborted rather than the 401. The refusal has to
+            # arrive to be useful -- an unauthenticated caller that cannot
+            # tell "refused" from "network broke" will retry forever.
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                if length > 0:
+                    self.rfile.read(length)
+            except (ValueError, OSError):
+                pass
+            return self._json(401, {
+                "error": "unauthorised",
+                "detail": "Send your key as the X-Api-Key header, as "
+                          "Authorization: Bearer, or as ?apikey=. Find it "
+                          "under Settings -> General, or set ROMARR_API_KEY.",
+            })
+
         def do_GET(self):
-            return self._guard(self._get)
+            return self._gate(self._get)
 
         def do_POST(self):
-            return self._guard(self._post)
+            return self._gate(self._post)
 
         def do_PUT(self):
-            return self._guard(self._put)
+            return self._gate(self._put)
 
         def do_DELETE(self):
-            return self._guard(self._delete)
+            return self._gate(self._delete)
 
         def _get(self):
             route = urlparse(self.path)
@@ -1322,6 +1394,13 @@ def make_handler(service: ROMarr):
                 return self._json(200, service.status())
             if route.path == "/api/v1/system/counts":
                 return self._json(200, service.counts())
+            if route.path == "/api/health" and not self._authorised():
+                # Liveness needs one bit. The full report names library paths,
+                # client URLs and counts, and this endpoint is reachable
+                # without a credential so the container HEALTHCHECK works --
+                # which made all of that free reconnaissance for anyone who
+                # could reach the port.
+                return self._json(200, {"ok": True})
             if route.path == "/api/health":
                 return self._json(200, service.health())
             if route.path == "/api/platforms":
@@ -1353,6 +1432,30 @@ def make_handler(service: ROMarr):
             except json.JSONDecodeError:
                 return self._json(400, {"error": "invalid json"})
 
+            if route.path == "/api/v1/login":
+                # Exchange a credential for a session, so a browser presents
+                # the key once instead of carrying it in every request and
+                # holding it in the page where any script can read it.
+                supplied = str(body.get("apikey") or "")
+                password = str(body.get("password") or "")
+                if not (service.auth.check_key(supplied)
+                        or service.auth.check_password(password)):
+                    return self._json(401, {"error": "unauthorised"})
+                token = service.auth.issue_session()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                # HttpOnly so a script cannot read it; SameSite=Strict so
+                # another site cannot ride it; Path=/ so it covers the API.
+                # Not Secure: ROMarr is normally plain http on a LAN, and a
+                # Secure cookie would simply never be stored there.
+                self.send_header(
+                    "Set-Cookie",
+                    f"{SESSION_COOKIE}={token}; HttpOnly; SameSite=Strict; "
+                    f"Path=/; Max-Age={service.auth.session_seconds}")
+                payload = json.dumps({"ok": True}).encode()
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                return self.wfile.write(payload)
             if route.path == "/api/v1/hub/plugin":
                 slug = (body.get("slug") or "").strip()
                 action = (body.get("action") or "").strip()
