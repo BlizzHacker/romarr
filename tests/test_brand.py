@@ -131,3 +131,34 @@ def test_the_brand_is_not_split_apart_by_a_flex_gap():
     assert gap, "#brand should state its gap explicitly, so this cannot regress"
     assert gap.group(1).strip() in ("0", "0px"), \
         f"a flex gap of {gap.group(1)!r} splits the brand into two words"
+
+
+def test_contrib_carries_the_brand_correctly():
+    """The plugins ship to other people's machines under this name.
+
+    The sweep covered the Python package and the docs but not `contrib/`, so
+    the LaunchBox plugin went out with a `Romarr` namespace and PowerShell
+    functions called `Invoke-RomarrSync` -- user-visible in Playnite's own
+    menu. Extending the guard here is what makes that a test failure rather
+    than something noticed in a screenshot.
+    """
+    import pathlib
+    import re
+
+    root = pathlib.Path(__file__).resolve().parents[1] / "contrib"
+    if not root.is_dir():
+        return
+
+    # `romarr` lower-case is legitimate: package paths, the config filename,
+    # a hostname in an example URL. What is wrong is the title-case spelling,
+    # which is neither the brand nor an identifier convention here.
+    wrong = re.compile(r"\bRomarr\b")
+    offenders = []
+    for path in root.rglob("*"):
+        if not path.is_file() or path.suffix.lower() in (".png", ".jpg", ".ico"):
+            continue
+        for number, line in enumerate(
+                path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+            if wrong.search(line):
+                offenders.append(f"{path.name}:{number}: {line.strip()}")
+    assert not offenders, "brand is ROMarr:\n" + "\n".join(offenders)

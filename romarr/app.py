@@ -58,6 +58,7 @@ from .indexers import Prowlarr, ProwlarrConfig
 from .library import import_rom, map_remote_path
 from .auth import DISABLED as AUTH_DISABLED
 from .auth import SESSION_COOKIE, Auth, new_api_key, parse_cookies
+from .frontends import FORMATS as FRONTEND_FORMATS
 from .ops import RateLimiter, make_backup, read_backup, render_metrics, to_csv
 from .platforms import PLATFORMS, resolve
 from .sso import ForwardAuth
@@ -1123,6 +1124,36 @@ class ROMarr:
             "uptime": f"{up // 3600}h {(up % 3600) // 60}m",
         }
 
+    def frontend_rows(self, platform: str = "") -> list[dict]:
+        """The library flattened into the shape every frontend export wants.
+
+        One shape for all three, because the differences between LaunchBox,
+        Playnite and EmulationStation are in how the fields are *written*, not
+        in which fields exist -- and three near-identical row builders would
+        drift apart the first time one of them gained a column.
+        """
+        items = (self.library_view() or {}).get("items", [])
+        wanted = str(platform or "").strip().lower()
+        rows = []
+        for item in items:
+            slug = str(item.get("platform_slug") or item.get("platform") or "")
+            if wanted and slug.lower() != wanted:
+                continue
+            name = str(item.get("file_name") or item.get("filename")
+                       or item.get("name") or "")
+            rows.append({
+                "id": item.get("id") or item.get("rom_id") or "",
+                "title": item.get("name") or item.get("title") or name,
+                "platform": slug,
+                "filename": name,
+                "path": item.get("path") or item.get("full_path")
+                        or (str(self.library_root(None) / slug / name)
+                            if name and slug else ""),
+                "region": item.get("region") or "",
+                "verified": item.get("verified") or "",
+            })
+        return rows
+
     def metrics(self) -> str:
         """Everything a scrape needs, from state already computed."""
         up = int(time.monotonic() - self._started)
@@ -1489,6 +1520,21 @@ def make_handler(service: ROMarr):
                     return self._send(200, to_csv(rows).encode(),
                                       "text/csv; charset=utf-8")
                 return self._json(200, {"items": rows})
+            if route.path == "/api/v1/frontend/formats":
+                return self._json(200, {"formats": [
+                    {"name": name, "label": spec["label"],
+                     "filename": spec["filename"]}
+                    for name, spec in FRONTEND_FORMATS.items()]})
+            if route.path == "/api/v1/frontend/export":
+                name = (query.get("format", ["launchbox"])[0] or "").lower()
+                spec = FRONTEND_FORMATS.get(name)
+                if spec is None:
+                    return self._json(400, {
+                        "error": "unknown format",
+                        "known": sorted(FRONTEND_FORMATS)})
+                rows = service.frontend_rows(query.get("platform", [""])[0])
+                return self._send(200, spec["render"](rows).encode("utf-8"),
+                                  spec["content_type"])
             if route.path == "/api/v1/indexer/schema":
                 return self._json(200, {"types": INDEXER_TYPES})
             if route.path == "/api/v1/library":
