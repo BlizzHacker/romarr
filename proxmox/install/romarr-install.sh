@@ -14,7 +14,10 @@ network_check
 update_os
 
 msg_info "Installing Dependencies"
-$STD apt-get install -y python3-venv
+# libarchive-tools provides bsdtar, which reads the .7z and .rar archives the
+# disc platforms ship as. Without it every PlayStation, PS2 and Wii import
+# fails on a format it cannot open. Debian's GNU tar is not a substitute.
+$STD apt-get install -y python3-venv libarchive-tools
 msg_ok "Installed Dependencies"
 
 fetch_and_deploy_gh_release "romarr" "BlizzHacker/romarr" "tarball" "latest" "/opt/romarr"

@@ -14,17 +14,75 @@ details it does handle are the ones that silently corrupt a library:
 from __future__ import annotations
 
 import logging
+import os
 import shutil
+import subprocess
 import zipfile
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 from .platforms import Platform
-from .selection import pick_rom_file
+from .selection import pick_rom_set
 
 log = logging.getLogger(__name__)
 
-ARCHIVE_SUFFIXES = (".zip",)
+#: Formats a finished download arrives in.
+#:
+#: `.zip` was the whole list, which was survivable while only cartridges were
+#: supported. It is not survivable now: the live library's disc platforms are
+#: overwhelmingly `.7z` -- 2,621 PlayStation entries, 2,409 PS2, 1,470 Wii --
+#: and an importer that cannot open the format the content ships in supports
+#: the platform on paper only.
+ARCHIVE_SUFFIXES = (".zip", ".7z", ".rar")
+
+#: Handled by the standard library, with no tool to install.
+_STDLIB_ARCHIVES = (".zip",)
+
+
+def _bsdtar() -> str | None:
+    """A libarchive `bsdtar`, which reads 7z, rar and zip uniformly.
+
+    `RommStreamServer` already reaches for exactly this and for the same
+    reason, so this is a second user of a proven choice rather than a new
+    dependency. Windows ships it as `tar.exe`; Alpine needs
+    `libarchive-tools`, which the Dockerfile installs.
+
+    GNU tar is explicitly rejected. It answers to the same name on most Linux
+    systems and cannot read a 7z, so accepting it on name alone would turn a
+    missing dependency into a corrupt-archive error pointing at the download.
+
+    Every `PATH` entry is searched rather than the first hit per name, because
+    a machine with both is the normal case, not a corner: Windows ships
+    libarchive as `System32\\tar.exe` while Git for Windows puts GNU tar
+    earlier on the same `PATH`, and a Linux box with `libarchive-tools`
+    installed alongside GNU tar looks identical. Stopping at the first binary
+    called `tar` finds the one that cannot do the job and concludes the job
+    cannot be done.
+    """
+    for directory in os.environ.get("PATH", "").split(os.pathsep):
+        if not directory:
+            continue
+        for name in ("bsdtar", "tar"):
+            path = shutil.which(name, path=directory)
+            if path and _is_libarchive(path):
+                return path
+    return None
+
+
+def _is_libarchive(path: str) -> bool:
+    try:
+        out = subprocess.run([path, "--version"], capture_output=True,
+                             text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return "libarchive" in (out.stdout + out.stderr).lower()
+
+
+@lru_cache(maxsize=1)
+def bsdtar_path() -> str | None:
+    """`_bsdtar()`, resolved once. `None` when no usable tool is installed."""
+    return _bsdtar()
 
 
 @dataclass(frozen=True)
@@ -34,40 +92,173 @@ class ImportResult:
     reason: str = ""
 
 
+def is_safe_name(name: str, root: Path) -> bool:
+    """Whether extracting `name` under `root` stays under `root`.
+
+    Applied to every format, not only zip. The check used to live inside the
+    zip reader, so adding 7z and rar would have added two formats with no
+    zip-slip protection at all -- and the format an attacker chooses is the one
+    with the gap.
+    """
+    if not name or name.endswith(("/", "\\")):
+        return False
+    root_resolved = root.resolve()
+    return (root_resolved / name).resolve().is_relative_to(root_resolved)
+
+
 def safe_members(archive: zipfile.ZipFile, root: Path) -> list[str]:
     """Archive entries that stay inside `root` when extracted.
 
     A zip may contain absolute paths or `../` traversal. Extracting those writes
-    outside the library — the classic zip-slip. Anything that does not resolve
+    outside the library -- the classic zip-slip. Anything that does not resolve
     inside root is dropped rather than sanitised, because a release that needs
     sanitising is not one to trust.
     """
-    keep: list[str] = []
-    root_resolved = root.resolve()
+    keep = []
     for name in archive.namelist():
         if name.endswith("/"):
             continue
-        target = (root_resolved / name).resolve()
-        if target.is_relative_to(root_resolved):
+        if is_safe_name(name, root):
             keep.append(name)
         else:
             log.warning("refusing archive entry outside root: %r", name)
     return keep
 
 
+class _Source:
+    """Where the files of a finished download are, and how to get at them.
+
+    Three shapes exist -- a zip, an archive only `bsdtar` can read, and a plain
+    file or directory the client already unpacked -- and each answers the same
+    three questions. `pick_rom_set` needs `read` to parse a `.cue`, and only
+    something that knows the shape can provide it.
+    """
+
+    def names(self) -> list[str]:
+        raise NotImplementedError
+
+    def read(self, name: str) -> bytes | None:
+        raise NotImplementedError
+
+    def copy(self, name: str, destination: Path) -> None:
+        raise NotImplementedError
+
+
+class _ZipSource(_Source):
+    def __init__(self, path: Path):
+        self.path = path
+
+    def names(self):
+        with zipfile.ZipFile(self.path) as archive:
+            return safe_members(archive, self.path.parent)
+
+    def read(self, name):
+        with zipfile.ZipFile(self.path) as archive:
+            return archive.read(name)
+
+    def copy(self, name, destination):
+        with zipfile.ZipFile(self.path) as archive, \
+                archive.open(name) as src, open(destination, "wb") as dst:
+            shutil.copyfileobj(src, dst)
+
+
+class _BsdtarSource(_Source):
+    """7z and rar, via libarchive.
+
+    Every member is read by re-invoking `bsdtar` rather than unpacking the
+    archive once. A disc release is a handful of files and the sheet is a few
+    hundred bytes, so the cost is small -- and unpacking the whole thing means
+    materialising up to twelve gigabytes to keep four of them.
+    """
+
+    def __init__(self, path: Path, tool: str):
+        self.path = path
+        self.tool = tool
+
+    def _run(self, args: list[str], **kw):
+        return subprocess.run([self.tool, *args], capture_output=True,
+                              check=True, timeout=600, **kw)
+
+    def names(self):
+        out = self._run(["-tf", str(self.path)], text=True)
+        return [n for n in (line.strip() for line in out.stdout.splitlines())
+                if n and not n.endswith("/") and is_safe_name(n, self.path.parent)]
+
+    def read(self, name):
+        return self._run(["-xOf", str(self.path), name]).stdout
+
+    def copy(self, name, destination):
+        with open(destination, "wb") as dst:
+            subprocess.run([self.tool, "-xOf", str(self.path), name],
+                           stdout=dst, check=True, timeout=600)
+
+
+class _PathSource(_Source):
+    """A bare ROM file, or a directory the download client already unpacked."""
+
+    def __init__(self, path: Path):
+        self.path = path
+
+    def names(self):
+        if self.path.is_file():
+            return [self.path.name]
+        return [str(p.relative_to(self.path)).replace("\\", "/")
+                for p in self.path.rglob("*") if p.is_file()]
+
+    def read(self, name):
+        target = self.path if self.path.is_file() else self.path / name
+        try:
+            return target.read_bytes()
+        except OSError:
+            return None
+
+    def copy(self, name, destination):
+        source = self.path if self.path.is_file() else self.path / name
+        shutil.copy2(source, destination)
+
+
+class MissingArchiveTool(Exception):
+    """The download is in a format no installed tool can open."""
+
+
+def _source_for(download: Path, platform: Platform | None = None) -> _Source:
+    # For MAME, FBNeo and DOSBox the archive IS the ROM: the core opens it and
+    # expects its internal layout. Looking inside would pick one chip dump out
+    # of a romset and import that, which succeeds and leaves an entry no core
+    # can load. Treat it as a plain file.
+    if (platform is not None and platform.archive_is_the_rom
+            and download.is_file()):
+        return _PathSource(download)
+
+    suffix = download.suffix.lower()
+    if download.is_file() and suffix in _STDLIB_ARCHIVES:
+        return _ZipSource(download)
+    if download.is_file() and suffix in ARCHIVE_SUFFIXES:
+        tool = bsdtar_path()
+        if tool is None:
+            raise MissingArchiveTool(
+                f"{download.name} is a {suffix} archive and bsdtar is not "
+                "installed, so its contents cannot be read. Install "
+                "libarchive-tools (Debian/Alpine) or use the official ROMarr "
+                "image, which ships it.")
+        return _BsdtarSource(download, tool)
+    return _PathSource(download)
+
+
 def list_candidates(download: Path) -> list[str]:
-    """Every file a completed download offers, looking inside a zip if needed."""
-    if download.is_file() and download.suffix.lower() in ARCHIVE_SUFFIXES:
-        with zipfile.ZipFile(download) as archive:
-            return safe_members(archive, download.parent)
-    if download.is_file():
-        return [download.name]
-    return [str(p.relative_to(download)) for p in download.rglob("*") if p.is_file()]
+    """Every file a completed download offers, looking inside an archive if needed."""
+    return _source_for(download).names()
 
 
 def import_rom(download: Path, platform: Platform, library_root: Path, *,
                overwrite: bool = False) -> ImportResult:
-    """Place the ROM from a finished download into RomM's library."""
+    """Place the ROM from a finished download into RomM's library.
+
+    A cartridge lands as one file, exactly as before. A disc lands as a
+    directory holding every file of the set, which is the layout the live
+    library already uses for multi-track rips -- so a disc ROMarr imported is
+    indistinguishable from one filed by hand.
+    """
     if not download.exists():
         # Almost always a mount problem rather than a missing download: the
         # client has the file and reported where IT sees it, and this process
@@ -81,8 +272,13 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
             "path, or add a remote path mapping under Settings -> Media "
             "Management.")
 
-    candidates = list_candidates(download)
-    chosen = pick_rom_file(candidates, platform)
+    try:
+        source = _source_for(download, platform)
+        candidates = source.names()
+    except MissingArchiveTool as exc:
+        return ImportResult(False, None, str(exc))
+
+    chosen = pick_rom_set(candidates, platform, read=source.read)
     if chosen is None:
         return ImportResult(
             False, None,
@@ -90,23 +286,55 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
         )
 
     target_dir = library_root / platform.slug
-    target_dir.mkdir(parents=True, exist_ok=True)
-    destination = target_dir / Path(chosen).name
 
-    if destination.exists() and not overwrite:
+    # A set of one keeps the layout it has always had. Wrapping every
+    # cartridge in a directory would rewrite the shape of an existing library
+    # for no gain.
+    if not chosen.is_multi_file:
+        target_dir.mkdir(parents=True, exist_ok=True)
+        destination = target_dir / Path(chosen.primary).name
+        if destination.exists() and not overwrite:
+            return ImportResult(False, destination, "already in the library")
+        source.copy(chosen.primary, destination)
+        log.info("imported %s -> %s", chosen.primary, destination)
+        return ImportResult(True, destination)
+
+    destination = target_dir / _set_name(chosen.primary)
+    if destination.exists() and any(destination.iterdir()) and not overwrite:
         return ImportResult(False, destination, "already in the library")
+    destination.mkdir(parents=True, exist_ok=True)
 
-    if download.is_file() and download.suffix.lower() in ARCHIVE_SUFFIXES:
-        with zipfile.ZipFile(download) as archive, \
-                archive.open(chosen) as src, \
-                open(destination, "wb") as dst:
-            shutil.copyfileobj(src, dst)
-    else:
-        source = download if download.is_file() else download / chosen
-        shutil.copy2(source, destination)
+    # Members are flattened to their base names. `pick_rom_set` only ever
+    # returns members from one directory, so nothing is lost -- and a set
+    # written by base name cannot traverse out of the directory it was given,
+    # which makes the sidecar path safe by construction rather than by check.
+    written: dict[str, str] = {}
+    for member in chosen.members:
+        name = Path(member.replace("\\", "/")).name
+        if not is_safe_name(name, destination):
+            log.warning("refusing set member with an unusable name: %r", member)
+            continue
+        if name in written:
+            return ImportResult(
+                False, destination,
+                f"two files in this download are both called {name!r} "
+                f"({written[name]} and {member}); refusing to guess which "
+                "one the game needs")
+        source.copy(member, destination / name)
+        written[name] = member
 
-    log.info("imported %s -> %s", chosen, destination)
+    log.info("imported %d files -> %s", len(written), destination)
     return ImportResult(True, destination)
+
+
+def _set_name(primary: str) -> str:
+    """The directory name a multi-file game gets.
+
+    The primary's stem, because that is the name the sheet carries and the one
+    a person recognises. `102 Dalmatians ….gdi` and its five `trackNN.bin`
+    files become `102 Dalmatians …/`.
+    """
+    return Path(primary.replace("\\", "/")).stem
 
 
 def map_remote_path(path, mappings):

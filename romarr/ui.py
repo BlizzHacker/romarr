@@ -146,8 +146,8 @@ NAV = [
     ("Settings", [("media", "Media Management", None), ("profiles", "Profiles", None),
                   ("indexers", "Indexers", None), ("clients", "Download Clients", None),
                   ("libraries", "Libraries", None), ("general", "General", None)]),
-    ("System",   [("status", "Status", None), ("tasks", "Tasks", None),
-                  ("logs", "Logs", None)]),
+    ("System",   [("status", "Status", None), ("platforms", "Platforms", None),
+                  ("tasks", "Tasks", None), ("logs", "Logs", None)]),
 ]
 
 
@@ -188,7 +188,7 @@ function go(page){
     queue:'Queue',history:'History',media:'Media Management',profiles:'Profiles',
     indexers:'Indexers',clients:'Download Clients',libraries:'Libraries',
     general:'General',
-    status:'System Status',tasks:'Tasks',logs:'Logs',
+    status:'System Status',platforms:'Platforms',tasks:'Tasks',logs:'Logs',
     hub:'ROM Hub — Plugins'};
   $('#top h1').textContent=titles[page]||'ROMarr';
   $('#search').classList.toggle('hide', !['library','add'].includes(page));
@@ -764,13 +764,59 @@ RENDER.status=async()=>{
       ${g.configured?row('GG Requestz',g.ok,g.url)
         :`<tr><td>GG Requestz</td><td><span class="dot"></span>not configured</td>
           <td style="color:var(--dim)">set GGREQUESTZ_URL to show the link</td></tr>`}
+      ${h.stream_url
+        ? row('Stream server',(h.play_routes||{}).stream>0,h.stream_url)
+        : `<tr><td>Stream server</td><td><span class="dot"></span>not configured</td>
+           <td style="color:var(--dim)">set STREAM_SERVER_URL to play PS2, GameCube,
+           Wii, Dreamcast and 3DS here</td></tr>`}
     </tbody></table></div>
+    ${playCard(h.play_routes||{})}
     <div class="card"><h3>About</h3><div class="st">
       <div><b>${esc(h.version)}</b><span>Version</span></div>
       <div><b>${h.platforms}</b><span>Platforms</span></div>
       <div><b>${h.events}</b><span>History events</span></div>
       <div><b>${esc(h.uptime)}</b><span>Uptime</span></div>
     </div></div>`;
+};
+
+// How the supported platforms can actually be played, on THIS install.
+//
+// It belongs on the status page rather than in the docs because the answer
+// depends on the operator's own setup: configuring a stream server moves five
+// platforms out of "download only", and nothing else in the UI would show
+// that it had worked.
+const playCard=r=>`<div class="card"><h3>How platforms play here</h3>
+  <div class="st">
+    <div><b>${r.local||0}</b><span>In the browser (EmulatorJS)</span></div>
+    <div><b>${r.stream||0}</b><span>Streamed (headless RetroArch)</span></div>
+    <div><b>${r.archive||0}</b><span>On Archive.org</span></div>
+    <div><b>${r.download_only||0}</b><span>Download only</span></div>
+  </div>
+  <p class="help">Every platform can be downloaded. ${
+    (r.download_only||0)>0
+      ? `${r.download_only} have no player on this install &mdash; a stream
+         server is what plays PS2, GameCube, Wii, Dreamcast and 3DS.`
+      : 'Every supported platform also plays here without downloading.'}
+    See <a href="#platforms">Platforms</a> for the per-platform answer.</p></div>`;
+
+RENDER.platforms=async()=>{
+  const rows=await j('/api/platforms').catch(()=>[]);
+  const badge=k=>`<span class="pill">${esc(k)}</span>`;
+  $('#page').innerHTML=`<div class="card"><h3>Platforms</h3>
+    <p class="help">What ROMarr can request, and how each one plays on this
+      install. Disc platforms are included: nine of them run in the browser on
+      a stock RomM, and the rest stream from a stream server.</p>
+    <table><thead><tr><th>Platform</th><th>Media</th><th>Plays</th>
+      <th>Ceiling</th><th>Extensions</th></tr></thead><tbody>
+    ${rows.map(p=>`<tr>
+      <td>${esc(p.name)}<div style="color:var(--dim);font-size:12px">${esc(p.slug)}</div></td>
+      <td>${badge(p.media)}</td>
+      <td>${(p.play_routes||[]).map(badge).join(' ')}</td>
+      <td style="white-space:nowrap">${p.max_size_mb>=1024
+          ? (p.max_size_mb/1024).toFixed(0)+' GB' : p.max_size_mb+' MB'}</td>
+      <td style="color:var(--dim);font-size:12px">${esc((p.extensions||[]).join(' '))}</td>
+    </tr>`).join('')}
+    </tbody></table></div>`;
 };
 
 RENDER.tasks=async()=>{
