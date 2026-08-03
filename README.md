@@ -390,6 +390,25 @@ stack by MoveWeight.
 
 Brand and naming: [BRAND.md](https://github.com/BlizzHacker/rom-hub/blob/master/BRAND.md).
 
+## Acknowledgements
+
+**[gamarr](https://github.com/JeremiahM37/gamarr)** by JeremiahM37 (MIT).
+Several features here exist because gamarr had them first and its README made
+the case for them plainly: the blocklist, release profiles, quality profiles,
+notification connections, tags, manual import, and Prometheus metrics. No code
+was taken — gamarr is Go and ROMarr is Python, and every implementation here
+was written from scratch — but the feature set was informed by theirs, and
+saying so is the least that is owed.
+
+**Radarr and Sonarr**, for the shape of the whole category: indexer and
+download-client registries rendered from field definitions, quality and
+release profiles, remote path mappings, and Manual Import.
+
+**No-Intro** and **[Redump](http://redump.org)**, whose DATs make
+verification possible at all. **[RomM](https://github.com/rommapp/romm)**,
+whose EmulatorJS core map is the basis of the playability routing.
+
+
 ## Licence
 
 MIT — see [LICENSE](LICENSE).

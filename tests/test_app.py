@@ -161,6 +161,12 @@ def test_every_verb_is_guarded_so_a_crash_is_a_500_not_a_dead_socket():
     curl reports 000 -- so there is nothing to search for and no way to tell a
     crash from a network problem. A search that exceeded Prowlarr's 60s timeout
     did exactly this.
+
+    Every verb now goes through `_gate`, which authenticates and then hands
+    off to `_guard` -- so the rule this pins is unchanged, but it is one layer
+    further out. Both links are asserted, because a `_gate` that stopped
+    calling `_guard` would restore the dead socket without failing anything
+    else.
     """
     import io as _io
     import pathlib
@@ -168,8 +174,9 @@ def test_every_verb_is_guarded_so_a_crash_is_a_500_not_a_dead_socket():
                    encoding="utf-8").read()
     for verb, inner in (("do_GET", "_get"), ("do_POST", "_post"),
                         ("do_PUT", "_put"), ("do_DELETE", "_delete")):
-        assert f"def {verb}(self):\n            return self._guard(self.{inner})" in src, verb
+        assert f"def {verb}(self):\n            return self._gate(self.{inner})" in src, verb
     assert "def _guard(self, handler):" in src
+    assert "return self._guard(handler)" in src, "_gate must still guard"
 
 
 def test_an_unresolvable_platform_is_reported_rather_than_silently_ignored(tmp_path):

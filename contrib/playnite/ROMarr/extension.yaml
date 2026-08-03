@@ -1,0 +1,10 @@
+Id: ROMarr_9f1c4a2e
+Name: ROMarr
+Author: BlizzHacker
+Version: 1.0.0
+Module: ROMarr.psm1
+Type: Script
+Icon: icon.png
+Links:
+  - Name: Source
+    Url: https://github.com/BlizzHacker/romarr

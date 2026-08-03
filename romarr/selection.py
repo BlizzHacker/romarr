@@ -241,8 +241,23 @@ class Judgement:
 
 
 def judge(release: Release, wanted: str,
-          platform: Platform | None = None) -> Judgement:
-    """Rank a release and record why. Higher is better; negative means no."""
+          platform: Platform | None = None, *,
+          profile=None, blocklist=None) -> Judgement:
+    """Rank a release and record why. Higher is better; negative means no.
+
+    `profile` and `blocklist` are operator policy and are applied before any
+    scoring. A blocked release is refused even when a profile scores it
+    highly: somebody who preferred a term and then blocked a specific release
+    meant the block, and reading it the other way round is the worst available
+    interpretation.
+    """
+    if blocklist is not None and release in blocklist:
+        return Judgement(-2000,
+                         verdict=f"blocklisted: {blocklist.reason_for(release)}")
+    if profile:
+        refusal = profile.refusal(release.title.lower())
+        if refusal:
+            return Judgement(-900, verdict=refusal)
     if not is_game_release(release):
         return Judgement(-1000, verdict="not a game release (wrong category)")
     if not title_matches(release.title, wanted):
@@ -395,6 +410,10 @@ def judge(release: Release, wanted: str,
             # those imports cleanly and boots nothing.
             add(-200, f"too small to be a {platform.name} {medium}")
 
+    if profile:
+        for delta, text in profile.adjustments(lowered):
+            add(delta, text)
+
     return Judgement(points, tuple(reasons))
 
 
@@ -422,9 +441,11 @@ def explain(release: Release, wanted: str,
 
 
 def best_release(releases: list[Release], wanted: str,
-                 platform: Platform | None = None) -> Release | None:
+                 platform: Platform | None = None, *,
+                 profile=None, blocklist=None) -> Release | None:
     """The highest-scoring usable release, or None if nothing qualifies."""
-    ranked = [(score(r, wanted, platform), r) for r in releases]
+    ranked = [(judge(r, wanted, platform, profile=profile,
+                     blocklist=blocklist).points, r) for r in releases]
     ranked = [(s, r) for s, r in ranked if s > 0]
     if not ranked:
         return None

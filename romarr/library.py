@@ -18,10 +18,11 @@ import os
 import shutil
 import subprocess
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
+from .dat import BAD_DUMP, UNKNOWN, VERIFIED, Match, hash_bytes
 from .platforms import Platform
 from .selection import pick_rom_set
 
@@ -90,6 +91,13 @@ class ImportResult:
     ok: bool
     destination: Path | None
     reason: str = ""
+    #: What the DAT said about the bytes that actually landed. `unknown` when
+    #: no DAT is loaded, which is the default and is not a failure.
+    verification: Match = field(default_factory=lambda: Match(UNKNOWN))
+    #: What the game is, once a metadata provider has been asked. Empty
+    #: when none is configured -- metadata is an enhancement and its
+    #: absence must never look like a failed import.
+    info: dict = field(default_factory=dict)
 
 
 def is_safe_name(name: str, root: Path) -> bool:
@@ -250,8 +258,45 @@ def list_candidates(download: Path) -> list[str]:
     return _source_for(download).names()
 
 
+def verify_set(source, members, dats) -> Match:
+    """What a DAT says about the files that are about to be imported.
+
+    Verified means **every** member matched. Redump lists each track of a disc
+    as its own `<rom>`, so a cue with a good checksum beside a corrupt track
+    is not a good import -- and reporting the set on the strength of its first
+    member is how that would be missed.
+
+    Read from the source rather than the destination on purpose: it is the
+    same bytes, and doing it here means a refusal can happen before anything
+    is written.
+    """
+    if dats is None:
+        return Match(UNKNOWN)
+    verdicts = []
+    for member in members:
+        try:
+            data = source.read(member)
+        except Exception:
+            return Match(UNKNOWN, detail=f"could not read {member!r} to verify")
+        if data is None:
+            return Match(UNKNOWN, detail=f"could not read {member!r} to verify")
+        suffix = Path(member.replace("\\", "/")).suffix
+        verdicts.append(dats.lookup(**hash_bytes(data, suffix=suffix)))
+
+    if not verdicts:
+        return Match(UNKNOWN)
+    bad = next((v for v in verdicts if v.status == BAD_DUMP), None)
+    if bad is not None:
+        return bad
+    if all(v.status == VERIFIED for v in verdicts):
+        # Every member matched; name the game they all belong to.
+        return verdicts[0]
+    return Match(UNKNOWN)
+
+
 def import_rom(download: Path, platform: Platform, library_root: Path, *,
-               overwrite: bool = False) -> ImportResult:
+               overwrite: bool = False, dats=None,
+               require_verified: bool = False) -> ImportResult:
     """Place the ROM from a finished download into RomM's library.
 
     A cartridge lands as one file, exactly as before. A disc lands as a
@@ -285,6 +330,15 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
             f"no {platform.name} ROM among {len(candidates)} file(s)",
         )
 
+    # Verify before writing, so `require_verified` can refuse without leaving
+    # a rejected dump behind for somebody to find later and wonder about.
+    verdict = verify_set(source, chosen.members, dats)
+    if require_verified and verdict.status != VERIFIED:
+        return ImportResult(
+            False, None,
+            f"refused: {verdict.detail or verdict}",
+            verification=verdict)
+
     target_dir = library_root / platform.slug
 
     # A set of one keeps the layout it has always had. Wrapping every
@@ -297,7 +351,7 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
             return ImportResult(False, destination, "already in the library")
         source.copy(chosen.primary, destination)
         log.info("imported %s -> %s", chosen.primary, destination)
-        return ImportResult(True, destination)
+        return ImportResult(True, destination, verification=verdict)
 
     destination = target_dir / _set_name(chosen.primary)
     if destination.exists() and any(destination.iterdir()) and not overwrite:
@@ -324,7 +378,7 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
         written[name] = member
 
     log.info("imported %d files -> %s", len(written), destination)
-    return ImportResult(True, destination)
+    return ImportResult(True, destination, verification=verdict)
 
 
 def _set_name(primary: str) -> str:

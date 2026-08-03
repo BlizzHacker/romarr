@@ -49,6 +49,7 @@ from .libraries import (
 )
 from .clients import QBittorrent, QbitConfig, Romm, RommConfig
 from . import hub  # ROM Hub bridge -- the Cartridge plugin layer
+from .dat import DatIndex, parse_dat
 from .downloaders import (
     CLIENT_TYPES, NZBGet, NzbgetConfig, SABnzbd, SabConfig, build_client,
     merge_secrets, pick_client, redact,
@@ -56,7 +57,20 @@ from .downloaders import (
 from .indexers import INDEXER_TYPES, build_indexer, redact_indexer
 from .indexers import Prowlarr, ProwlarrConfig
 from .library import import_rom, map_remote_path
+from .auth import DISABLED as AUTH_DISABLED
+from .auth import SESSION_COOKIE, Auth, new_api_key, parse_cookies
+from .catalogue import (Submission, check_source, facets as hub_facets,
+                        search as hub_search, submission_link)
+from .frontends import FORMATS as FRONTEND_FORMATS
+from .metadata import PROVIDERS as METADATA_PROVIDERS
+from .notify import NOTIFIERS, Message, Notifier, failed, grabbed, imported
+from .profiles import Blocklist, ReleaseProfile, release_id
+from .upgrade import is_upgrade, merge_tags, scan as scan_directory
+from .metadata import Metadata, calendar as metadata_calendar
+from .ops import RateLimiter, make_backup, read_backup, render_metrics, to_csv
 from .platforms import PLATFORMS, resolve
+from .sso import ForwardAuth
+from .totp import Totp
 from .playability import DOWNLOAD, StreamServer, routes_for
 from .selection import best_release, judge, score
 from .store import Event, Store
@@ -210,6 +224,60 @@ class ROMarr:
         stream_url = e.get("STREAM_SERVER_URL", "")
         self.store.settings["_stream_url"] = stream_url
         self.stream = StreamServer(stream_url) if stream_url else None
+
+        # Authentication, on unless deliberately turned off.
+        #
+        # The key is generated and stored on first run rather than left blank,
+        # because an install that is open until somebody reads the
+        # documentation is an open install. It is kept under a leading
+        # underscore so `safe_settings` never has to learn about it -- that
+        # method masks known credential shapes, and a key it had not been told
+        # about would have gone straight into the browser.
+        api_key = e.get("ROMARR_API_KEY", "") or self.store.settings.get("_api_key", "")
+        if not api_key:
+            api_key = new_api_key()
+            log.info("generated an API key; find it under Settings -> General")
+        self.store.settings["_api_key"] = api_key
+        mode = e.get("ROMARR_AUTH", "").strip().lower()
+        self.auth = Auth(
+            api_key=api_key,
+            password_hash=self.store.settings.get("_password_hash", ""),
+            enabled=mode != AUTH_DISABLED,
+        )
+        self.auth.totp = Totp(
+            secret=self.store.settings.get("_totp_secret", ""),
+            backup=self.store.settings.get("_totp_backup", []) or [],
+        )
+
+        # Single sign-on, when a proxy in front is the authority.
+        #
+        # This is what `ROMARR_AUTH=disabled` should have been. That setting
+        # is honest about what it does -- ROMarr stops checking anything, so
+        # any request reaching the port is in, including one that bypassed the
+        # proxy entirely. Forward mode keeps the proxy as the authority but
+        # verifies the request came *through* it, learns who the user is, and
+        # can require a group.
+        self.limiter = RateLimiter()
+        self.reload_dats(e.get("DAT_PATH", "")
+                         or self.store.settings.get("dat_path", ""))
+        self.reload_metadata()
+        self.reload_policy()
+        self.sso = None
+        if mode == "forward":
+            self.sso = ForwardAuth(
+                provider=e.get("ROMARR_SSO_PROVIDER", "authentik"),
+                trusted_proxies=[p.strip() for p
+                                 in e.get("ROMARR_TRUSTED_PROXIES", "").split(",")
+                                 if p.strip()],
+                user_header=e.get("ROMARR_SSO_USER_HEADER", ""),
+                groups_header=e.get("ROMARR_SSO_GROUPS_HEADER", ""),
+                required_group=e.get("ROMARR_SSO_GROUP", ""),
+            )
+            if not self.sso.trusted_proxies:
+                log.error(
+                    "ROMARR_AUTH=forward with no ROMARR_TRUSTED_PROXIES: every "
+                    "request will be refused. Set it to the proxy's address, "
+                    "e.g. 192.168.0.0/24")
 
         self._seed_from_env(e)
         self.reload_clients()
@@ -563,6 +631,12 @@ class ROMarr:
         out["download_clients"] = [redact(c) for c in out.get("download_clients", [])]
         out["indexers"] = [redact_indexer(i) for i in out.get("indexers", [])]
         out["libraries"] = [redact_library(lib) for lib in out.get("libraries", [])]
+        # The two settings that ARE the credential. Removed by name rather
+        # than by a leading-underscore rule, because the other underscore keys
+        # (`_prowlarr_url`, `_romm_url`, `_stream_url`) are deliberately shown
+        # -- a rule would have hidden the wrong half of them.
+        for secret in ("_api_key", "_password_hash"):
+            out.pop(secret, None)
         return out
 
     # --- inbound webhooks -------------------------------------------------
@@ -1062,6 +1136,162 @@ class ROMarr:
             "uptime": f"{up // 3600}h {(up % 3600) // 60}m",
         }
 
+    def reload_dats(self, directory: str = "") -> dict:
+        """Load every DAT under `directory`.
+
+        Optional and quiet. An operator with no DATs is the common case on
+        day one, and it must not turn every import into an error -- the index
+        simply answers `unknown`, which is a real verdict rather than a
+        failure.
+        """
+        self.dats = DatIndex()
+        self.store.settings["dat_path"] = str(directory or "")
+        if not directory:
+            return {"loaded": 0, "path": ""}
+        root = Path(directory)
+        if not root.is_dir():
+            log.warning("DAT_PATH %s is not a directory", root)
+            return {"loaded": 0, "path": str(root),
+                    "error": f"{root} is not a directory"}
+        for path in sorted(root.rglob("*.dat")) + sorted(root.rglob("*.xml")):
+            try:
+                self.dats.add(parse_dat(path.read_text(encoding="utf-8",
+                                                       errors="replace")))
+            except OSError as exc:
+                log.warning("could not read %s: %s", path, exc)
+        log.info("loaded %d DAT(s) from %s", len(self.dats.dats), root)
+        return {"loaded": len(self.dats.dats), "path": str(root)}
+
+    def reload_policy(self) -> None:
+        """Rebuild the operator's selection policy and notification fan-out.
+
+        Held on the service rather than rebuilt per search: a blocklist is
+        read on every candidate, and re-parsing it thousands of times during
+        one interactive search is work nobody asked for.
+        """
+        self.profile = ReleaseProfile.from_settings(self.store.settings)
+        self.blocklist = Blocklist.from_items(
+            self.store.list_items("blocklist"))
+        self.notifier = Notifier(self.store.list_items("connections"))
+
+    def block(self, release, reason: str = "") -> dict:
+        """Never take this release again, and record why."""
+        entry = self.blocklist.add(release, reason=reason)
+        self.store.put_item("blocklist", entry)
+        return entry
+
+    def unblock(self, entry_id: str) -> bool:
+        self.blocklist.remove(entry_id)
+        return self.store.delete_item("blocklist", entry_id)
+
+    def notify(self, message) -> list[dict]:
+        """Fan out, and never let a failure here matter.
+
+        The delivery is a courtesy; the import is the work.
+        """
+        try:
+            return self.notifier.send(message)
+        except Exception as exc:
+            log.warning("notification fan-out failed: %s", exc)
+            return []
+
+    def tag(self, item_id: str, add=None, remove=None) -> list[str]:
+        """Set the tags on one library item."""
+        tags = self.store.settings.setdefault("_tags", {})
+        merged = merge_tags(tags.get(str(item_id)) or [], add, remove)
+        if merged:
+            tags[str(item_id)] = merged
+        else:
+            tags.pop(str(item_id), None)
+        self.store.save()
+        return merged
+
+    def tags_for(self, item_id: str) -> list[str]:
+        return list((self.store.settings.get("_tags") or {}).get(str(item_id))
+                    or [])
+
+    def scan(self, directory: str) -> dict:
+        """Manual import: what is already on disk that ROMarr could adopt."""
+        result = scan_directory(directory, PLATFORMS, self.dats)
+        return {
+            "candidates": [vars(c) for c in result.candidates],
+            "skipped": result.skipped,
+            "error": result.error,
+        }
+
+    def reload_metadata(self) -> None:
+        """Rebuild the provider chain from stored settings."""
+        self.metadata = Metadata(self.store.list_items("metadata_providers"))
+
+    def identify(self, filename: str = "", verification=None) -> dict:
+        """Name a game, and say how confidently.
+
+        `matched_by` travels with the answer because "we matched a DAT name"
+        and "we guessed from the filename" deserve different amounts of trust.
+        A UI that shows a cover without saying which is inviting somebody to
+        believe the wrong one.
+        """
+        info = self.metadata.identify(verification=verification,
+                                      filename=filename)
+        return {
+            "found": info.found,
+            "title": info.title,
+            "summary": info.summary,
+            "released": info.released,
+            "rating": info.rating,
+            "genres": list(info.genres),
+            "cover_url": info.cover_url,
+            "source": info.source,
+            "matched_by": info.matched_by,
+        }
+
+    def frontend_rows(self, platform: str = "") -> list[dict]:
+        """The library flattened into the shape every frontend export wants.
+
+        One shape for all three, because the differences between LaunchBox,
+        Playnite and EmulationStation are in how the fields are *written*, not
+        in which fields exist -- and three near-identical row builders would
+        drift apart the first time one of them gained a column.
+        """
+        items = (self.library_view() or {}).get("items", [])
+        wanted = str(platform or "").strip().lower()
+        rows = []
+        for item in items:
+            slug = str(item.get("platform_slug") or item.get("platform") or "")
+            if wanted and slug.lower() != wanted:
+                continue
+            name = str(item.get("file_name") or item.get("filename")
+                       or item.get("name") or "")
+            rows.append({
+                "id": item.get("id") or item.get("rom_id") or "",
+                "title": item.get("name") or item.get("title") or name,
+                "platform": slug,
+                "filename": name,
+                "path": item.get("path") or item.get("full_path")
+                        or (str(self.library_root(None) / slug / name)
+                            if name and slug else ""),
+                "region": item.get("region") or "",
+                "verified": item.get("verified") or "",
+            })
+        return rows
+
+    def metrics(self) -> str:
+        """Everything a scrape needs, from state already computed."""
+        up = int(time.monotonic() - self._started)
+        return render_metrics({
+            "platforms": len(PLATFORMS),
+            "queued": len(self.queue),
+            "wanted": len(self.store.missing()),
+            "blocklist": len(self.store.list_items("blocklist")),
+            "uptime_seconds": up,
+            "dependencies": {
+                "prowlarr": bool(self.prowlarr._config.api_key),
+                **{lib["name"]: bool(lib.get("ok"))
+                   for lib in self.libraries_status()},
+            },
+            "imports": self.store.settings.get("_import_verdicts") or {},
+        })
+
     def play_route_counts(self) -> dict:
         """How many supported platforms are playable, and by which route.
 
@@ -1257,17 +1487,97 @@ def make_handler(service: ROMarr):
                 log.exception("%s %s failed", self.command, self.path)
                 return self._json(500, {"error": f"{type(exc).__name__}: {exc}"})
 
+        #: Paths that answer without a credential, and nothing else.
+        #:
+        #: `/` is the UI shell, which holds no data and is where somebody logs
+        #: in. `/api/v1/login` is how they do it. `/api/health` is the
+        #: container's HEALTHCHECK, which has no credential to offer -- it
+        #: answers, but see `_get`: unauthenticated it returns one bit rather
+        #: than the library paths and client URLs it used to hand out for free.
+        OPEN_PATHS = ("/", "/api/health", "/api/v1/login")
+
+        def _drain(self) -> None:
+            """Read the request body before refusing it.
+
+            A POST has already sent its body; replying without reading leaves
+            those bytes in the socket and the client sees an aborted
+            connection rather than the refusal. The refusal has to arrive to
+            be useful.
+            """
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                if length > 0:
+                    self.rfile.read(length)
+            except (ValueError, OSError):
+                pass
+
+        def _authorised(self) -> bool:
+            # Single sign-on first, when configured. `self.client_address` is
+            # the socket peer -- the only trustworthy source. Reading it from
+            # X-Forwarded-For would let anybody claim to be the proxy, which
+            # is the bypass the whole arrangement exists to close.
+            if service.sso is not None:
+                identity = service.sso.identify(
+                    self.headers, peer=self.client_address[0])
+                if identity.ok:
+                    return True
+                log.debug("sso refused: %s", identity.reason)
+            cookies = parse_cookies(self.headers.get("Cookie", ""))
+            query = parse_qs(urlparse(self.path).query)
+            return service.auth.authorised(self.headers, query, cookies)
+
+        def _gate(self, handler):
+            """Refuse before doing anything, unless the path is open.
+
+            Wrapped around every verb rather than checked inside each route:
+            a route added later is protected by default, and forgetting to
+            call a per-route check is exactly how the endpoints that queue
+            downloads end up answering strangers.
+            """
+            path = urlparse(self.path).path
+            # Rate limit before authenticating, and key on the caller's
+            # address: login is the one endpoint where guessing is the attack,
+            # so it has to be limited for callers who have not authenticated
+            # -- which is all of them, at that point.
+            category = RateLimiter.category_for(path)
+            allowed, retry = service.limiter.check(
+                category, self.client_address[0])
+            if not allowed:
+                # Drain first, for the same reason the 401 does: a POST has
+                # already sent its body, and replying without reading it
+                # aborts the connection so the caller never sees the 429 --
+                # which is precisely the caller who most needs to be told to
+                # slow down, and who will otherwise retry immediately.
+                self._drain()
+                self.send_response(429)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Retry-After", str(retry))
+                body = json.dumps({"error": "rate limited",
+                                   "retry_after": retry}).encode()
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                return self.wfile.write(body)
+            if path in self.OPEN_PATHS or self._authorised():
+                return self._guard(handler)
+            self._drain()
+            return self._json(401, {
+                "error": "unauthorised",
+                "detail": "Send your key as the X-Api-Key header, as "
+                          "Authorization: Bearer, or as ?apikey=. Find it "
+                          "under Settings -> General, or set ROMARR_API_KEY.",
+            })
+
         def do_GET(self):
-            return self._guard(self._get)
+            return self._gate(self._get)
 
         def do_POST(self):
-            return self._guard(self._post)
+            return self._gate(self._post)
 
         def do_PUT(self):
-            return self._guard(self._put)
+            return self._gate(self._put)
 
         def do_DELETE(self):
-            return self._guard(self._delete)
+            return self._gate(self._delete)
 
         def _get(self):
             route = urlparse(self.path)
@@ -1307,6 +1617,89 @@ def make_handler(service: ROMarr):
                 return self._json(200, {"items": service.download_clients()})
             if route.path == "/api/v1/downloadclient/schema":
                 return self._json(200, {"types": CLIENT_TYPES})
+            if route.path == "/metrics":
+                # Authenticated like everything else. A metrics endpoint that
+                # is open while the rest of the app is not is a hole with a
+                # Grafana dashboard attached: it names every dependency, the
+                # queue depth and the library size.
+                return self._send(200, service.metrics().encode(),
+                                  "text/plain; version=0.0.4; charset=utf-8")
+            if route.path == "/api/v1/backup":
+                include = query.get("secrets", ["0"])[0] in ("1", "true", "yes")
+                return self._json(200, make_backup(service.store.settings,
+                                                   include_secrets=include))
+            if route.path == "/api/v1/export":
+                what = (query.get("what", ["library"])[0] or "library").lower()
+                rows = {
+                    "library": service.library_view().get("items", []),
+                    "wanted": service.store.missing(),
+                    "blocklist": service.store.list_items("blocklist"),
+                }.get(what)
+                if rows is None:
+                    return self._json(400, {"error": "unknown export"})
+                if query.get("format", ["json"])[0].lower() == "csv":
+                    return self._send(200, to_csv(rows).encode(),
+                                      "text/csv; charset=utf-8")
+                return self._json(200, {"items": rows})
+            if route.path == "/api/v1/hub/catalogue":
+                catalogue = hub.plugins()
+                items = catalogue.get("items") or []
+                found = hub_search(
+                    items,
+                    query.get("q", [""])[0],
+                    capability=query.get("capability", [""])[0],
+                    platform=query.get("platform", [""])[0],
+                    installed={"1": True, "0": False}.get(
+                        query.get("installed", [""])[0]),
+                )
+                return self._json(200, {
+                    "items": found,
+                    "facets": hub_facets(items),
+                    "total": len(items),
+                    "matched": len(found),
+                    "error": catalogue.get("error"),
+                })
+            if route.path == "/api/v1/calendar":
+                return self._json(200, metadata_calendar(
+                    service.store.list_items("metadata_providers"),
+                    days_back=int(query.get("back", ["30"])[0] or 30),
+                    days_ahead=int(query.get("ahead", ["60"])[0] or 60)))
+            if route.path == "/api/v1/blocklist":
+                return self._json(200, {"items": service.blocklist.as_items()})
+            if route.path == "/api/v1/connection/schema":
+                return self._json(200, {"types": [
+                    {"name": name, "label": spec["label"],
+                     "fields": list(spec["fields"]), "help": spec["help"]}
+                    for name, spec in NOTIFIERS.items()]})
+            if route.path == "/api/v1/tag":
+                return self._json(200, {
+                    "tags": service.store.settings.get("_tags") or {}})
+            if route.path == "/api/v1/manualimport":
+                return self._json(200, service.scan(
+                    query.get("path", [""])[0]))
+            if route.path == "/api/v1/metadata/schema":
+                return self._json(200, {"providers": [
+                    {"name": name, "label": spec["label"],
+                     "fields": list(spec["fields"]), "help": spec["help"]}
+                    for name, spec in METADATA_PROVIDERS.items()]})
+            if route.path == "/api/v1/metadata/lookup":
+                return self._json(200, service.identify(
+                    filename=query.get("filename", [""])[0]))
+            if route.path == "/api/v1/frontend/formats":
+                return self._json(200, {"formats": [
+                    {"name": name, "label": spec["label"],
+                     "filename": spec["filename"]}
+                    for name, spec in FRONTEND_FORMATS.items()]})
+            if route.path == "/api/v1/frontend/export":
+                name = (query.get("format", ["launchbox"])[0] or "").lower()
+                spec = FRONTEND_FORMATS.get(name)
+                if spec is None:
+                    return self._json(400, {
+                        "error": "unknown format",
+                        "known": sorted(FRONTEND_FORMATS)})
+                rows = service.frontend_rows(query.get("platform", [""])[0])
+                return self._send(200, spec["render"](rows).encode("utf-8"),
+                                  spec["content_type"])
             if route.path == "/api/v1/indexer/schema":
                 return self._json(200, {"types": INDEXER_TYPES})
             if route.path == "/api/v1/library":
@@ -1322,6 +1715,13 @@ def make_handler(service: ROMarr):
                 return self._json(200, service.status())
             if route.path == "/api/v1/system/counts":
                 return self._json(200, service.counts())
+            if route.path == "/api/health" and not self._authorised():
+                # Liveness needs one bit. The full report names library paths,
+                # client URLs and counts, and this endpoint is reachable
+                # without a credential so the container HEALTHCHECK works --
+                # which made all of that free reconnaissance for anyone who
+                # could reach the port.
+                return self._json(200, {"ok": True})
             if route.path == "/api/health":
                 return self._json(200, service.health())
             if route.path == "/api/platforms":
@@ -1353,6 +1753,103 @@ def make_handler(service: ROMarr):
             except json.JSONDecodeError:
                 return self._json(400, {"error": "invalid json"})
 
+            if route.path == "/api/v1/blocklist":
+                # A release is blocked by identity, so a title the indexer
+                # rewrites tomorrow is still the same block.
+                from .selection import Release as _Release
+
+                release = _Release(
+                    title=str(body.get("title") or ""),
+                    size=int(body.get("size") or 0), seeders=0,
+                    categories=(), download_url=str(body.get("url") or ""),
+                    protocol="torrent",
+                    indexer=str(body.get("indexer") or ""))
+                return self._json(200, service.block(
+                    release, str(body.get("reason") or "")))
+            if route.path == "/api/v1/restore":
+                try:
+                    settings, warning = read_backup(body)
+                except ValueError as exc:
+                    return self._json(400, {"error": str(exc)})
+                service.store.settings.update(settings)
+                service.store.save()
+                service.reload_clients()
+                service.reload_libraries()
+                return self._json(200, {"ok": True, "warning": warning})
+            if route.path == "/api/v1/login":
+                # Exchange a credential for a session, so a browser presents
+                # the key once instead of carrying it in every request and
+                # holding it in the page where any script can read it.
+                supplied = str(body.get("apikey") or "")
+                password = str(body.get("password") or "")
+                if not (service.auth.check_key(supplied)
+                        or service.auth.check_password(password)):
+                    return self._json(401, {"error": "unauthorised"})
+                # The second factor gates the session, not the API key: a key
+                # is already a high-entropy secret and a script cannot be
+                # prompted. What 2FA protects is the interactive login.
+                if service.auth.totp.enabled and not supplied:
+                    if not service.auth.totp.verify(body.get("totp")):
+                        return self._json(401, {"error": "unauthorised",
+                                                "detail": "two-factor code "
+                                                          "required or wrong"})
+                token = service.auth.issue_session()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                # HttpOnly so a script cannot read it; SameSite=Strict so
+                # another site cannot ride it; Path=/ so it covers the API.
+                # Not Secure: ROMarr is normally plain http on a LAN, and a
+                # Secure cookie would simply never be stored there.
+                self.send_header(
+                    "Set-Cookie",
+                    f"{SESSION_COOKIE}={token}; HttpOnly; SameSite=Strict; "
+                    f"Path=/; Max-Age={service.auth.session_seconds}")
+                payload = json.dumps({"ok": True}).encode()
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                return self.wfile.write(payload)
+            if route.path == "/api/v1/connection/test":
+                got = service.notify(Message(
+                    "grab", "ROMarr test notification",
+                    body="If you can read this, the connection works.",
+                    reasons=("+50 this is a test",)))
+                return self._json(200, {"results": got})
+            if route.path == "/api/v1/tag":
+                merged = service.tag(str(body.get("id") or ""),
+                                     add=body.get("add"),
+                                     remove=body.get("remove"))
+                return self._json(200, {"tags": merged})
+            if route.path == "/api/v1/hub/submit":
+                # Prepared, never sent. Publishing under somebody's name is
+                # their decision; a tool that posts because a button was
+                # clicked in a settings page has made it for them.
+                submission = Submission(
+                    slug=str(body.get("slug") or "").strip(),
+                    name=str(body.get("name") or "").strip(),
+                    repository=str(body.get("repository") or "").strip(),
+                    author=str(body.get("author") or "").strip(),
+                    description=str(body.get("description") or "").strip(),
+                    capabilities=list(body.get("capabilities") or []),
+                    platforms=list(body.get("platforms") or []),
+                )
+                problems = submission.problems(
+                    service.store.settings.get("plugin_hosts") or None)
+                if problems:
+                    return self._json(400, {"problems": problems})
+                return self._json(200, {
+                    "entry": submission.as_entry(),
+                    "submit_url": submission_link(submission),
+                    "note": "ROMarr does not post this for you. Open the link "
+                            "to review and submit it yourself.",
+                })
+            if route.path == "/api/v1/hub/source/check":
+                got = check_source(
+                    str(body.get("url") or ""),
+                    service.store.settings.get("plugin_hosts") or None)
+                return self._json(200 if got.ok else 400, {
+                    "ok": got.ok, "url": got.url, "host": got.host,
+                    "reason": got.reason,
+                })
             if route.path == "/api/v1/hub/plugin":
                 slug = (body.get("slug") or "").strip()
                 action = (body.get("action") or "").strip()

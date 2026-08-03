@@ -392,25 +392,223 @@ class Torznab:
         )
 
 
-def build_indexer(cfg: dict) -> Torznab | None:
+@dataclass
+class TorrentRssConfig:
+    url: str
+    name: str = "Torrent RSS"
+    private: bool = False
+    timeout: int = 60
+
+
+class TorrentRss:
+    """A plain RSS feed of torrents, as Radarr's "Torrent RSS Feed" offers.
+
+    No API, no key, no categories -- which is the whole difficulty. Everything
+    downstream assumes Newznab-shaped metadata, and the two fields a bare feed
+    does not carry are the two that decide whether a release survives:
+
+      * **Category.** `is_game_release` rejects anything without one, so every
+        result from a feed would be discarded before it was ever scored. The
+        feed is a game feed because the operator pointed ROMarr at it; that
+        decision is what the category records.
+      * **Seeders.** A feed does not publish them. Reporting 0 would read as
+        "dead torrent" on a public tracker and be rejected outright, so a feed
+        reports its items as if private -- keep it, rank it low, let the title
+        and size decide.
+
+    `search()` filters client-side. A feed has no query interface at all, so
+    the alternative is handing the scorer the entire feed for every request.
+    """
+
+    def __init__(self, config: TorrentRssConfig,
+                 session: requests.Session | None = None):
+        self._config = config
+        self._session = session or requests.Session()
+
+    @property
+    def name(self) -> str:
+        return self._config.name
+
+    def _body(self) -> str:
+        response = self._session.get(self._config.url,
+                                     timeout=self._config.timeout)
+        response.raise_for_status()
+        return response.text
+
+    def caps(self) -> bool:
+        """A feed that parses to at least a well-formed document is reachable."""
+        self._body()
+        return True
+
+    def search(self, term: str, *, limit: int = 100) -> list[Release]:
+        wanted = [w for w in _normalise_words(term) if len(w) > 2]
+        out = []
+        for release in self.parse(self._body()):
+            haystack = " ".join(_normalise_words(release.title))
+            if all(w in haystack for w in wanted):
+                out.append(release)
+            if len(out) >= limit:
+                break
+        return out
+
+    def parse(self, body: str) -> list[Release]:
+        import xml.etree.ElementTree as ET
+
+        try:
+            root = ET.fromstring(body or "")
+        except ET.ParseError:
+            log.warning("%s returned a feed that is not XML", self.name)
+            return []
+
+        out = []
+        for item in root.iter("item"):
+            title = (item.findtext("title") or "").strip()
+            enclosure = item.find("enclosure")
+            link = ""
+            size = 0
+            if enclosure is not None:
+                link = (enclosure.get("url") or "").strip()
+                try:
+                    size = int(enclosure.get("length") or 0)
+                except ValueError:
+                    size = 0
+            if not link:
+                link = (item.findtext("link") or "").strip()
+            if not title or not link:
+                continue
+            out.append(Release(
+                title=title, size=size,
+                # See the class docstring: a feed publishes no seeder count,
+                # and 0 on a public tracker means "dead".
+                seeders=1,
+                categories=(SEARCH_CATEGORIES[0],),
+                download_url=link, protocol="torrent",
+                indexer=self.name, private=True,
+            ))
+        return out
+
+
+@dataclass
+class TorrentPotatoConfig:
+    url: str
+    name: str = "TorrentPotato"
+    user: str = ""
+    passkey: str = ""
+    private: bool = True
+    timeout: int = 60
+
+
+class TorrentPotato:
+    """The TorrentPotato JSON API, as Radarr offers it.
+
+    A small JSON protocol a handful of private trackers expose directly. Its
+    one trap is `size`, which is **megabytes** -- reading it as bytes turns a
+    3 MB SNES release into 3 bytes, which the scorer rejects as "too small to
+    be a ROM". The indexer would return results, every one would be discarded,
+    and nothing would say why.
+    """
+
+    def __init__(self, config: TorrentPotatoConfig,
+                 session: requests.Session | None = None):
+        self._config = config
+        self._session = session or requests.Session()
+
+    @property
+    def name(self) -> str:
+        return self._config.name
+
+    def _get(self, **params) -> dict:
+        query = urlencode({**params, "user": self._config.user,
+                           "passkey": self._config.passkey})
+        response = self._session.get(
+            f"{self._config.url.rstrip('/')}?{query}",
+            timeout=self._config.timeout)
+        response.raise_for_status()
+        return response.json()
+
+    def caps(self) -> bool:
+        self._get(t="search", q="")
+        return True
+
+    def search(self, term: str, *, limit: int = 100) -> list[Release]:
+        return self.parse(self._get(t="search", q=term))[:limit]
+
+    def parse(self, body) -> list[Release]:
+        rows = (body or {}).get("results") if isinstance(body, dict) else None
+        if not isinstance(rows, list):
+            return []
+        out = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            link = str(row.get("download_url") or "").strip()
+            title = str(row.get("release_name") or "").strip()
+            if not link or not title:
+                continue
+            try:
+                megabytes = float(row.get("size") or 0)
+            except (TypeError, ValueError):
+                megabytes = 0.0
+            out.append(Release(
+                title=title,
+                size=int(megabytes * 1024 * 1024),
+                seeders=int(row.get("seeders") or 0),
+                categories=(SEARCH_CATEGORIES[0],),
+                download_url=link, protocol="torrent",
+                indexer=self.name, private=self._config.private,
+            ))
+        return out
+
+
+def _normalise_words(text: str) -> list[str]:
+    import re
+
+    return re.sub(r"[^a-z0-9]+", " ", str(text or "").lower()).split()
+
+
+def driver_for(kind: str) -> str:
+    """Which client family a stored indexer type belongs to."""
+    return INDEXER_TYPES.get(str(kind or "").lower(), {}).get("driver", "")
+
+
+def build_indexer(cfg: dict):
     """A searchable client for a stored indexer entry, or None.
 
     Prowlarr entries return None: they are driven by the Prowlarr class, which
     the service holds separately because it aggregates many indexers rather
-    than being one.
+    than being one. Searching it here as well would search it twice.
+
+    Everything else is dispatched on the type's declared driver rather than on
+    its name, which is what lets Jackett, NZBHydra2, Cardigann and Bitmagnet be
+    four rows in a table instead of four clients: they are all Torznab or
+    Newznab underneath, and the differences that matter -- default port, URL
+    shape, whether a key is required -- are configuration, not code.
     """
     kind = str(cfg.get("type") or "").lower()
-    if kind not in ("torznab", "newznab"):
+    driver = driver_for(kind)
+    if driver in ("", "prowlarr") or not cfg.get("url"):
         return None
-    if not cfg.get("url"):
-        return None
+    spec = INDEXER_TYPES[kind]
+    name = cfg.get("name") or spec["label"]
+
+    if driver == "rss":
+        return TorrentRss(TorrentRssConfig(
+            url=cfg["url"], name=name,
+            private=bool(cfg.get("private", True))))
+    if driver == "potato":
+        return TorrentPotato(TorrentPotatoConfig(
+            url=cfg["url"], name=name,
+            user=str(cfg.get("user") or ""),
+            passkey=str(cfg.get("passkey") or ""),
+            private=bool(cfg.get("private", True))))
+
     categories = tuple(indexer_categories(cfg)) or SEARCH_CATEGORIES
     return Torznab(TorznabConfig(
         base_url=cfg.get("url", ""),
         api_key=cfg.get("api_key", ""),
-        name=cfg.get("name") or kind.title(),
+        name=name,
         categories=categories,
-        protocol="usenet" if kind == "newznab" else "torrent",
+        protocol=spec["protocol"] if spec["protocol"] != "any" else "torrent",
         private=bool(cfg.get("private", False)),
     ))
 
@@ -466,11 +664,35 @@ _INDEXER_COMMON = [
                   help="Keep low-seeder results and never rebuild a public magnet"),
 ]
 
+def _family(url_default: str, url_help: str, *, key_required: bool = True,
+            private_default: bool = False) -> list[dict]:
+    """The common field list, with the product's own URL default and hint.
+
+    The hint is the point. Every one of these products speaks Torznab or
+    Newznab, so the code is identical -- what differs is the URL an operator
+    has to type, and getting it wrong is by far the most common way one of
+    these ends up configured, tested and returning nothing.
+    """
+    fields = []
+    for field in _INDEXER_COMMON:
+        field = dict(field)
+        if field["name"] == "url":
+            field.update(default=url_default, help=url_help)
+        elif field["name"] == "api_key":
+            field["required"] = key_required
+        elif field["name"] == "private":
+            field["default"] = private_default
+        fields.append(field)
+    return fields
+
+
 INDEXER_TYPES = {
     "prowlarr": {
         "label": "Prowlarr",
         "protocol": "any",
+        "driver": "prowlarr",
         "managed": True,
+        "help": "Aggregates every tracker you configure in it. Recommended.",
         "fields": [
             INDEXER_FIELD("name", "Name", default="Prowlarr"),
             INDEXER_FIELD("enable", "Enable", "bool", True),
@@ -478,8 +700,92 @@ INDEXER_TYPES = {
             INDEXER_FIELD("api_key", "API Key", "secret"),
         ],
     },
-    "torznab": {"label": "Torznab", "protocol": "torrent", "fields": _INDEXER_COMMON},
-    "newznab": {"label": "Newznab", "protocol": "usenet", "fields": _INDEXER_COMMON},
+    # -- aggregators and proxies, all Torznab/Newznab underneath -------------
+    "jackett": {
+        "label": "Jackett",
+        "protocol": "torrent",
+        "driver": "torznab",
+        "help": "The long-standing Prowlarr alternative. Caches queries and "
+                "carries definitions for obscure trackers Prowlarr dropped.",
+        "fields": _family(
+            "http://localhost:9117/api/v2.0/indexers/all/results/torznab/",
+            "Jackett's Torznab endpoint, NOT its homepage. `/indexers/all/` "
+            "searches every tracker at once; swap `all` for a tracker id to "
+            "search just that one."),
+    },
+    "nzbhydra2": {
+        "label": "NZBHydra2",
+        "protocol": "usenet",
+        "driver": "torznab",
+        "help": "Usenet-focused aggregator. Merges and dedupes across several "
+                "Newznab indexers.",
+        "fields": _family(
+            "http://localhost:5076/api",
+            "NZBHydra2's Newznab endpoint. Use /torznab/api instead if you "
+            "want its torrent results."),
+    },
+    "cardigann": {
+        "label": "Cardigann",
+        "protocol": "torrent",
+        "driver": "torznab",
+        "help": "Definition-driven proxy for trackers Jackett and Prowlarr do "
+                "not carry.",
+        "fields": _family(
+            "http://localhost:5060/torznab/",
+            "Cardigann's Torznab endpoint, with the indexer name appended.",
+            private_default=True),
+    },
+    "bitmagnet": {
+        "label": "Bitmagnet",
+        "protocol": "torrent",
+        "driver": "torznab",
+        "help": "Self-hosted DHT crawler. Indexes the network directly, so it "
+                "depends on no third-party tracker at all.",
+        "fields": _family(
+            "http://localhost:3333/torznab",
+            "Bitmagnet's Torznab endpoint.",
+            # It crawls the DHT itself, so there is nobody to authenticate to.
+            # Demanding a key would make a correct setup look broken.
+            key_required=False),
+    },
+    # -- raw protocols -------------------------------------------------------
+    "torznab": {"label": "Torznab", "protocol": "torrent", "driver": "torznab",
+                "help": "Any Torznab-compatible indexer.",
+                "fields": _INDEXER_COMMON},
+    "newznab": {"label": "Newznab", "protocol": "usenet", "driver": "torznab",
+                "help": "Any Newznab-compatible usenet indexer.",
+                "fields": _INDEXER_COMMON},
+    "torrentrss": {
+        "label": "Torrent RSS Feed",
+        "protocol": "torrent",
+        "driver": "rss",
+        "help": "A plain RSS feed of torrents. No query interface, so ROMarr "
+                "filters it here.",
+        "fields": [
+            INDEXER_FIELD("name", "Name", default="Torrent RSS"),
+            INDEXER_FIELD("enable", "Enable", "bool", True),
+            INDEXER_FIELD("url", "Feed URL",
+                          help="The RSS URL, including any passkey it needs"),
+            INDEXER_FIELD("priority", "Priority", "int", 25),
+            INDEXER_FIELD("private", "Private tracker", "bool", True),
+        ],
+    },
+    "torrentpotato": {
+        "label": "TorrentPotato",
+        "protocol": "torrent",
+        "driver": "potato",
+        "help": "The TorrentPotato JSON API, exposed by a few private "
+                "trackers directly.",
+        "fields": [
+            INDEXER_FIELD("name", "Name", default="TorrentPotato"),
+            INDEXER_FIELD("enable", "Enable", "bool", True),
+            INDEXER_FIELD("url", "URL"),
+            INDEXER_FIELD("user", "Username"),
+            INDEXER_FIELD("passkey", "Passkey", "secret"),
+            INDEXER_FIELD("priority", "Priority", "int", 25),
+            INDEXER_FIELD("private", "Private tracker", "bool", True),
+        ],
+    },
 }
 
 
@@ -496,10 +802,24 @@ def indexer_categories(cfg: dict) -> list[int]:
 SECRET_PLACEHOLDER = "********"
 
 
+def secret_field_names() -> set[str]:
+    """Every field name that is a secret in *any* indexer type.
+
+    Deliberately the union rather than the current type's own fields.
+    Redaction used to consult only the configured type, so a key that arrived
+    under one shape and stayed after the type changed -- an operator switching
+    a Torznab entry to a Torrent RSS feed, say -- was no longer a declared
+    field and went to the browser in the clear. The set of names that are
+    *ever* credentials is small and stable; the set a given row happens to
+    carry is neither.
+    """
+    return {f["name"] for spec in INDEXER_TYPES.values()
+            for f in spec.get("fields", []) if f["type"] == "secret"}
+
+
 def redact_indexer(cfg: dict) -> dict:
     """An indexer configuration safe to send to a browser."""
-    spec = INDEXER_TYPES.get(str(cfg.get("type") or "").lower(), {})
-    secrets = {f["name"] for f in spec.get("fields", []) if f["type"] == "secret"}
+    secrets = secret_field_names()
     return {
         k: (SECRET_PLACEHOLDER if k in secrets and v else v)
         for k, v in cfg.items()
