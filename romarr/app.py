@@ -58,6 +58,8 @@ from .indexers import Prowlarr, ProwlarrConfig
 from .library import import_rom, map_remote_path
 from .auth import DISABLED as AUTH_DISABLED
 from .auth import SESSION_COOKIE, Auth, new_api_key, parse_cookies
+from .catalogue import (Submission, check_source, facets as hub_facets,
+                        search as hub_search, submission_link)
 from .frontends import FORMATS as FRONTEND_FORMATS
 from .ops import RateLimiter, make_backup, read_backup, render_metrics, to_csv
 from .platforms import PLATFORMS, resolve
@@ -1520,6 +1522,24 @@ def make_handler(service: ROMarr):
                     return self._send(200, to_csv(rows).encode(),
                                       "text/csv; charset=utf-8")
                 return self._json(200, {"items": rows})
+            if route.path == "/api/v1/hub/catalogue":
+                catalogue = hub.plugins()
+                items = catalogue.get("items") or []
+                found = hub_search(
+                    items,
+                    query.get("q", [""])[0],
+                    capability=query.get("capability", [""])[0],
+                    platform=query.get("platform", [""])[0],
+                    installed={"1": True, "0": False}.get(
+                        query.get("installed", [""])[0]),
+                )
+                return self._json(200, {
+                    "items": found,
+                    "facets": hub_facets(items),
+                    "total": len(items),
+                    "matched": len(found),
+                    "error": catalogue.get("error"),
+                })
             if route.path == "/api/v1/frontend/formats":
                 return self._json(200, {"formats": [
                     {"name": name, "label": spec["label"],
@@ -1630,6 +1650,37 @@ def make_handler(service: ROMarr):
                 self.send_header("Content-Length", str(len(payload)))
                 self.end_headers()
                 return self.wfile.write(payload)
+            if route.path == "/api/v1/hub/submit":
+                # Prepared, never sent. Publishing under somebody's name is
+                # their decision; a tool that posts because a button was
+                # clicked in a settings page has made it for them.
+                submission = Submission(
+                    slug=str(body.get("slug") or "").strip(),
+                    name=str(body.get("name") or "").strip(),
+                    repository=str(body.get("repository") or "").strip(),
+                    author=str(body.get("author") or "").strip(),
+                    description=str(body.get("description") or "").strip(),
+                    capabilities=list(body.get("capabilities") or []),
+                    platforms=list(body.get("platforms") or []),
+                )
+                problems = submission.problems(
+                    service.store.settings.get("plugin_hosts") or None)
+                if problems:
+                    return self._json(400, {"problems": problems})
+                return self._json(200, {
+                    "entry": submission.as_entry(),
+                    "submit_url": submission_link(submission),
+                    "note": "ROMarr does not post this for you. Open the link "
+                            "to review and submit it yourself.",
+                })
+            if route.path == "/api/v1/hub/source/check":
+                got = check_source(
+                    str(body.get("url") or ""),
+                    service.store.settings.get("plugin_hosts") or None)
+                return self._json(200 if got.ok else 400, {
+                    "ok": got.ok, "url": got.url, "host": got.host,
+                    "reason": got.reason,
+                })
             if route.path == "/api/v1/hub/plugin":
                 slug = (body.get("slug") or "").strip()
                 action = (body.get("action") or "").strip()
