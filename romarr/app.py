@@ -67,6 +67,7 @@ from .notify import NOTIFIERS, Message, Notifier, failed, grabbed, imported
 from .profiles import Blocklist, ReleaseProfile, release_id
 from .upgrade import is_upgrade, merge_tags, scan as scan_directory
 from .metadata import Metadata, calendar as metadata_calendar
+from .openapi import spec as openapi_spec
 from .ops import RateLimiter, make_backup, read_backup, render_metrics, to_csv
 from .platforms import PLATFORMS, resolve
 from .sso import ForwardAuth
@@ -1677,6 +1678,8 @@ def make_handler(service: ROMarr):
             if route.path == "/api/v1/manualimport":
                 return self._json(200, service.scan(
                     query.get("path", [""])[0]))
+            if route.path == "/api/v1/openapi.json":
+                return self._json(200, openapi_spec(VERSION))
             if route.path == "/api/v1/metadata/schema":
                 return self._json(200, {"providers": [
                     {"name": name, "label": spec["label"],

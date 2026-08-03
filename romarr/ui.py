@@ -58,6 +58,73 @@ a{color:var(--accent);text-decoration:none}
   color:var(--fg);border:1px solid var(--line);border-radius:4px;outline:none}
 #top input:focus{border-color:var(--accent)}
 .page{padding:22px}
+/* ---- plugin catalogue ---------------------------------------------------
+   A card grid rather than a table. A plugin is a thing you decide to trust,
+   and that decision needs the description and the permissions in view at the
+   same time -- a table row makes you read across five columns to assemble
+   what one card says at a glance. */
+.cat-bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+  padding:0 0 14px;border-bottom:1px solid var(--line);margin-bottom:16px}
+.cat-bar input{flex:1;min-width:220px;padding:9px 13px;background:var(--bg);
+  color:var(--fg);border:1px solid var(--line);border-radius:7px;outline:none;
+  transition:border-color .12s,box-shadow .12s}
+.cat-bar input:focus{border-color:var(--accent);
+  box-shadow:0 0 0 3px rgba(242,163,60,.13)}
+.chip{padding:5px 11px;border-radius:999px;border:1px solid var(--line);
+  background:var(--bg);color:var(--dim);cursor:pointer;font-size:12px;
+  white-space:nowrap;transition:all .12s}
+.chip:hover{border-color:#555;color:var(--fg)}
+.chip.on{background:var(--accent);border-color:var(--accent);
+  color:var(--accent-ink);font-weight:600}
+.chip .n{opacity:.65;margin-left:5px}
+
+/* The scroll the catalogue needs once it is more than a screenful. Bounded
+   so the page header and the add-your-own panel stay put while it moves. */
+.cat-scroll{max-height:calc(100vh - 340px);min-height:220px;overflow-y:auto;
+  padding-right:6px;margin-right:-6px}
+.cat-scroll::-webkit-scrollbar{width:10px}
+.cat-scroll::-webkit-scrollbar-track{background:transparent}
+.cat-scroll::-webkit-scrollbar-thumb{background:#3d3d3d;border-radius:5px;
+  border:2px solid var(--panel)}
+.cat-scroll::-webkit-scrollbar-thumb:hover{background:#4d4d4d}
+
+.grid{display:grid;gap:12px;
+  grid-template-columns:repeat(auto-fill,minmax(310px,1fr))}
+.pcard{background:var(--bg);border:1px solid var(--line);border-radius:9px;
+  padding:14px 15px;display:flex;flex-direction:column;gap:9px;
+  transition:border-color .12s,transform .12s}
+.pcard:hover{border-color:#4a4a4a;transform:translateY(-1px)}
+.pcard.installed{border-left:3px solid var(--ok)}
+.pcard h4{font-size:14px;font-weight:600;display:flex;align-items:center;
+  gap:8px;margin:0}
+.pcard .by{color:var(--dim);font-size:11px;font-weight:400}
+.pcard .desc{color:#b4b4b4;font-size:12.5px;line-height:1.45;flex:1}
+.pcard .meta{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.pcard .foot{display:flex;gap:8px;align-items:center;
+  border-top:1px solid var(--line);padding-top:9px;margin-top:2px}
+.pcard .net{color:#7d7d7d;font-size:11px;margin-left:auto;text-align:right}
+.dot-ok{width:7px;height:7px;border-radius:50%;background:var(--ok);
+  display:inline-block;flex:none}
+.dot-off{width:7px;height:7px;border-radius:50%;background:#555;
+  display:inline-block;flex:none}
+
+.panels{display:grid;gap:14px;grid-template-columns:1fr 1fr;margin-top:16px}
+@media(max-width:900px){.panels{grid-template-columns:1fr}}
+.panel-note{background:rgba(91,155,213,.09);border:1px solid rgba(91,155,213,.3);
+  border-radius:7px;padding:10px 12px;color:#a8c8e8;font-size:12px;
+  line-height:1.5;margin-top:10px}
+.panel-warn{background:rgba(240,80,80,.09);border-color:rgba(240,80,80,.3);
+  color:#e8a8a8}
+.field{display:flex;flex-direction:column;gap:5px;margin-bottom:10px}
+.field label{font-size:11px;text-transform:uppercase;letter-spacing:.06em;
+  color:var(--dim)}
+.field input,.field textarea{padding:8px 11px;background:var(--bg);
+  color:var(--fg);border:1px solid var(--line);border-radius:6px;outline:none;
+  font:13px/1.5 inherit;transition:border-color .12s}
+.field input:focus,.field textarea:focus{border-color:var(--accent)}
+.field textarea{resize:vertical;min-height:58px}
+.empty-cat{text-align:center;padding:48px 20px;color:var(--dim)}
+.empty-cat b{display:block;color:var(--fg);margin-bottom:6px;font-size:15px}
 .hide{display:none !important}
 
 /* ---- shared ---- */
@@ -199,53 +266,142 @@ addEventListener('hashchange',()=>go(location.hash.slice(1)||'library'));
 /* ---------------- pages ---------------- */
 const RENDER={};
 RENDER.hub=async()=>{
-  const p=$('#page'); p.innerHTML='<div class="empty">Reading the plugin catalogue…</div>';
-  const d=await j('/api/v1/hub/plugins').catch(()=>({items:[],error:'ROM Hub unreachable'}));
-  if(d.error && !(d.items||[]).length){
-    p.innerHTML='<div class="card"><h3>ROM Hub</h3><p class="help">'+esc(d.error)+'</p>'
-      +'<p class="help">The Hub is the plugin layer of the Cartridge ecosystem — the sources '
-      +'ROMarr can acquire from. Install it beside ROMarr to light this up.</p></div>';
-    return;
-  }
-  const items=d.items||[];
-  const cap=c=>'<span class="pill">'+esc(c)+'</span>';
-  const rows=items.map(pl=>{
-    const status = pl.installed
-      ? '<span class="okt">'+(pl.enabled?'● enabled':'○ disabled')+'</span>'
-        +'<button class="mini" data-act="'+(pl.enabled?'disable':'enable')+'" data-slug="'+esc(pl.slug)+'">'
-        +(pl.enabled?'Disable':'Enable')+'</button>'
-      : '<button class="mini accent" data-act="install" data-slug="'+esc(pl.slug)+'">'
-        +'Install'+(pl.key_required?' (needs key)':'')+'</button>';
-    return '<tr><td><b>'+esc(pl.name)+'</b><div class="help" style="margin:2px 0 0">'
-      +esc(pl.description||'')+'</div></td>'
-      +'<td>'+((pl.capabilities||[]).map(cap).join(' ')||'—')+'</td>'
-      +'<td style="white-space:nowrap">'+(esc((pl.platforms||[]).slice(0,3).join(', '))||'—')+'</td>'
-      +'<td style="color:var(--dim);font-size:12px">'+esc((pl.network||[]).slice(0,2).join(', '))+'</td>'
-      +'<td style="white-space:nowrap">'+status+'</td></tr>';
-  }).join('');
-  p.innerHTML='<div class="card"><h3>Plugins <span class="help">'
-    +(d.installed_count||0)+' of '+(d.total||items.length)+' installed</span></h3>'
-    +'<p class="help">Sources ROMarr can search and import from — part of the <b>Cartridge</b> '
-    +'ecosystem. Plugins are sandboxed and third-party; install only ones you trust.</p>'
-    +'<table><thead><tr><th>Plugin</th><th>Capabilities</th><th>Platforms</th><th>Network</th>'
-    +'<th>Status</th></tr></thead><tbody>'
-    +(rows||'<tr><td colspan=5 class="empty">No plugins in the catalogue.</td></tr>')
-    +'</tbody></table><p id="hub-msg" class="help"></p></div>';
-  document.querySelectorAll('[data-act]').forEach(b=>b.onclick=async()=>{
-    const slug=b.dataset.slug, action=b.dataset.act;
-    b.disabled=true; b.textContent='…';
-    const msg=$('#hub-msg');
-    try{
-      const r=await fetch('/api/v1/hub/plugin',{method:'POST',
+  const p=$('#page');
+  p.innerHTML='<div class="empty">Reading the plugin catalogue…</div>';
+
+  // State lives here rather than in the DOM: a filter that has to be read
+  // back out of the markup drifts from what is actually displayed.
+  let q='', cap='', inst='';
+
+  const load=async()=>{
+    const qs=new URLSearchParams();
+    if(q) qs.set('q',q);
+    if(cap) qs.set('capability',cap);
+    if(inst) qs.set('installed',inst);
+    return j('/api/v1/hub/catalogue?'+qs.toString())
+      .catch(()=>({items:[],facets:{capabilities:[],platforms:[]},error:'ROM Hub unreachable'}));
+  };
+
+  const card=pl=>{
+    const caps=(pl.capabilities||[]).map(c=>'<span class="pill">'+esc(c)+'</span>').join(' ');
+    const net=(pl.network||[]).slice(0,2).join(', ');
+    const action = pl.installed
+      ? '<span class="'+(pl.enabled?'dot-ok':'dot-off')+'"></span>'
+        +'<span class="help" style="margin:0">'+(pl.enabled?'Enabled':'Disabled')+'</span>'
+        +'<button class="mini" data-act="'+(pl.enabled?'disable':'enable')+'" '
+        +'data-slug="'+esc(pl.slug)+'">'+(pl.enabled?'Disable':'Enable')+'</button>'
+      : '<button class="mini accent" data-act="install" data-slug="'+esc(pl.slug)+'">Install'
+        +(pl.key_required?' · key needed':'')+'</button>';
+    return '<div class="pcard'+(pl.installed?' installed':'')+'">'
+      +'<h4>'+esc(pl.name)+(pl.author?'<span class="by">by '+esc(pl.author)+'</span>':'')+'</h4>'
+      +'<div class="desc">'+esc(pl.description||'No description supplied.')+'</div>'
+      +'<div class="meta">'+(caps||'<span class="help" style="margin:0">no capabilities declared</span>')+'</div>'
+      +'<div class="foot">'+action
+      +(net?'<span class="net">reaches '+esc(net)+'</span>':'')+'</div></div>';
+  };
+
+  const render=d=>{
+    const items=d.items||[];
+    const facets=(d.facets&&d.facets.capabilities)||[];
+    const chips=facets.map(([name,n])=>
+      '<span class="chip'+(cap===name?' on':'')+'" data-cap="'+esc(name)+'">'
+      +esc(name)+'<span class="n">'+n+'</span></span>').join('');
+
+    p.innerHTML='<div class="card"><h3>Plugins'
+      +'<span class="help" style="margin-left:10px">'+items.length+' of '+(d.total||0)+'</span></h3>'
+      +'<div class="cat-bar">'
+      +'<input id="pq" placeholder="Search plugins by name, author or description…" value="'+esc(q)+'">'
+      +'<span class="chip'+(inst==='1'?' on':'')+'" data-inst="1">Installed</span>'
+      +'<span class="chip'+(inst==='0'?' on':'')+'" data-inst="0">Available</span>'
+      +chips+'</div>'
+      +(d.error?'<div class="panel-note panel-warn">'+esc(d.error)+'</div>':'')
+      +'<div class="cat-scroll">'
+      +(items.length?'<div class="grid">'+items.map(card).join('')+'</div>'
+        :'<div class="empty-cat"><b>Nothing matches</b>'
+         +'Try a different search, or add your own plugin below.</div>')
+      +'</div></div>'
+
+      +'<div class="panels">'
+      +'<div class="card"><h3>Add your own</h3>'
+      +'<p class="help">Install a plugin straight from its repository — yours, '
+      +'or somebody else\'s that is not in the catalogue yet.</p>'
+      +'<div class="field"><label>Repository URL</label>'
+      +'<input id="ownurl" placeholder="https://github.com/you/rom-hub-your-plugin"></div>'
+      +'<button class="mini accent" id="ownadd">Check and install</button>'
+      +'<div id="ownmsg"></div>'
+      +'<div class="panel-note">A plugin is code ROMarr runs. Only https, and only '
+      +'from a forge where you can read the source first — the check tells you which '
+      +'hosts are allowed.</div></div>'
+
+      +'<div class="card"><h3>Submit to be featured</h3>'
+      +'<p class="help">Propose your plugin for the shared catalogue so everyone '
+      +'can find it.</p>'
+      +'<div class="field"><label>Slug</label><input id="sslug" placeholder="your-plugin"></div>'
+      +'<div class="field"><label>Name</label><input id="sname" placeholder="Your Plugin"></div>'
+      +'<div class="field"><label>Repository</label><input id="srepo" placeholder="https://github.com/you/your-plugin"></div>'
+      +'<div class="field"><label>Capabilities</label><input id="scaps" placeholder="search, importer"></div>'
+      +'<div class="field"><label>Description</label><textarea id="sdesc" '
+      +'placeholder="What it does, and what somebody is trusting when they run it."></textarea></div>'
+      +'<button class="mini accent" id="ssubmit">Prepare submission</button>'
+      +'<div id="smsg"></div>'
+      +'<div class="panel-note">ROMarr does not post this for you. It prepares the '
+      +'entry and hands you a link to review and submit yourself.</div></div>'
+      +'</div>';
+
+    const qi=$('#pq');
+    let t=null;
+    qi.oninput=()=>{clearTimeout(t);t=setTimeout(async()=>{
+      q=qi.value.trim();
+      const at=qi.selectionStart;
+      render(await load());
+      const n=$('#pq'); n.focus(); n.setSelectionRange(at,at);
+    },220);};
+
+    p.querySelectorAll('.chip[data-cap]').forEach(c=>c.onclick=async()=>{
+      cap = cap===c.dataset.cap ? '' : c.dataset.cap; render(await load());});
+    p.querySelectorAll('.chip[data-inst]').forEach(c=>c.onclick=async()=>{
+      inst = inst===c.dataset.inst ? '' : c.dataset.inst; render(await load());});
+
+    p.querySelectorAll('button[data-act]').forEach(b=>b.onclick=async()=>{
+      b.disabled=true; b.textContent='Working…';
+      await fetch('/api/v1/hub/plugin',{method:'POST',
         headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({slug:slug,action:action})}).then(x=>x.json());
-      if(msg) msg.innerHTML = r.ok
-        ? '<span class="okt">'+esc(action)+' '+esc(slug)+' ✓</span>'
-        : '<span style="color:var(--bad)">'+esc(action)+' '+esc(slug)+' failed: '
-          +esc((r.err||r.error||'').slice(0,200))+'</span>';
-    }catch(e){ if(msg) msg.textContent='request failed: '+e; }
-    go('hub');
-  });
+        body:JSON.stringify({slug:b.dataset.slug,action:b.dataset.act})});
+      render(await load());
+    });
+
+    $('#ownadd').onclick=async()=>{
+      const msg=$('#ownmsg');
+      const r=await fetch('/api/v1/hub/source/check',{method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({url:$('#ownurl').value.trim()})});
+      const d=await r.json();
+      msg.innerHTML='<div class="panel-note'+(d.ok?'':' panel-warn')+'">'
+        +esc(d.ok?('Source accepted: '+d.host+'. Installing…'):d.reason)+'</div>';
+    };
+
+    $('#ssubmit').onclick=async()=>{
+      const msg=$('#smsg');
+      const r=await fetch('/api/v1/hub/submit',{method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+          slug:$('#sslug').value.trim(), name:$('#sname').value.trim(),
+          repository:$('#srepo').value.trim(),
+          description:$('#sdesc').value.trim(),
+          capabilities:$('#scaps').value.split(',').map(x=>x.trim()).filter(Boolean)})});
+      const d=await r.json();
+      if(d.problems){
+        msg.innerHTML='<div class="panel-note panel-warn"><b>Fix these:</b><br>'
+          +d.problems.map(esc).join('<br>')+'</div>';
+      }else{
+        msg.innerHTML='<div class="panel-note">Ready. '
+          +'<a href="'+esc(d.submit_url)+'" target="_blank" rel="noopener">'
+          +'Open the submission</a> to review and post it yourself.</div>';
+      }
+    };
+  };
+
+  render(await load());
 };
 
 RENDER.library=async()=>{

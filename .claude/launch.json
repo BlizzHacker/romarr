@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "romarr",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "romarr"],
+      "port": 6868
+    }
+  ]
+}
