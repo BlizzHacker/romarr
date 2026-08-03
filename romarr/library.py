@@ -94,6 +94,10 @@ class ImportResult:
     #: What the DAT said about the bytes that actually landed. `unknown` when
     #: no DAT is loaded, which is the default and is not a failure.
     verification: Match = field(default_factory=lambda: Match(UNKNOWN))
+    #: What the game is, once a metadata provider has been asked. Empty
+    #: when none is configured -- metadata is an enhancement and its
+    #: absence must never look like a failed import.
+    info: dict = field(default_factory=dict)
 
 
 def is_safe_name(name: str, root: Path) -> bool:

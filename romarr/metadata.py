@@ -247,3 +247,68 @@ class Metadata:
             if info.found:
                 return GameInfo(**{**info.__dict__, "matched_by": how})
         return GameInfo(matched_by=how)
+
+
+# --- release calendar -------------------------------------------------------
+
+def _rawg_calendar(cfg: dict, start: str, end: str, limit: int) -> list[dict]:
+    key = str(cfg.get("api_key") or "")
+    if not key:
+        return []
+    url = ("https://api.rawg.io/api/games?"
+           + urllib.parse.urlencode({
+               "key": key, "dates": f"{start},{end}",
+               "ordering": "released", "page_size": limit}))
+    body = _get_json(url) or {}
+    out = []
+    for row in body.get("results") or []:
+        out.append({
+            "title": str(row.get("name") or ""),
+            "released": str(row.get("released") or ""),
+            "rating": float(row.get("rating") or 0.0),
+            "cover_url": str(row.get("background_image") or ""),
+            "platforms": [str((p.get("platform") or {}).get("name") or "")
+                          for p in (row.get("platforms") or [])],
+            "source": "RAWG",
+        })
+    return out
+
+
+#: Which providers can answer a date range. RAWG can; IGDB's date filtering
+#: needs a different query shape and is not worth a second code path until
+#: somebody asks for it.
+CALENDAR_PROVIDERS = {"rawg": _rawg_calendar}
+
+
+def calendar(providers: list[dict], *, days_back: int = 30,
+             days_ahead: int = 60, limit: int = 40) -> dict:
+    """Games released recently or due soon.
+
+    A window in both directions on purpose. "Upcoming" alone is the obvious
+    reading and the less useful one -- most of what somebody wants to acquire
+    came out last month, not next month.
+    """
+    import datetime
+
+    today = datetime.date.today()
+    start = (today - datetime.timedelta(days=days_back)).isoformat()
+    end = (today + datetime.timedelta(days=days_ahead)).isoformat()
+
+    for cfg in providers or []:
+        if not cfg.get("enable", True):
+            continue
+        answer = CALENDAR_PROVIDERS.get(str(cfg.get("type") or "").lower())
+        if answer is None:
+            continue
+        try:
+            rows = answer(cfg, start, end, limit)
+        except Exception as exc:
+            log.warning("calendar lookup failed: %s", exc)
+            continue
+        if rows:
+            today_iso = today.isoformat()
+            for row in rows:
+                row["upcoming"] = bool(row.get("released", "") > today_iso)
+            return {"items": rows, "from": start, "to": end, "error": None}
+    return {"items": [], "from": start, "to": end,
+            "error": "no metadata provider with an API key is configured"}

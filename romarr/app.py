@@ -49,6 +49,7 @@ from .libraries import (
 )
 from .clients import QBittorrent, QbitConfig, Romm, RommConfig
 from . import hub  # ROM Hub bridge -- the Cartridge plugin layer
+from .dat import DatIndex, parse_dat
 from .downloaders import (
     CLIENT_TYPES, NZBGet, NzbgetConfig, SABnzbd, SabConfig, build_client,
     merge_secrets, pick_client, redact,
@@ -61,6 +62,11 @@ from .auth import SESSION_COOKIE, Auth, new_api_key, parse_cookies
 from .catalogue import (Submission, check_source, facets as hub_facets,
                         search as hub_search, submission_link)
 from .frontends import FORMATS as FRONTEND_FORMATS
+from .metadata import PROVIDERS as METADATA_PROVIDERS
+from .notify import NOTIFIERS, Message, Notifier, failed, grabbed, imported
+from .profiles import Blocklist, ReleaseProfile, release_id
+from .upgrade import is_upgrade, merge_tags, scan as scan_directory
+from .metadata import Metadata, calendar as metadata_calendar
 from .ops import RateLimiter, make_backup, read_backup, render_metrics, to_csv
 from .platforms import PLATFORMS, resolve
 from .sso import ForwardAuth
@@ -252,6 +258,10 @@ class ROMarr:
         # verifies the request came *through* it, learns who the user is, and
         # can require a group.
         self.limiter = RateLimiter()
+        self.reload_dats(e.get("DAT_PATH", "")
+                         or self.store.settings.get("dat_path", ""))
+        self.reload_metadata()
+        self.reload_policy()
         self.sso = None
         if mode == "forward":
             self.sso = ForwardAuth(
@@ -1126,6 +1136,115 @@ class ROMarr:
             "uptime": f"{up // 3600}h {(up % 3600) // 60}m",
         }
 
+    def reload_dats(self, directory: str = "") -> dict:
+        """Load every DAT under `directory`.
+
+        Optional and quiet. An operator with no DATs is the common case on
+        day one, and it must not turn every import into an error -- the index
+        simply answers `unknown`, which is a real verdict rather than a
+        failure.
+        """
+        self.dats = DatIndex()
+        self.store.settings["dat_path"] = str(directory or "")
+        if not directory:
+            return {"loaded": 0, "path": ""}
+        root = Path(directory)
+        if not root.is_dir():
+            log.warning("DAT_PATH %s is not a directory", root)
+            return {"loaded": 0, "path": str(root),
+                    "error": f"{root} is not a directory"}
+        for path in sorted(root.rglob("*.dat")) + sorted(root.rglob("*.xml")):
+            try:
+                self.dats.add(parse_dat(path.read_text(encoding="utf-8",
+                                                       errors="replace")))
+            except OSError as exc:
+                log.warning("could not read %s: %s", path, exc)
+        log.info("loaded %d DAT(s) from %s", len(self.dats.dats), root)
+        return {"loaded": len(self.dats.dats), "path": str(root)}
+
+    def reload_policy(self) -> None:
+        """Rebuild the operator's selection policy and notification fan-out.
+
+        Held on the service rather than rebuilt per search: a blocklist is
+        read on every candidate, and re-parsing it thousands of times during
+        one interactive search is work nobody asked for.
+        """
+        self.profile = ReleaseProfile.from_settings(self.store.settings)
+        self.blocklist = Blocklist.from_items(
+            self.store.list_items("blocklist"))
+        self.notifier = Notifier(self.store.list_items("connections"))
+
+    def block(self, release, reason: str = "") -> dict:
+        """Never take this release again, and record why."""
+        entry = self.blocklist.add(release, reason=reason)
+        self.store.put_item("blocklist", entry)
+        return entry
+
+    def unblock(self, entry_id: str) -> bool:
+        self.blocklist.remove(entry_id)
+        return self.store.delete_item("blocklist", entry_id)
+
+    def notify(self, message) -> list[dict]:
+        """Fan out, and never let a failure here matter.
+
+        The delivery is a courtesy; the import is the work.
+        """
+        try:
+            return self.notifier.send(message)
+        except Exception as exc:
+            log.warning("notification fan-out failed: %s", exc)
+            return []
+
+    def tag(self, item_id: str, add=None, remove=None) -> list[str]:
+        """Set the tags on one library item."""
+        tags = self.store.settings.setdefault("_tags", {})
+        merged = merge_tags(tags.get(str(item_id)) or [], add, remove)
+        if merged:
+            tags[str(item_id)] = merged
+        else:
+            tags.pop(str(item_id), None)
+        self.store.save()
+        return merged
+
+    def tags_for(self, item_id: str) -> list[str]:
+        return list((self.store.settings.get("_tags") or {}).get(str(item_id))
+                    or [])
+
+    def scan(self, directory: str) -> dict:
+        """Manual import: what is already on disk that ROMarr could adopt."""
+        result = scan_directory(directory, PLATFORMS, self.dats)
+        return {
+            "candidates": [vars(c) for c in result.candidates],
+            "skipped": result.skipped,
+            "error": result.error,
+        }
+
+    def reload_metadata(self) -> None:
+        """Rebuild the provider chain from stored settings."""
+        self.metadata = Metadata(self.store.list_items("metadata_providers"))
+
+    def identify(self, filename: str = "", verification=None) -> dict:
+        """Name a game, and say how confidently.
+
+        `matched_by` travels with the answer because "we matched a DAT name"
+        and "we guessed from the filename" deserve different amounts of trust.
+        A UI that shows a cover without saying which is inviting somebody to
+        believe the wrong one.
+        """
+        info = self.metadata.identify(verification=verification,
+                                      filename=filename)
+        return {
+            "found": info.found,
+            "title": info.title,
+            "summary": info.summary,
+            "released": info.released,
+            "rating": info.rating,
+            "genres": list(info.genres),
+            "cover_url": info.cover_url,
+            "source": info.source,
+            "matched_by": info.matched_by,
+        }
+
     def frontend_rows(self, platform: str = "") -> list[dict]:
         """The library flattened into the shape every frontend export wants.
 
@@ -1540,6 +1659,32 @@ def make_handler(service: ROMarr):
                     "matched": len(found),
                     "error": catalogue.get("error"),
                 })
+            if route.path == "/api/v1/calendar":
+                return self._json(200, metadata_calendar(
+                    service.store.list_items("metadata_providers"),
+                    days_back=int(query.get("back", ["30"])[0] or 30),
+                    days_ahead=int(query.get("ahead", ["60"])[0] or 60)))
+            if route.path == "/api/v1/blocklist":
+                return self._json(200, {"items": service.blocklist.as_items()})
+            if route.path == "/api/v1/connection/schema":
+                return self._json(200, {"types": [
+                    {"name": name, "label": spec["label"],
+                     "fields": list(spec["fields"]), "help": spec["help"]}
+                    for name, spec in NOTIFIERS.items()]})
+            if route.path == "/api/v1/tag":
+                return self._json(200, {
+                    "tags": service.store.settings.get("_tags") or {}})
+            if route.path == "/api/v1/manualimport":
+                return self._json(200, service.scan(
+                    query.get("path", [""])[0]))
+            if route.path == "/api/v1/metadata/schema":
+                return self._json(200, {"providers": [
+                    {"name": name, "label": spec["label"],
+                     "fields": list(spec["fields"]), "help": spec["help"]}
+                    for name, spec in METADATA_PROVIDERS.items()]})
+            if route.path == "/api/v1/metadata/lookup":
+                return self._json(200, service.identify(
+                    filename=query.get("filename", [""])[0]))
             if route.path == "/api/v1/frontend/formats":
                 return self._json(200, {"formats": [
                     {"name": name, "label": spec["label"],
@@ -1608,6 +1753,19 @@ def make_handler(service: ROMarr):
             except json.JSONDecodeError:
                 return self._json(400, {"error": "invalid json"})
 
+            if route.path == "/api/v1/blocklist":
+                # A release is blocked by identity, so a title the indexer
+                # rewrites tomorrow is still the same block.
+                from .selection import Release as _Release
+
+                release = _Release(
+                    title=str(body.get("title") or ""),
+                    size=int(body.get("size") or 0), seeders=0,
+                    categories=(), download_url=str(body.get("url") or ""),
+                    protocol="torrent",
+                    indexer=str(body.get("indexer") or ""))
+                return self._json(200, service.block(
+                    release, str(body.get("reason") or "")))
             if route.path == "/api/v1/restore":
                 try:
                     settings, warning = read_backup(body)
@@ -1650,6 +1808,17 @@ def make_handler(service: ROMarr):
                 self.send_header("Content-Length", str(len(payload)))
                 self.end_headers()
                 return self.wfile.write(payload)
+            if route.path == "/api/v1/connection/test":
+                got = service.notify(Message(
+                    "grab", "ROMarr test notification",
+                    body="If you can read this, the connection works.",
+                    reasons=("+50 this is a test",)))
+                return self._json(200, {"results": got})
+            if route.path == "/api/v1/tag":
+                merged = service.tag(str(body.get("id") or ""),
+                                     add=body.get("add"),
+                                     remove=body.get("remove"))
+                return self._json(200, {"tags": merged})
             if route.path == "/api/v1/hub/submit":
                 # Prepared, never sent. Publishing under somebody's name is
                 # their decision; a tool that posts because a button was

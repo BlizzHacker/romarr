@@ -188,3 +188,93 @@ def test_a_provider_with_no_credential_is_skipped_rather_than_failing():
 def test_every_provider_is_declared_completely(name):
     spec = PROVIDERS[name]
     assert spec["label"] and callable(spec["lookup"]) and spec["help"]
+
+
+# --- wired, not merely written --------------------------------------------
+
+def test_the_service_builds_a_metadata_chain(tmp_path):
+    """This test exists because the module shipped unwired.
+
+    249 lines and 27 green tests, and nothing in app.py imported it -- the
+    exact "configuration that tests green and does nothing" failure this
+    project keeps finding elsewhere, committed here. A unit-tested module
+    nobody calls is dead code with a certificate.
+    """
+    from romarr.app import ROMarr
+
+    service = ROMarr({"ROMARR_DATA": str(tmp_path / "s.json")})
+    assert hasattr(service, "metadata")
+    assert hasattr(service, "identify")
+
+
+def test_identify_returns_the_shape_the_api_serves(tmp_path):
+    from romarr.app import ROMarr
+
+    service = ROMarr({"ROMARR_DATA": str(tmp_path / "s.json")})
+    got = service.identify(filename="Super Metroid (USA) [!].sfc")
+    assert set(got) >= {"found", "title", "cover_url", "matched_by", "source"}
+    assert got["matched_by"] == "filename"
+
+
+def test_adding_a_provider_and_reloading_takes_effect(tmp_path):
+    from romarr.app import ROMarr
+
+    service = ROMarr({"ROMARR_DATA": str(tmp_path / "s.json")})
+    assert service.metadata.providers == []
+    service.store.put_item("metadata_providers",
+                           {"type": "rawg", "api_key": "k", "enable": True})
+    service.reload_metadata()
+    assert len(service.metadata.providers) == 1
+
+
+# --- calendar --------------------------------------------------------------
+
+def test_the_calendar_reports_why_it_is_empty():
+    """"No games" and "you have not configured a provider" look identical in
+    a UI unless one of them says so."""
+    from romarr.metadata import calendar
+
+    got = calendar([])
+    assert got["items"] == []
+    assert "api key" in got["error"].lower()
+
+
+def test_the_calendar_window_looks_backwards_as_well_as_forwards():
+    """"Upcoming" alone is the obvious reading and the less useful one: most
+    of what somebody wants to acquire came out last month."""
+    import datetime
+
+    from romarr.metadata import calendar
+
+    got = calendar([], days_back=30, days_ahead=60)
+    today = datetime.date.today()
+    assert got["from"] < today.isoformat() < got["to"]
+
+
+def test_the_calendar_marks_which_entries_are_still_upcoming(monkeypatch):
+    import datetime
+
+    from romarr import metadata as module
+
+    soon = (datetime.date.today() + datetime.timedelta(days=10)).isoformat()
+    past = (datetime.date.today() - datetime.timedelta(days=10)).isoformat()
+    monkeypatch.setitem(
+        module.CALENDAR_PROVIDERS, "rawg",
+        lambda cfg, start, end, limit: [
+            {"title": "Future Game", "released": soon},
+            {"title": "Past Game", "released": past}])
+
+    rows = module.calendar([{"type": "rawg", "api_key": "k"}])["items"]
+    assert {r["title"]: r["upcoming"] for r in rows} == {
+        "Future Game": True, "Past Game": False}
+
+
+def test_a_calendar_provider_that_raises_does_not_break_the_page(monkeypatch):
+    from romarr import metadata as module
+
+    def boom(cfg, start, end, limit):
+        raise OSError("refused")
+
+    monkeypatch.setitem(module.CALENDAR_PROVIDERS, "rawg", boom)
+    got = module.calendar([{"type": "rawg", "api_key": "k"}])
+    assert got["items"] == [] and got["error"]
