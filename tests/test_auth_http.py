@@ -192,3 +192,113 @@ def test_the_key_is_never_returned_by_the_config_endpoint(server):
     base, service = server
     _, body, _ = get(base + "/api/v1/config", key="testkey")
     assert b"testkey" not in body
+
+
+# --- single sign-on, as a request meets it ---------------------------------
+
+def _serve(service):
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(service))
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return f"http://127.0.0.1:{httpd.server_address[1]}", httpd
+
+
+def test_sso_accepts_an_identity_from_a_trusted_proxy(tmp_path):
+    """127.0.0.1 is the peer for a loopback test, so trusting it here is the
+    same arrangement an operator has with a proxy on the LAN."""
+    service = ROMarr({"ROMARR_DATA": str(tmp_path / "s.json"),
+                      "ROMARR_API_KEY": "k",
+                      "ROMARR_AUTH": "forward",
+                      "ROMARR_TRUSTED_PROXIES": "127.0.0.1/32"})
+    base, httpd = _serve(service)
+    try:
+        request = urllib.request.Request(base + "/api/v1/game")
+        request.add_header("X-authentik-username", "wade")
+        with urllib.request.urlopen(request, timeout=10) as response:
+            assert response.status == 200
+    finally:
+        httpd.shutdown(); httpd.server_close()
+
+
+def test_the_identity_header_alone_is_not_a_login(tmp_path):
+    """The bypass this exists to close: with the peer outside every trusted
+    range, `curl -H 'X-authentik-username: admin'` must be worth nothing."""
+    service = ROMarr({"ROMARR_DATA": str(tmp_path / "s.json"),
+                      "ROMARR_API_KEY": "k",
+                      "ROMARR_AUTH": "forward",
+                      # Loopback is deliberately NOT trusted here, so the
+                      # test's own connection is an untrusted peer.
+                      "ROMARR_TRUSTED_PROXIES": "10.99.99.0/24"})
+    base, httpd = _serve(service)
+    try:
+        code, _, _ = get(base + "/api/v1/game")
+        assert code == 401
+        request = urllib.request.Request(base + "/api/v1/game")
+        request.add_header("X-authentik-username", "admin")
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                assert False, f"header alone was accepted: {response.status}"
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 401
+    finally:
+        httpd.shutdown(); httpd.server_close()
+
+
+def test_the_api_key_still_works_alongside_sso(tmp_path):
+    """A script cannot go through the browser's SSO flow, so the key has to
+    keep working or every automation breaks the day SSO is turned on."""
+    service = ROMarr({"ROMARR_DATA": str(tmp_path / "s.json"),
+                      "ROMARR_API_KEY": "k",
+                      "ROMARR_AUTH": "forward",
+                      "ROMARR_TRUSTED_PROXIES": "10.99.99.0/24"})
+    base, httpd = _serve(service)
+    try:
+        assert get(base + "/api/v1/game", key="k")[0] == 200
+    finally:
+        httpd.shutdown(); httpd.server_close()
+
+
+def test_a_required_group_is_enforced_over_http(tmp_path):
+    service = ROMarr({"ROMARR_DATA": str(tmp_path / "s.json"),
+                      "ROMARR_API_KEY": "k",
+                      "ROMARR_AUTH": "forward",
+                      "ROMARR_TRUSTED_PROXIES": "127.0.0.1/32",
+                      "ROMARR_SSO_GROUP": "romarr-admins"})
+    base, httpd = _serve(service)
+    try:
+        for groups, expected in (("users|romarr-admins", 200), ("users", 401)):
+            request = urllib.request.Request(base + "/api/v1/game")
+            request.add_header("X-authentik-username", "wade")
+            request.add_header("X-authentik-groups", groups)
+            try:
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    assert response.status == expected, groups
+            except urllib.error.HTTPError as exc:
+                assert exc.code == expected, groups
+    finally:
+        httpd.shutdown(); httpd.server_close()
+
+
+def test_login_requires_the_second_factor_when_one_is_enrolled(tmp_path):
+    from romarr.totp import code_at, new_secret
+    import time as _time
+
+    secret = new_secret()
+    service = ROMarr({"ROMARR_DATA": str(tmp_path / "s.json"),
+                      "ROMARR_API_KEY": "k"})
+    service.auth.password_hash = service.auth.hash_password("hunter2")
+    service.auth.totp.secret = secret
+    base, httpd = _serve(service)
+    try:
+        # Right password, no code.
+        code, _, _ = get(base + "/api/v1/login", method="POST",
+                         body={"password": "hunter2"})
+        assert code == 401
+
+        # Right password, right code.
+        code, _, headers = get(base + "/api/v1/login", method="POST",
+                               body={"password": "hunter2",
+                                     "totp": code_at(secret, int(_time.time()))})
+        assert code == 200
+        assert "romarr_session=" in headers.get("Set-Cookie", "")
+    finally:
+        httpd.shutdown(); httpd.server_close()

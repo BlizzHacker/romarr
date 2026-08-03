@@ -59,6 +59,8 @@ from .library import import_rom, map_remote_path
 from .auth import DISABLED as AUTH_DISABLED
 from .auth import SESSION_COOKIE, Auth, new_api_key, parse_cookies
 from .platforms import PLATFORMS, resolve
+from .sso import ForwardAuth
+from .totp import Totp
 from .playability import DOWNLOAD, StreamServer, routes_for
 from .selection import best_release, judge, score
 from .store import Event, Store
@@ -226,11 +228,41 @@ class ROMarr:
             api_key = new_api_key()
             log.info("generated an API key; find it under Settings -> General")
         self.store.settings["_api_key"] = api_key
+        mode = e.get("ROMARR_AUTH", "").strip().lower()
         self.auth = Auth(
             api_key=api_key,
             password_hash=self.store.settings.get("_password_hash", ""),
-            enabled=e.get("ROMARR_AUTH", "").strip().lower() != AUTH_DISABLED,
+            enabled=mode != AUTH_DISABLED,
         )
+        self.auth.totp = Totp(
+            secret=self.store.settings.get("_totp_secret", ""),
+            backup=self.store.settings.get("_totp_backup", []) or [],
+        )
+
+        # Single sign-on, when a proxy in front is the authority.
+        #
+        # This is what `ROMARR_AUTH=disabled` should have been. That setting
+        # is honest about what it does -- ROMarr stops checking anything, so
+        # any request reaching the port is in, including one that bypassed the
+        # proxy entirely. Forward mode keeps the proxy as the authority but
+        # verifies the request came *through* it, learns who the user is, and
+        # can require a group.
+        self.sso = None
+        if mode == "forward":
+            self.sso = ForwardAuth(
+                provider=e.get("ROMARR_SSO_PROVIDER", "authentik"),
+                trusted_proxies=[p.strip() for p
+                                 in e.get("ROMARR_TRUSTED_PROXIES", "").split(",")
+                                 if p.strip()],
+                user_header=e.get("ROMARR_SSO_USER_HEADER", ""),
+                groups_header=e.get("ROMARR_SSO_GROUPS_HEADER", ""),
+                required_group=e.get("ROMARR_SSO_GROUP", ""),
+            )
+            if not self.sso.trusted_proxies:
+                log.error(
+                    "ROMARR_AUTH=forward with no ROMARR_TRUSTED_PROXIES: every "
+                    "request will be refused. Set it to the proxy's address, "
+                    "e.g. 192.168.0.0/24")
 
         self._seed_from_env(e)
         self.reload_clients()
@@ -1294,6 +1326,16 @@ def make_handler(service: ROMarr):
         OPEN_PATHS = ("/", "/api/health", "/api/v1/login")
 
         def _authorised(self) -> bool:
+            # Single sign-on first, when configured. `self.client_address` is
+            # the socket peer -- the only trustworthy source. Reading it from
+            # X-Forwarded-For would let anybody claim to be the proxy, which
+            # is the bypass the whole arrangement exists to close.
+            if service.sso is not None:
+                identity = service.sso.identify(
+                    self.headers, peer=self.client_address[0])
+                if identity.ok:
+                    return True
+                log.debug("sso refused: %s", identity.reason)
             cookies = parse_cookies(self.headers.get("Cookie", ""))
             query = parse_qs(urlparse(self.path).query)
             return service.auth.authorised(self.headers, query, cookies)
@@ -1441,6 +1483,14 @@ def make_handler(service: ROMarr):
                 if not (service.auth.check_key(supplied)
                         or service.auth.check_password(password)):
                     return self._json(401, {"error": "unauthorised"})
+                # The second factor gates the session, not the API key: a key
+                # is already a high-entropy secret and a script cannot be
+                # prompted. What 2FA protects is the interactive login.
+                if service.auth.totp.enabled and not supplied:
+                    if not service.auth.totp.verify(body.get("totp")):
+                        return self._json(401, {"error": "unauthorised",
+                                                "detail": "two-factor code "
+                                                          "required or wrong"})
                 token = service.auth.issue_session()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
