@@ -23,6 +23,7 @@ Three are implemented:
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
@@ -680,6 +681,108 @@ LIBRARY_TYPES = {
 }
 
 
+# --------------------------------------------------- out-of-tree backends --
+#
+# The four backends above are compiled in, and for a long time that was the
+# whole list -- `build_library_from_config` was an if-chain, so the only way to
+# teach ROMarr a new library server was to edit this file and ship a release.
+# That is the wrong shape for the long tail. New self-hosted library servers
+# appear faster than any one project can absorb them, some are private or
+# pre-release and cannot be named in a public tree at all, and a house with an
+# in-development server should not have to fork ROMarr to file into it.
+#
+# So a backend is registrable. A driver is a module that calls
+# `register_library_backend` with a label, a field list and a builder; ROMarr
+# then treats it exactly like a compiled-in one -- it appears in the Libraries
+# page schema, routes by platform, redacts its secrets and imports into it,
+# with no further wiring. Registration mutates LIBRARY_TYPES rather than
+# shadowing it so every existing reader picks it up without knowing this
+# mechanism exists.
+
+#: kind -> callable(cfg) -> Library, for backends registered at runtime.
+_REGISTERED: dict[str, callable] = {}
+
+
+def register_library_backend(kind: str, *, label: str, build,
+                             fields: list | None = None,
+                             default_port: int = 0,
+                             common_fields: bool = True) -> None:
+    """Teach ROMarr a library backend defined outside this file.
+
+    `build` takes the stored config dict and returns something satisfying the
+    Library protocol. `fields` are added to the standard name/enable/url/path
+    set unless `common_fields` is False, in which case they are the whole form.
+
+    Re-registering a kind replaces it, so a driver can be reloaded in place;
+    the compiled-in four are refused, because silently swapping the meaning of
+    "romm" underneath an existing configuration would be a data-loss bug rather
+    than an extension.
+    """
+    kind = (kind or "").strip().lower()
+    if not kind:
+        raise ValueError("a backend kind cannot be empty")
+    if kind in LIBRARY_KINDS:
+        raise ValueError(f"{kind!r} is a built-in backend and cannot be replaced")
+    if not callable(build):
+        raise TypeError("build must be callable")
+
+    base = list(_COMMON_LIBRARY_FIELDS) if common_fields else []
+    LIBRARY_TYPES[kind] = {
+        "label": label,
+        "default_port": default_port,
+        "fields": base + list(fields or []),
+        # Marks the row as not shipped with ROMarr, so the UI can say where it
+        # came from instead of implying the project supports it.
+        "external": True,
+    }
+    _REGISTERED[kind] = build
+    log.info("registered library backend %r (%s)", kind, label)
+
+
+def registered_backends() -> tuple[str, ...]:
+    """Kinds added at runtime, in registration order."""
+    return tuple(_REGISTERED)
+
+
+def load_backend_plugins(directory: str | None = None) -> list[str]:
+    """Import every driver in the backends directory.
+
+    Drop-in rather than packaged: a driver is one file in a directory ROMarr
+    is pointed at, which is the lowest-ceremony thing that works for a private
+    or site-local backend -- no build, no publish, no entry point.
+
+    A driver that raises is logged and skipped. One bad file must not stop the
+    service, for the same reason one bad row in the settings file does not:
+    the fix would then be locked behind the UI it prevented from starting.
+    """
+    import importlib.util
+
+    from pathlib import Path
+
+    root = Path(directory or os.environ.get("ROMARR_BACKENDS_DIR", "")
+                or "/opt/romarr/backends")
+    loaded: list[str] = []
+    if not root.is_dir():
+        return loaded
+
+    for path in sorted(root.glob("*.py")):
+        if path.name.startswith("_"):
+            continue
+        try:
+            spec = importlib.util.spec_from_file_location(
+                f"romarr_backend_{path.stem}", path)
+            if spec is None or spec.loader is None:
+                continue
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+        except Exception as err:  # noqa: BLE001 - a driver may fail any way
+            log.warning("library backend %s failed to load: %s: %s",
+                        path.name, err.__class__.__name__, err)
+            continue
+        loaded.append(path.stem)
+    return loaded
+
+
 def redact_library(cfg: dict) -> dict:
     """A library configuration safe to send to a browser."""
     spec = LIBRARY_TYPES.get(str(cfg.get("type") or "").lower(), {})
@@ -730,6 +833,16 @@ def build_library_from_config(cfg: dict):
     if kind == "romm":
         return Romm(RommConfig(base_url=url, username=user, password=pw,
                                api_token=key))
+    # A registered driver is consulted after the built-ins, never before, so
+    # no out-of-tree file can take over a shipped backend.
+    builder = _REGISTERED.get(kind)
+    if builder is not None:
+        try:
+            return builder(cfg)
+        except Exception as err:  # noqa: BLE001 - a driver may fail any way
+            log.warning("library backend %r failed to build: %s: %s",
+                        kind, err.__class__.__name__, err)
+            return None
     log.warning("ignoring library of unknown kind %r", kind)
     return None
 

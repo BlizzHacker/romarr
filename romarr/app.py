@@ -45,7 +45,7 @@ import time
 
 from .libraries import (
     LIBRARY_TYPES, build_library, build_library_from_config,
-    merge_library_secrets, redact_library, route_library,
+    load_backend_plugins, merge_library_secrets, redact_library, route_library,
 )
 from .clients import QBittorrent, QbitConfig, Romm, RommConfig
 from . import hub  # ROM Hub bridge -- the Cartridge plugin layer
@@ -478,6 +478,12 @@ class ROMarr:
         Mirrors reload_clients, for the same reason: a library added on the
         Libraries page has to work without a restart.
         """
+        # Before anything is built, so a drop-in driver's kind is known by the
+        # time stored rows are read. Reloaded on every pass rather than once at
+        # import, so dropping in a driver and hitting Reload is enough -- the
+        # same expectation the Libraries page already sets for everything else.
+        load_backend_plugins()
+
         self._seed_libraries_from_env(self._env)
 
         built: list[tuple[dict, object]] = []
