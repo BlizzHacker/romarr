@@ -1920,6 +1920,15 @@ def make_handler(service: ROMarr):
 
         def _delete(self):
             route = urlparse(self.path)
+            if route.path.startswith("/api/v1/blocklist/"):
+                # Lifting a block is a decision, so it is its own verb rather
+                # than a flag on an update -- and the reason the entry carried
+                # is what the operator read before making it.
+                from urllib.parse import unquote
+
+                entry_id = unquote(route.path[len("/api/v1/blocklist/"):])
+                removed = service.unblock(entry_id)
+                return self._json(200 if removed else 404, {"deleted": removed})
             if route.path.startswith("/api/v1/library/"):
                 item_id = route.path[len("/api/v1/library/"):]
                 removed = service.store.delete_item("libraries", item_id)

@@ -207,13 +207,17 @@ input:focus,select:focus{border-color:var(--accent)}
 NAV = [
     ("Library",  [("library", "Games", "games"), ("add", "Add New", None),
                   ("search", "Interactive Search", None)]),
-    ("Wanted",   [("missing", "Missing", "missing")]),
-    ("Activity", [("queue", "Queue", "queued"), ("history", "History", None)]),
+    ("Wanted",   [("missing", "Missing", "missing"), ("calendar", "Calendar", None)]),
+    ("Activity", [("queue", "Queue", "queued"), ("history", "History", None),
+                  ("blocklist", "Blocklist", None)]),
     ("Hub",      [("hub", "Plugins", None)]),
     ("Settings", [("media", "Media Management", None), ("profiles", "Profiles", None),
                   ("indexers", "Indexers", None), ("clients", "Download Clients", None),
-                  ("libraries", "Libraries", None), ("general", "General", None)]),
+                  ("libraries", "Libraries", None),
+                  ("connections", "Connections", None),
+                  ("metadata", "Metadata", None), ("general", "General", None)]),
     ("System",   [("status", "Status", None), ("platforms", "Platforms", None),
+                  ("manualimport", "Manual Import", None),
                   ("tasks", "Tasks", None), ("logs", "Logs", None)]),
 ]
 
@@ -256,6 +260,8 @@ function go(page){
     indexers:'Indexers',clients:'Download Clients',libraries:'Libraries',
     general:'General',
     status:'System Status',platforms:'Platforms',tasks:'Tasks',logs:'Logs',
+    blocklist:'Blocklist',connections:'Connections',metadata:'Metadata',
+    calendar:'Release Calendar',manualimport:'Manual Import',
     hub:'ROM Hub — Plugins'};
   $('#top h1').textContent=titles[page]||'ROMarr';
   $('#search').classList.toggle('hide', !['library','add'].includes(page));
@@ -973,6 +979,180 @@ RENDER.platforms=async()=>{
       <td style="color:var(--dim);font-size:12px">${esc((p.extensions||[]).join(' '))}</td>
     </tr>`).join('')}
     </tbody></table></div>`;
+};
+
+// --- Blocklist -------------------------------------------------------------
+// Every other *arr shows you a list of blocked releases. This shows why each
+// one is blocked, which is the only form of the answer anybody can act on.
+RENDER.blocklist=async()=>{
+  const d=await j('/api/v1/blocklist').catch(()=>({items:[]}));
+  const items=d.items||[];
+  const when=t=>t?new Date(t*1000).toLocaleString():'—';
+  $('#page').innerHTML='<div class="card"><h3>Blocklist '
+    +'<span class="help" style="margin-left:8px">'+items.length+'</span></h3>'
+    +'<p class="help">Releases ROMarr will never take again. Each carries the '
+    +'reason it was blocked, so lifting one is a decision rather than a guess.</p>'
+    +(items.length
+      ?'<table><thead><tr><th>Release</th><th>Indexer</th><th>Reason</th>'
+       +'<th>Blocked</th><th></th></tr></thead><tbody>'
+       +items.map(i=>'<tr><td><b>'+esc(i.title||'(untitled)')+'</b>'
+         +'<div class="help" style="margin:2px 0 0;font-size:11px">'+esc(i.id)+'</div></td>'
+         +'<td>'+esc(i.indexer||'—')+'</td>'
+         +'<td>'+esc(i.reason||'—')+'</td>'
+         +'<td style="white-space:nowrap">'+esc(when(i.blocked_at))+'</td>'
+         +'<td><button class="mini" data-un="'+esc(i.id)+'">Unblock</button></td></tr>').join('')
+       +'</tbody></table>'
+      :'<div class="empty-cat"><b>Nothing blocked</b>'
+       +'A release lands here when a download fails or you reject it.</div>')
+    +'</div>';
+  $('#page').querySelectorAll('button[data-un]').forEach(b=>b.onclick=async()=>{
+    await fetch('/api/v1/blocklist/'+encodeURIComponent(b.dataset.un),{method:'DELETE'});
+    RENDER.blocklist();
+  });
+};
+
+// --- Connections -----------------------------------------------------------
+RENDER.connections=async()=>{
+  const [schema,cfg]=await Promise.all([
+    j('/api/v1/connection/schema').catch(()=>({types:[]})),
+    j('/api/v1/config').catch(()=>({}))]);
+  const have=cfg.connections||[];
+  const types=schema.types||[];
+  $('#page').innerHTML='<div class="card"><h3>Connections</h3>'
+    +'<p class="help">Where ROMarr tells you what it did. A grab notification '
+    +'carries the reasons the release was chosen, not just its name.</p>'
+    +(have.length
+      ?'<table><thead><tr><th>Name</th><th>Type</th><th>Events</th><th></th></tr></thead><tbody>'
+       +have.map(c=>'<tr><td><b>'+esc(c.name||c.type)+'</b></td>'
+         +'<td><span class="pill">'+esc(c.type)+'</span></td>'
+         +'<td>'+esc((c.events||['all']).join(', '))+'</td>'
+         +'<td><span class="'+(c.enable===false?'dot-off':'dot-ok')+'"></span></td></tr>').join('')
+       +'</tbody></table>'
+      :'<div class="empty-cat"><b>No connections yet</b>Pick a provider below.</div>')
+    +'<div class="row" style="margin-top:14px">'
+    +'<button class="btn ghost" id="ctest">Send a test notification</button>'
+    +'<span id="ctestmsg" class="help" style="margin:0"></span></div></div>'
+
+    +'<div class="card"><h3>Available providers</h3>'
+    +'<div class="pgrid">'+types.map(t=>
+      '<div class="pcard"><h4>'+esc(t.label)+'</h4>'
+      +'<div class="desc">'+esc(t.help)+'</div>'
+      +'<div class="meta">'+(t.fields||[]).map(f=>'<span class="pill">'+esc(f)+'</span>').join(' ')+'</div>'
+      +'</div>').join('')+'</div></div>';
+
+  $('#ctest').onclick=async()=>{
+    const m=$('#ctestmsg'); m.textContent='Sending…';
+    const r=await fetch('/api/v1/connection/test',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:'{}'});
+    const d=await r.json();
+    const res=d.results||[];
+    m.textContent = res.length
+      ? res.map(x=>x.name+': '+(x.ok?'delivered':'failed')).join(' · ')
+      : 'No connections configured.';
+  };
+};
+
+// --- Metadata --------------------------------------------------------------
+RENDER.metadata=async()=>{
+  const schema=await j('/api/v1/metadata/schema').catch(()=>({providers:[]}));
+  const probe=await j('/api/v1/metadata/lookup?filename='
+    +encodeURIComponent('Chrono.Trigger.USA.v1.1.smc')).catch(()=>({}));
+  $('#page').innerHTML='<div class="card"><h3>Metadata</h3>'
+    +'<p class="help">ROMarr looks a game up by its <b>DAT-verified name</b> when it '
+    +'has one, and only falls back to parsing the filename when it does not. '
+    +'Every result says which was used, because a cover matched from a guess '
+    +'deserves less trust than one matched from a hash.</p>'
+    +'<table><thead><tr><th>Provider</th><th>Needs</th><th>Notes</th></tr></thead><tbody>'
+    +(schema.providers||[]).map(p=>'<tr><td><b>'+esc(p.label)+'</b></td>'
+      +'<td>'+(p.fields||[]).map(f=>'<span class="pill">'+esc(f)+'</span>').join(' ')+'</td>'
+      +'<td class="help" style="margin:0">'+esc(p.help)+'</td></tr>').join('')
+    +'</tbody></table></div>'
+
+    +'<div class="card"><h3>Try it</h3>'
+    +'<p class="help">A live lookup against whatever you have configured.</p>'
+    +'<div class="field"><label>Filename</label>'
+    +'<input id="mfn" value="Chrono.Trigger.USA.v1.1.smc"></div>'
+    +'<button class="mini accent" id="mgo">Identify</button>'
+    +'<div id="mout" style="margin-top:12px">'+metaResult(probe)+'</div></div>';
+
+  $('#mgo').onclick=async()=>{
+    const d=await j('/api/v1/metadata/lookup?filename='
+      +encodeURIComponent($('#mfn').value)).catch(()=>({}));
+    $('#mout').innerHTML=metaResult(d);
+  };
+};
+
+const metaResult=d=>{
+  if(!d||!d.matched_by) return '<div class="help">No answer.</div>';
+  const badge = d.matched_by==='dat'
+    ? '<span class="pill" style="background:var(--ok);color:#08210d">matched by DAT — exact</span>'
+    : '<span class="pill">matched by filename — a guess</span>';
+  return '<div class="pcard"><h4>'+esc(d.title||'Not identified')+'</h4>'
+    +'<div class="meta">'+badge+(d.source?'<span class="pill">'+esc(d.source)+'</span>':'')+'</div>'
+    +(d.summary?'<div class="desc">'+esc(d.summary)+'</div>':'')
+    +(d.found?'':'<div class="help" style="margin:0">Configure a provider above to '
+      +'turn this into a title, cover and description.</div>')+'</div>';
+};
+
+// --- Calendar --------------------------------------------------------------
+RENDER.calendar=async()=>{
+  const d=await j('/api/v1/calendar').catch(()=>({items:[],error:'unavailable'}));
+  const items=d.items||[];
+  $('#page').innerHTML='<div class="card"><h3>Release Calendar</h3>'
+    +'<p class="help">Games out recently or due soon. The window looks both ways '
+    +'on purpose — most of what you want to acquire came out last month, not next.</p>'
+    +(d.error?'<div class="panel-note panel-warn">'+esc(d.error)+'</div>':'')
+    +(items.length
+      ?'<div class="pgrid">'+items.map(g=>'<div class="pcard">'
+        +'<h4>'+esc(g.title)+'</h4>'
+        +'<div class="meta"><span class="pill">'+esc(g.released||'TBA')+'</span>'
+        +(g.upcoming?'<span class="pill" style="background:var(--info);color:#06131f">upcoming</span>':'')
+        +'</div>'
+        +'<div class="desc">'+esc((g.platforms||[]).slice(0,4).join(', '))+'</div>'
+        +'</div>').join('')+'</div>'
+      :'<div class="empty-cat"><b>Nothing to show</b>'
+       +'Add a metadata provider with an API key under Settings → Metadata.</div>')
+    +'</div>';
+};
+
+// --- Manual Import ---------------------------------------------------------
+// Radarr calls this Manual Import and it exists for the same reason: somebody
+// arrives with a library already on disk, and telling them to re-download
+// everything ROMarr could have adopted is absurd.
+RENDER.manualimport=async()=>{
+  $('#page').innerHTML='<div class="card"><h3>Manual Import</h3>'
+    +'<p class="help">Point ROMarr at a directory you already have. It works out '
+    +'which platform each file belongs to, and verifies against your DATs as it goes.</p>'
+    +'<div class="row"><input id="mipath" placeholder="/downloads/roms" '
+    +'style="flex:1;padding:8px 12px;background:var(--bg);color:var(--fg);'
+    +'border:1px solid var(--line);border-radius:6px">'
+    +'<button class="btn" id="miscan">Scan</button></div>'
+    +'<div id="mires" style="margin-top:14px"></div></div>';
+
+  $('#miscan').onclick=async()=>{
+    const out=$('#mires');
+    out.innerHTML='<div class="empty">Scanning…</div>';
+    const d=await j('/api/v1/manualimport?path='
+      +encodeURIComponent($('#mipath').value)).catch(()=>({error:'scan failed'}));
+    if(d.error){out.innerHTML='<div class="panel-note panel-warn">'+esc(d.error)+'</div>';return;}
+    const c=d.candidates||[];
+    const verdict=v=>v==='verified'
+      ? '<span class="pill" style="background:var(--ok);color:#08210d">verified</span>'
+      : v==='bad-dump'
+        ? '<span class="pill" style="background:var(--bad);color:#2a0b0b">bad dump</span>'
+        : '<span class="pill">unknown</span>';
+    out.innerHTML='<p class="help">'+c.length+' importable, '+(d.skipped||0)+' skipped.</p>'
+      +(c.length
+        ?'<table><thead><tr><th>File</th><th>Platform</th><th>Why</th>'
+         +'<th>DAT</th></tr></thead><tbody>'
+         +c.slice(0,200).map(x=>'<tr><td>'+esc(x.filename)+'</td>'
+           +'<td><span class="pill">'+esc(x.platform)+'</span></td>'
+           +'<td class="help" style="margin:0">'+esc(x.reason)+'</td>'
+           +'<td>'+verdict(x.verdict)+'</td></tr>').join('')
+         +'</tbody></table>'
+        :'<div class="empty-cat"><b>Nothing importable there</b>'
+         +'Check the path, or that the files carry extensions ROMarr knows.</div>');
+  };
 };
 
 RENDER.tasks=async()=>{
