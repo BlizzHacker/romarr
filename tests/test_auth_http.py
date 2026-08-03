@@ -302,3 +302,91 @@ def test_login_requires_the_second_factor_when_one_is_enrolled(tmp_path):
         assert "romarr_session=" in headers.get("Set-Cookie", "")
     finally:
         httpd.shutdown(); httpd.server_close()
+
+
+# --- ops endpoints, as a request meets them --------------------------------
+
+def test_metrics_needs_a_key_like_everything_else(server):
+    """A metrics endpoint open while the rest of the app is not is a hole
+    with a Grafana dashboard attached: it names every dependency, the queue
+    depth and the library size."""
+    base, _ = server
+    assert get(base + "/metrics")[0] == 401
+
+    code, body, _ = get(base + "/metrics", key="testkey")
+    assert code == 200
+    assert b"romarr_up 1" in body
+    assert b"# TYPE romarr_platforms gauge" in body
+
+
+def test_backup_omits_credentials_by_default(server):
+    base, service = server
+    service.store.settings["download_clients"] = [
+        {"name": "q", "type": "qbittorrent", "password": "hunter2"}]
+    _, body, _ = get(base + "/api/v1/backup", key="testkey")
+    assert b"hunter2" not in body
+    assert json.loads(body)["kind"] == "romarr-backup"
+
+
+def test_backup_can_include_credentials_when_asked(server):
+    base, service = server
+    service.store.settings["download_clients"] = [
+        {"name": "q", "type": "qbittorrent", "password": "hunter2"}]
+    _, body, _ = get(base + "/api/v1/backup?secrets=1", key="testkey")
+    assert b"hunter2" in body
+
+
+def test_restore_rejects_something_that_is_not_a_backup(server):
+    base, _ = server
+    code, _, _ = get(base + "/api/v1/restore", key="testkey", method="POST",
+                     body={"kind": "not-a-backup"})
+    assert code == 400
+
+
+def test_restore_round_trips_a_backup(server):
+    base, service = server
+    service.store.settings["min_seeders"] = 7
+    _, backup, _ = get(base + "/api/v1/backup", key="testkey")
+    service.store.settings["min_seeders"] = 1
+
+    code, body, _ = get(base + "/api/v1/restore", key="testkey", method="POST",
+                        body=json.loads(backup))
+    assert code == 200
+    assert service.store.settings["min_seeders"] == 7
+    assert "password" in json.loads(body)["warning"].lower()
+
+
+def test_export_offers_csv(server):
+    base, _ = server
+    code, body, headers = get(base + "/api/v1/export?what=wanted&format=csv",
+                              key="testkey")
+    assert code == 200
+    assert "text/csv" in headers.get("Content-Type", "")
+
+
+def test_an_unknown_export_is_refused(server):
+    base, _ = server
+    assert get(base + "/api/v1/export?what=nonsense", key="testkey")[0] == 400
+
+
+def test_login_is_rate_limited(tmp_path):
+    """The one endpoint where guessing is the attack, so it has to be limited
+    for callers who have not authenticated -- which is all of them there."""
+    service = ROMarr({"ROMARR_DATA": str(tmp_path / "s.json"),
+                      "ROMARR_API_KEY": "k"})
+    base, httpd = _serve(service)
+    try:
+        codes = [get(base + "/api/v1/login", method="POST",
+                     body={"apikey": "wrong"})[0] for _ in range(12)]
+        assert 429 in codes, codes
+        limited = get(base + "/api/v1/login", method="POST",
+                      body={"apikey": "wrong"})
+        assert limited[2].get("Retry-After")
+    finally:
+        httpd.shutdown(); httpd.server_close()
+
+
+def test_ordinary_browsing_is_not_rate_limited(server):
+    base, _ = server
+    codes = [get(base + "/api/v1/game", key="testkey")[0] for _ in range(20)]
+    assert set(codes) == {200}

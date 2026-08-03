@@ -58,6 +58,7 @@ from .indexers import Prowlarr, ProwlarrConfig
 from .library import import_rom, map_remote_path
 from .auth import DISABLED as AUTH_DISABLED
 from .auth import SESSION_COOKIE, Auth, new_api_key, parse_cookies
+from .ops import RateLimiter, make_backup, read_backup, render_metrics, to_csv
 from .platforms import PLATFORMS, resolve
 from .sso import ForwardAuth
 from .totp import Totp
@@ -247,6 +248,7 @@ class ROMarr:
         # proxy entirely. Forward mode keeps the proxy as the authority but
         # verifies the request came *through* it, learns who the user is, and
         # can require a group.
+        self.limiter = RateLimiter()
         self.sso = None
         if mode == "forward":
             self.sso = ForwardAuth(
@@ -1121,6 +1123,23 @@ class ROMarr:
             "uptime": f"{up // 3600}h {(up % 3600) // 60}m",
         }
 
+    def metrics(self) -> str:
+        """Everything a scrape needs, from state already computed."""
+        up = int(time.monotonic() - self._started)
+        return render_metrics({
+            "platforms": len(PLATFORMS),
+            "queued": len(self.queue),
+            "wanted": len(self.store.missing()),
+            "blocklist": len(self.store.list_items("blocklist")),
+            "uptime_seconds": up,
+            "dependencies": {
+                "prowlarr": bool(self.prowlarr._config.api_key),
+                **{lib["name"]: bool(lib.get("ok"))
+                   for lib in self.libraries_status()},
+            },
+            "imports": self.store.settings.get("_import_verdicts") or {},
+        })
+
     def play_route_counts(self) -> dict:
         """How many supported platforms are playable, and by which route.
 
@@ -1325,6 +1344,21 @@ def make_handler(service: ROMarr):
         #: than the library paths and client URLs it used to hand out for free.
         OPEN_PATHS = ("/", "/api/health", "/api/v1/login")
 
+        def _drain(self) -> None:
+            """Read the request body before refusing it.
+
+            A POST has already sent its body; replying without reading leaves
+            those bytes in the socket and the client sees an aborted
+            connection rather than the refusal. The refusal has to arrive to
+            be useful.
+            """
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                if length > 0:
+                    self.rfile.read(length)
+            except (ValueError, OSError):
+                pass
+
         def _authorised(self) -> bool:
             # Single sign-on first, when configured. `self.client_address` is
             # the socket peer -- the only trustworthy source. Reading it from
@@ -1349,21 +1383,31 @@ def make_handler(service: ROMarr):
             downloads end up answering strangers.
             """
             path = urlparse(self.path).path
+            # Rate limit before authenticating, and key on the caller's
+            # address: login is the one endpoint where guessing is the attack,
+            # so it has to be limited for callers who have not authenticated
+            # -- which is all of them, at that point.
+            category = RateLimiter.category_for(path)
+            allowed, retry = service.limiter.check(
+                category, self.client_address[0])
+            if not allowed:
+                # Drain first, for the same reason the 401 does: a POST has
+                # already sent its body, and replying without reading it
+                # aborts the connection so the caller never sees the 429 --
+                # which is precisely the caller who most needs to be told to
+                # slow down, and who will otherwise retry immediately.
+                self._drain()
+                self.send_response(429)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Retry-After", str(retry))
+                body = json.dumps({"error": "rate limited",
+                                   "retry_after": retry}).encode()
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                return self.wfile.write(body)
             if path in self.OPEN_PATHS or self._authorised():
                 return self._guard(handler)
-            # Drain the request body before refusing.
-            #
-            # A POST or PUT has already sent its body; replying without
-            # reading it leaves those bytes in the socket, and the client sees
-            # its connection aborted rather than the 401. The refusal has to
-            # arrive to be useful -- an unauthenticated caller that cannot
-            # tell "refused" from "network broke" will retry forever.
-            try:
-                length = int(self.headers.get("Content-Length") or 0)
-                if length > 0:
-                    self.rfile.read(length)
-            except (ValueError, OSError):
-                pass
+            self._drain()
             return self._json(401, {
                 "error": "unauthorised",
                 "detail": "Send your key as the X-Api-Key header, as "
@@ -1421,6 +1465,30 @@ def make_handler(service: ROMarr):
                 return self._json(200, {"items": service.download_clients()})
             if route.path == "/api/v1/downloadclient/schema":
                 return self._json(200, {"types": CLIENT_TYPES})
+            if route.path == "/metrics":
+                # Authenticated like everything else. A metrics endpoint that
+                # is open while the rest of the app is not is a hole with a
+                # Grafana dashboard attached: it names every dependency, the
+                # queue depth and the library size.
+                return self._send(200, service.metrics().encode(),
+                                  "text/plain; version=0.0.4; charset=utf-8")
+            if route.path == "/api/v1/backup":
+                include = query.get("secrets", ["0"])[0] in ("1", "true", "yes")
+                return self._json(200, make_backup(service.store.settings,
+                                                   include_secrets=include))
+            if route.path == "/api/v1/export":
+                what = (query.get("what", ["library"])[0] or "library").lower()
+                rows = {
+                    "library": service.library_view().get("items", []),
+                    "wanted": service.store.missing(),
+                    "blocklist": service.store.list_items("blocklist"),
+                }.get(what)
+                if rows is None:
+                    return self._json(400, {"error": "unknown export"})
+                if query.get("format", ["json"])[0].lower() == "csv":
+                    return self._send(200, to_csv(rows).encode(),
+                                      "text/csv; charset=utf-8")
+                return self._json(200, {"items": rows})
             if route.path == "/api/v1/indexer/schema":
                 return self._json(200, {"types": INDEXER_TYPES})
             if route.path == "/api/v1/library":
@@ -1474,6 +1542,16 @@ def make_handler(service: ROMarr):
             except json.JSONDecodeError:
                 return self._json(400, {"error": "invalid json"})
 
+            if route.path == "/api/v1/restore":
+                try:
+                    settings, warning = read_backup(body)
+                except ValueError as exc:
+                    return self._json(400, {"error": str(exc)})
+                service.store.settings.update(settings)
+                service.store.save()
+                service.reload_clients()
+                service.reload_libraries()
+                return self._json(200, {"ok": True, "warning": warning})
             if route.path == "/api/v1/login":
                 # Exchange a credential for a session, so a browser presents
                 # the key once instead of carrying it in every request and
