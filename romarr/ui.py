@@ -88,8 +88,8 @@ a{color:var(--accent);text-decoration:none}
   border:2px solid var(--panel)}
 .cat-scroll::-webkit-scrollbar-thumb:hover{background:#4d4d4d}
 
-.grid{display:grid;gap:12px;
-  grid-template-columns:repeat(auto-fill,minmax(310px,1fr))}
+.pgrid{display:grid;gap:12px;
+  grid-template-columns:repeat(auto-fill,minmax(320px,1fr))}
 .pcard{background:var(--bg);border:1px solid var(--line);border-radius:9px;
   padding:14px 15px;display:flex;flex-direction:column;gap:9px;
   transition:border-color .12s,transform .12s}
@@ -316,7 +316,7 @@ RENDER.hub=async()=>{
       +chips+'</div>'
       +(d.error?'<div class="panel-note panel-warn">'+esc(d.error)+'</div>':'')
       +'<div class="cat-scroll">'
-      +(items.length?'<div class="grid">'+items.map(card).join('')+'</div>'
+      +(items.length?'<div class="pgrid">'+items.map(card).join('')+'</div>'
         :'<div class="empty-cat"><b>Nothing matches</b>'
          +'Try a different search, or add your own plugin below.</div>')
       +'</div></div>'
