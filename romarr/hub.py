@@ -193,7 +193,34 @@ def disable(slug: str) -> dict:
 
 
 def uninstall(slug: str) -> dict:
-    return _run_cli("plugin", "uninstall", slug)
+    """ROM Hub has no uninstall, and saying so beats a usage dump.
+
+    Neither the CLI nor `registry.Registry` implements one -- `plugin` offers
+    install, browse, list, enable, disable, assets, config and secret, and the
+    registry has install/get/installed/set_enabled/set_config and nothing that
+    removes. Shelling out to `plugin uninstall` therefore printed argparse's
+    list of valid choices, which reads like a bug in ROMarr rather than a
+    capability the Hub does not have.
+
+    Disabling is the supported way to stop a plugin being used: it drops out of
+    the fan-out and any command aimed at it refuses. Removing the directory by
+    hand would leave the registry's state.json still listing it, which is why
+    that is not done from here either.
+    """
+    return {
+        "ok": False,
+        "out": "",
+        "err": (
+            f"ROM Hub cannot uninstall a plugin: neither its CLI nor its "
+            f"registry implements one. Disable {slug!r} instead -- it then "
+            f"drops out of search and every command aimed at it refuses. To "
+            f"remove it from disk entirely, delete "
+            f"$ROM_HUB_HOME/plugins/{slug} and its entry in "
+            f"$ROM_HUB_HOME/state.json together; removing only one of the two "
+            f"leaves the registry inconsistent."
+        ),
+        "code": -1,
+    }
 
 
 # Applied at import so in-process Hub calls see the same backend the CLI does.
