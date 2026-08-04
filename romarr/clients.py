@@ -60,7 +60,7 @@ class QBittorrent:
             data={"username": self._config.username, "password": self._config.password},
             timeout=self._config.timeout,
         )
-        self._authed = response.ok and response.text.strip() == "Ok."
+        self._authed = response.ok and (response.status_code == 204 or response.text.strip() == "Ok.")
         if not self._authed:
             log.warning("qbittorrent login rejected (status %s)", response.status_code)
         return self._authed

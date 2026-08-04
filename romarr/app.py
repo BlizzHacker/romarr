@@ -1432,23 +1432,35 @@ class ROMarr:
             target_cfg, target_lib = target
             label = target_cfg.get("name") or getattr(target_lib, "name", "library")
 
-            outcome = import_rom(path, platform, self.library_root(target_cfg))
-            if outcome.ok:
+            outcomes = import_rom(path, platform, self.library_root(target_cfg))
+            if not outcomes:
+                self.store.record(Event(kind="failed", game=name,
+                                        platform=platform.slug,
+                                        detail="no ROMs found in download"))
+                results.append({"name": name, "ok": False,
+                                "reason": "no ROMs found", "library": label})
+                continue
+
+            any_ok = any(o.ok for o in outcomes)
+            for outcome in outcomes:
+                if outcome.ok:
+                    self.store.record(Event(kind="imported", game=name,
+                                            platform=platform.slug, release=name,
+                                            library=label,
+                                            detail=str(outcome.destination)))
+                else:
+                    self.store.record(Event(kind="failed", game=name,
+                                            platform=platform.slug,
+                                            detail=outcome.reason))
+            if any_ok:
                 if self.store.settings.get("rescan_after_import", True):
                     target_lib.rescan(platform.slug)
-                self.store.record(Event(kind="imported", game=name,
-                                        platform=platform.slug, release=name,
-                                        library=label,
-                                        detail=str(outcome.destination)))
-                # It has arrived, so it is no longer wanted.
                 for w in list(self.store.wanted):
                     if w.platform == platform.slug and w.game.lower() in name.lower():
                         self.store.fulfil(w.game, w.platform)
-            else:
-                self.store.record(Event(kind="failed", game=name,
-                                        platform=platform.slug, detail=outcome.reason))
-            results.append({"name": name, "ok": outcome.ok,
-                            "reason": outcome.reason, "library": label})
+            results.append({"name": name, "ok": any_ok,
+                            "reason": "" if any_ok else str(outcomes[0].reason),
+                            "library": label})
         return results
 
 

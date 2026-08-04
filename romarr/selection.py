@@ -569,6 +569,54 @@ def pick_rom_set(filenames: list[str], platform: Platform, *,
     return None
 
 
+def pick_all_rom_sets(filenames: list[str], platform: Platform, *,
+                      read=None) -> list[RomSet]:
+    """Every valid ROM set the archive holds, not just the best one.
+
+    A cartridge zip may bundle several ROMs (a 3-in-1 collection, a bundle of
+    homebrew).  pick_rom_set keeps the one that ranks highest; this returns all
+    of them so that importing a multi-ROM zip does not silently drop games.
+    Disc releases and playlists are unchanged -- a cue with its bins is one
+    game regardless.
+    """
+    if not filenames:
+        return []
+
+    playable = [f for f in filenames if not _is_extra(f)]
+
+    if _PLAYLIST in platform.extensions:
+        playlists = [f for f in playable if f.lower().endswith(_PLAYLIST)]
+        if playlists:
+            sets = []
+            for primary in sorted(playlists,
+                                  key=lambda f: (-_region_rank(f), len(f))):
+                listed = _playlist_members(primary, playable, read)
+                sets.append(RomSet(primary, (primary, *listed)))
+            return sets if sets else []
+
+    all_matches = []
+    for ext in platform.extensions:
+        all_matches.extend(f for f in playable if f.lower().endswith(ext))
+
+    if not all_matches:
+        return []
+
+    all_matches.sort(key=lambda f: (-_region_rank(f), len(f)))
+
+    consumed: set[str] = set()
+    sets: list[RomSet] = []
+
+    for primary in all_matches:
+        if primary in consumed:
+            continue
+        sidecars = _sidecars_for(primary, playable, read)
+        members = (primary, *sidecars)
+        consumed.update(members)
+        sets.append(RomSet(primary, members))
+
+    return sets
+
+
 def _sidecars_for(primary: str, filenames: list[str], read) -> tuple[str, ...]:
     """The track files `primary` cannot boot without.
 
