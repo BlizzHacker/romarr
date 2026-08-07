@@ -154,7 +154,24 @@ pct exec "$CTID" -- bash -c "
   curl -fsSL \"\$url\" -o /tmp/romarr.tar.gz
   tar -xzf /tmp/romarr.tar.gz -C /opt/romarr --strip-components=1
   rm -f /tmp/romarr.tar.gz
-" || die "Could not download $APP from ${REPO}."
+
+  # Refuse to leave an unauthenticated ROMarr on somebody's network.
+  #
+  # The published release can lag main by a long way -- v0.7.0 was tagged
+  # before authentication existed at all, so installing 'latest' produced an
+  # install whose API was open to anyone who could reach the port, on a service
+  # that queues downloads and writes to the filesystem. An installer that
+  # quietly does that is worse than one that fails.
+  if [ ! -f /opt/romarr/romarr/auth.py ]; then
+    echo 'release predates authentication; using main instead'
+    rm -rf /opt/romarr/romarr
+    curl -fsSL https://github.com/${REPO}/archive/refs/heads/main.tar.gz \
+      -o /tmp/romarr.tar.gz
+    tar -xzf /tmp/romarr.tar.gz -C /opt/romarr --strip-components=1
+    rm -f /tmp/romarr.tar.gz
+  fi
+  test -f /opt/romarr/romarr/auth.py
+" || die "Could not download an authenticated build of $APP from ${REPO}."
 msg "Fetched $APP"
 
 info "Creating virtualenv"

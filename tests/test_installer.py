@@ -110,6 +110,20 @@ def test_the_update_path_preserves_state():
         assert keep in body, f"update.sh does not preserve {keep}"
 
 
+def test_the_installer_refuses_to_deploy_a_build_without_authentication():
+    """The published release can lag main badly.
+
+    v0.7.0 was tagged before auth.py existed, so installing 'latest' produced
+    an open API on a service that queues downloads and writes to disk. The
+    installer has to notice that rather than reporting success.
+    """
+    body = CT.read_text(encoding="utf-8")
+    assert "romarr/auth.py" in body, (
+        "installer does not check that what it deployed can authenticate")
+    assert body.count("romarr/auth.py") >= 2, (
+        "it must both fall back and then verify the fallback worked")
+
+
 def test_the_installer_does_not_preset_a_credential():
     """The first visit claims the install. Baking a password into a public
     script would make every install share it."""
