@@ -49,6 +49,11 @@ SESSION_SECONDS = 14 * 24 * 3600
 #: `ROMARR_AUTH` set to this, and only this, turns the gate off.
 DISABLED = "disabled"
 
+#: Shortest password the first-run claim will accept. Low enough not to be
+#: theatre on a LAN service, high enough that the scrypt cost above is doing
+#: work rather than covering for four characters.
+MIN_PASSWORD = 8
+
 #: scrypt parameters. Deliberately not a bare hash: a ROMarr password is
 #: chosen by a person and will be short, so the cost has to come from the
 #: derivation rather than from the input.

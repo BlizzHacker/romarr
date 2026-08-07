@@ -58,7 +58,7 @@ from .indexers import INDEXER_TYPES, build_indexer, redact_indexer
 from .indexers import Prowlarr, ProwlarrConfig
 from .library import import_rom, map_remote_path
 from .auth import DISABLED as AUTH_DISABLED
-from .auth import SESSION_COOKIE, Auth, new_api_key, parse_cookies
+from .auth import MIN_PASSWORD, SESSION_COOKIE, Auth, new_api_key, parse_cookies
 from .catalogue import (Submission, check_source, facets as hub_facets,
                         search as hub_search, submission_link)
 from .frontends import FORMATS as FRONTEND_FORMATS
@@ -76,6 +76,7 @@ from .playability import DOWNLOAD, StreamServer, routes_for
 from .selection import best_release, judge, score
 from .store import Event, Store
 from .ui import page as ui_page
+from .ui import login_page as ui_login_page
 
 log = logging.getLogger(__name__)
 
@@ -234,10 +235,11 @@ class ROMarr:
         # underscore so `safe_settings` never has to learn about it -- that
         # method masks known credential shapes, and a key it had not been told
         # about would have gone straight into the browser.
-        api_key = e.get("ROMARR_API_KEY", "") or self.store.settings.get("_api_key", "")
-        if not api_key:
+        supplied_key = e.get("ROMARR_API_KEY", "")
+        api_key = supplied_key or self.store.settings.get("_api_key", "")
+        generated = not api_key
+        if generated:
             api_key = new_api_key()
-            log.info("generated an API key; find it under Settings -> General")
         self.store.settings["_api_key"] = api_key
         mode = e.get("ROMARR_AUTH", "").strip().lower()
         self.auth = Auth(
@@ -245,6 +247,33 @@ class ROMarr:
             password_hash=self.store.settings.get("_password_hash", ""),
             enabled=mode != AUTH_DISABLED,
         )
+
+        # A password handed in by the environment claims the install before it
+        # ever serves a request, which is what a container template should do:
+        # no open window at all, and no setup screen for the operator to find.
+        env_password = e.get("ROMARR_PASSWORD", "")
+        if env_password and not self.store.settings.get("_password_hash"):
+            self.store.settings["_password_hash"] = \
+                self.auth.hash_password(env_password)
+            self.auth.password_hash = self.store.settings["_password_hash"]
+            log.info("password set from ROMARR_PASSWORD")
+
+        # "Claimed" means somebody can actually get in: a password exists, or
+        # the operator supplied the key themselves and therefore has it. A key
+        # ROMarr generated for itself is not a credential anybody holds, so an
+        # install with only that is unclaimed and shows the setup screen.
+        #
+        # This is the whole of issue #8. Authentication was correct and the
+        # browser had no way through it, so the UI rendered and then 401'd on
+        # every request, while the log pointed at a Settings page that was
+        # itself behind the gate.
+        self.claimed = bool(self.store.settings.get("_password_hash")
+                            or supplied_key)
+        if self.auth.enabled and not self.claimed:
+            log.warning(
+                "ROMarr is unclaimed: the first visitor to the web UI sets the "
+                "password. Set ROMARR_PASSWORD (or ROMARR_API_KEY) in the "
+                "environment to claim it before it starts.")
         self.auth.totp = Totp(
             secret=self.store.settings.get("_totp_secret", ""),
             backup=self.store.settings.get("_totp_backup", []) or [],
@@ -1501,7 +1530,32 @@ def make_handler(service: ROMarr):
         #: container's HEALTHCHECK, which has no credential to offer -- it
         #: answers, but see `_get`: unauthenticated it returns one bit rather
         #: than the library paths and client URLs it used to hand out for free.
-        OPEN_PATHS = ("/", "/api/health", "/api/v1/login")
+        # `/login` renders the sign-in screen and `/api/v1/setup` performs the
+        # first-run claim, so both have to answer somebody with no credential
+        # -- that is the entire point of them. `/setup` guards itself: it
+        # refuses once the install is claimed.
+        OPEN_PATHS = ("/", "/login", "/api/health", "/api/v1/login",
+                      "/api/v1/setup")
+
+        def _send_session(self, token: str, payload: dict):
+            """Answer with a session cookie set.
+
+            Shared by login and first-run setup so the cookie's flags are
+            stated once. HttpOnly so a script cannot read it; SameSite=Strict
+            so another site cannot ride it; Path=/ so it covers the API. Not
+            Secure: ROMarr is normally plain http on a LAN, and a Secure
+            cookie would simply never be stored there.
+            """
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header(
+                "Set-Cookie",
+                f"{SESSION_COOKIE}={token}; HttpOnly; SameSite=Strict; "
+                f"Path=/; Max-Age={service.auth.session_seconds}")
+            raw = json.dumps(payload).encode()
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            return self.wfile.write(raw)
 
         def _drain(self) -> None:
             """Read the request body before refusing it.
@@ -1589,7 +1643,25 @@ def make_handler(service: ROMarr):
         def _get(self):
             route = urlparse(self.path)
             query = parse_qs(route.query)
-            if route.path == "/":
+            if route.path in ("/", "/login"):
+                # The app shell only for somebody who is already in. Serving
+                # it to everybody is what made issue #8 so confusing: the UI
+                # rendered, looked healthy, and then every request it made
+                # came back 401 with nowhere to go and fix it.
+                if service.auth.enabled and not self._authorised():
+                    return self._send(
+                        200,
+                        ui_login_page(claimed=service.claimed,
+                                      totp=service.auth.totp.enabled)
+                        .encode("utf-8"),
+                        "text/html; charset=utf-8")
+                if route.path == "/login":
+                    # Already signed in; nothing to log into.
+                    self.send_response(303)
+                    self.send_header("Location", "/")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return None
                 return self._send(200, ui_page().encode("utf-8"),
                                   "text/html; charset=utf-8")
 
@@ -1785,6 +1857,31 @@ def make_handler(service: ROMarr):
                 service.reload_clients()
                 service.reload_libraries()
                 return self._json(200, {"ok": True, "warning": warning})
+            if route.path == "/api/v1/setup":
+                # First-run claim. Open only while unclaimed, and it closes the
+                # moment it succeeds -- so this is a one-shot, not a standing
+                # unauthenticated way to reset the password.
+                if service.claimed:
+                    return self._json(409, {
+                        "error": "already set up",
+                        "detail": "This ROMarr already has a password. Sign in "
+                                  "instead.",
+                    })
+                password = str(body.get("password") or "")
+                if len(password) < MIN_PASSWORD:
+                    return self._json(400, {
+                        "error": "weak password",
+                        "detail": f"Use at least {MIN_PASSWORD} characters.",
+                    })
+                service.store.settings["_password_hash"] = \
+                    service.auth.hash_password(password)
+                service.auth.password_hash = \
+                    service.store.settings["_password_hash"]
+                service.claimed = True
+                service.store.save()
+                log.info("this install has been claimed; setup is now closed")
+                token = service.auth.issue_session()
+                return self._send_session(token, {"ok": True})
             if route.path == "/api/v1/login":
                 # Exchange a credential for a session, so a browser presents
                 # the key once instead of carrying it in every request and
@@ -1803,20 +1900,7 @@ def make_handler(service: ROMarr):
                                                 "detail": "two-factor code "
                                                           "required or wrong"})
                 token = service.auth.issue_session()
-                self.send_response(200)
-                self.send_header("Content-Type", "application/json")
-                # HttpOnly so a script cannot read it; SameSite=Strict so
-                # another site cannot ride it; Path=/ so it covers the API.
-                # Not Secure: ROMarr is normally plain http on a LAN, and a
-                # Secure cookie would simply never be stored there.
-                self.send_header(
-                    "Set-Cookie",
-                    f"{SESSION_COOKIE}={token}; HttpOnly; SameSite=Strict; "
-                    f"Path=/; Max-Age={service.auth.session_seconds}")
-                payload = json.dumps({"ok": True}).encode()
-                self.send_header("Content-Length", str(len(payload)))
-                self.end_headers()
-                return self.wfile.write(payload)
+                return self._send_session(token, {"ok": True})
             if route.path == "/api/v1/connection/test":
                 got = service.notify(Message(
                     "grab", "ROMarr test notification",

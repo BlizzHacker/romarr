@@ -18,6 +18,20 @@ services:
       PGID: 1000
       TZ: Etc/UTC
 
+      # Authentication. ROMarr requires a credential by default; leave this
+      # commented and the first visit to the web UI asks you to set a
+      # password. Uncomment to claim the install before it ever serves a
+      # request, so there is no unclaimed window at all.
+      # ROMARR_PASSWORD: choose-something-long
+      #
+      # The key scripts and other *arrs use. Generated on first run and shown
+      # under Settings -> General; set it here to pin it to your own value.
+      # ROMARR_API_KEY:
+      #
+      # Already behind an authenticating proxy? ROMARR_AUTH=forward keeps that
+      # proxy as the authority and verifies requests came through it. See
+      # .env.example for the full set of forward-auth variables.
+
       # Prowlarr -- how ROMarr finds releases.
       PROWLARR_URL: http://prowlarr:9696
       PROWLARR_API_KEY: ""

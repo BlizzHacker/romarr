@@ -24,9 +24,15 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "/api/health": ("GET", "Liveness. Returns {ok} unauthenticated, the full "
                            "dependency report with a key."),
     "/metrics": ("GET", "Prometheus exposition."),
+    "/login": ("GET", "The sign-in screen, or the first-run setup screen on "
+                      "an install nobody has claimed. Served without a "
+                      "credential; redirects to / once signed in."),
     "/api/v1/login": ("POST", "Exchange an API key or password for a session "
                               "cookie. Requires the TOTP code when two-factor "
                               "is enrolled."),
+    "/api/v1/setup": ("POST", "First-run claim: set the admin password on an "
+                              "install that has none. Open only while "
+                              "unclaimed, and answers 409 once it is."),
     "/api/v1/game": ("GET", "The library."),
     "/api/v1/wanted/missing": ("GET", "Games wanted but not yet found."),
     "/api/v1/queue": ("GET", "Active downloads."),

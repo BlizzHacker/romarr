@@ -19,6 +19,7 @@ If you run Radarr for films and Sonarr for TV, this is the missing one.
 - [Features](#features)
 - [Requirements](#requirements)
 - [Installation](#installation) — [Docker](#docker) · [Docker Compose](#docker-compose) · [Proxmox LXC](#proxmox-lxc) · [Source](#from-source)
+- [Signing in](#signing-in)
 - [Configuration](#configuration)
 - [Usage](#usage)
 - [Plugins](#plugins)
@@ -120,6 +121,62 @@ python -m romarr
 application. Only `/config` is chowned.
 
 ---
+
+## Signing in
+
+ROMarr requires a credential. There is no open mode you can fall into by
+forgetting to configure something.
+
+**The first time you open the web UI**, it asks you to set a password. That is
+the whole of first-run setup — there is no key to go and find first. Once set,
+the install is claimed, that screen becomes a normal sign-in, and the password
+survives restarts.
+
+Your browser then holds a signed session cookie, so the key is never kept in
+the page.
+
+**To skip the setup screen entirely**, claim the install from its environment
+before it starts. This is what a container template should do, because it
+leaves no window in which an unclaimed ROMarr is reachable:
+
+```bash
+-e ROMARR_PASSWORD=choose-something-long
+```
+
+**For scripts and other *arrs**, use the API key. One is generated on first run
+and shown under *Settings → General*; set `ROMARR_API_KEY` to pin it to a value
+you choose. Present it any of three ways:
+
+```bash
+curl -H "X-Api-Key: $KEY"          http://localhost:6868/api/v1/game
+curl -H "Authorization: Bearer $KEY" http://localhost:6868/api/v1/game
+curl "http://localhost:6868/api/v1/game?apikey=$KEY"
+```
+
+An API key also signs a browser in, via *Use an API key instead* on the
+sign-in screen — which is how you get back in if the password is lost: set
+`ROMARR_API_KEY`, restart, and sign in with it.
+
+### Authentication variables
+
+| Variable | Description |
+|---|---|
+| `ROMARR_PASSWORD` | Claims the install at startup. No setup screen is shown. |
+| `ROMARR_API_KEY` | Pins the API key. Setting it also counts as claiming the install. |
+| `ROMARR_AUTH` | `forward` for SSO, or `disabled` to turn the gate off. Unset means normal password/key auth. |
+| `ROMARR_SSO_PROVIDER` | `authentik` (default), `authelia`, `cloudflare`, `oauth2-proxy`. |
+| `ROMARR_TRUSTED_PROXIES` | **Required for `forward`.** CIDRs allowed to assert identity. |
+| `ROMARR_SSO_USER_HEADER` / `_GROUPS_HEADER` | Override the provider's default headers. |
+| `ROMARR_SSO_GROUP` | Require membership of this group. |
+
+Two-factor (TOTP) is enrolled from *Settings → General* and applies to
+interactive sign-in. It deliberately does not gate the API key: a script cannot
+be prompted, and a key is already a high-entropy secret.
+
+`ROMARR_AUTH=disabled` means anything that reaches the port is in, including a
+request that bypassed your proxy. If a proxy already authenticates, prefer
+`ROMARR_AUTH=forward`, which keeps the proxy as the authority but verifies the
+request actually came through it.
 
 ## Configuration
 

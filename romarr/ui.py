@@ -1221,3 +1221,148 @@ def page() -> str:
   <div class="page" id="page"></div>
 </div>
 <script>{JS}</script></body></html>"""
+
+
+# ------------------------------------------------------------ the door in --
+#
+# The API gate was built before the door. Every page of the UI loaded, and then
+# every request it made came back 401, because a browser had no way to present
+# a credential and no screen on which to offer one -- and the log line telling
+# the operator to look under Settings pointed at a page that was itself 401ing.
+# That is issue #8: an install that looks like it works and cannot be used.
+#
+# Two states, because a fresh install has nobody in it yet:
+#
+#   setup  -- nothing has claimed this install. The first visitor sets the
+#             password. This is how Jellyfin, Gitea, Nextcloud and Authentik
+#             all bootstrap, and it beats printing a secret into the log where
+#             it stays forever and gets pasted into bug reports.
+#   signin -- somebody has. Password, or an API key for anyone who kept one.
+#
+# An operator who does not want an unclaimed window at all sets ROMARR_PASSWORD
+# or ROMARR_API_KEY in their template, and never sees the setup screen.
+
+LOGIN_CSS = """
+body{display:flex;align-items:center;justify-content:center;min-height:100vh;
+  padding:20px}
+.box{width:100%;max-width:380px;background:var(--panel);
+  border:1px solid var(--line);border-radius:8px;padding:28px}
+.box h1{display:flex;gap:0;font-size:24px;font-weight:700;letter-spacing:-.02em;
+  justify-content:center;margin-bottom:6px}
+.box h1 span{color:var(--accent)}
+.box .sub{text-align:center;color:var(--dim);font-size:13px;margin-bottom:22px}
+.box label{display:block;font-size:12px;color:var(--dim);margin:14px 0 5px;
+  text-transform:uppercase;letter-spacing:.06em}
+.box input{width:100%;padding:9px 12px;background:var(--bg);color:var(--fg);
+  border:1px solid var(--line);border-radius:4px;outline:none;font-size:14px}
+.box input:focus{border-color:var(--accent)}
+.box button{width:100%;margin-top:20px;padding:10px;background:var(--accent);
+  color:var(--accent-ink);border:0;border-radius:4px;font-size:14px;
+  font-weight:600;cursor:pointer}
+.box button:hover{filter:brightness(1.08)}
+.box button:disabled{opacity:.6;cursor:default}
+.note{margin-top:18px;padding:11px 13px;background:var(--bg);
+  border:1px solid var(--line);border-left:3px solid var(--info);
+  border-radius:4px;color:var(--dim);font-size:12px;line-height:1.6}
+.err{margin-top:16px;padding:10px 12px;border-radius:4px;font-size:13px;
+  background:#3a2020;border:1px solid var(--bad);color:#ffb4b4;display:none}
+.err.on{display:block}
+.alt{margin-top:16px;text-align:center;font-size:12px;color:var(--dim)}
+.alt a{cursor:pointer}
+@media(max-width:420px){.box{padding:22px 18px}}
+"""
+
+
+def login_page(*, claimed: bool, totp: bool = False) -> str:
+    """The sign-in screen, or the first-run claim screen.
+
+    Server-rendered and served unauthenticated, because the whole failure was
+    a browser with no way to obtain a credential.
+    """
+    if claimed:
+        title, action = "Sign in", "Sign in"
+        fields = """
+  <label for="password">Password</label>
+  <input id="password" type="password" autocomplete="current-password" autofocus>
+""" + ("""
+  <label for="totp">Two-factor code</label>
+  <input id="totp" inputmode="numeric" autocomplete="one-time-code"
+         placeholder="000000">
+""" if totp else "") + """
+  <div class="alt"><a id="usekey">Use an API key instead</a></div>
+  <div id="keyrow" style="display:none">
+    <label for="apikey">API key</label>
+    <input id="apikey" type="password" autocomplete="off">
+  </div>
+"""
+        note = ("Lost the password? Set <code>ROMARR_API_KEY</code> in the "
+                "container's environment and restart, then sign in with it.")
+    else:
+        title, action = "Set your password", "Create password"
+        fields = """
+  <label for="password">New password</label>
+  <input id="password" type="password" autocomplete="new-password"
+         minlength="8" autofocus>
+  <label for="confirm">Confirm password</label>
+  <input id="confirm" type="password" autocomplete="new-password" minlength="8">
+"""
+        note = ("Nobody has claimed this ROMarr yet, so this screen is open. "
+                "Set the password now. To skip this step on future installs, "
+                "put <code>ROMARR_PASSWORD</code> in your container "
+                "environment.")
+
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<title>{title} &middot; ROMarr</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>{CSS}{LOGIN_CSS}</style></head><body>
+<form class="box" id="f" autocomplete="on">
+  <h1>ROM<span>arr</span></h1>
+  <div class="sub">{title}</div>
+  {fields}
+  <button type="submit" id="go">{action}</button>
+  <div class="err" id="err"></div>
+  <div class="note">{note}</div>
+</form>
+<script>
+var claimed = {str(bool(claimed)).lower()};
+var f = document.getElementById('f'), err = document.getElementById('err'),
+    go = document.getElementById('go');
+var keylink = document.getElementById('usekey');
+if (keylink) keylink.onclick = function() {{
+  document.getElementById('keyrow').style.display = 'block';
+  keylink.parentNode.style.display = 'none';
+  document.getElementById('apikey').focus();
+}};
+function fail(m) {{ err.textContent = m; err.className = 'err on';
+                    go.disabled = false; go.textContent = claimed ?
+                    'Sign in' : 'Create password'; }}
+f.onsubmit = async function(e) {{
+  e.preventDefault();
+  err.className = 'err';
+  var pw = document.getElementById('password').value;
+  var body, url;
+  if (claimed) {{
+    var keyEl = document.getElementById('apikey');
+    var key = keyEl ? keyEl.value : '';
+    var totpEl = document.getElementById('totp');
+    url = '/api/v1/login';
+    body = {{password: pw, apikey: key, totp: totpEl ? totpEl.value : ''}};
+  }} else {{
+    var confirmEl = document.getElementById('confirm');
+    if (pw.length < 8) return fail('Use at least 8 characters.');
+    if (pw !== confirmEl.value) return fail('The two passwords do not match.');
+    url = '/api/v1/setup';
+    body = {{password: pw}};
+  }}
+  go.disabled = true; go.textContent = 'Working…';
+  try {{
+    var r = await fetch(url, {{method: 'POST',
+      headers: {{'Content-Type': 'application/json'}},
+      body: JSON.stringify(body)}});
+    if (r.ok) {{ location.href = '/'; return; }}
+    var d = {{}};
+    try {{ d = await r.json(); }} catch (_) {{}}
+    fail(d.detail || d.error || ('Refused (HTTP ' + r.status + ').'));
+  }} catch (_) {{ fail('Could not reach ROMarr.'); }}
+}};
+</script></body></html>"""
