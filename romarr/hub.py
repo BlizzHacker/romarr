@@ -131,12 +131,53 @@ def plugins() -> dict:
     }
 
 
+#: Environment a plugin subprocess is allowed to inherit.
+#:
+#: It used to get `dict(os.environ, ...)` -- ROMarr's entire environment, which
+#: is where ROMARR_API_KEY, ROMARR_PASSWORD, PROWLARR_API_KEY, QBITTORRENT_PASS
+#: and LIBRARY_PASSWORD all live. A plugin needs a library to import into; it
+#: has no business holding the key to ROMarr itself or the password to the
+#: torrent client, and "it is probably fine" is not a trust boundary.
+#:
+#: Only what a process needs to run at all is passed through, plus the library
+#: credentials `_backend_env` hands over deliberately. Anything else a plugin
+#: wants has to be configured on the plugin.
+_ENV_PASSTHROUGH = ("PATH", "HOME", "LANG", "LC_ALL", "TZ", "TMPDIR",
+                    "SYSTEMROOT", "TEMP", "TMP",
+                    "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+                    "http_proxy", "https_proxy", "no_proxy")
+
+
+def _plugin_env() -> dict:
+    """The environment a plugin subprocess runs with.
+
+    Built by allowlist rather than by subtraction: a denylist silently stops
+    covering anything added later, and the thing added later is exactly the
+    credential nobody thought about.
+    """
+    env = {name: os.environ[name] for name in _ENV_PASSTHROUGH
+           if name in os.environ}
+    env["ROM_HUB_HOME"] = str(HOME)
+    # Kept because the Hub refuses to run plugins where it cannot sandbox them,
+    # and inside ROMarr's container it cannot. This is not a sandbox and is not
+    # described as one: a plugin runs as ROMarr's own user with its filesystem
+    # and its network. See SECURITY.md.
+    env["ROM_HUB_ALLOW_UNSANDBOXED"] = "1"
+    env.update(_backend_env())
+    return env
+
+
 def _run_cli(*args, timeout=180):
     """Run the Hub CLI in ROMarr's own interpreter and capture the result.
 
-    Install/enable/disable are one-shot, sandboxed operations the Hub already
-    implements; shelling out to its entry point is the honest way to reuse them
-    without copying the registry-mutation code here.
+    Install/enable/disable are one-shot operations the Hub already implements;
+    shelling out to its entry point is the honest way to reuse them without
+    copying the registry-mutation code here.
+
+    Not sandboxed. ROM_HUB_ALLOW_UNSANDBOXED is set because the Hub cannot
+    isolate a subprocess inside ROMarr's container, so installing a plugin runs
+    that plugin's code with ROMarr's own privileges. `_plugin_env` limits what
+    it inherits; it cannot limit what it does.
     """
     import subprocess
     import sys
@@ -149,8 +190,7 @@ def _run_cli(*args, timeout=180):
     else:
         cmd = [sys.executable, "-c",
                "import sys; from rom_hub.cli import main; sys.exit(main())", *args]
-    env = dict(os.environ, ROM_HUB_HOME=str(HOME), ROM_HUB_ALLOW_UNSANDBOXED="1")
-    env.update(_backend_env())
+    env = _plugin_env()
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
         ok = p.returncode == 0
