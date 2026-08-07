@@ -5,9 +5,24 @@ from pathlib import Path
 import pytest
 
 from romarr.indexers import Prowlarr, sanitise_for_display
-from romarr.library import import_rom, list_candidates, map_remote_path, safe_members
+from romarr.library import import_rom as _import_rom, list_candidates, map_remote_path, safe_members
 from romarr.platforms import by_slug
 from romarr.selection import Release
+
+
+def import_rom(*args, **kwargs):
+    """One result, because every fixture in this file holds a single game.
+
+    `romarr.library.import_rom` returns a list: a cartridge archive can hold
+    several games and dropping all but one was a real bug (PR #7). These tests
+    predate that and each build a one-game archive, so unwrapping here keeps
+    them about what they were written to check -- and the assertion fails
+    loudly if a fixture ever quietly starts producing more than one.
+    """
+    results = _import_rom(*args, **kwargs)
+    assert len(results) == 1, f"fixture produced {len(results)} imports, not 1"
+    return results[0]
+
 
 
 SNES = by_slug("snes")

@@ -24,7 +24,7 @@ from pathlib import Path
 
 from .dat import BAD_DUMP, UNKNOWN, VERIFIED, Match, hash_bytes
 from .platforms import Platform
-from .selection import pick_rom_set
+from .selection import pick_all_rom_sets, pick_rom_set
 
 log = logging.getLogger(__name__)
 
@@ -296,89 +296,88 @@ def verify_set(source, members, dats) -> Match:
 
 def import_rom(download: Path, platform: Platform, library_root: Path, *,
                overwrite: bool = False, dats=None,
-               require_verified: bool = False) -> ImportResult:
-    """Place the ROM from a finished download into RomM's library.
+               require_verified: bool = False) -> list[ImportResult]:
+    """Place every ROM from a finished download into the library.
 
-    A cartridge lands as one file, exactly as before. A disc lands as a
-    directory holding every file of the set, which is the layout the live
-    library already uses for multi-track rips -- so a disc ROMarr imported is
-    indistinguishable from one filed by hand.
+    A cartridge zip may hold several games (a 3-in-1 collection, a bundle)
+    and every one is imported.  A disc lands as a directory holding every
+    file of the set, which is the layout the live library already uses for
+    multi-track rips.
     """
     if not download.exists():
-        # Almost always a mount problem rather than a missing download: the
-        # client has the file and reported where IT sees it, and this process
-        # cannot see that path. "does not exist" on its own sends people looking
-        # for a lost download that is sitting right there, so say which of the
-        # two fixes applies.
-        return ImportResult(
-            False, None,
+        msg = (
             f"download path does not exist in this container: {download}. "
             "Mount the download client's completed directory at that exact "
             "path, or add a remote path mapping under Settings -> Media "
             "Management.")
+        return [ImportResult(False, None, msg)]
 
     try:
         source = _source_for(download, platform)
         candidates = source.names()
     except MissingArchiveTool as exc:
-        return ImportResult(False, None, str(exc))
+        return [ImportResult(False, None, str(exc))]
 
-    chosen = pick_rom_set(candidates, platform, read=source.read)
-    if chosen is None:
-        return ImportResult(
+    chosen_sets = pick_all_rom_sets(candidates, platform, read=source.read)
+    if not chosen_sets:
+        return [ImportResult(
             False, None,
-            f"no {platform.name} ROM among {len(candidates)} file(s)",
-        )
+            f"no {platform.name} ROM among {len(candidates)} file(s)")]
 
-    # Verify before writing, so `require_verified` can refuse without leaving
-    # a rejected dump behind for somebody to find later and wonder about.
-    verdict = verify_set(source, chosen.members, dats)
-    if require_verified and verdict.status != VERIFIED:
-        return ImportResult(
-            False, None,
-            f"refused: {verdict.detail or verdict}",
-            verification=verdict)
-
-    target_dir = library_root / platform.slug
-
-    # A set of one keeps the layout it has always had. Wrapping every
-    # cartridge in a directory would rewrite the shape of an existing library
-    # for no gain.
-    if not chosen.is_multi_file:
-        target_dir.mkdir(parents=True, exist_ok=True)
-        destination = target_dir / Path(chosen.primary).name
-        if destination.exists() and not overwrite:
-            return ImportResult(False, destination, "already in the library")
-        source.copy(chosen.primary, destination)
-        log.info("imported %s -> %s", chosen.primary, destination)
-        return ImportResult(True, destination, verification=verdict)
-
-    destination = target_dir / _set_name(chosen.primary)
-    if destination.exists() and any(destination.iterdir()) and not overwrite:
-        return ImportResult(False, destination, "already in the library")
-    destination.mkdir(parents=True, exist_ok=True)
-
-    # Members are flattened to their base names. `pick_rom_set` only ever
-    # returns members from one directory, so nothing is lost -- and a set
-    # written by base name cannot traverse out of the directory it was given,
-    # which makes the sidecar path safe by construction rather than by check.
-    written: dict[str, str] = {}
-    for member in chosen.members:
-        name = Path(member.replace("\\", "/")).name
-        if not is_safe_name(name, destination):
-            log.warning("refusing set member with an unusable name: %r", member)
+    results: list[ImportResult] = []
+    for chosen in chosen_sets:
+        verdict = verify_set(source, chosen.members, dats)
+        if require_verified and verdict.status != VERIFIED:
+            results.append(ImportResult(
+                False, None,
+                f"refused: {verdict.detail or verdict}",
+                verification=verdict))
             continue
-        if name in written:
-            return ImportResult(
-                False, destination,
-                f"two files in this download are both called {name!r} "
-                f"({written[name]} and {member}); refusing to guess which "
-                "one the game needs")
-        source.copy(member, destination / name)
-        written[name] = member
 
-    log.info("imported %d files -> %s", len(written), destination)
-    return ImportResult(True, destination, verification=verdict)
+        target_dir = library_root / platform.slug
+
+        if not chosen.is_multi_file:
+            target_dir.mkdir(parents=True, exist_ok=True)
+            destination = target_dir / Path(chosen.primary).name
+            if destination.exists() and not overwrite:
+                results.append(
+                    ImportResult(False, destination, "already in the library"))
+                continue
+            source.copy(chosen.primary, destination)
+            log.info("imported %s -> %s", chosen.primary, destination)
+            results.append(ImportResult(True, destination,
+                                        verification=verdict))
+            continue
+
+        destination = target_dir / _set_name(chosen.primary)
+        if destination.exists() and any(destination.iterdir()) and not overwrite:
+            results.append(
+                ImportResult(False, destination, "already in the library"))
+            continue
+        destination.mkdir(parents=True, exist_ok=True)
+
+        written: dict[str, str] = {}
+        for member in chosen.members:
+            name = Path(member.replace("\\", "/")).name
+            if not is_safe_name(name, destination):
+                log.warning("refusing set member with an unusable name: %r",
+                            member)
+                continue
+            if name in written:
+                results.append(ImportResult(
+                    False, destination,
+                    f"two files in this download are both called {name!r} "
+                    f"({written[name]} and {member}); refusing to guess which "
+                    "one the game needs"))
+                break
+            source.copy(member, destination / name)
+            written[name] = member
+        else:
+            log.info("imported %d files -> %s", len(written), destination)
+            results.append(ImportResult(True, destination,
+                                        verification=verdict))
+
+    return results
 
 
 def _set_name(primary: str) -> str:

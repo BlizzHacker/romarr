@@ -569,6 +569,57 @@ def pick_rom_set(filenames: list[str], platform: Platform, *,
     return None
 
 
+def pick_all_rom_sets(filenames: list[str], platform: Platform, *,
+                      read=None) -> list[RomSet]:
+    """Every valid ROM set the archive holds, not just the best one.
+
+    A cartridge zip may bundle several ROMs (a 3-in-1 collection, a bundle of
+    homebrew).  pick_rom_set keeps the one that ranks highest; this returns all
+    of them so that importing a multi-ROM zip does not silently drop games.
+    Disc releases and playlists are unchanged -- a cue with its bins is one
+    game regardless.
+    """
+    if not filenames:
+        return []
+
+    playable = [f for f in filenames if not _is_extra(f)]
+
+    if _PLAYLIST in platform.extensions:
+        playlists = [f for f in playable if f.lower().endswith(_PLAYLIST)]
+        if playlists:
+            sets = []
+            for primary in sorted(playlists,
+                                  key=lambda f: (-_region_rank(f), len(f))):
+                listed = _playlist_members(primary, playable, read)
+                sets.append(RomSet(primary, (primary, *listed)))
+            return sets if sets else []
+
+    # Extension groups in the platform's declared order, exactly as
+    # `pick_rom_set` does. Flattening them into one list and sorting by name
+    # loses that priority, and a track file then outranks the sheet that owns
+    # it: a Dreamcast .gdi with track01.bin beside it produced "track01.bin"
+    # as one game and the .gdi as another, because the track's name is
+    # shorter. The descriptor has to be considered first so it can claim its
+    # own tracks as sidecars before they are mistaken for games.
+    consumed: set[str] = set()
+    sets: list[RomSet] = []
+
+    for ext in platform.extensions:
+        matches = [f for f in playable
+                   if f.lower().endswith(ext) and f not in consumed]
+        # A multi-dump archive: prefer the region the scorer prefers too.
+        matches.sort(key=lambda f: (-_region_rank(f), len(f)))
+        for primary in matches:
+            if primary in consumed:
+                continue
+            sidecars = _sidecars_for(primary, playable, read)
+            members = (primary, *sidecars)
+            consumed.update(members)
+            sets.append(RomSet(primary, members))
+
+    return sets
+
+
 def _sidecars_for(primary: str, filenames: list[str], read) -> tuple[str, ...]:
     """The track files `primary` cannot boot without.
 

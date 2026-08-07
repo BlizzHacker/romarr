@@ -11,7 +11,19 @@ from pathlib import Path
 
 sys.path.insert(0, r"C:\MoveWeight\romarr-wt-disc")
 
-from romarr.library import import_rom, list_candidates
+from romarr.library import import_rom as _import_rom
+from romarr.library import list_candidates
+
+
+def import_rom(*args, **kwargs):
+    """One result: each case below is a single game.
+
+    The library function returns a list -- a cartridge archive can hold
+    several games (PR #7) -- and this spec predates that.
+    """
+    results = _import_rom(*args, **kwargs)
+    return results[0]
+
 from romarr.platforms import by_slug
 from romarr.playability import routes_for, StreamServer
 from romarr.selection import Release, best_release, judge, pick_rom_set
