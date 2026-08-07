@@ -1255,6 +1255,131 @@ class ROMarr:
             "error": result.error,
         }
 
+    @staticmethod
+    def _remove_imported(destination: Path) -> None:
+        """Undo a write that turned out to need forcing.
+
+        Verification happens against the archive before the copy, but a plain
+        file on disk is verified from what landed -- so a refusal can arrive
+        after the write. Leaving it there would put a rejected dump in the
+        library for somebody to find later and wonder about.
+        """
+        import shutil
+        try:
+            if destination.is_dir():
+                shutil.rmtree(destination)
+            elif destination.exists():
+                destination.unlink()
+        except OSError as err:
+            log.warning("could not roll back %s: %s", destination, err)
+
+    def adopt(self, path: str, platform_slug: str = "", *,
+              force: bool = False) -> dict:
+        """Import one file the operator picked out of a manual-import scan.
+
+        Separate from `import_finished` because the two have different
+        authorities. That one acts on a download ROMarr asked for, and can
+        infer the platform from the request that started it. This one acts on
+        a file somebody pointed at, so the operator's platform choice wins over
+        the guess -- they can see the file and ROMarr cannot.
+
+        `force` is what makes a BAD_DUMP importable. It is deliberately a
+        separate argument rather than a mode: a bad dump is a file whose hash
+        does not match a known ROM of the same size, and the operator may well
+        know why -- a translation patch, a hack, a modified Pokemon save
+        editor's output. ROMarr does not get to decide that for them. What it
+        does get to do is refuse silence: a forced import is recorded as forced,
+        with the verdict that was overridden, so the library never claims a
+        file was verified when it was not.
+        """
+        from .dat import BAD_DUMP, VERIFIED
+
+        source = Path(path)
+        if not source.exists():
+            return {"ok": False, "reason": f"{path} does not exist"}
+
+        platform = resolve(platform_slug) if platform_slug else None
+        if platform is None:
+            # Fall back to the scan's own guess, so a caller that trusts
+            # ROMarr's detection does not have to restate it.
+            guess = scan_directory(str(source.parent), PLATFORMS, self.dats)
+            for candidate in guess.candidates:
+                if candidate.filename == source.name:
+                    platform = resolve(candidate.platform)
+                    break
+        if platform is None:
+            return {"ok": False,
+                    "reason": "could not tell which platform this belongs to; "
+                              "choose one"}
+
+        target = self.library_for(platform.slug)
+        if target is None:
+            return {"ok": False,
+                    "reason": "no library configured to import into"}
+        target_cfg, target_lib = target
+        label = target_cfg.get("name") or getattr(target_lib, "name", "library")
+
+        outcomes = import_rom(source, platform, self.library_root(target_cfg),
+                              dats=self.dats,
+                              require_verified=False)
+
+        imported, refused = [], []
+        for outcome in outcomes:
+            verdict = outcome.verification
+            status = getattr(verdict, "status", None)
+
+            # The rule that matters, and the one most likely to be got wrong:
+            # UNKNOWN means "not in the DAT you loaded", which is the normal
+            # state for homebrew, translations, and anything newer than your
+            # DAT. It is not evidence of a problem and never needs forcing.
+            # Only BAD_DUMP -- a hash mismatch against a known ROM -- does.
+            if status == BAD_DUMP and not force:
+                refused.append({
+                    "file": outcome.destination and str(outcome.destination)
+                            or source.name,
+                    "verdict": status,
+                    "detail": getattr(verdict, "detail", ""),
+                    "reason": "bad dump: the file is the size of a known ROM "
+                              "but its hash does not match. Import anyway only "
+                              "if you know why -- a patch, a hack or a "
+                              "translation will look exactly like this.",
+                    "needs_force": True,
+                })
+                # Undo the write: refusing after landing the file leaves a
+                # rejected dump in the library for somebody to find later.
+                if outcome.ok and outcome.destination:
+                    self._remove_imported(outcome.destination)
+                continue
+
+            if not outcome.ok:
+                refused.append({"file": source.name, "verdict": status,
+                                "reason": outcome.reason, "needs_force": False})
+                continue
+
+            forced = force and status == BAD_DUMP
+            self.store.record(Event(
+                kind="imported", game=source.stem, platform=platform.slug,
+                release=source.name, library=label,
+                detail=(f"manual import ({'FORCED over ' + str(status) if forced else status or 'unknown'})"
+                        f": {outcome.destination}")))
+            imported.append({
+                "file": str(outcome.destination),
+                "verdict": status,
+                "forced": forced,
+            })
+
+        if imported and self.store.settings.get("rescan_after_import", True):
+            target_lib.rescan(platform.slug)
+        self.store.save()
+
+        return {
+            "ok": bool(imported),
+            "platform": platform.slug,
+            "library": label,
+            "imported": imported,
+            "refused": refused,
+        }
+
     def reload_metadata(self) -> None:
         """Rebuild the provider chain from stored settings."""
         self.metadata = Metadata(self.store.list_items("metadata_providers"))
@@ -1869,6 +1994,14 @@ def make_handler(service: ROMarr):
                 service.reload_clients()
                 service.reload_libraries()
                 return self._json(200, {"ok": True, "warning": warning})
+            if route.path == "/api/v1/manualimport":
+                # The action half of Manual Import. GET scans and reports;
+                # this adopts one file the operator picked, with their
+                # platform choice winning over ROMarr's guess.
+                return self._json(200, service.adopt(
+                    str(body.get("path") or ""),
+                    str(body.get("platform") or ""),
+                    force=bool(body.get("force"))))
             if route.path == "/api/v1/setup":
                 # First-run claim. Open only while unclaimed, and it closes the
                 # moment it succeeds -- so this is a one-shot, not a standing

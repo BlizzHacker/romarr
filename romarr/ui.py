@@ -1122,12 +1122,60 @@ RENDER.calendar=async()=>{
 RENDER.manualimport=async()=>{
   $('#page').innerHTML='<div class="card"><h3>Manual Import</h3>'
     +'<p class="help">Point ROMarr at a directory you already have. It works out '
-    +'which platform each file belongs to, and verifies against your DATs as it goes.</p>'
+    +'which platform each file belongs to and verifies against your DATs, then '
+    +'you choose what to adopt.</p>'
     +'<div class="row"><input id="mipath" placeholder="/downloads/roms" '
     +'style="flex:1;padding:8px 12px;background:var(--bg);color:var(--fg);'
     +'border:1px solid var(--line);border-radius:6px">'
     +'<button class="btn" id="miscan">Scan</button></div>'
     +'<div id="mires" style="margin-top:14px"></div></div>';
+
+  const opts=sel=>PLATFORMS.map(p=>'<option value="'+esc(p.slug)+'"'
+      +(p.slug===sel?' selected':'')+'>'+esc(p.name)+'</option>').join('');
+
+  // The distinction the whole page turns on. UNKNOWN means "not in the DAT you
+  // loaded" -- normal for homebrew, translations and anything newer than your
+  // DAT -- and must never be presented as a problem. Only a bad dump is.
+  const verdict=v=>v==='verified'
+    ? '<span class="pill" style="background:var(--ok);color:#08210d">verified</span>'
+    : v==='bad-dump'
+      ? '<span class="pill" style="background:var(--bad);color:#2a0b0b">bad dump</span>'
+      : '<span class="pill" title="Not in your DAT. Often perfectly fine.">unknown</span>';
+
+  async function adopt(row, force){
+    const btn=row.querySelector('.mi-go');
+    const st=row.querySelector('.mi-st');
+    btn.disabled=true; st.textContent='Importing…';
+    const d=await j('/api/v1/manualimport',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({path:row.dataset.path,
+        platform:row.querySelector('.mi-pf').value, force:!!force})})
+      .catch(()=>({ok:false,refused:[{reason:'request failed'}]}));
+
+    if(d.ok){
+      const one=d.imported[0]||{};
+      st.innerHTML=one.forced
+        ? '<span style="color:var(--warn)">imported (forced)</span>'
+        : '<span style="color:var(--ok)">imported</span>';
+      btn.remove();
+      row.querySelector('.mi-pf').disabled=true;
+      return;
+    }
+    const bad=(d.refused||[])[0]||{};
+    st.innerHTML='<span style="color:var(--bad)">'+esc(bad.reason||'refused')+'</span>';
+    btn.disabled=false;
+    if(bad.needs_force){
+      // Never a silent reinterpretation: forcing is a second, separate act,
+      // and the button says exactly what it does.
+      btn.textContent='Import anyway';
+      btn.style.background='var(--bad)';
+      btn.onclick=()=>{
+        if(confirm('This file did not match a known dump.\n\n'
+          +'Import it anyway? It will be recorded as a forced import, and '
+          +'ROMarr will not claim it is verified.')) adopt(row,true);
+      };
+    }
+  }
 
   $('#miscan').onclick=async()=>{
     const out=$('#mires');
@@ -1136,24 +1184,41 @@ RENDER.manualimport=async()=>{
       +encodeURIComponent($('#mipath').value)).catch(()=>({error:'scan failed'}));
     if(d.error){out.innerHTML='<div class="panel-note panel-warn">'+esc(d.error)+'</div>';return;}
     const c=d.candidates||[];
-    const verdict=v=>v==='verified'
-      ? '<span class="pill" style="background:var(--ok);color:#08210d">verified</span>'
-      : v==='bad-dump'
-        ? '<span class="pill" style="background:var(--bad);color:#2a0b0b">bad dump</span>'
-        : '<span class="pill">unknown</span>';
     out.innerHTML='<p class="help">'+c.length+' importable, '+(d.skipped||0)+' skipped.</p>'
       +(c.length
-        ?'<table><thead><tr><th>File</th><th>Platform</th><th>Why</th>'
-         +'<th>DAT</th></tr></thead><tbody>'
-         +c.slice(0,200).map(x=>'<tr><td>'+esc(x.filename)+'</td>'
-           +'<td><span class="pill">'+esc(x.platform)+'</span></td>'
+        ?'<div class="row" style="margin-bottom:10px">'
+         +'<button class="btn ghost" id="miall">Import everything verified</button></div>'
+         +'<table><thead><tr><th>File</th><th>Platform</th><th>Why</th>'
+         +'<th>DAT</th><th></th><th></th></tr></thead><tbody>'
+         +c.slice(0,200).map(x=>'<tr data-path="'+esc(x.path||'')+'" '
+           +'data-verdict="'+esc(x.verdict)+'">'
+           +'<td>'+esc(x.filename)+'</td>'
+           +'<td><select class="mi-pf">'+opts(x.platform)+'</select></td>'
            +'<td class="help" style="margin:0">'+esc(x.reason)+'</td>'
-           +'<td>'+verdict(x.verdict)+'</td></tr>').join('')
+           +'<td>'+verdict(x.verdict)+'</td>'
+           +'<td><button class="btn mi-go">Import</button></td>'
+           +'<td class="mi-st help" style="margin:0"></td></tr>').join('')
          +'</tbody></table>'
         :'<div class="empty-cat"><b>Nothing importable there</b>'
          +'Check the path, or that the files carry extensions ROMarr knows.</div>');
+
+    out.querySelectorAll('tbody tr').forEach(row=>{
+      const btn=row.querySelector('.mi-go');
+      if(btn) btn.onclick=()=>adopt(row,false);
+    });
+    const all=out.querySelector('#miall');
+    if(all) all.onclick=async()=>{
+      all.disabled=true;
+      // Verified only. A bulk button that also forced bad dumps would be a
+      // way to override verification without ever deciding to.
+      for(const row of out.querySelectorAll('tbody tr[data-verdict="verified"]')){
+        if(row.querySelector('.mi-go')) await adopt(row,false);
+      }
+      all.disabled=false;
+    };
   };
 };
+
 
 RENDER.tasks=async()=>{
   const tasks=[
