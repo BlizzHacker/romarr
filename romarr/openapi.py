@@ -56,6 +56,16 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "/api/v1/blocklist": ("GET", "Releases that will never be taken, with the "
                                  "reason each was blocked."),
     "/api/v1/tag": ("GET", "Tags, by library item."),
+    "/api/v1/collection": ("GET", "Set-acquisition batches in progress, and "
+                                  "the DATs available to plan against."),
+    "/api/v1/collection/plan": ("GET", "Compare a DAT against the library: "
+                                       "expected, present, missing, and why "
+                                       "each dump won its group."),
+    "/api/v1/collection/start": ("POST", "Queue every missing title from a "
+                                         "plan as a resumable batch."),
+    "/api/v1/collection/step": ("POST", "Request the next slice of a batch."),
+    "/api/v1/collection/control": ("POST", "pause, resume, retry or cancel a "
+                                           "batch."),
     "/api/v1/manualimport": ("GET", "Scan a directory for files ROMarr could adopt."),
     "/api/v1/backup": ("GET", "A restorable snapshot. Credentials are stripped "
                               "unless ?secrets=1."),

@@ -1380,6 +1380,161 @@ class ROMarr:
             "refused": refused,
         }
 
+    # ------------------------------------------------------- collections --
+
+    def _present_titles(self) -> dict[str, str]:
+        """What the library already has, keyed by DAT-style name.
+
+        Matched by name rather than by hash. Hashing a whole library to draw a
+        progress bar would take hours on a large one, and the verdict ROMarr
+        recorded when it imported the file is already the better answer -- so
+        the honest default is "present", upgraded where a verdict is known.
+        """
+        from .collections import PRESENT_UNKNOWN, PRESENT_VERIFIED, PRESENT_BAD
+
+        verdicts: dict[str, str] = {}
+        for event in self.store.events:
+            if event.kind != "imported" or not event.game:
+                continue
+            detail = (event.detail or "").lower()
+            if "verified" in detail:
+                verdicts[event.game.lower()] = PRESENT_VERIFIED
+            elif "bad-dump" in detail or "bad dump" in detail:
+                verdicts[event.game.lower()] = PRESENT_BAD
+
+        present: dict[str, str] = {}
+        for item in (self.library_view() or {}).get("items", []):
+            name = str(item.get("name") or "")
+            if not name:
+                continue
+            present[name] = verdicts.get(name.lower(), PRESENT_UNKNOWN)
+        return present
+
+    def dat_names(self) -> list[str]:
+        return [d.name for d in self.dats.dats if d.name]
+
+    def collection_plan(self, dat_name: str = "", **policy_kw) -> dict:
+        """The set report: expected, present, missing, and why each dump won."""
+        from .collections import Policy, build_plan
+
+        dat = next((d for d in self.dats.dats if d.name == dat_name),
+                   None) or (self.dats.dats[0] if self.dats.dats else None)
+        if dat is None:
+            return {"error": "no DAT loaded. Point DAT_PATH at a No-Intro or "
+                             "Redump directory, or add one under Settings."}
+
+        regions = tuple(r.lower() for r in
+                        (policy_kw.get("regions")
+                         or self.store.settings.get("preferred_regions")
+                         or ("usa", "world", "europe", "japan")))
+        policy = Policy(
+            regions=regions,
+            one_game_one_rom=bool(policy_kw.get("one_game_one_rom", True)),
+            exclude=frozenset(policy_kw.get("exclude",
+                                            ("proto", "beta", "demo", "hack",
+                                             "unlicensed"))),
+        )
+        plan = build_plan(dat, self._present_titles(), policy)
+        return {
+            "dat": plan.dat,
+            "dat_version": plan.dat_version,
+            "counts": plan.counts(),
+            "policy": {"regions": list(policy.regions),
+                       "one_game_one_rom": policy.one_game_one_rom,
+                       "exclude": sorted(policy.exclude)},
+            "titles": [
+                {"name": t.name, "parent": t.parent, "status": t.status,
+                 "why": t.chosen_because,
+                 "discarded": [{"name": n, "why": w} for n, w in t.discarded],
+                 "outside_preference": t.outside_preference}
+                for t in plan.titles
+            ],
+        }
+
+    def _batches(self) -> dict:
+        from .collections import Batch
+        return {raw["id"]: Batch.from_dict(raw)
+                for raw in self.store.list_items("batches")}
+
+    def collection_start(self, dat_name: str, platform: str = "",
+                         per_pass: int = 5, **policy_kw) -> dict:
+        """Queue every missing title from a plan, resumably."""
+        import uuid
+
+        from .collections import Batch, BATCH_PENDING
+
+        plan = self.collection_plan(dat_name, **policy_kw)
+        if plan.get("error"):
+            return plan
+        missing = [t["name"] for t in plan["titles"] if t["status"] == "missing"]
+        if not missing:
+            return {"ok": True, "message": "nothing missing", "queued": 0}
+
+        batch = Batch(id=uuid.uuid4().hex[:12], platform=platform,
+                      dat=plan["dat"], status=BATCH_PENDING,
+                      queue=missing, per_pass=max(1, int(per_pass)))
+        self.store.put_item("batches", batch.to_dict())
+        self.store.save()
+        return {"ok": True, "queued": len(missing), **batch.progress()}
+
+    def collection_step(self, batch_id: str) -> dict:
+        """Request the next slice. Deliberately one slice per call.
+
+        Indexers and download clients are shared with whatever else the
+        operator runs, and a 3,000-title set is not more important than their
+        other traffic. Draining the queue in one pass would also mean losing
+        the lot if the process stopped halfway.
+        """
+        from .collections import BATCH_DONE, BATCH_PAUSED, BATCH_RUNNING
+
+        batches = self._batches()
+        batch = batches.get(batch_id)
+        if batch is None:
+            return {"error": "no such batch"}
+        if batch.status == BATCH_PAUSED:
+            return {"paused": True, **batch.progress()}
+
+        batch.status = BATCH_RUNNING
+        for name in batch.take():
+            try:
+                self.request(name, batch.platform)
+                batch.record(name, ok=True)
+            except Exception as err:  # noqa: BLE001 - one title must not stop the set
+                batch.record(name, ok=False,
+                             reason=f"{err.__class__.__name__}: {err}")
+        if not batch.queue:
+            batch.status = BATCH_DONE
+        self.store.put_item("batches", batch.to_dict())
+        self.store.save()
+        return batch.progress()
+
+    def collection_control(self, batch_id: str, action: str) -> dict:
+        from .collections import BATCH_PAUSED, BATCH_PENDING
+
+        batches = self._batches()
+        batch = batches.get(batch_id)
+        if batch is None:
+            return {"error": "no such batch"}
+        if action == "pause":
+            batch.status = BATCH_PAUSED
+        elif action == "resume":
+            batch.status = BATCH_PENDING
+        elif action == "retry":
+            batch.retry_failed()
+        elif action == "cancel":
+            self.store.delete_item("batches", batch_id)
+            self.store.save()
+            return {"ok": True, "cancelled": batch_id}
+        else:
+            return {"error": f"unknown action {action!r}"}
+        self.store.put_item("batches", batch.to_dict())
+        self.store.save()
+        return batch.progress()
+
+    def collection_status(self) -> dict:
+        return {"batches": [b.progress() for b in self._batches().values()],
+                "dats": self.dat_names()}
+
     def reload_metadata(self) -> None:
         """Rebuild the provider chain from stored settings."""
         self.metadata = Metadata(self.store.list_items("metadata_providers"))
@@ -1893,6 +2048,16 @@ def make_handler(service: ROMarr):
             if route.path == "/api/v1/manualimport":
                 return self._json(200, service.scan(
                     query.get("path", [""])[0]))
+            if route.path == "/api/v1/collection/plan":
+                return self._json(200, service.collection_plan(
+                    query.get("dat", [""])[0],
+                    one_game_one_rom=query.get("onegame", ["1"])[0] != "0",
+                    regions=[r for r in query.get("regions", [""])[0].split(",")
+                             if r] or None,
+                    exclude=[e for e in query.get("exclude", [""])[0].split(",")
+                             if e] if "exclude" in query else None))
+            if route.path == "/api/v1/collection":
+                return self._json(200, service.collection_status())
             if route.path == "/api/v1/openapi.json":
                 return self._json(200, openapi_spec(VERSION))
             if route.path == "/api/v1/metadata/schema":
@@ -1994,6 +2159,21 @@ def make_handler(service: ROMarr):
                 service.reload_clients()
                 service.reload_libraries()
                 return self._json(200, {"ok": True, "warning": warning})
+            if route.path == "/api/v1/collection/start":
+                return self._json(200, service.collection_start(
+                    str(body.get("dat") or ""),
+                    str(body.get("platform") or ""),
+                    int(body.get("per_pass") or 5),
+                    one_game_one_rom=bool(body.get("one_game_one_rom", True)),
+                    regions=body.get("regions") or None,
+                    exclude=body.get("exclude")
+                    if body.get("exclude") is not None else None))
+            if route.path == "/api/v1/collection/step":
+                return self._json(200, service.collection_step(
+                    str(body.get("id") or "")))
+            if route.path == "/api/v1/collection/control":
+                return self._json(200, service.collection_control(
+                    str(body.get("id") or ""), str(body.get("action") or "")))
             if route.path == "/api/v1/manualimport":
                 # The action half of Manual Import. GET scans and reports;
                 # this adopts one file the operator picked, with their

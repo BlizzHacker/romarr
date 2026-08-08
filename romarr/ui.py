@@ -217,6 +217,7 @@ NAV = [
                   ("connections", "Connections", None),
                   ("metadata", "Metadata", None), ("general", "General", None)]),
     ("System",   [("status", "Status", None), ("platforms", "Platforms", None),
+                  ("collections", "Collections", None),
                   ("manualimport", "Manual Import", None),
                   ("tasks", "Tasks", None), ("logs", "Logs", None)]),
 ]
@@ -262,6 +263,7 @@ function go(page){
     status:'System Status',platforms:'Platforms',tasks:'Tasks',logs:'Logs',
     blocklist:'Blocklist',connections:'Connections',metadata:'Metadata',
     calendar:'Release Calendar',manualimport:'Manual Import',
+    collections:'Collections \u2014 full sets and 1G1R',
     hub:'ROM Hub — Plugins'};
   $('#top h1').textContent=titles[page]||'ROMarr';
   $('#search').classList.toggle('hide', !['library','add'].includes(page));
@@ -1119,6 +1121,144 @@ RENDER.calendar=async()=>{
 // Radarr calls this Manual Import and it exists for the same reason: somebody
 // arrives with a library already on disk, and telling them to re-download
 // everything ROMarr could have adopted is absurd.
+RENDER.collections=async()=>{
+  const st=await j('/api/v1/collection').catch(()=>({dats:[],batches:[]}));
+  const dats=st.dats||[];
+  $('#page').innerHTML='<div class="card"><h3>Plan a set</h3>'
+    +(dats.length
+      ?'<p class="help">Compare a DAT against your library. Nothing is '
+       +'requested until you say so.</p>'
+       +'<div class="row" style="flex-wrap:wrap;gap:10px">'
+       +'<select id="cdat">'+dats.map(d=>'<option>'+esc(d)+'</option>').join('')+'</select>'
+       +'<label class="help" style="margin:0"><input type="checkbox" id="c1g1r" checked> '
+       +'One game, one ROM</label>'
+       +'<input id="cregions" placeholder="usa,world,europe,japan" '
+       +'style="flex:1;min-width:180px;padding:7px 10px;background:var(--bg);'
+       +'color:var(--fg);border:1px solid var(--line);border-radius:6px">'
+       +'<button class="btn" id="cplan">Preview plan</button></div>'
+       +'<div class="row" style="flex-wrap:wrap;gap:14px;margin-top:10px">'
+       +['proto','beta','demo','hack','unlicensed'].map(k=>
+          '<label class="help" style="margin:0"><input type="checkbox" class="cex" '
+          +'value="'+k+'" checked> exclude '+k+'</label>').join('')
+       +'</div>'
+      :'<div class="empty-cat"><b>No DAT loaded</b>'
+       +'Point DAT_PATH at a directory of No-Intro or Redump DATs. Without one '
+       +'there is no list of what a complete set contains.</div>')
+    +'<div id="cres" style="margin-top:16px"></div></div>'
+    +'<div class="card" style="margin-top:16px"><h3>Batches</h3>'
+    +'<div id="cbatch"></div></div>';
+
+  const drawBatches=async()=>{
+    const s=await j('/api/v1/collection').catch(()=>({batches:[]}));
+    const b=s.batches||[];
+    $('#cbatch').innerHTML=b.length
+      ?'<table><thead><tr><th>Set</th><th>Progress</th><th>Done</th>'
+       +'<th>Failed</th><th>Left</th><th></th></tr></thead><tbody>'
+       +b.map(x=>'<tr data-id="'+esc(x.id)+'"><td>'+esc(x.dat||x.platform||x.id)+'</td>'
+         +'<td style="min-width:150px"><div style="background:var(--bg);'
+         +'border:1px solid var(--line);border-radius:4px;height:16px;overflow:hidden">'
+         +'<div style="height:100%;width:'+x.percent+'%;background:var(--accent)"></div>'
+         +'</div><span class="help" style="margin:0">'+x.percent+'% — '+esc(x.status)+'</span></td>'
+         +'<td>'+x.done+'</td><td>'+x.failed+'</td><td>'+x.remaining+'</td>'
+         +'<td class="row" style="gap:6px">'
+         +'<button class="btn ghost cstep">Run next</button>'
+         +'<button class="btn ghost cact" data-a="'+(x.status==='paused'?'resume':'pause')+'">'
+         +(x.status==='paused'?'Resume':'Pause')+'</button>'
+         +(x.failed?'<button class="btn ghost cact" data-a="retry">Retry failed</button>':'')
+         +'<button class="btn ghost cact" data-a="cancel">Cancel</button></td></tr>').join('')
+       +'</tbody></table>'
+      :'<div class="empty">No set is being acquired.</div>';
+
+    $('#cbatch').querySelectorAll('.cstep').forEach(el=>el.onclick=async e=>{
+      const id=e.target.closest('tr').dataset.id;
+      e.target.disabled=true; e.target.textContent='Running…';
+      await j('/api/v1/collection/step',{method:'POST',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});
+      drawBatches();
+    });
+    $('#cbatch').querySelectorAll('.cact').forEach(el=>el.onclick=async e=>{
+      const id=e.target.closest('tr').dataset.id, action=e.target.dataset.a;
+      if(action==='cancel'&&!confirm('Cancel this set? Titles already requested are unaffected.')) return;
+      await j('/api/v1/collection/control',{method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({id:id,action:action})});
+      drawBatches();
+    });
+  };
+  drawBatches();
+
+  const planBtn=$('#cplan');
+  if(!planBtn) return;
+  planBtn.onclick=async()=>{
+    const out=$('#cres');
+    out.innerHTML='<div class="empty">Planning…</div>';
+    const ex=[...document.querySelectorAll('.cex')].filter(c=>c.checked)
+      .map(c=>c.value).join(',');
+    const q='dat='+encodeURIComponent($('#cdat').value)
+      +'&onegame='+($('#c1g1r').checked?'1':'0')
+      +'&regions='+encodeURIComponent($('#cregions').value.trim())
+      +'&exclude='+encodeURIComponent(ex);
+    const d=await j('/api/v1/collection/plan?'+q).catch(()=>({error:'plan failed'}));
+    if(d.error){out.innerHTML='<div class="panel-note panel-warn">'+esc(d.error)+'</div>';return;}
+    const c=d.counts;
+    const tile=(n,label,colour)=>'<div style="flex:1;min-width:110px;padding:10px 12px;'
+      +'background:var(--bg);border:1px solid var(--line);border-radius:6px">'
+      +'<div style="font-size:22px;font-weight:600;color:'+colour+'">'+n+'</div>'
+      +'<div class="help" style="margin:0">'+label+'</div></div>';
+    out.innerHTML='<div class="row" style="gap:10px;flex-wrap:wrap">'
+      +tile(c.expected,'in the set','var(--fg)')
+      +tile(c.have,'you have','var(--ok)')
+      +tile(c.missing,'missing','var(--warn)')
+      +tile(c.bad,'bad dumps','var(--bad)')
+      +tile(c.excluded,'excluded by policy','var(--dim)')
+      +'</div>'
+      +'<p class="help">'+esc(d.dat)+(d.dat_version?' ('+esc(d.dat_version)+')':'')
+      +' — region order '+esc((d.policy.regions||[]).join(' → '))+'.</p>'
+      +'<div class="row"><button class="btn" id="cstart">Request '+c.missing
+      +' missing</button>'
+      +'<label class="help" style="margin:0">at <input id="cpp" type="number" '
+      +'min="1" max="50" value="5" style="width:60px;padding:5px;background:var(--bg);'
+      +'color:var(--fg);border:1px solid var(--line);border-radius:4px"> per pass</label></div>'
+      +'<table style="margin-top:14px"><thead><tr><th>Title</th><th>Status</th>'
+      +'<th>Why this dump</th></tr></thead><tbody>'
+      +d.titles.slice(0,300).map(t=>{
+        const pill=t.status==='verified'
+          ?'<span class="pill" style="background:var(--ok);color:#08210d">verified</span>'
+          :t.status==='bad'
+            ?'<span class="pill" style="background:var(--bad);color:#2a0b0b">bad dump</span>'
+            :t.status==='missing'
+              ?'<span class="pill" style="background:var(--warn);color:#2a1c05">missing</span>'
+              :'<span class="pill">present</span>';
+        const clones=(t.discarded||[]).length
+          ?'<details><summary class="help" style="margin:0;cursor:pointer">'
+           +t.discarded.length+' other dump'+(t.discarded.length>1?'s':'')+'</summary>'
+           +'<ul style="margin:6px 0 0 16px">'+t.discarded.map(x=>
+             '<li class="help" style="margin:0">'+esc(x.name)+' — '+esc(x.why)+'</li>').join('')
+           +'</ul></details>':'';
+        return '<tr><td>'+esc(t.name)
+          +(t.outside_preference?' <span class="pill" title="No dump in your preferred regions; kept so the game is not lost">outside regions</span>':'')
+          +'</td><td>'+pill+'</td><td class="help" style="margin:0">'+esc(t.why)
+          +clones+'</td></tr>';
+      }).join('')+'</tbody></table>'
+      +(d.titles.length>300?'<p class="help">Showing the first 300 of '
+        +d.titles.length+'.</p>':'');
+
+    $('#cstart').onclick=async e=>{
+      e.target.disabled=true; e.target.textContent='Queueing…';
+      const r=await j('/api/v1/collection/start',{method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({dat:$('#cdat').value,
+          per_pass:parseInt($('#cpp').value,10)||5,
+          one_game_one_rom:$('#c1g1r').checked,
+          regions:($('#cregions').value.trim()||'').split(',').filter(Boolean),
+          exclude:ex.split(',').filter(Boolean)})});
+      toast(r.error?r.error:('Queued '+(r.queued||0)+' titles'));
+      e.target.disabled=false; e.target.textContent='Request missing';
+      drawBatches();
+    };
+  };
+};
+
 RENDER.manualimport=async()=>{
   $('#page').innerHTML='<div class="card"><h3>Manual Import</h3>'
     +'<p class="help">Point ROMarr at a directory you already have. It works out '
