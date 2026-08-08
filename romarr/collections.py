@@ -176,7 +176,7 @@ def build_plan(dat: Dat, present: dict[str, str], policy: Policy) -> Plan:
 
     groups: dict[str, list[Game]] = {}
     for game in dat.games.values():
-        groups.setdefault(dat.parent_of(game.name), []).append(game)
+        groups.setdefault(dat.group_key(game.name), []).append(game)
 
     chosen: dict[str, Game] = (dat.one_game_one_rom(list(policy.regions))
                                if policy.one_game_one_rom else {})

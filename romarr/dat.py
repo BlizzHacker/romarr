@@ -179,6 +179,37 @@ def hash_file(path, *, chunk: int = 1024 * 1024) -> dict:
             "md5": md5.hexdigest(), "sha1": sha1.hexdigest()}
 
 
+
+
+#: Bracketed groups that identify a *different item* rather than a different
+#: version of the same one. A two-disc game needs both discs, so they must not
+#: collapse into one title the way (USA) and (Europe) should.
+_SEPARATE_ITEM = re.compile(
+    r"^(disc|disk|side|tape|cassette|cart|volume|vol)\s*[.\-]?\s*[0-9a-z]+$",
+    re.I)
+
+_BRACKETED = re.compile(r"\s*[\(\[]([^\)\]]*)[\)\]]")
+
+
+def base_title(name: str) -> str:
+    """A DAT name reduced to the game it is a dump of.
+
+    "Contra (USA) (Rev 1)" and "Contra (Japan)" both reduce to "Contra", so a
+    DAT with no clone data can still be collapsed. Disc and side markers are
+    kept, because "Resident Evil 4 (USA) (Disc 1)" and "(Disc 2)" are two
+    things you need rather than two versions of one thing -- collapsing them
+    would report a complete set as missing half of it.
+    """
+    kept = []
+    for group in _BRACKETED.findall(name or ""):
+        for part in group.split(","):
+            part = part.strip()
+            if part and _SEPARATE_ITEM.match(part):
+                kept.append(part)
+    stripped = _BRACKETED.sub("", name or "").strip(" -")
+    return " ".join([stripped] + [f"({k})" for k in kept]).strip()
+
+
 @dataclass
 class Dat:
     """One parsed DAT -- normally one system."""
@@ -190,6 +221,7 @@ class Dat:
     _by_sha1: dict[str, tuple[str, Rom]] = field(default_factory=dict)
     _by_md5: dict[str, tuple[str, Rom]] = field(default_factory=dict)
     _sizes: dict[int, str] = field(default_factory=dict)
+    _declares_clones: bool | None = None
 
     def lookup(self, *, crc: str = "", md5: str = "", sha1: str = "",
                size: int = 0) -> Match:
@@ -225,10 +257,49 @@ class Dat:
         return Match(UNKNOWN, dat=self.name)
 
     def parent_of(self, game: str) -> str:
+        """The entry this one is a clone of, or itself.
+
+        Answers a question about the DAT's own declarations. `group_key` is
+        what decides which dumps are versions of one game.
+        """
         entry = self.games.get(game)
         if entry is None:
             return game
         return entry.cloneof or entry.name
+
+    @property
+    def declares_clones(self) -> bool:
+        """Whether this DAT carries any parent/clone relationship at all."""
+        if self._declares_clones is None:
+            self._declares_clones = any(g.cloneof for g in self.games.values())
+        return self._declares_clones
+
+    def group_key(self, game: str) -> str:
+        """Which game a dump belongs to, for collapsing versions.
+
+        A declared `cloneof` is authoritative and used. Many real DATs do not
+        declare them: the No-Intro GameCube datfile on the install this was
+        found against carries exactly one across 1,907 entries, and Redump-style
+        DATs generally carry none. Without a fallback every dump is its own
+        group and `one_game_one_rom` quietly does nothing -- it returned 1,906
+        "titles" for that GameCube set, listing "007 - Agent Under Fire (USA)",
+        "(USA) (Rev 1)" and "(Europe)" separately. It did not fail; it just was
+        not 1G1R.
+
+        So anything without a declared parent is grouped by its normalised
+        title, which is what Igir and RomVault do. Gating that on "the DAT
+        declares nothing at all" was the obvious conservative rule and the real
+        data disproved it: one stray cloneof was enough to switch inference off
+        for the whole file.
+
+        Both sides are normalised, or the key a clone produces -- its parent's
+        full name -- would never equal the key its parent produces, and the two
+        would land in different groups.
+        """
+        entry = self.games.get(game)
+        if entry is None:
+            return base_title(game)
+        return base_title(entry.cloneof or entry.name)
 
     def one_game_one_rom(self, regions: list[str]) -> dict[str, Game]:
         """One entry per game, choosing by region preference.
@@ -244,7 +315,7 @@ class Dat:
         """
         groups: dict[str, list[Game]] = {}
         for game in self.games.values():
-            groups.setdefault(self.parent_of(game.name), []).append(game)
+            groups.setdefault(self.group_key(game.name), []).append(game)
 
         order = [r.lower() for r in regions]
 
