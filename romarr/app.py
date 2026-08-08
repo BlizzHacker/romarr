@@ -178,10 +178,33 @@ def _find_dats(root: "Path") -> tuple[list["Path"], str]:
                     f"and stopped. Point DAT_PATH at a directory holding only "
                     f"DATs, rather than at your ROM library.")
             lowered = name.lower()
+            # gamelist.xml is EmulationStation's, one per platform directory,
+            # and never a DAT. On a real library that is dozens of files opened
+            # and rejected -- and on this one, dozens of permission-denied
+            # warnings that look like a problem and are not.
+            if lowered in ("gamelist.xml", "miximages.xml"):
+                continue
             if lowered.endswith((".dat", ".xml")):
                 found.append(here / name)
     return sorted(found), ""
 
+
+
+
+def _read_failure(err: Exception) -> str:
+    """Why a library read failed, in words that suggest a fix.
+
+    "HTTPError" tells somebody nothing. A 401 or 403 from a library almost
+    always means the credentials ROMarr holds are wrong or have expired, and
+    saying so is the difference between a five-minute fix and an evening.
+    """
+    status = getattr(getattr(err, "response", None), "status_code", None)
+    if status in (401, 403):
+        return (f"credentials rejected (HTTP {status}). Check the username, "
+                f"password or API key on this library.")
+    if status:
+        return f"HTTP {status} from the library server."
+    return err.__class__.__name__
 
 class ROMarr:
     """The service. Holds config, clients, and the in-flight queue."""
@@ -393,6 +416,8 @@ class ROMarr:
         # `None` means "not known yet", which the UI shows as a dash -- an
         # honest answer, where 0 would be a claim that the library is empty.
         self._count_cache: tuple[int | None, float] = (None, 0.0)
+        #: label -> why the last read of that library failed, or absent.
+        self._library_reasons: dict[str, str] = {}
         # The library itself is cached the same way, and for a stronger reason:
         # RomM's /api/roms is contended on a large library -- other clients
         # polling it hold the database for minutes at a time -- so a request
@@ -422,6 +447,10 @@ class ROMarr:
                 continue
 
             ok, total, shelf, failures = True, 0, [], []
+            # Per library, so the Libraries page can say which one is unhappy
+            # and why. A joined string was enough for a log line and no use to
+            # a row that has to render one server's state.
+            reasons: dict[str, str] = {}
             # Every library is read, and one failing does not lose the others.
             # A single unreachable server used to be indistinguishable from an
             # empty shelf; now it is one named row that did not answer.
@@ -433,6 +462,7 @@ class ROMarr:
                 except Exception as err:
                     ok = False
                     failures.append(f"{label}: {err.__class__.__name__}")
+                    reasons[label] = _read_failure(err)
                     log.warning("library count refresh failed for %s: %s",
                                 label, err.__class__.__name__)
                 try:
@@ -445,9 +475,11 @@ class ROMarr:
                 except Exception as err:
                     ok = False
                     failures.append(f"{label}: {err.__class__.__name__}")
+                    reasons.setdefault(label, _read_failure(err))
                     log.warning("library refresh failed for %s: %s",
                                 label, err.__class__.__name__)
 
+            self._library_reasons = reasons
             if shelf or ok:
                 self._count_cache = (total, time.monotonic())
                 self._library_cache = (shelf, time.monotonic(), "; ".join(failures))
@@ -680,9 +712,10 @@ class ROMarr:
         out = []
         for cfg, backend in self.game_libraries:
             root = self.library_root(cfg)
+            name = cfg.get("name") or getattr(backend, "name", "")
             out.append({
                 "id": cfg.get("id"),
-                "name": cfg.get("name") or getattr(backend, "name", ""),
+                "name": name,
                 "type": cfg.get("type", ""),
                 "url": cfg.get("url", ""),
                 "path": str(root),
@@ -690,7 +723,15 @@ class ROMarr:
                 "path_hint": self.path_hint(root),
                 "is_default": bool(cfg.get("is_default")),
                 "platforms": cfg.get("platforms") or [],
+                # Answering and usable are different questions, and conflating
+                # them is how a library with rejected credentials showed as OK
+                # while ROMarr could not read a single game out of it. The
+                # heartbeat is deliberately unauthenticated so a slow server
+                # does not stall the page; that makes it a liveness check, not
+                # a verdict on whether the library works.
                 "ok": bool(backend.reachable()),
+                "readable": name not in self._library_reasons,
+                "detail": self._library_reasons.get(name, ""),
             })
         return out
 
@@ -1521,12 +1562,17 @@ class ROMarr:
                         (policy_kw.get("regions")
                          or self.store.settings.get("preferred_regions")
                          or ("usa", "world", "europe", "japan")))
+        # `.get(key, default)` returns None when the caller passed None
+        # explicitly, which is exactly what the HTTP route does for an absent
+        # query parameter -- and frozenset(None) is a 500. The plan worked
+        # in-process and failed over HTTP for precisely this reason.
+        exclude = policy_kw.get("exclude")
+        if exclude is None:
+            exclude = ("proto", "beta", "demo", "hack", "unlicensed")
         policy = Policy(
             regions=regions,
             one_game_one_rom=bool(policy_kw.get("one_game_one_rom", True)),
-            exclude=frozenset(policy_kw.get("exclude",
-                                            ("proto", "beta", "demo", "hack",
-                                             "unlicensed"))),
+            exclude=frozenset(exclude),
         )
         plan = build_plan(dat, self._present_titles(), policy)
         return {

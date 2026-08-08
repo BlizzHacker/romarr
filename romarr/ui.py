@@ -806,7 +806,11 @@ RENDER.clients=async()=>{
 
 RENDER.libraries=async()=>{
   const d=await j('/api/v1/library');
+  // Answering is not the same as usable. A RomM whose credentials had
+  // expired answered its heartbeat and rejected every read, so this said
+  // "connected" while nothing could be read out of it.
   const state=l=>!l.ok?'<span class="dot down"></span>unreachable'
+    :l.readable===false?'<span class="dot down"></span>cannot read'
     :!l.path_exists?'<span class="dot warn"></span>path missing'
     :'<span class="dot up"></span>connected';
   const rules=l=>(l.platforms&&l.platforms.length)
@@ -829,7 +833,8 @@ RENDER.libraries=async()=>{
       goes to the first one listed. Mark one to make that a decision.</p>`:''}
     ${unmounted.map(l=>`<p class="help" style="color:var(--warn)">
       <b>${esc(l.name)}</b> answers, but nothing can be imported into it yet.
-      ${esc(l.path_hint||'')}</p>`).join('')}
+      ${esc(l.path_hint||'')}</p>
+      ${l.readable===false?`<p class="panel-note panel-warn">${esc(l.detail||'')}</p>`:''}`).join('')}
     ${d.items.length?`<table><thead><tr><th>Library</th><th>Type</th>
       <th>Address</th><th>Path</th><th>Platforms</th><th>Status</th><th></th></tr>
       </thead><tbody>
