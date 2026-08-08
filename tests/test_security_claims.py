@@ -29,9 +29,9 @@ def test_the_document_exists_and_says_how_to_report(doc):
     assert "Reporting a vulnerability" in doc
 
 
-def test_the_documented_open_paths_are_the_actual_open_paths(doc):
+def test_the_documented_open_paths_are_the_actual_open_paths(doc, tmp_path):
     """The list in SECURITY.md is the one readers rely on."""
-    handler = make_handler(ROMarr({"ROMARR_DATA": ":memory:"}))
+    handler = make_handler(ROMarr({"ROMARR_DATA": str(tmp_path / "s.json")}))
     actual = set(handler.OPEN_PATHS)
     assert actual == {"/", "/login", "/api/health", "/api/v1/login",
                       "/api/v1/setup"}, (
@@ -67,9 +67,9 @@ def test_a_plugin_still_does_not_inherit_romarr_credentials(doc):
         "the sandbox is disabled; the document must keep saying so")
 
 
-def test_the_unauthenticated_health_response_is_one_bit():
+def test_the_unauthenticated_health_response_is_one_bit(tmp_path):
     """It used to hand out library paths and client URLs for free."""
-    service = ROMarr({"ROMARR_DATA": ":memory:", "ROMARR_API_KEY": "k"})
+    service = ROMarr({"ROMARR_DATA": str(tmp_path / "s.json"), "ROMARR_API_KEY": "k"})
     report = service.health_report() if hasattr(service, "health_report") else None
     if report is None:
         pytest.skip("no health_report to inspect directly")
