@@ -1,8 +1,44 @@
 # ROMarr
 
+<<<<<<< HEAD
 **The *arr for games.** Request a title — ROMarr searches your indexers, picks the
 best release, hands it to your download client, and files the ROM into your game
 library.
+=======
+The *arr for games. Request a title, Romarr finds it, grabs it, and files it
+into your game library.
+
+```
+Move Weight
+└─ Yarr.It ................ one front door for a self-hosted media library
+   └─ Cartridge ........... tools for self-hosting a retro game library
+      └─ ROMarr ........... you are here
+         └─ ROM Hub ....... the plugin host underneath
+```
+
+Romarr runs perfectly well on its own — nothing above it is required.
+
+**It is not tied to one library.** RomM, [Gaseous](https://github.com/gaseous-project/gaseous-server)
+and [Retrom](https://github.com/jmberesford/retrom) are all supported, chosen
+with a single setting:
+
+    LIBRARY_KIND=romm      # or gaseous, or retrom
+    LIBRARY_URL=http://your-library:8080
+    LIBRARY_API_KEY=...    # or LIBRARY_USERNAME / LIBRARY_PASSWORD
+
+Existing installs need no changes: `LIBRARY_KIND` defaults to `romm` and the
+old `ROMM_*` variables are still read.
+
+Adding a backend means implementing four methods -- reachable, count, games,
+rescan -- in `romarr/libraries.py`. Nothing else in the service learns which
+library is attached.
+
+
+**The *arr for games.** Romarr watches for game requests, searches your
+indexers through Prowlarr, hands the winner to your download client, and files
+the ROM into [RomM](https://github.com/rommapp/romm) where it can actually be
+played.
+>>>>>>> 2f3eec2 (Show where this sits in the family)
 
 If you run Radarr for films and Sonarr for TV, this is the missing one.
 
