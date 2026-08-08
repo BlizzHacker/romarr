@@ -940,9 +940,77 @@ RENDER.status=async()=>{
     <div class="card"><h3>About</h3><div class="st">
       <div><b>${esc(h.version)}</b><span>Version</span></div>
       <div><b>${h.platforms}</b><span>Platforms</span></div>
+      <div><b>${h.dats||0}</b><span>DATs loaded</span></div>
+      <div><b>${h.dat_games||0}</b><span>Known dumps</span></div>
       <div><b>${h.events}</b><span>History events</span></div>
       <div><b>${esc(h.uptime)}</b><span>Uptime</span></div>
-    </div></div>`;
+    </div></div>
+
+    <div class="card"><h3>Backup and export</h3>
+    <p class="help">A snapshot restores an install: settings, libraries,
+    indexers, clients, history and the wanted list. Credentials are stripped
+    unless you ask for them, so the safe file is the default and the one
+    holding secrets takes a deliberate click.</p>
+    <div class="row" style="flex-wrap:wrap;gap:8px">
+      <button class="btn" id="bk-dl">Download backup</button>
+      <button class="btn ghost" id="bk-dls">Download with credentials</button>
+      <button class="btn ghost" id="bk-rs">Restore from file…</button>
+      <input type="file" id="bk-file" accept="application/json" style="display:none">
+    </div>
+    <div id="bk-msg" class="testline"></div>
+    <p class="help" style="margin-top:16px">Export the library itself, for a
+    spreadsheet or another tool:</p>
+    <div class="row" style="flex-wrap:wrap;gap:8px">
+      <select id="ex-what">
+        <option value="library">Library</option>
+        <option value="wanted">Wanted</option>
+        <option value="blocklist">Blocklist</option>
+      </select>
+      <select id="ex-fmt"><option value="json">JSON</option>
+        <option value="csv">CSV</option></select>
+      <button class="btn ghost" id="ex-go">Export</button>
+    </div>
+    <p class="help" style="margin-top:16px">Or as a frontend's own format:</p>
+    <div class="row" style="flex-wrap:wrap;gap:8px" id="fe-row"></div>
+    </div>`;
+
+  const msg=(ok,text)=>{const m=$('#bk-msg');
+    m.className='testline '+(ok?'ok':'bad'); m.textContent=text;};
+  const save=(url,name)=>{const a=document.createElement('a');
+    a.href=url; a.download=name; document.body.append(a); a.click(); a.remove();};
+
+  $('#bk-dl').onclick=()=>save('/api/v1/backup','romarr-backup.json');
+  $('#bk-dls').onclick=()=>{
+    if(confirm('This file will contain your API key and every stored password '
+      +'in plain text.\n\nDownload it?'))
+      save('/api/v1/backup?secrets=1','romarr-backup-with-credentials.json');
+  };
+  $('#bk-rs').onclick=()=>$('#bk-file').click();
+  $('#bk-file').onchange=async e=>{
+    const file=e.target.files[0]; if(!file) return;
+    if(!confirm('Restore from '+file.name+'?\n\nThis replaces your current '
+      +'settings, libraries, indexers and clients.')) { e.target.value=''; return; }
+    msg(true,'Restoring…');
+    try{
+      const r=await j('/api/v1/restore',{method:'POST',
+        headers:{'Content-Type':'application/json'}, body:await file.text()});
+      msg(!r.error, r.error||'Restored. Reloading…');
+      if(!r.error) setTimeout(()=>location.reload(),1200);
+    }catch(_){ msg(false,'That file is not a ROMarr backup.'); }
+    e.target.value='';
+  };
+  $('#ex-go').onclick=()=>save('/api/v1/export?what='+$('#ex-what').value
+    +'&format='+$('#ex-fmt').value,
+    'romarr-'+$('#ex-what').value+'.'+$('#ex-fmt').value);
+
+  const fe=await j('/api/v1/frontend/formats').catch(()=>({formats:[]}));
+  $('#fe-row').innerHTML=(fe.formats||[]).map(f=>
+    '<button class="btn ghost fe-btn" data-f="'+esc(f.name||f)+'">'
+    +esc(f.label||f.name||f)+'</button>').join('')
+    ||'<span class="help" style="margin:0">No frontend formats available.</span>';
+  $('#fe-row').querySelectorAll('.fe-btn').forEach(b=>b.onclick=()=>
+    save('/api/v1/frontend/export?format='+b.dataset.f,
+         'romarr-'+b.dataset.f+'.export'));
 };
 
 // How the supported platforms can actually be played, on THIS install.
