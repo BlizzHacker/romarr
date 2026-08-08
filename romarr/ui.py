@@ -1314,6 +1314,9 @@ RENDER.collections=async()=>{
        +'requested until you say so.</p>'
        +'<div class="row" style="flex-wrap:wrap;gap:10px">'
        +'<select id="cdat">'+dats.map(d=>'<option>'+esc(d)+'</option>').join('')+'</select>'
+       +'<select id="cplat"><option value="">platform (match on disk)</option>'
+       +PLATFORMS.map(p=>'<option value="'+esc(p.slug)+'">'+esc(p.name)+'</option>').join('')
+       +'</select>'
        +'<label class="help" style="margin:0"><input type="checkbox" id="c1g1r" checked> '
        +'One game, one ROM</label>'
        +'<input id="cregions" placeholder="usa,world,europe,japan" '
@@ -1379,6 +1382,7 @@ RENDER.collections=async()=>{
     const ex=[...document.querySelectorAll('.cex')].filter(c=>c.checked)
       .map(c=>c.value).join(',');
     const q='dat='+encodeURIComponent($('#cdat').value)
+      +'&platform='+encodeURIComponent($('#cplat').value)
       +'&onegame='+($('#c1g1r').checked?'1':'0')
       +'&regions='+encodeURIComponent($('#cregions').value.trim())
       +'&exclude='+encodeURIComponent(ex);
@@ -1432,6 +1436,7 @@ RENDER.collections=async()=>{
       const r=await j('/api/v1/collection/start',{method:'POST',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify({dat:$('#cdat').value,
+          platform:$('#cplat').value,
           per_pass:parseInt($('#cpp').value,10)||5,
           one_game_one_rom:$('#c1g1r').checked,
           regions:($('#cregions').value.trim()||'').split(',').filter(Boolean),

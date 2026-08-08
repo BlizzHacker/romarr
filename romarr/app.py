@@ -1517,13 +1517,19 @@ class ROMarr:
 
     # ------------------------------------------------------- collections --
 
-    def _present_titles(self) -> dict[str, str]:
+    def _present_titles(self, platform_slug: str = "") -> dict[str, str]:
         """What the library already has, keyed by DAT-style name.
 
-        Matched by name rather than by hash. Hashing a whole library to draw a
-        progress bar would take hours on a large one, and the verdict ROMarr
-        recorded when it imported the file is already the better answer -- so
-        the honest default is "present", upgraded where a verdict is known.
+        Read from the platform's directory on disk when there is one, and only
+        from the cached shelf otherwise. The shelf is a page -- a few hundred
+        rows kept for the Library grid -- and comparing a 1,900-entry DAT
+        against the first page of a 166,578-game library reports almost
+        everything as missing. The directory is the whole truth for one
+        platform and costs one listing.
+
+        Matched by name, not by hash. Hashing a library that size to draw a
+        progress bar would take hours, and the verdict recorded when ROMarr
+        imported a file is already the better answer where it exists.
         """
         from .collections import PRESENT_UNKNOWN, PRESENT_VERIFIED, PRESENT_BAD
 
@@ -1538,17 +1544,34 @@ class ROMarr:
                 verdicts[event.game.lower()] = PRESENT_BAD
 
         present: dict[str, str] = {}
-        for item in (self.library_view() or {}).get("items", []):
-            name = str(item.get("name") or "")
-            if not name:
-                continue
-            present[name] = verdicts.get(name.lower(), PRESENT_UNKNOWN)
+
+        def note(name: str) -> None:
+            if name:
+                present[name] = verdicts.get(name.lower(), PRESENT_UNKNOWN)
+
+        listed = False
+        if platform_slug:
+            for cfg, _ in self.game_libraries:
+                folder = self.library_root(cfg) / platform_slug
+                try:
+                    entries = list(folder.iterdir())
+                except OSError:
+                    continue
+                listed = True
+                for entry in entries:
+                    # A disc set lands as a directory named for the game; a
+                    # cartridge as a file. Both answer to their stem.
+                    note(entry.name if entry.is_dir() else entry.stem)
+        if not listed:
+            for item in (self.library_view() or {}).get("items", []):
+                note(str(item.get("name") or ""))
         return present
 
     def dat_names(self) -> list[str]:
         return [d.name for d in self.dats.dats if d.name]
 
-    def collection_plan(self, dat_name: str = "", **policy_kw) -> dict:
+    def collection_plan(self, dat_name: str = "", platform: str = "",
+                        **policy_kw) -> dict:
         """The set report: expected, present, missing, and why each dump won."""
         from .collections import Policy, build_plan
 
@@ -1574,10 +1597,11 @@ class ROMarr:
             one_game_one_rom=bool(policy_kw.get("one_game_one_rom", True)),
             exclude=frozenset(exclude),
         )
-        plan = build_plan(dat, self._present_titles(), policy)
+        plan = build_plan(dat, self._present_titles(platform), policy)
         return {
             "dat": plan.dat,
             "dat_version": plan.dat_version,
+            "platform": platform,
             "counts": plan.counts(),
             "policy": {"regions": list(policy.regions),
                        "one_game_one_rom": policy.one_game_one_rom,
@@ -1603,7 +1627,7 @@ class ROMarr:
 
         from .collections import Batch, BATCH_PENDING
 
-        plan = self.collection_plan(dat_name, **policy_kw)
+        plan = self.collection_plan(dat_name, platform, **policy_kw)
         if plan.get("error"):
             return plan
         missing = [t["name"] for t in plan["titles"] if t["status"] == "missing"]
@@ -2191,6 +2215,7 @@ def make_handler(service: ROMarr):
             if route.path == "/api/v1/collection/plan":
                 return self._json(200, service.collection_plan(
                     query.get("dat", [""])[0],
+                    query.get("platform", [""])[0],
                     one_game_one_rom=query.get("onegame", ["1"])[0] != "0",
                     regions=[r for r in query.get("regions", [""])[0].split(",")
                              if r] or None,
