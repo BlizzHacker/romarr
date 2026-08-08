@@ -2285,7 +2285,13 @@ def make_handler(service: ROMarr):
             if route.path == "/api/v1/hub/plugins":
                 return self._json(200, hub.plugins())
             if route.path == "/api/v1/hub/status":
-                return self._json(200, {"available": hub.available()})
+                # Whether plugins are confined is the most useful thing to
+                # know before installing one, so it travels with the
+                # availability answer instead of hiding in a startup log.
+                confined, why = hub.sandbox_state()
+                return self._json(200, {"available": hub.available(),
+                                        "sandboxed": confined,
+                                        "sandbox_detail": why})
             if route.path == "/api/search":
                 game = (query.get("game") or [""])[0]
                 if not game:

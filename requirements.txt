@@ -1,1 +1,10 @@
 requests>=2.31
+
+# Lets ROM Hub confine plugin subprocesses with a seccomp filter. Without it
+# the Hub refuses to run plugins at all unless ROMarr opts out of confinement
+# entirely, which is what it used to do -- so this is the difference between
+# plugins having a network boundary and having none.
+#
+# Linux-only, and optional by design: an install without it still runs, logs a
+# warning, and says so on the status page.
+pyseccomp>=0.1.2; sys_platform == "linux"

@@ -12,6 +12,8 @@ itself or the password to the torrent client.
 
 from __future__ import annotations
 
+import pathlib
+
 import pytest
 
 from romarr import hub
@@ -83,9 +85,23 @@ def test_proxy_settings_are_deliberately_passed(monkeypatch):
     assert hub._plugin_env().get("HTTPS_PROXY") == "http://proxy:3128"
 
 
-def test_we_do_not_claim_a_sandbox_we_do_not_have():
-    """ROM_HUB_ALLOW_UNSANDBOXED is set on purpose; the docs must not describe
-    plugin execution as sandboxed while the code turns the sandbox off."""
-    assert hub._plugin_env()["ROM_HUB_ALLOW_UNSANDBOXED"] == "1"
-    source = (hub.__doc__ or "") + (hub._run_cli.__doc__ or "")
-    assert "sandbox" not in source.lower() or "not sandboxed" in source.lower()
+def test_what_the_docs_claim_matches_what_the_code_does():
+    """This test used to assert the opposite, and was wrong.
+
+    It pinned `ROM_HUB_ALLOW_UNSANDBOXED == "1"` as correct behaviour, on the
+    belief that ROMarr's container could not confine a plugin. The Hub's filter
+    needs Linux and `pyseccomp` and nothing else, so what the flag really did
+    was switch off a boundary that worked. Understating protection is a
+    cheaper mistake than overstating it, but it is still a wrong document -- it
+    told operators not to expect something they were entitled to.
+    """
+    security = (pathlib.Path(__file__).resolve().parents[1]
+                / "SECURITY.md").read_text(encoding="utf-8")
+    confined = "ROM_HUB_ALLOW_UNSANDBOXED" not in hub._plugin_env()
+
+    if confined:
+        assert "There is no sandbox." not in security, (
+            "SECURITY.md denies confinement that this install has")
+    else:
+        assert "no confinement" in security.lower(), (
+            "confinement is off and SECURITY.md does not say so")

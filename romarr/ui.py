@@ -276,6 +276,21 @@ addEventListener('hashchange',()=>go(location.hash.slice(1)||'library'));
 /* ---------------- pages ---------------- */
 const RENDER={};
 RENDER.hub=async()=>{
+  // Installing a plugin means running its author's code. Whether that code is
+  // confined is the thing to know first, so it goes at the top of the page
+  // rather than in a log the operator will never read.
+  const hs=await j('/api/v1/hub/status').catch(()=>({}));
+  const confined=hs.sandboxed===true;
+  const sandboxNote=hs.available===false ? '' :
+    (confined
+      ? '<div class="panel-note" style="border-left:3px solid var(--ok)">'
+        +'<b>Plugins run confined.</b> Each runs as its own subprocess with no '
+        +'library token and no sockets of its own &mdash; it can only reach the '
+        +'hosts it declared. It can still read files ROMarr can.</div>'
+      : '<div class="panel-note panel-warn"><b>Plugins run with no '
+        +'confinement.</b> '+esc(hs.sandbox_detail||'')+' A plugin you install '
+        +'can reach any host and read any file ROMarr can.</div>');
+
   const p=$('#page');
   p.innerHTML='<div class="empty">Reading the plugin catalogue…</div>';
 
@@ -317,7 +332,7 @@ RENDER.hub=async()=>{
       '<span class="chip'+(cap===name?' on':'')+'" data-cap="'+esc(name)+'">'
       +esc(name)+'<span class="n">'+n+'</span></span>').join('');
 
-    p.innerHTML='<div class="card"><h3>Plugins'
+    p.innerHTML=sandboxNote+'<div class="card"><h3>Plugins'
       +'<span class="help" style="margin-left:10px">'+items.length+' of '+(d.total||0)+'</span></h3>'
       +'<div class="cat-bar">'
       +'<input id="pq" placeholder="Search plugins by name, author or description…" value="'+esc(q)+'">'

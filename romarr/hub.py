@@ -12,8 +12,11 @@ registry on disk (`$ROM_HUB_HOME`). ROMarr never edits it directly.
 from __future__ import annotations
 
 import dataclasses
+import logging
 import os
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 # ROM Hub keeps its state (catalog cache, installed plugins) under this home.
 # ROMarr gives it a stable directory it owns so state survives restarts.
@@ -148,6 +151,30 @@ _ENV_PASSTHROUGH = ("PATH", "HOME", "LANG", "LC_ALL", "TZ", "TMPDIR",
                     "http_proxy", "https_proxy", "no_proxy")
 
 
+
+
+def sandbox_state() -> tuple[bool, str]:
+    """Whether ROM Hub can confine a plugin here, and why not if it cannot.
+
+    The Hub runs each plugin as a subprocess whose only route outward is an RPC
+    back to the host, checked against the hosts that plugin declared. That
+    boundary is enforced by a seccomp filter, and the filter needs Linux and
+    `pyseccomp`. Both are ordinary to have; neither was installed, so ROMarr
+    had been opting out of the whole mechanism.
+
+    Reported rather than assumed, so the Plugins page can say which of the two
+    states an install is actually in.
+    """
+    try:
+        from rom_hub.sandbox import probe
+    except Exception as err:  # noqa: BLE001 - the Hub may not be installed
+        return False, f"ROM Hub is not available ({err.__class__.__name__})"
+    try:
+        return probe()
+    except Exception as err:  # noqa: BLE001
+        return False, f"sandbox probe failed: {err.__class__.__name__}"
+
+
 def _plugin_env() -> dict:
     """The environment a plugin subprocess runs with.
 
@@ -158,11 +185,22 @@ def _plugin_env() -> dict:
     env = {name: os.environ[name] for name in _ENV_PASSTHROUGH
            if name in os.environ}
     env["ROM_HUB_HOME"] = str(HOME)
-    # Kept because the Hub refuses to run plugins where it cannot sandbox them,
-    # and inside ROMarr's container it cannot. This is not a sandbox and is not
-    # described as one: a plugin runs as ROMarr's own user with its filesystem
-    # and its network. See SECURITY.md.
-    env["ROM_HUB_ALLOW_UNSANDBOXED"] = "1"
+    ok, why = sandbox_state()
+    if not ok:
+        # Asked for, never assumed. ROMarr used to set this unconditionally on
+        # the belief that its container could not confine a plugin. That was
+        # wrong: the Hub's seccomp filter needs `pyseccomp` and nothing else,
+        # so the only thing standing between plugins and a real boundary was a
+        # missing dependency -- and setting the flag turned off the network and
+        # exec confinement the Hub exists to provide.
+        #
+        # The Hub's own words for this flag are "no confinement at all ... a
+        # development convenience, never a deployment setting". So it is set
+        # only when the sandbox genuinely cannot be installed, and loudly.
+        fix = ("Install pyseccomp to restore it." if "pyseccomp" in why
+               else "Plugins will run with no network or exec confinement.")
+        log.warning("running plugins WITHOUT confinement: %s. %s", why, fix)
+        env["ROM_HUB_ALLOW_UNSANDBOXED"] = "1"
     env.update(_backend_env())
     return env
 

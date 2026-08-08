@@ -59,10 +59,11 @@ def test_the_session_cookie_flags_match(doc):
 
 
 def test_a_plugin_still_does_not_inherit_romarr_credentials(doc):
-    """The claim that carries the most weight, since there is no sandbox."""
+    """Holds whether or not seccomp is available -- the environment
+    allowlist and the sandbox are separate boundaries."""
     from romarr import hub
     assert "ROMARR_API_KEY" not in hub._ENV_PASSTHROUGH
-    assert "no sandbox" in doc.lower()
+    assert "confinement is real but partial" in doc.lower()
     assert "ROM_HUB_ALLOW_UNSANDBOXED" in doc, (
         "the sandbox is disabled; the document must keep saying so")
 
@@ -79,7 +80,8 @@ def test_the_unauthenticated_health_response_is_one_bit(tmp_path):
 def test_the_document_admits_what_is_not_protected(doc):
     """The section that makes the rest credible."""
     assert "What is not protected" in doc
-    for admission in ("No sandbox", "No encryption at rest",
+    for admission in ("No filesystem confinement",
+                      "No encryption at rest",
                       "No multi-user model", "not a security control"):
         assert admission in doc
 

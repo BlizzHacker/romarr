@@ -128,13 +128,31 @@ controlled.
 
 ## Plugins — read this before installing one
 
-**ROM Hub plugins are code, and running one runs it as ROMarr, with ROMarr's
-filesystem access and ROMarr's network access. There is no sandbox.**
+**ROM Hub plugins are code. Confinement is real but partial — read what it
+does and does not cover before installing one.**
 
-ROM Hub refuses to run plugins where it cannot isolate them; inside ROMarr's
-container it cannot, and ROMarr sets `ROM_HUB_ALLOW_UNSANDBOXED=1` to proceed
-anyway. That is a deliberate decision and it is stated here rather than
-described as sandboxing.
+Each plugin runs as its own subprocess with no library token, no filesystem
+mount of yours, and no network sockets of its own. Its only route outward is an
+RPC back to ROMarr, which checks the destination against the hosts that plugin
+declared in its manifest *before* opening a connection. A plugin that asks for
+a host it did not declare is refused and the request never reaches the network.
+A seccomp filter enforces this; it needs Linux and `pyseccomp`.
+
+What that does **not** cover:
+
+- A plugin runs arbitrary code in its subprocess and can read any file ROMarr
+  can. Filesystem confinement needs a mount namespace and is not in place.
+- Memory is not capped. The wall-clock timeout and output-size cap are.
+- It can reach every host it declared. Read that list before installing; a
+  search plugin asking for hosts unrelated to its source is the warning sign.
+
+**If the filter cannot be installed, ROMarr falls back to running plugins with
+no confinement at all and logs a warning saying so.** It previously set that
+opt-out unconditionally, which switched off a boundary that in fact worked —
+the only thing missing was `pyseccomp`. The fallback sets
+`ROM_HUB_ALLOW_UNSANDBOXED=1`, which ROM Hub documents as no confinement
+at all; ROMarr never sets it while the filter is available. Check the
+startup log to see which state your install is in.
 
 What *is* enforced:
 
@@ -158,7 +176,8 @@ surface is deliberate: fewer dependencies is fewer supply-chain paths.
 
 Stated so nobody assumes otherwise:
 
-- **No sandbox for plugins.** See above.
+- **No filesystem confinement for plugins.** Network and exec are
+  confined; a plugin can still read any file ROMarr can. See above.
 - **No protection against a malicious library or indexer you configured.**
   ROMarr trusts responses from services you pointed it at.
 - **No encryption at rest.** `romarr.json` and `.env` hold credentials in
