@@ -9,10 +9,15 @@ Move Weight
 └─ Yarr.It ................ one front door for a self-hosted media library
    └─ Cartridge ........... tools for self-hosting a retro game library
       └─ ROMarr ........... you are here
-         └─ ROM Hub ....... the plugin host underneath
+         └─ ROM Hub ....... ROMarr's plugin factory
 ```
 
 ROMarr runs perfectly well on its own — nothing above it is required.
+
+[ROM Hub](https://github.com/BlizzHacker/rom-hub) is ROMarr's plugin factory:
+it is where a source is written, run and sandboxed, and ROMarr picks the
+plugins up from its Hub tab. Adding a source means writing a plugin there, not
+patching ROMarr.
 
 If you run Radarr for films and Sonarr for TV, this is the missing one.
 
