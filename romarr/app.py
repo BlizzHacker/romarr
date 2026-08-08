@@ -1383,9 +1383,22 @@ class ROMarr:
 
     def scan(self, directory: str) -> dict:
         """Manual import: what is already on disk that ROMarr could adopt."""
+        from .sniff import disagrees_with
+
         result = scan_directory(directory, PLATFORMS, self.dats)
+        rows = []
+        for candidate in result.candidates:
+            row = vars(candidate).copy()
+            # Cheap: one small read per candidate, and it is the difference
+            # between spotting a mislabelled ROM here and finding out when it
+            # will not boot.
+            mismatch = disagrees_with(row.get("path", ""), row.get("platform", ""))
+            if mismatch is not None:
+                row["header_says"] = mismatch.platform
+                row["header_detail"] = mismatch.detail
+            rows.append(row)
         return {
-            "candidates": [vars(c) for c in result.candidates],
+            "candidates": rows,
             "skipped": result.skipped,
             "error": result.error,
         }
@@ -1447,6 +1460,16 @@ class ROMarr:
                     "reason": "could not tell which platform this belongs to; "
                               "choose one"}
 
+        # The bytes get a say before anything is filed. A ROM renamed by hand
+        # or by a release group is otherwise filed under whatever its name
+        # claimed, and the symptom appears much later as a game that will not
+        # boot. Reported rather than enforced: the operator picked this
+        # platform and may have a reason, so this is a warning attached to the
+        # result, not a refusal.
+        from .sniff import disagrees_with
+
+        mismatch = disagrees_with(source, platform.slug)
+
         target = self.library_for(platform.slug)
         if target is None:
             return {"ok": False,
@@ -1507,13 +1530,17 @@ class ROMarr:
             target_lib.rescan(platform.slug)
         self.store.save()
 
-        return {
+        result = {
             "ok": bool(imported),
             "platform": platform.slug,
             "library": label,
             "imported": imported,
             "refused": refused,
         }
+        if mismatch is not None:
+            result["header_says"] = mismatch.platform
+            result["header_detail"] = mismatch.detail
+        return result
 
     # ------------------------------------------------------- collections --
 
