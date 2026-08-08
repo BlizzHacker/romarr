@@ -123,6 +123,66 @@ class QueueItem:
     at: str = field(default_factory=lambda: datetime.now(timezone.utc).isoformat(timespec="seconds"))
 
 
+#: How deep the DAT scan walks, and how many directory entries it will look at
+#: before giving up.
+#:
+#: `reload_dats` used to do `root.rglob("*.dat")` over whatever DAT_PATH named.
+#: Pointed at a real library that is the whole library: on a live install with
+#: ~58 platforms on a network mount the walk had not finished after ten
+#: minutes, so setting DAT_PATH to the obvious place -- the directory the ROMs
+#: and their datfiles are both in -- made ROMarr appear to hang at startup.
+#:
+#: DATs sit at the top of a DAT directory, or one level down beside the
+#: platform they describe. Three levels covers both with room to spare, and the
+#: entry cap stops a pathological tree regardless of depth.
+DAT_SCAN_DEPTH = 3
+DAT_SCAN_MAX_ENTRIES = 40_000
+
+#: Directory names never worth descending into looking for a DAT. These are
+#: where the volume of files actually is.
+_DAT_SKIP_DIRS = frozenset({
+    ".git", ".svn", "node_modules", "__pycache__", "@eaDir",
+    "#recycle", "$RECYCLE.BIN", "System Volume Information",
+    "saves", "savestates", "states", "media", "images", "videos",
+    "manuals", "bios", "downloaded_media", "cache",
+})
+
+
+def _find_dats(root: "Path") -> tuple[list["Path"], str]:
+    """Candidate DAT files under `root`, without walking the world.
+
+    Returns the paths and, when the scan stopped early, a sentence saying so --
+    silence would leave an operator wondering why only some of their DATs
+    loaded.
+    """
+    import os
+
+    found: list[Path] = []
+    seen = 0
+    root = Path(root)
+    base_depth = len(root.parts)
+
+    for current, dirs, files in os.walk(root, followlinks=False):
+        here = Path(current)
+        depth = len(here.parts) - base_depth
+        if depth >= DAT_SCAN_DEPTH:
+            dirs[:] = []
+        else:
+            dirs[:] = [d for d in dirs
+                       if d not in _DAT_SKIP_DIRS and not d.startswith(".")]
+        for name in files:
+            seen += 1
+            if seen > DAT_SCAN_MAX_ENTRIES:
+                return found, (
+                    f"looked at {DAT_SCAN_MAX_ENTRIES:,} files under {root} "
+                    f"and stopped. Point DAT_PATH at a directory holding only "
+                    f"DATs, rather than at your ROM library.")
+            lowered = name.lower()
+            if lowered.endswith((".dat", ".xml")):
+                found.append(here / name)
+    return sorted(found), ""
+
+
 class ROMarr:
     """The service. Holds config, clients, and the in-flight queue."""
 
@@ -240,7 +300,23 @@ class ROMarr:
         generated = not api_key
         if generated:
             api_key = new_api_key()
-        self.store.settings["_api_key"] = api_key
+        if supplied_key:
+            # An operator-supplied key belongs to the environment and is not
+            # copied into the state file. Persisting it would put a secret
+            # from outside into a file that gets backed up, and would make
+            # removing the variable a no-op because the stored copy would take
+            # over -- which is not what unsetting something means.
+            self.store.settings.pop("_api_key", None)
+        else:
+            self.store.settings["_api_key"] = api_key
+            if generated:
+                # Written now rather than left for whatever saves next. A
+                # generated key that only ever exists in memory is a different
+                # key after every restart, so every script authenticating with
+                # it breaks and the value shown under Settings is one nobody
+                # can rely on. Found on a live install whose store file was a
+                # week older than the running process.
+                self.store.save()
         mode = e.get("ROMARR_AUTH", "").strip().lower()
         self.auth = Auth(
             api_key=api_key,
@@ -1179,6 +1255,11 @@ class ROMarr:
             "uptime": f"{up // 3600}h {(up % 3600) // 60}m",
         }
 
+    @staticmethod
+    def _dat_scan_limits() -> tuple[int, int]:
+        """How far the DAT scan is allowed to go. Overridable for testing."""
+        return DAT_SCAN_DEPTH, DAT_SCAN_MAX_ENTRIES
+
     def reload_dats(self, directory: str = "") -> dict:
         """Load every DAT under `directory`.
 
@@ -1196,14 +1277,20 @@ class ROMarr:
             log.warning("DAT_PATH %s is not a directory", root)
             return {"loaded": 0, "path": str(root),
                     "error": f"{root} is not a directory"}
-        for path in sorted(root.rglob("*.dat")) + sorted(root.rglob("*.xml")):
+        found, stopped = _find_dats(root)
+        for path in found:
             try:
                 self.dats.add(parse_dat(path.read_text(encoding="utf-8",
                                                        errors="replace")))
-            except OSError as exc:
+            except (OSError, ValueError) as exc:
                 log.warning("could not read %s: %s", path, exc)
         log.info("loaded %d DAT(s) from %s", len(self.dats.dats), root)
-        return {"loaded": len(self.dats.dats), "path": str(root)}
+        result = {"loaded": len(self.dats.dats), "path": str(root),
+                  "examined": len(found)}
+        if stopped:
+            result["truncated"] = stopped
+            log.warning("DAT scan stopped early: %s", stopped)
+        return result
 
     def reload_policy(self) -> None:
         """Rebuild the operator's selection policy and notification fan-out.
