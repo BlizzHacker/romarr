@@ -1166,6 +1166,13 @@ class ROMarr:
             "library_path_hint": self.path_hint(self.library),
             "libraries": self.libraries_status(),
             "platforms": len(PLATFORMS),
+            # DAT verification is the thing that separates ROMarr from a
+            # downloader, and the status page had no way to say whether it was
+            # on. Get Started could therefore only ever report DATs as not set
+            # up, however many were loaded.
+            "dats": len(self.dats.dats),
+            "dat_names": [d.name for d in self.dats.dats if d.name],
+            "dat_games": sum(len(d.games) for d in self.dats.dats),
             "play_routes": self.play_route_counts(),
             "stream_url": self.store.settings.get("_stream_url", ""),
             "events": len(self.store.events),

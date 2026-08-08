@@ -217,6 +217,7 @@ NAV = [
                   ("connections", "Connections", None),
                   ("metadata", "Metadata", None), ("general", "General", None)]),
     ("System",   [("status", "Status", None), ("platforms", "Platforms", None),
+                  ("getstarted", "Get Started", None),
                   ("collections", "Collections", None),
                   ("manualimport", "Manual Import", None),
                   ("tasks", "Tasks", None), ("logs", "Logs", None)]),
@@ -264,6 +265,7 @@ function go(page){
     blocklist:'Blocklist',connections:'Connections',metadata:'Metadata',
     calendar:'Release Calendar',manualimport:'Manual Import',
     collections:'Collections \u2014 full sets and 1G1R',
+    getstarted:'Get Started',
     hub:'ROM Hub — Plugins'};
   $('#top h1').textContent=titles[page]||'ROMarr';
   $('#search').classList.toggle('hide', !['library','add'].includes(page));
@@ -1121,6 +1123,115 @@ RENDER.calendar=async()=>{
 // Radarr calls this Manual Import and it exists for the same reason: somebody
 // arrives with a library already on disk, and telling them to re-download
 // everything ROMarr could have adopted is absurd.
+RENDER.getstarted=async()=>{
+  // The question a capable new self-hoster actually asked: "if I host ROMs,
+  // where do I play them?" ROMarr acquires and files; something else plays.
+  // Saying so plainly beats implying ROMarr is a frontend it is not.
+  const [status,libs,plat]=await Promise.all([
+    j('/api/v1/system/status').catch(()=>({})),
+    j('/api/v1/library').catch(()=>({items:[]})),
+    j('/api/platforms').catch(()=>({platforms:[]}))
+  ]);
+  const items=libs.items||[];
+  const platforms=plat.platforms||[];
+  const ok=x=>x?'<span class="pill" style="background:var(--ok);color:#08210d">ready</span>'
+                :'<span class="pill" style="background:var(--warn);color:#2a1c05">not set up</span>';
+
+  const indexerOk=!!(status.prowlarr||(status.indexers||0)>0);
+  const clientOk=!!(status.qbittorrent||status.sabnzbd||status.nzbget
+                    ||(status.download_clients||0)>0);
+  const libOk=items.some(l=>l.ok);
+  const datOk=(status.dats||0)>0||!!status.dat_games;
+
+  const step=(n,title,done,body)=>'<div style="display:flex;gap:14px;'
+    +'padding:14px 0;border-bottom:1px solid var(--line)">'
+    +'<div style="flex:0 0 30px;height:30px;border-radius:50%;display:flex;'
+    +'align-items:center;justify-content:center;font-weight:600;'
+    +'background:'+(done?'var(--ok)':'var(--rail-2)')+';'
+    +'color:'+(done?'#08210d':'var(--dim)')+'">'+(done?'✓':n)+'</div>'
+    +'<div style="flex:1"><div style="font-weight:600;margin-bottom:3px">'
+    +title+' '+ok(done)+'</div>'
+    +'<div class="help" style="margin:0">'+body+'</div></div></div>';
+
+  const counts={};
+  platforms.forEach(p=>{const r=(p.play&&p.play.route)||'unknown';
+    counts[r]=(counts[r]||0)+1;});
+  const routeRow=(k,label,what)=>counts[k]
+    ?'<tr><td><b>'+counts[k]+'</b> platforms</td><td>'+esc(label)+'</td>'
+     +'<td class="help" style="margin:0">'+what+'</td></tr>':'';
+
+  $('#page').innerHTML=
+    '<div class="card"><h3>What ROMarr is</h3>'
+    +'<p class="help">ROMarr is the acquisition and automation layer: it '
+    +'searches your indexers, grabs the best release, checks it against a '
+    +'No-Intro or Redump DAT, and files it into your library. '
+    +'<b>It is not an emulator and not a game launcher.</b> Something else '
+    +'plays the ROM — ROMarr makes sure the right file is in the right place '
+    +'for it.</p>'
+    +'<div style="font-family:ui-monospace,monospace;font-size:12.5px;'
+    +'background:var(--bg);border:1px solid var(--line);border-radius:6px;'
+    +'padding:14px;overflow-x:auto;line-height:1.9">'
+    +'<b>Acquire</b> → <b>Verify</b> → <b>File</b> → <b>Scan</b> → <b>Play</b><br>'
+    +'<span style="color:var(--dim)">indexers &nbsp; DAT hashes &nbsp; '
+    +'library root &nbsp; library server &nbsp; a frontend</span><br>'
+    +'<span style="color:var(--dim)">└─ ROMarr does the first four ─┘ &nbsp; '
+    +'└ you choose this ┘</span>'
+    +'</div></div>'
+
+    +'<div class="card" style="margin-top:16px"><h3>Your setup</h3>'
+    +step(1,'An indexer',indexerOk,
+       'Prowlarr, or Torznab/Newznab indexers added directly under '
+       +'<a href="#indexers">Indexers</a>. This is where releases are found.')
+    +step(2,'A download client',clientOk,
+       'qBittorrent for torrents, SABnzbd or NZBGet for usenet. Set under '
+       +'<a href="#clients">Download Clients</a>.')
+    +step(3,'A library',libOk,
+       'Where ROMs are filed and what serves them. RomM, Gaseous, Retrom, or '
+       +'a plain folder that Batocera, ES-DE, EmuDeck or LaunchBox reads. '
+       +'Set under <a href="#libraries">Libraries</a>.')
+    +step(4,'DATs (optional, recommended)',datOk,
+       'No-Intro and Redump checksums. With them ROMarr can say a file is the '
+       +'exact known-good dump rather than merely the right size — and '
+       +'<a href="#collections">Collections</a> can tell you what a complete '
+       +'set is missing.')
+    +'</div>'
+
+    +'<div class="card" style="margin-top:16px"><h3>Where you actually play</h3>'
+    +'<p class="help">ROMarr files the ROM; one of these runs it. You do not '
+    +'need all of them — one is enough.</p>'
+    +'<table><thead><tr><th>If your library is</th><th>You play in</th></tr></thead><tbody>'
+    +'<tr><td>RomM</td><td>RomM\'s built-in EmulatorJS, in the browser</td></tr>'
+    +'<tr><td>Gaseous or Retrom</td><td>Their own web players and clients</td></tr>'
+    +'<tr><td>A folder</td><td>Batocera, RetroPie, Recalbox, ES-DE, EmuDeck, '
+    +'Lakka, muOS, LaunchBox or Playnite — they all read a per-platform '
+    +'directory, which is exactly what ROMarr writes</td></tr>'
+    +'</tbody></table>'
+    +'<p class="help">ROMarr can also export your library as LaunchBox XML, an '
+    +'ES-DE <code>gamelist.xml</code> or Playnite JSON — see '
+    +'<a href="#status">System</a>.</p>'
+    +(Object.keys(counts).length
+      ?'<h3 style="margin-top:18px">On this install</h3>'
+       +'<table><thead><tr><th></th><th>Route</th><th>What that means</th>'
+       +'</tr></thead><tbody>'
+       +routeRow('browser','Browser emulator',
+          'Playable in the browser through your library server.')
+       +routeRow('stream','Streamed',
+          'Too heavy for the browser; rendered by a headless RetroArch and '
+          +'streamed to you.')
+       +routeRow('download','Download only',
+          'ROMarr fetches and verifies it; you play it in a native emulator.')
+       +'</tbody></table>':'')
+    +'</div>'
+
+    +'<div class="card" style="margin-top:16px"><h3>Next</h3>'
+    +'<p class="help">'
+    +'<a href="#add">Request a game</a> to watch the whole chain run once, or '
+    +'<a href="#manualimport">Manual Import</a> to adopt ROMs you already have. '
+    +'If you want a whole system at once, <a href="#collections">Collections</a> '
+    +'compares a DAT against your shelf and requests only what is missing.'
+    +'</p></div>';
+};
+
 RENDER.collections=async()=>{
   const st=await j('/api/v1/collection').catch(()=>({dats:[],batches:[]}));
   const dats=st.dats||[];
