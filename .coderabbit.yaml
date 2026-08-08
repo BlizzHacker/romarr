@@ -1,0 +1,119 @@
+# yaml-language-server: $schema=https://storage.googleapis.com/coderabbit_public_assets/schema.v2.json
+language: en-US
+tone_instructions: >-
+  Be direct; skip praise and preamble. Romarr automates ROM acquisition via
+  indexers and download clients. Prioritize release-scoring correctness,
+  indexer-query accuracy, and credential handling over style.
+early_access: false
+enable_free_tier: true
+
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  review_status: true
+  collapse_walkthrough: true
+  changed_files_summary: true
+  sequence_diagrams: true
+  estimate_code_review_effort: true
+  assess_linked_issues: true
+  related_issues: true
+  related_prs: true
+  suggested_labels: true
+  auto_apply_labels: false
+  suggested_reviewers: false
+  in_progress_fortune: false
+  poem: false
+  enable_prompt_for_ai_agents: true
+  abort_on_close: true
+
+  slop_detection:
+    enabled: true
+    label: slop
+
+  path_filters:
+    - "!**/*.min.js"
+    - "!**/dist/**"
+    - "!**/*.lock"
+    - "!**/vendor/**"
+    - "!**/__pycache__/**"
+
+  path_instructions:
+    - path: "romarr/**/*.py"
+      instructions: >-
+        Release scoring and matching is the highest-risk logic in this codebase.
+        A scoring bug does not raise an exception, it silently grabs the wrong
+        file, so treat scoring changes as correctness-critical.
+
+        Substring matching: flag any language, region, tag, or format check that
+        matches a bare substring against a release title. Substrings match
+        inside unrelated words — a naive "ger" test matches "Trigger" — so these
+        checks need word-boundary anchoring or delimiter-aware parsing. Call this
+        out specifically whenever you see `in title`, `startswith`, or an
+        unanchored regex used for tag detection.
+
+        Extension matching has the same hazard: check that comparisons are
+        against a parsed extension rather than a substring of the filename.
+
+        Compilations and multi-disc sets are a known mis-grab source. When
+        matching logic changes, ask whether a compilation or multi-title release
+        could now outrank the specific title requested.
+
+        Indexer queries: Prowlarr aggregate calls mean the slowest indexer sets
+        overall latency, and category parameters behave differently in aggregate
+        mode. Flag changes that add per-indexer fan-out without bounding
+        concurrency or that drop/alter category filters.
+
+        Credentials: indexer and download-client credentials must never be
+        logged, echoed into exception messages, or written into fixtures. Flag
+        any log or error string that interpolates a config object wholesale.
+    - path: "tests/**"
+      instructions: >-
+        Scoring changes need tests over a frozen set of real release titles,
+        asserting exact ranking rather than "a result was returned". Flag
+        scoring changes that arrive without such a test. Tests must not hit live
+        indexers.
+    - path: "Dockerfile"
+      instructions: >-
+        An ENV set in the image beats the application's own fallback chain, so
+        adding an ENV here can silently override a user's existing configuration
+        on upgrade. Flag any new ENV that shadows a runtime-configurable
+        setting.
+    - path: ".github/workflows/**"
+      instructions: >-
+        Check for unpinned third-party actions, secrets exposed to
+        pull_request_target, and steps interpolating untrusted PR text into run
+        blocks.
+
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    drafts: false
+    ignore_usernames:
+      - dependabot
+      - dependabot[bot]
+
+  tools:
+    ruff:
+      enabled: true
+    gitleaks:
+      enabled: true
+    semgrep:
+      enabled: true
+    hadolint:
+      enabled: true
+    actionlint:
+      enabled: true
+    zizmor:
+      enabled: true
+    languagetool:
+      enabled: false
+
+chat:
+  art: false
+  auto_reply: true
+
+knowledge_base:
+  opt_out: false
+  learnings:
+    scope: auto
