@@ -1,10 +1,17 @@
 # Romarr
 
-A project of the [Move Weight Foundation](https://foundation.moveweight.com), an
-Oklahoma non-profit corporation with 501(c)(3) status pending.
-
 The *arr for games. Request a title, Romarr finds it, grabs it, and files it
 into your game library.
+
+```
+Move Weight
+└─ Yarr.It ................ one front door for a self-hosted media library
+   └─ Cartridge ........... tools for self-hosting a retro game library
+      └─ Romarr ........... you are here
+         └─ ROM Hub ....... the plugin host underneath
+```
+
+Romarr runs perfectly well on its own — nothing above it is required.
 
 **It is not tied to one library.** RomM, [Gaseous](https://github.com/gaseous-project/gaseous-server)
 and [Retrom](https://github.com/jmberesford/retrom) are all supported, chosen
