@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import pathlib
 import threading
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
@@ -205,6 +206,27 @@ def _read_failure(err: Exception) -> str:
     if status:
         return f"HTTP {status} from the library server."
     return err.__class__.__name__
+
+
+
+def _claimants(filename: str) -> list[str]:
+    """Every platform that claims this file's extension."""
+    suffix = pathlib.PurePath(str(filename)).suffix.lower()
+    if not suffix:
+        return []
+    return [p.slug for p in PLATFORMS if suffix in p.extensions]
+
+
+#: Pairs the header genuinely cannot separate, so a difference between them is
+#: not evidence of anything. Mirrors the rule in sniff.disagrees_with; kept
+#: here too because this decides whether to *correct* rather than warn.
+_FAMILIES = (("sms", "gamegear"), ("gb", "gbc"), ("nes", "famicom", "fds"),
+             ("snes", "sfam"), ("neo-geo-pocket", "neo-geo-pocket-color"),
+             ("wonderswan", "wonderswan-color"))
+
+
+def _same_family(a: str, b: str) -> bool:
+    return any(a in family and b in family for family in _FAMILIES)
 
 class ROMarr:
     """The service. Holds config, clients, and the in-flight queue."""
@@ -1385,17 +1407,42 @@ class ROMarr:
         """Manual import: what is already on disk that ROMarr could adopt."""
         from .sniff import disagrees_with
 
+        from .sniff import identify_file
+
         result = scan_directory(directory, PLATFORMS, self.dats)
         rows = []
         for candidate in result.candidates:
             row = vars(candidate).copy()
-            # Cheap: one small read per candidate, and it is the difference
-            # between spotting a mislabelled ROM here and finding out when it
-            # will not boot.
-            mismatch = disagrees_with(row.get("path", ""), row.get("platform", ""))
-            if mismatch is not None:
-                row["header_says"] = mismatch.platform
-                row["header_detail"] = mismatch.detail
+            # One small read per candidate, and it settles two different
+            # problems: a file whose name lies, and a file whose extension is
+            # honest but shared.
+            sniffed = identify_file(row.get("path", ""))
+            guessed = row.get("platform", "")
+            if sniffed is not None and sniffed.platform == guessed:
+                # The guess was right, but on a shared extension it was still
+                # a guess. Say what confirmed it instead of asking the operator
+                # to confirm something we are now certain of.
+                if len(_claimants(row.get("filename", ""))) > 1:
+                    row["reason"] = sniffed.detail + " — confirmed by the header"
+                    row["header_chose"] = sniffed.platform
+            elif sniffed is not None:
+                claimants = _claimants(row.get("filename", ""))
+                if sniffed.platform in claimants:
+                    # The extension is shared and detection had to pick one.
+                    # `.bin` alone is claimed by twenty platforms, so the
+                    # first-listed guess is barely better than a coin toss --
+                    # and the header knows. Correcting is the whole point of
+                    # reading it.
+                    row["platform"] = sniffed.platform
+                    row["reason"] = (f"{sniffed.detail} — chosen over "
+                                     f"{len(claimants)} platforms sharing this "
+                                     f"extension")
+                    row["header_chose"] = sniffed.platform
+                elif not _same_family(sniffed.platform, guessed):
+                    # Not a claimant at all: the name is simply wrong. Flagged,
+                    # never silently overridden -- an operator may know better.
+                    row["header_says"] = sniffed.platform
+                    row["header_detail"] = sniffed.detail
             rows.append(row)
         return {
             "candidates": rows,
