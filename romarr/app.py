@@ -228,6 +228,14 @@ _FAMILIES = (("sms", "gamegear"), ("gb", "gbc"), ("nes", "famicom", "fds"),
 def _same_family(a: str, b: str) -> bool:
     return any(a in family and b in family for family in _FAMILIES)
 
+def _archive_tool_path() -> str:
+    """The libarchive bsdtar ROMarr found, or an empty string."""
+    try:
+        from .library import bsdtar_path
+        return bsdtar_path() or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
 class ROMarr:
     """The service. Holds config, clients, and the in-flight queue."""
 
@@ -1309,6 +1317,10 @@ class ROMarr:
             # downloader, and the status page had no way to say whether it was
             # on. Get Started could therefore only ever report DATs as not set
             # up, however many were loaded.
+            # Without a libarchive bsdtar, every 7z and rar import fails on a
+            # format it cannot open -- which is how the disc platforms ship.
+            # The live install this was found on had been missing it silently.
+            "archive_tool": _archive_tool_path(),
             "dats": len(self.dats.dats),
             "dat_names": [d.name for d in self.dats.dats if d.name],
             "dat_games": sum(len(d.games) for d in self.dats.dats),
