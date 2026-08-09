@@ -101,4 +101,4 @@ def test_plain_iso9660_without_sony_is_not_claimed():
 
 
 def test_the_window_reaches_the_iso9660_descriptor():
-    assert HEAD_BYTES > 0x8001
+    assert HEAD_BYTES > 37657  # the raw-sector descriptor, furthest thing read

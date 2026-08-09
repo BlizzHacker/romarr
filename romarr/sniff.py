@@ -121,7 +121,7 @@ def identify(head: bytes) -> Sniffed | None:
     # Sega's optical formats name themselves in the first sector. The offset
     # differs between a 2048-byte user-data rip and a 2352-byte raw one, so
     # both are checked.
-    for offset in (0x00, 0x10):
+    for offset in (0x00, 0x10, 0x18):
         if _at(head, offset, b"SEGADISCSYSTEM") or \
                 _at(head, offset, b"SEGABOOTDISC"):
             return Sniffed("segacd", f"Sega CD boot header at {offset:#04x}")
@@ -137,11 +137,26 @@ def identify(head: bytes) -> Sniffed | None:
     # PlayStation and PS2 are ISO9660 with a Sony volume identifier. This
     # cannot separate the two -- both say PLAYSTATION -- so it says so rather
     # than picking one.
-    if _at(head, 0x8001, b"CD001"):
-        window = head[0x8000:0x9000]
-        if b"PLAYSTATION" in window:
-            return Sniffed("psx", "ISO9660 with a PLAYSTATION volume "
-                                  "identifier (PlayStation or PS2)")
+    #
+    # Three layouts, because a disc image is not one thing:
+    #
+    #   0x8001  a 2048-byte image: sector 16 is at 0x8000, descriptor first.
+    #   37649   raw 2352-byte sectors, Mode 1: 12 sync + 4 header, then data.
+    #   37657   raw 2352-byte sectors, Mode 2 Form 1: 8 more subheader bytes.
+    #
+    # The last is what a real PlayStation .cue/.bin set uses, and it was past
+    # the old read window entirely -- so every one of them came back with no
+    # opinion.
+    for descriptor in (0x8001, 37649, 37657):
+        if _at(head, descriptor, b"CD001"):
+            window = head[descriptor:descriptor + 64]
+            if b"PLAYSTATION" in window:
+                return Sniffed("psx", "ISO9660 with a PLAYSTATION volume "
+                                      "identifier (PlayStation or PS2)")
+
+    # A raw image whose sync marks are present but whose volume identifier
+    # names nothing known. Worth nothing on its own: "this is a CD" does not
+    # say which machine, and guessing is what this module refuses to do.
 
     # Atari Lynx also ships headerless; nothing else distinctive is left, so
     # anything unrecognised is reported as unknown rather than guessed at.
@@ -150,10 +165,13 @@ def identify(head: bytes) -> Sniffed | None:
 
 #: How many bytes `identify` ever looks at. Read this much and no more.
 #:
-#: 0x9000 rather than 0x8000 because ISO9660's first volume descriptor sits at
-#: 0x8001, and that is what identifies a PlayStation or PS2 disc. Still small
-#: enough that reading it off a 1.3 GB archive member costs nothing.
-HEAD_BYTES = 0x9000
+#: Sized by the furthest thing worth reading, which is ISO9660's first volume
+#: descriptor. In a 2048-byte image that sits at 0x8001. In a raw 2352-byte
+#: image -- what a .cue/.bin set actually contains -- sector 16 begins at
+#: 37632 and the descriptor follows the sector header, so it lands near 37657.
+#: 0x9600 covers both with room to read the identifier that follows it, and is
+#: still nothing to read off a 1.3 GB archive member.
+HEAD_BYTES = 0x9600
 
 
 def identify_file(path) -> Sniffed | None:
@@ -319,3 +337,59 @@ def _identify_via_bsdtar(path) -> Sniffed | None:
         return None
     return Sniffed(got.platform,
                    f"{got.detail}, inside {pathlib.Path(str(path)).suffix}")
+
+#: Below this a file is too small for the probe to say anything useful: a
+#: legitimate small ROM is mostly content, and padding at both ends is normal.
+_HOLLOW_MIN_BYTES = 16 * 1024 * 1024
+
+#: Read this much at each probe point.
+_PROBE_BYTES = 64 * 1024
+
+
+def looks_hollow(path) -> str | None:
+    """Whether a file is the right size and contains almost nothing.
+
+    Found in a real library: eight PlayStation images, 80 to 670 MB each,
+    every one of them zeros from the first byte to the last 64 KB. The
+    filesystem had the size and the filename looked right, so nothing anywhere
+    said they were empty -- they would simply never boot.
+
+    That is what an interrupted download leaves behind when the tool
+    pre-allocates the file and dies: the size is real and the content is not.
+
+    Deliberately conservative. Long runs of zeros are normal inside a disc
+    image, so this only speaks up when the *start* is empty and most of the
+    file is too, which no working image does.
+    """
+    path = pathlib.Path(str(path))
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return None
+    if size < _HOLLOW_MIN_BYTES:
+        return None
+
+    points = [0, size // 4, size // 2, (size * 3) // 4,
+              max(0, size - _PROBE_BYTES)]
+    empty = 0
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0)
+            if any(handle.read(_PROBE_BYTES)):
+                # Real content at the very front. Whatever else is in here,
+                # it is not the failure this looks for.
+                return None
+            empty = 1
+            for offset in points[1:]:
+                handle.seek(offset)
+                if not any(handle.read(_PROBE_BYTES)):
+                    empty += 1
+    except OSError:
+        return None
+
+    if empty < 4:
+        return None
+    return (f"{empty} of {len(points)} sampled regions are empty, including "
+            f"the start — the file has its full size ({size // (1024 * 1024)} "
+            f"MB) and almost no content, which is what an interrupted "
+            f"download leaves behind")

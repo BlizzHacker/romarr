@@ -144,7 +144,7 @@ def test_it_reads_a_window_not_the_whole_file(tmp_path):
     Manual Import unusable on a real library."""
     path = tmp_path / "big.iso"
     path.write_bytes(rom(**{"0": b"NES\x1a"}) + b"\x00" * (HEAD_BYTES * 4))
-    assert HEAD_BYTES <= 0x9000  # 0x8001 holds ISO9660, which discs need
+    assert HEAD_BYTES <= 0x9600  # raw 2352-byte sector 16 lands near 37657
     assert identify_file(path).platform == "nes"
 
 

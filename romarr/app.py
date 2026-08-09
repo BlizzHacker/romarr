@@ -1419,7 +1419,7 @@ class ROMarr:
         """Manual import: what is already on disk that ROMarr could adopt."""
         from .sniff import disagrees_with
 
-        from .sniff import identify_file
+        from .sniff import identify_file, looks_hollow
 
         result = scan_directory(directory, PLATFORMS, self.dats)
         rows = []
@@ -1455,6 +1455,12 @@ class ROMarr:
                     # never silently overridden -- an operator may know better.
                     row["header_says"] = sniffed.platform
                     row["header_detail"] = sniffed.detail
+            # A file can be the right size, the right name and completely
+            # empty. Nothing else in the pipeline notices, because every check
+            # upstream is about identity rather than content.
+            hollow = looks_hollow(row.get("path", ""))
+            if hollow:
+                row["hollow"] = hollow
             rows.append(row)
         return {
             "candidates": rows,
