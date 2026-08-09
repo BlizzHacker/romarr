@@ -30,6 +30,14 @@ PC_GAME_CATEGORIES = range(4050, 4070)
 FOREIGN_PLATFORM_MARKERS = {
     "nintendo switch", "switch", "nsp", "xci",
     "playstation", "ps1", "ps2", "ps3", "ps4", "ps5", "psp", "psx", "vita",
+    # Spelled out, because a listing usually writes the machine in full and
+    # the short forms never appear. Without these a PlayStation request took
+    # "Dynasty Warriors 2 - PlayStation 2" as its own platform: "playstation"
+    # is psx's alias, and it is a substring of every later Sony console.
+    "playstation 2", "playstation 3", "playstation 4", "playstation 5",
+    "playstation portable", "playstation vita",
+    "nintendo 64", "super nintendo", "game boy advance", "game boy color",
+    "sega saturn", "sega dreamcast", "master system", "game gear",
     "xbox", "x360", "xbla",
     "gamecube", "wii", "wiiu", "wii u", "3ds", "nds", "ds",
     "android", "apk", "ios",
@@ -45,6 +53,27 @@ FOREIGN_PLATFORM_MARKERS = {
     # never says Wii.
     "virtual console", "wiiware", "wad", "eshop",
 }
+
+
+# Scene markers that only ever appear on a PC release. Kept apart from
+# FOREIGN_PLATFORM_MARKERS because these say something different: not "names
+# another console" but "is a cracked PC game", which is why the
+# own-platform exemption must not apply to them -- no retro system is called
+# CODEX or TENOKE.
+#
+# The gap they close, seen live: a PlayStation request for "Dynasty Warriors"
+# grabbed "DYNASTY WARRIORS ORIGINS (CRACK FIXED)", a 2025 PC game. It names
+# no platform at all, so nothing rejected it, and 42 seeders scored it above
+# the correct "Dynasty Warriors - PlayStation" on one seeder. Seeder count
+# should never outrank being the right machine.
+PC_RELEASE_MARKERS = (
+    "crack", "cracked", "crackfix", "denuvo", "goldberg", "steamworks",
+    "tenoke", "codex", "plaza", "skidrow", "reloaded", "razor1911", "flt",
+    "empress", "rune", "hoodlum", "prophet", "doge", "hi2u", "darksiders",
+    "fitgirl", "dodi", "elamigos", "kaos", "sim0n", "0xdeadc0de",
+    # A patch is not a game, however well seeded.
+    "update v", "patch v", "hotfix", "dlc unlocker", "trainer",
+)
 
 # Names for "several games in one box", which a single-game request cannot use.
 # Kept apart from _JUNK_MARKERS because these are matched as whole words: the
@@ -339,12 +368,27 @@ def judge(release: Release, wanted: str,
         own = {platform.slug.lower(), platform.name.lower(), *platform.aliases,
                *platform.native_markers}
         own_words = {w for entry in own for w in entry.split()}
-        for marker in FOREIGN_PLATFORM_MARKERS:
-            if marker in own or marker in own_words:
+        # Longest first, so the most specific name in the title decides. Every
+        # Sony console contains "playstation", so checking the short alias
+        # first exempted "PlayStation 2" from a PlayStation request and let a
+        # PS2 disc win a PSX search.
+        for marker in sorted(FOREIGN_PLATFORM_MARKERS, key=len, reverse=True):
+            if not _mentions(lowered, marker):
                 continue
-            if _mentions(lowered, marker):
-                return Judgement(-300,
-                                 verdict=f"names another platform ({marker})")
+            if marker in own or marker in own_words:
+                # This platform's own name. Nothing more specific matched, so
+                # the title is talking about us.
+                break
+            return Judgement(-300,
+                             verdict=f"names another platform ({marker})")
+
+    # A cracked PC release, whatever it is named. Rejected rather than
+    # penalised for the same reason a compilation is: there is no ROM inside
+    # for the importer to file, so the grab would succeed and the import
+    # could not.
+    for marker in PC_RELEASE_MARKERS:
+        if _mentions(lowered, marker):
+            return Judgement(-300, verdict=f"a PC release ({marker})")
 
     # A compilation is not a cartridge dump, and cannot be imported as one.
     #
