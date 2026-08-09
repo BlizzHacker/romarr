@@ -90,3 +90,15 @@ def test_the_verdict_says_how_big_the_file_claims_to_be(tmp_path):
     obvious the download never finished."""
     path = write(tmp_path / "Game.bin", BIG)
     assert "20 MB" in looks_hollow(path)
+
+
+def test_formats_that_are_sparse_by_nature_are_never_flagged(tmp_path):
+    """CD subchannel data is largely empty when perfectly healthy.
+
+    Found in a real library: a .sub beside a game matched the broken-download
+    pattern exactly, and calling it a failed download would have been wrong
+    every time. The pattern is only evidence for formats that carry content.
+    """
+    for suffix in ('.sub', '.swp', '.sbi'):
+        path = write(tmp_path / ('data' + suffix), BIG)
+        assert looks_hollow(path) is None, suffix

@@ -346,6 +346,12 @@ _HOLLOW_MIN_BYTES = 16 * 1024 * 1024
 _PROBE_BYTES = 64 * 1024
 
 
+#: Formats that are mostly zeros when perfectly healthy, so the probe below
+#: says nothing useful about them. CD subchannel data is the case that turned
+#: up in a real library: a .sub is largely empty by nature, and flagging one
+#: as a broken download would be wrong every time.
+_LEGITIMATELY_SPARSE = {'.sub', '.swp', '.sbi', '.ccd'}
+
 def looks_hollow(path) -> str | None:
     """Whether a file is the right size and contains almost nothing.
 
@@ -362,6 +368,8 @@ def looks_hollow(path) -> str | None:
     file is too, which no working image does.
     """
     path = pathlib.Path(str(path))
+    if path.suffix.lower() in _LEGITIMATELY_SPARSE:
+        return None
     try:
         size = path.stat().st_size
     except OSError:
