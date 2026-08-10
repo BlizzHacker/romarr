@@ -25,7 +25,13 @@ If you run Radarr for films and Sonarr for TV, this is the missing one.
 [![Docker](https://img.shields.io/badge/docker-ghcr.io-2496ed)](https://github.com/BlizzHacker/romarr/pkgs/container/romarr)
 [![platforms](https://img.shields.io/badge/arch-amd64%20%7C%20arm64%20%7C%20armv7-lightgrey)](#docker)
 
-![ROMarr interactive search](docs/img/interactive-search.png)
+![Interactive search on a live install: 51 releases scored, the verified dump on top, every rejection explained](docs/img/interactive-search-live.png)
+
+*A real search on a live install — 51 releases, the DAT-verified dump ranked
+first at +50, romhacks and wrong-platform releases rejected with the reason
+written next to each. Every screenshot in this README is from the
+maintainer's production instance; [docs/PROOF.md](docs/PROOF.md) is the
+full claim-by-claim evidence file.*
 
 ---
 
@@ -63,6 +69,16 @@ If you run Radarr for films and Sonarr for TV, this is the missing one.
 - **Auth built in** — password + optional TOTP, API keys, or ForwardAuth SSO behind a proxy; native HTTPS with `ROMARR_SSL_CERT`/`ROMARR_SSL_KEY`.
 - **Remote path mapping** — for download clients running on another host or container.
 - **Persistent state** — history, wanted list, shelf and settings survive restarts.
+
+## Screenshots
+
+All from a live install with a 166,578-game library — not a seeded demo.
+
+| | |
+|---|---|
+| ![Library](docs/img/library.png) *The library grid — shelf status and ratings on the tiles* | ![Stats](docs/img/stats.png) *Statistics: 860 grabs across ten indexers, imports by platform* |
+| ![Lists](docs/img/lists.png) *Import Lists — a pasted top-100 and the connected-accounts truth table* | ![Collections](docs/img/collections.png) *Collections: full sets and 1G1R planned from DATs* |
+| ![Tasks](docs/img/tasks.png) *The clock: every scheduled job, its interval and last result* | ![Live log](docs/img/logs.png) *The process log, tailed live in the browser* |
 
 ## Requirements
 
@@ -512,16 +528,17 @@ Brand and naming: [BRAND.md](https://github.com/BlizzHacker/rom-hub/blob/master/
 
 ## Acknowledgements
 
-**[Questarr](https://github.com/Doezer/Questarr)** by Doezer (GPL-3.0),
-the same *arr idea built for PC games, and built well. Several ROMarr
-features exist because Questarr proved they belong in a game *arr: the
-scheduled search / RSS-sync clock, per-game status, ratings and notes, the
-stats page, the wider download-client roster (Transmission, Deluge,
-rTorrent, Synology Download Station), native SSL, and Home Assistant
-packaging. No code was taken — Questarr is TypeScript and ROMarr is Python —
-but the case for those features was made there first. If your library is
-Steam and FitGirl rather than cartridges and DATs, use Questarr — it is the
-right tool for that shelf.
+**[Questarr](https://github.com/Doezer/Questarr)** by Doezer (GPL-3.0).
+Several ROMarr features landed after Questarr proved the demand for them in
+a game *arr: the scheduled search / RSS-sync clock, per-game status,
+ratings and notes, the stats page, the wider download-client roster
+(Transmission, Deluge, rTorrent, Synology Download Station), native SSL,
+and Home Assistant packaging. No code was taken — Questarr is TypeScript
+and ROMarr is Python — but the case for those features was made there
+first, and saying so costs nothing. As of August 2026 every capability on
+their feature list and published roadmap has a ROMarr equivalent, and the
+acquisitions here come with the one thing no title-parsing pipeline can
+add: a checksum against the published dump.
 
 **[gamarr](https://github.com/JeremiahM37/gamarr)** by JeremiahM37 (MIT).
 Several features here exist because gamarr had them first and its README made
