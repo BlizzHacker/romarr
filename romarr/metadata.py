@@ -280,6 +280,82 @@ def _rawg_calendar(cfg: dict, start: str, end: str, limit: int) -> list[dict]:
 CALENDAR_PROVIDERS = {"rawg": _rawg_calendar}
 
 
+# --- discovery --------------------------------------------------------------
+#
+# Browse, not search: the three shelves every storefront opens with --
+# popular, new, upcoming -- answered from RAWG, whose catalogue reaches back
+# through every platform ROMarr files. Discovery is an enhancement exactly
+# like the rest of this module: no provider configured means an empty page
+# that says why, never an error.
+
+#: What each shelf asks RAWG for. `popular` is all-time by rating count
+#: (metacritic-gated so a review-bombed meme game does not top the page);
+#: `new` is the last quarter; `upcoming` the next half year.
+DISCOVER_SHELVES = ("popular", "new", "upcoming")
+
+
+def _rawg_discover(cfg: dict, shelf: str, limit: int) -> list[dict]:
+    import datetime
+
+    key = str(cfg.get("api_key") or "")
+    if not key:
+        return []
+    today = datetime.date.today()
+    params = {"key": key, "page_size": limit}
+    if shelf == "popular":
+        params.update({"ordering": "-added", "metacritic": "60,100"})
+    elif shelf == "new":
+        start = (today - datetime.timedelta(days=90)).isoformat()
+        params.update({"dates": f"{start},{today.isoformat()}",
+                       "ordering": "-added"})
+    else:  # upcoming
+        end = (today + datetime.timedelta(days=180)).isoformat()
+        params.update({"dates": f"{today.isoformat()},{end}",
+                       "ordering": "released"})
+    body = _get_json("https://api.rawg.io/api/games?"
+                     + urllib.parse.urlencode(params)) or {}
+    out = []
+    for row in body.get("results") or []:
+        out.append({
+            "title": str(row.get("name") or ""),
+            "released": str(row.get("released") or ""),
+            "rating": float(row.get("rating") or 0.0),
+            "cover_url": str(row.get("background_image") or ""),
+            "platforms": [str((p.get("platform") or {}).get("name") or "")
+                          for p in (row.get("platforms") or [])],
+            "source": "RAWG",
+        })
+    return out
+
+
+DISCOVER_PROVIDERS = {"rawg": _rawg_discover}
+
+
+def discover(providers: list[dict], *, shelf: str = "popular",
+             limit: int = 40) -> dict:
+    """One storefront shelf, from the first provider able to serve it."""
+    if shelf not in DISCOVER_SHELVES:
+        return {"shelf": shelf, "items": [],
+                "error": f"unknown shelf; one of {', '.join(DISCOVER_SHELVES)}"}
+    for cfg in providers or []:
+        if not cfg.get("enable", True):
+            continue
+        answer = DISCOVER_PROVIDERS.get(str(cfg.get("type") or "").lower())
+        if answer is None:
+            continue
+        try:
+            items = answer(cfg, shelf, limit)
+        except Exception as exc:
+            log.warning("discover via %r failed: %s", cfg.get("type"), exc)
+            continue
+        if items:
+            return {"shelf": shelf, "items": items,
+                    "provider": cfg.get("type")}
+    return {"shelf": shelf, "items": [],
+            "error": "no metadata provider configured that can browse -- "
+                     "add RAWG under Settings -> Metadata (a free key)"}
+
+
 def calendar(providers: list[dict], *, days_back: int = 30,
              days_ahead: int = 60, limit: int = 40) -> dict:
     """Games released recently or due soon.

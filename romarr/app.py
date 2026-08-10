@@ -69,13 +69,19 @@ from .notify import (NOTIFIERS, Message, Notifier, failed, grabbed, imported,
 from .profiles import Blocklist, ReleaseProfile, release_id
 from .upgrade import is_upgrade, merge_tags, scan as scan_directory
 from .metadata import Metadata, calendar as metadata_calendar
+from .metadata import discover as metadata_discover
 from .openapi import spec as openapi_spec
-from .ops import RateLimiter, make_backup, read_backup, render_metrics, to_csv
+from .ops import (LogRing, RateLimiter, make_backup, read_backup,
+                  render_metrics, to_csv)
 from .platforms import PLATFORMS, resolve
 from .sso import ForwardAuth
 from .totp import Totp
 from .playability import DOWNLOAD, StreamServer, routes_for
 from .lists import LIST_TYPES
+
+#: List-source fields that are credentials: masked on the way out, kept on
+#: edit when the form returns the placeholder.
+LIST_SECRETS = ("api_key", "openxbl_key", "npsso", "itchio_key")
 from .scheduler import Scheduler, next_search_due
 from .selection import best_release, judge, score
 from .store import Event, Store
@@ -459,6 +465,12 @@ class ROMarr:
         self._library_cache: tuple[list | None, float, str] = (None, 0.0, "")
         self._count_thread = threading.Thread(target=self._refresh_counts, daemon=True)
         self._count_thread.start()
+
+        # The live log: a ring buffer behind the Logs page. Attached to the
+        # root logger so every module's lines land in it, exactly as they go
+        # to stdout -- the page is a tail, not a second logging system.
+        self.logring = LogRing()
+        logging.getLogger().addHandler(self.logring.handler())
 
         # The clock. Until this existed, "Import completed downloads
         # automatically" was a checkbox nothing read, and the Wanted list was
@@ -2515,6 +2527,16 @@ def make_handler(service: ROMarr):
             if route.path == "/api/v1/log":
                 limit = int((query.get("limit") or ["200"])[0])
                 return self._json(200, {"items": service.store.history(limit)})
+            if route.path == "/api/v1/log/tail":
+                return self._json(200, service.logring.tail(
+                    since=int((query.get("since") or ["0"])[0] or 0),
+                    level=(query.get("level") or [""])[0],
+                    limit=int((query.get("limit") or ["200"])[0])))
+            if route.path == "/api/v1/discover":
+                return self._json(200, metadata_discover(
+                    service.store.list_items("metadata_providers"),
+                    shelf=(query.get("shelf") or ["popular"])[0],
+                    limit=int((query.get("limit") or ["40"])[0])))
             if route.path == "/api/v1/indexer":
                 # Configured entries first, then whatever Prowlarr proxies --
                 # the latter are managed there and shown read-only, the way an
@@ -2658,12 +2680,15 @@ def make_handler(service: ROMarr):
                     # The ledger is bookkeeping, not configuration; its size
                     # is the interesting part.
                     ledger = cfg.pop("added", None) or []
-                    if cfg.get("api_key"):
-                        cfg["api_key"] = "********"
+                    for secret in LIST_SECRETS:
+                        if cfg.get(secret):
+                            cfg[secret] = "********"
                     items.append({**cfg, "added_count": len(ledger)})
                 return self._json(200, {"items": items})
             if route.path == "/api/v1/importlist/schema":
-                return self._json(200, {"types": LIST_TYPES})
+                from .lists import NO_API_STORES
+                return self._json(200, {"types": LIST_TYPES,
+                                        "no_api": NO_API_STORES})
             if route.path == "/api/health" and not self._authorised():
                 # Liveness needs one bit. The full report names library paths,
                 # client URLs and counts, and this endpoint is reachable
@@ -2771,7 +2796,8 @@ def make_handler(service: ROMarr):
             if route.path == "/api/v1/importlist":
                 cfg = {k: body.get(k, "") for k in
                        ("id", "name", "type", "platform", "content", "url",
-                        "steam_id", "api_key", "source", "gog_username")}
+                        "steam_id", "api_key", "source", "gog_username",
+                        "openxbl_key", "npsso", "itchio_key")}
                 cfg["enable"] = bool(body.get("enable", True))
                 cfg["type"] = str(cfg["type"] or "paste").lower()
                 if cfg["type"] not in LIST_TYPES:
@@ -2784,28 +2810,33 @@ def make_handler(service: ROMarr):
                     # An edit must not wipe the ledger of what this list
                     # already added -- losing it would resurrect every
                     # fulfilled title on the next sync. The same rule keeps
-                    # the stored Steam key when the form sends back the
+                    # every stored credential when the form sends back its
                     # placeholder.
                     old = service.store.get_item("import_lists", cfg["id"])
                     if old:
                         cfg["added"] = old.get("added") or []
-                        if cfg.get("api_key") in ("********", ""):
-                            cfg["api_key"] = old.get("api_key", "")
+                        for secret in LIST_SECRETS:
+                            if cfg.get(secret) in ("********", ""):
+                                cfg[secret] = old.get(secret, "")
                 saved = service.store.put_item("import_lists", cfg)
                 saved.pop("added", None)
-                if saved.get("api_key"):
-                    saved["api_key"] = "********"
+                for secret in LIST_SECRETS:
+                    if saved.get(secret):
+                        saved[secret] = "********"
                 return self._json(200, saved)
             if route.path == "/api/v1/importlist/preview":
                 from .lists import fetch_entries as _fetch_entries
                 preview_cfg = {k: body.get(k) or ""
                                for k in ("type", "content", "url", "steam_id",
-                                         "api_key", "source", "gog_username")}
+                                         "api_key", "source", "gog_username",
+                                         "openxbl_key", "npsso", "itchio_key")}
                 preview_cfg["type"] = preview_cfg["type"] or "paste"
-                if preview_cfg["api_key"] == "********" and body.get("id"):
+                if body.get("id"):
                     stored = service.store.get_item("import_lists",
-                                                    str(body["id"]))
-                    preview_cfg["api_key"] = (stored or {}).get("api_key", "")
+                                                    str(body["id"])) or {}
+                    for secret in LIST_SECRETS:
+                        if preview_cfg.get(secret) == "********":
+                            preview_cfg[secret] = stored.get(secret, "")
                 try:
                     entries = _fetch_entries(preview_cfg)
                 except ValueError as exc:

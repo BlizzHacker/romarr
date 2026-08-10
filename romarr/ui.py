@@ -206,6 +206,7 @@ input:focus,select:focus{border-color:var(--accent)}
 # The nav, in *arr order. `count` names a stat the badge reads.
 NAV = [
     ("Library",  [("library", "Games", "games"), ("add", "Add New", None),
+                  ("discover", "Discover", None),
                   ("search", "Interactive Search", None)]),
     ("Wanted",   [("missing", "Missing", "missing"), ("lists", "Lists", None),
                   ("calendar", "Calendar", None)]),
@@ -260,6 +261,7 @@ function go(page){
     n.classList.toggle('on', n.dataset.page===page));
   const titles={library:'Games',add:'Add New Game',search:'Interactive Search',
     missing:'Wanted — Missing',lists:'Import Lists',stats:'Statistics',
+    discover:'Discover',
     queue:'Queue',history:'History',media:'Media Management',profiles:'Profiles',
     indexers:'Indexers',clients:'Download Clients',libraries:'Libraries',
     general:'General',
@@ -663,7 +665,17 @@ RENDER.lists=async()=>{
         <td style="text-align:right"><div class="rowact">
           <button data-ledit="${i}">Edit</button></div></td></tr>`).join('')}
       </tbody></table>`
-      :'<div class="empty">No lists yet. Paste one and let the clock do the asking.</div>'}`;
+      :'<div class="empty">No lists yet. Paste one, or connect an account, and let the clock do the asking.</div>'}
+    <div class="card" style="margin-top:14px"><h3>Connected accounts</h3>
+      <p class="help">Steam, GOG, Xbox, PlayStation and itch.io connect as
+        list types above &mdash; add a list and pick the store. The ones that
+        cannot connect, and why (no marketing, just the truth):</p>
+      <div id="l-noapi" style="color:var(--dim);font-size:12.5px"></div></div>`;
+  j('/api/v1/importlist/schema').then(s=>{
+    const rows=Object.entries(s.no_api||{});
+    $('#l-noapi').innerHTML=rows.map(([store,why])=>
+      `<p style="margin:6px 0"><b>${esc(store)}</b> — ${esc(why)}</p>`).join('');
+  }).catch(()=>{});
   $('#l-add').onclick=()=>editList({type:'paste'});
   $('#l-sync').onclick=async e=>{
     e.target.disabled=true; e.target.textContent='Syncing…';
@@ -692,6 +704,9 @@ function editList(item){
         <option value="url"${item.type==='url'?' selected':''}>List at a URL</option>
         <option value="steam"${item.type==='steam'?' selected':''}>Steam library / wishlist</option>
         <option value="gog"${item.type==='gog'?' selected':''}>GOG profile</option>
+        <option value="xbox"${item.type==='xbox'?' selected':''}>Xbox (OpenXBL)</option>
+        <option value="psn"${item.type==='psn'?' selected':''}>PlayStation (NPSSO)</option>
+        <option value="itchio"${item.type==='itchio'?' selected':''}>itch.io purchases</option>
       </select></div>
     <div class="field"><label>Default platform</label>
       <select data-f="platform"><option value="">Named per line</option>
@@ -722,6 +737,26 @@ function editList(item){
       <label>GOG username</label>
       <input type="text" data-f="gog_username" value="${esc(item.gog_username||'')}"
         placeholder="a public gog.com profile name"></div>
+    <div data-lt="xbox" style="${item.type==='xbox'?'':'display:none'}">
+      <div class="field"><label>OpenXBL API key</label>
+        <input type="password" data-f="openxbl_key" autocomplete="new-password"
+          value="${esc(item.openxbl_key||'')}" placeholder="sign in once at xbl.io"></div>
+      <p class="help">Pulls your title history &mdash; every game the account
+        has played. Microsoft exposes no purchase list to anyone, so played
+        IS the practical library.</p></div>
+    <div data-lt="psn" style="${item.type==='psn'?'':'display:none'}">
+      <div class="field"><label>NPSSO token</label>
+        <input type="password" data-f="npsso" autocomplete="new-password"
+          value="${esc(item.npsso||'')}"
+          placeholder="from ca.account.sony.com/api/authz/v3/ssocookie"></div>
+      <p class="help">Sign in at playstation.com, then open the ssocookie URL
+        above and copy the token. It expires every couple of months; when a
+        sync fails, grab a fresh one.</p></div>
+    <div class="field" data-lt="itchio" style="${item.type==='itchio'?'':'display:none'}">
+      <label>itch.io API key</label>
+      <input type="password" data-f="itchio_key" autocomplete="new-password"
+        value="${esc(item.itchio_key||'')}"
+        placeholder="itch.io/user/settings/api-keys"></div>
     <div class="field" data-lt="paste" style="${['url','steam','gog'].includes(item.type)?'display:none':''}">
       <label>Titles</label>
       <textarea data-f="content" rows="10"
@@ -738,7 +773,8 @@ function editList(item){
   document.body.append(m);
   m.onclick=e=>{ if(e.target===m||e.target.dataset.close!==undefined) closeModal(); };
   m.querySelector('[data-f=type]').onchange=e=>{
-    const kind=['url','steam','gog'].includes(e.target.value)?e.target.value:'paste';
+    const kind=['url','steam','gog','xbox','psn','itchio'].includes(e.target.value)
+      ?e.target.value:'paste';
     m.querySelectorAll('[data-lt]').forEach(el=>
       el.style.display=el.dataset.lt===kind?'':'none');
   };
@@ -772,6 +808,55 @@ function editList(item){
     closeModal(); toast('Removed'); go('lists');
   };
 }
+
+RENDER.discover=async()=>{
+  const shelf=(location.hash.split(':')[1])||'popular';
+  const tabs=[['popular','Popular'],['new','New releases'],['upcoming','Upcoming']];
+  $('#page').innerHTML=`<div class="row" style="margin-bottom:14px">
+      ${tabs.map(([k,l])=>`<button class="btn ${k===shelf?'':'ghost'}"
+        data-shelf="${k}">${l}</button>`).join('')}
+    </div><div id="d-out"><div class="empty">Browsing…</div></div>`;
+  document.querySelectorAll('[data-shelf]').forEach(b=>b.onclick=()=>{
+    location.hash='discover:'+b.dataset.shelf; go('discover');});
+  const d=await j('/api/v1/discover?shelf='+shelf).catch(()=>({items:[]}));
+  if(!d.items||!d.items.length){
+    $('#d-out').innerHTML=`<div class="empty">${esc(d.error||'Nothing to show.')}</div>`;
+    return;
+  }
+  const requestable=g=>(g.platforms||[]).filter(p=>
+    PLATFORMS.some(x=>x.name.toLowerCase()===String(p).toLowerCase()
+      ||x.slug===String(p).toLowerCase()));
+  $('#d-out').innerHTML=`<div class="grid">${d.items.map((g,i)=>{
+    const plats=requestable(g);
+    return `<div class="tile">
+      <div class="art" style="background-image:url('${esc(g.cover_url||'')}')"></div>
+      <div class="nm">${esc(g.title)}</div>
+      <div class="pf">${esc(g.released||'')}${g.rating?' · ★'+g.rating.toFixed(1):''}</div>
+      ${plats.length?`<div class="rowact" style="margin-top:4px">
+        <button data-dreq="${i}">Request</button></div>`
+        :`<div class="pf" style="opacity:.6">no retro platform</div>`}</div>`;
+  }).join('')}</div>
+  <p class="help" style="margin-top:10px">Request shows only for games on a
+    platform ROMarr models — the scorer takes it from there, DAT
+    verification included.</p>`;
+  document.querySelectorAll('[data-dreq]').forEach(b=>b.onclick=async()=>{
+    const g=d.items[Number(b.dataset.dreq)];
+    const plats=requestable(g);
+    const pick=plats.length===1?plats[0]
+      :prompt('Which platform?\n'+plats.join(', '), plats[0]);
+    if(!pick) return;
+    const match=PLATFORMS.find(x=>x.name.toLowerCase()===String(pick).toLowerCase()
+      ||x.slug===String(pick).toLowerCase());
+    if(!match){toast('Unknown platform');return;}
+    b.disabled=true; b.textContent='Requesting…';
+    const r=await j('/api/request',{method:'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify({game:g.title,platform:match.slug})});
+    b.textContent=r.ok?'Grabbed':'Wanted';
+    toast(r.ok?`Grabbed ${r.release}`:(r.error||'Added to Wanted'));
+    refreshCounts();
+  });
+};
 
 RENDER.stats=async()=>{
   const s=await j('/api/v1/stats');
@@ -1834,16 +1919,44 @@ RENDER.tasks=async()=>{
   });
 };
 
+let LOG_TIMER=null;
 RENDER.logs=async()=>{
-  const d=await j('/api/v1/log?limit=200');
-  $('#page').innerHTML=`<div class="card"><h3>Recent events</h3>
-    <p class="help">ROMarr's own history. Service logs are in journalctl -u romarr,
-    or docker logs romarr.</p>
-    ${d.items.length?`<pre style="font:12px/1.6 ui-monospace,Menlo,monospace;
-      color:var(--dim);white-space:pre-wrap">${d.items.map(e=>
-      `${esc(e.at)}  ${esc(e.kind.toUpperCase().padEnd(9))} ${esc(e.game)} `+
-      `[${esc(e.platform)}] ${esc(e.detail||e.release||'')}`).join('\n')}</pre>`
-    :'<div class="empty">Nothing logged yet.</div>'}</div>`;
+  clearInterval(LOG_TIMER);
+  $('#page').innerHTML=`<div class="card"><h3>Live log</h3>
+    <p class="help">The process log, tailed live — the same lines journalctl
+      or docker logs would show. Events (grabs, imports) stay under
+      Activity &rarr; History.</p>
+    <div class="row" style="margin-bottom:10px">
+      <select id="lg-level">
+        <option value="">Everything</option>
+        <option value="INFO" selected>Info and up</option>
+        <option value="WARNING">Warnings and up</option>
+        <option value="ERROR">Errors only</option>
+      </select>
+      <label class="check" style="margin:0"><input type="checkbox" id="lg-follow"
+        checked><span>Follow</span></label>
+    </div>
+    <pre id="lg-out" style="font:12px/1.6 ui-monospace,Menlo,monospace;
+      color:var(--dim);white-space:pre-wrap;max-height:70vh;overflow:auto"></pre></div>`;
+  let since=0;
+  const paint=rows=>{
+    if(!rows.length) return;
+    const out=$('#lg-out'); if(!out) return;
+    out.textContent+=rows.map(r=>
+      `${r.at.replace('T',' ').slice(0,19)}  ${r.level.padEnd(7)} ${r.name}  ${r.message}`)
+      .join('\n')+'\n';
+    if($('#lg-follow')?.checked) out.scrollTop=out.scrollHeight;
+  };
+  const pull=async()=>{
+    if(!$('#lg-out')){clearInterval(LOG_TIMER);return;}
+    const level=$('#lg-level').value;
+    const d=await j(`/api/v1/log/tail?since=${since}&level=${level}`).catch(()=>null);
+    if(!d) return;
+    paint(d.items||[]); since=d.latest||since;
+  };
+  $('#lg-level').onchange=()=>{since=0;$('#lg-out').textContent='';pull();};
+  await pull();
+  LOG_TIMER=setInterval(pull,2000);
 };
 
 /* ---------------- boot ---------------- */

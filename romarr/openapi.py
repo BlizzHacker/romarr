@@ -85,6 +85,10 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "/api/request": ("POST", "Request a game."),
     "/api/v1/system/tasks": ("GET", "The scheduled jobs: interval, last run, "
                                     "last result."),
+    "/api/v1/log/tail": ("GET", "The live process log: records after ?since=, "
+                                "filtered to ?level= and up."),
+    "/api/v1/discover": ("GET", "Browse a storefront shelf: "
+                                "?shelf=popular|new|upcoming."),
     "/api/v1/stats": ("GET", "What this install has done: events, imports by "
                              "platform, grabs by indexer, shelf totals."),
     "/api/v1/game/meta": ("GET", "The shelf: status, rating and notes, for "

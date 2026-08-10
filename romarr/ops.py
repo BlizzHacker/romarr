@@ -80,6 +80,73 @@ def render_metrics(stats: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
+# --- live log ---------------------------------------------------------------
+#
+# The Logs page used to show the event history and call it logs. This is the
+# actual process log: a ring buffer fed by a logging.Handler, served with
+# sequence numbers so the page can poll for "everything since 4172" and get
+# a live tail out of plain polling -- no sockets, matching how the rest of
+# the UI stays current.
+
+class LogRing:
+    """The last N log records, numbered.
+
+    Not itself a logging.Handler -- `handler()` builds the real handler wired
+    to this buffer. Kept separate so tests can drive the ring without
+    touching global logging state.
+    """
+
+    SIZE = 1000
+
+    def __init__(self, size: int = SIZE):
+        import collections
+        import threading
+        self._records = collections.deque(maxlen=size)
+        self._lock = threading.Lock()
+        self._seq = 0
+
+    def add(self, level: str, name: str, message: str, at: str = "") -> None:
+        from datetime import datetime, timezone
+        with self._lock:
+            self._seq += 1
+            self._records.append({
+                "seq": self._seq,
+                "at": at or datetime.now(timezone.utc)
+                .isoformat(timespec="seconds"),
+                "level": level,
+                "name": name,
+                "message": message,
+            })
+
+    def tail(self, since: int = 0, level: str = "", limit: int = 200) -> dict:
+        """Records after `since`, oldest first, filtered to `level` and up."""
+        import logging as _logging
+        floor = getattr(_logging, (level or "DEBUG").upper(), _logging.DEBUG)
+        with self._lock:
+            rows = [r for r in self._records if r["seq"] > since]
+            latest = self._seq
+        rows = [r for r in rows
+                if getattr(_logging, r["level"], _logging.DEBUG) >= floor]
+        return {"items": rows[-limit:], "latest": latest}
+
+    def handler(self) -> "logging.Handler":
+        import logging as _logging
+
+        ring = self
+
+        class _RingHandler(_logging.Handler):
+            def emit(self, record):
+                try:
+                    ring.add(record.levelname, record.name,
+                             self.format(record))
+                except Exception:   # a broken log line must not loop
+                    pass
+
+        h = _RingHandler()
+        h.setFormatter(_logging.Formatter("%(message)s"))
+        return h
+
+
 # --- rate limiting ----------------------------------------------------------
 
 #: Per-category limits, as (requests, seconds).

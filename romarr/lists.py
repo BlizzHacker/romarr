@@ -114,6 +114,12 @@ def fetch_entries(cfg: dict, *, session=None) -> list[ListEntry]:
         return _steam_entries(cfg, session=session)
     if kind == "gog":
         return _gog_entries(cfg, session=session)
+    if kind == "xbox":
+        return _xbox_entries(cfg, session=session)
+    if kind == "psn":
+        return _psn_entries(cfg, session=session)
+    if kind == "itchio":
+        return _itchio_entries(cfg, session=session)
     raise ValueError(f"unknown list type {kind!r}")
 
 
@@ -212,6 +218,134 @@ def _gog_entries(cfg: dict, *, session=None) -> list[ListEntry]:
     return out
 
 
+# --- Xbox -------------------------------------------------------------------
+#
+# Microsoft's own Xbox API requires an Azure AD application and a full OAuth
+# dance no self-hosted tool should ask its users to perform. OpenXBL
+# (xbl.io) exists precisely for this: the user signs in there once, gets a
+# personal API key, and the title history -- every game the account has
+# played -- is one authenticated GET. That history IS the practical library:
+# Microsoft exposes no purchased-games list even to OpenXBL.
+
+XBOX_API = "https://xbl.io/api/v2"
+
+
+def _xbox_entries(cfg: dict, *, session=None) -> list[ListEntry]:
+    import requests
+    http = session or requests
+    key = str(cfg.get("openxbl_key") or "").strip()
+    if not key:
+        return []
+    response = http.get(f"{XBOX_API}/achievements",
+                        headers={"X-Authorization": key,
+                                 "Accept": "application/json"}, timeout=30)
+    response.raise_for_status()
+    titles = (response.json() or {}).get("titles") or []
+    out = []
+    for title in titles:
+        name = str(title.get("name") or "").strip()
+        if name:
+            out.append(ListEntry(game=name))
+    return out
+
+
+# --- PlayStation ------------------------------------------------------------
+#
+# Sony has no public API either, but the community flow behind psn-api is
+# stable and needs only the NPSSO token from the user's own browser session:
+# NPSSO -> authorization code -> access token, then the trophy-title list is
+# the played-games list. The NPSSO is a credential and is stored as one.
+
+PSN_AUTH = "https://ca.account.sony.com/api/authz/v3/oauth"
+PSN_API = "https://m.np.playstation.com/api"
+
+
+def _psn_entries(cfg: dict, *, session=None) -> list[ListEntry]:
+    import requests
+    http = session or requests
+    npsso = str(cfg.get("npsso") or "").strip()
+    if not npsso:
+        return []
+    # Step 1: the code. Sony answers with a 302 whose Location carries it.
+    response = http.get(
+        f"{PSN_AUTH}/authorize",
+        params={"access_type": "offline",
+                "client_id": "09515159-7237-4370-9b40-3806e67c0891",
+                "response_type": "code",
+                "scope": "psn:mobile.v2.core psn:clientapp",
+                "redirect_uri": "com.scee.psxandroid.scecompcall://redirect"},
+        headers={"Cookie": f"npsso={npsso}"},
+        allow_redirects=False, timeout=30)
+    location = response.headers.get("Location") or ""
+    if "code=" not in location:
+        raise ValueError("PSN refused the NPSSO token; grab a fresh one from "
+                         "ca.account.sony.com after signing in")
+    code = location.split("code=")[1].split("&")[0]
+    # Step 2: the token.
+    response = http.post(
+        f"{PSN_AUTH}/token",
+        data={"code": code, "grant_type": "authorization_code",
+              "redirect_uri": "com.scee.psxandroid.scecompcall://redirect",
+              "token_format": "jwt"},
+        headers={"Authorization": "Basic MDk1MTUxNTktNzIzNy00MzcwLTliNDAtMzgw"
+                                  "NmU2N2MwODkxOnVjUGprYTV0bnRCMktxc1A="},
+        timeout=30)
+    response.raise_for_status()
+    token = (response.json() or {}).get("access_token") or ""
+    if not token:
+        raise ValueError("PSN token exchange failed")
+    # Step 3: the shelf.
+    out: list[ListEntry] = []
+    offset = 0
+    while offset <= 800:
+        response = http.get(
+            f"{PSN_API}/trophy/v1/users/me/trophyTitles",
+            params={"limit": 100, "offset": offset},
+            headers={"Authorization": f"Bearer {token}"}, timeout=30)
+        response.raise_for_status()
+        body = response.json() or {}
+        titles = body.get("trophyTitles") or []
+        for title in titles:
+            name = str(title.get("trophyTitleName") or "").strip()
+            if name:
+                out.append(ListEntry(game=name))
+        if len(titles) < 100:
+            break
+        offset += 100
+    return out
+
+
+# --- itch.io ----------------------------------------------------------------
+#
+# The straightforward one: itch.io hands out API keys in account settings
+# and the owned-keys endpoint is the purchase list, paginated.
+
+ITCHIO_API = "https://itch.io/api/1"
+
+
+def _itchio_entries(cfg: dict, *, session=None) -> list[ListEntry]:
+    import requests
+    http = session or requests
+    key = str(cfg.get("itchio_key") or "").strip()
+    if not key:
+        return []
+    out: list[ListEntry] = []
+    page = 1
+    while page <= 50:
+        response = http.get(f"{ITCHIO_API}/{key}/my-owned-keys",
+                            params={"page": page}, timeout=30)
+        response.raise_for_status()
+        keys = (response.json() or {}).get("owned_keys") or []
+        for row in keys:
+            name = str(((row.get("game") or {}).get("title")) or "").strip()
+            if name:
+                out.append(ListEntry(game=name))
+        if not keys:
+            break
+        page += 1
+    return out
+
+
 # The Settings page renders list forms from this, the same way download
 # clients and indexers describe themselves.
 LIST_TYPES = {
@@ -241,4 +375,43 @@ LIST_TYPES = {
                 "profile just has to be public under Privacy settings.",
         "fields": ["name", "enable", "platform", "gog_username"],
     },
+    "xbox": {
+        "label": "Xbox (via OpenXBL)",
+        "help": "Your Xbox title history -- every game the account has "
+                "played. Sign in once at xbl.io for a personal API key; "
+                "Microsoft exposes no purchase list, so played IS the "
+                "practical library.",
+        "fields": ["name", "enable", "platform", "openxbl_key"],
+    },
+    "psn": {
+        "label": "PlayStation (via NPSSO)",
+        "help": "Your PSN played-titles list. Sign in at playstation.com, "
+                "then copy the NPSSO token from ca.account.sony.com/api/authz"
+                "/v3/ssocookie -- it expires every couple of months.",
+        "fields": ["name", "enable", "platform", "npsso"],
+    },
+    "itchio": {
+        "label": "itch.io purchases",
+        "help": "Everything you own on itch.io, via an API key from "
+                "itch.io/user/settings/api-keys.",
+        "fields": ["name", "enable", "platform", "itchio_key"],
+    },
+}
+
+#: Stores with no usable API, and what to do instead. Rendered in the UI so
+#: "why can't I connect X" has its answer where the person is looking.
+#: This is the honest list -- pretending an EA connector exists would only
+#: defer the disappointment to sync time.
+NO_API_STORES = {
+    "EA (Origin)": "EA retired every public API; there is nothing to call. "
+                   "Paste your library as a list -- the EA app's collection "
+                   "page selects cleanly.",
+    "Battle.net": "Blizzard's API exposes game data, not an owned-games "
+                  "list -- and the catalogue is a dozen titles. A pasted "
+                  "list covers it in under a minute.",
+    "Epic Games": "No public library API; the community workarounds need "
+                  "captcha-solving logins that break monthly. Paste the "
+                  "list from your transactions page.",
+    "Nintendo": "No API of any kind. Paste, and DAT-verified acquisition "
+                "takes it from there.",
 }
