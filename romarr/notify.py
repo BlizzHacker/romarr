@@ -40,8 +40,9 @@ ON_IMPORT = "import"
 ON_FAILURE = "failure"
 ON_UPGRADE = "upgrade"
 ON_BAD_DUMP = "bad-dump"
+ON_UPDATE = "update"
 
-EVENTS = (ON_GRAB, ON_IMPORT, ON_UPGRADE, ON_FAILURE, ON_BAD_DUMP)
+EVENTS = (ON_GRAB, ON_IMPORT, ON_UPGRADE, ON_FAILURE, ON_BAD_DUMP, ON_UPDATE)
 
 TIMEOUT = 15
 
@@ -278,3 +279,15 @@ def imported(title: str, platform: str, verification) -> Message:
 
 def failed(title: str, reason: str) -> Message:
     return Message(event=ON_FAILURE, title=f"Failed {title}", body=reason)
+
+
+def update_available(current: str, latest: str, url: str = "") -> Message:
+    """A newer ROMarr exists. Telling somebody is the entire feature: nothing
+    is downloaded or applied, because an *arr that updates itself is an *arr
+    that restarts mid-import."""
+    return Message(
+        event=ON_UPDATE,
+        title=f"ROMarr {latest} is available",
+        body=f"This install is running {current}.",
+        url=url,
+    )

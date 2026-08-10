@@ -1,0 +1,39 @@
+# ROMarr as a Home Assistant add-on.
+#
+# The image is the same one Docker users run -- ROMarr reads Home
+# Assistant's /data/options.json natively, so there is no add-on-specific
+# build, no entrypoint shim, and no drift between the two.
+name: ROMarr
+version: "0.8.0"
+slug: romarr
+description: The *arr for games — request a title, ROMarr searches your indexers and files the ROM into your library.
+url: https://github.com/BlizzHacker/romarr
+arch:
+  - amd64
+  - aarch64
+  - armv7
+image: ghcr.io/blizzhacker/romarr
+init: false
+ports:
+  6868/tcp: 6868
+ports_description:
+  6868/tcp: Web UI
+map:
+  - type: share
+    read_only: false
+  - type: media
+    read_only: false
+options:
+  romarr_password: ""
+  prowlarr_url: ""
+  prowlarr_api_key: ""
+  qbittorrent_url: ""
+  library_kind: "folder"
+  library_path: "/media/roms"
+schema:
+  romarr_password: password
+  prowlarr_url: str?
+  prowlarr_api_key: password?
+  qbittorrent_url: str?
+  library_kind: list(romm|gaseous|retrom|folder)?
+  library_path: str?

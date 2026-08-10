@@ -64,7 +64,8 @@ from .catalogue import (Submission, check_source, facets as hub_facets,
                         search as hub_search, submission_link)
 from .frontends import FORMATS as FRONTEND_FORMATS
 from .metadata import PROVIDERS as METADATA_PROVIDERS
-from .notify import NOTIFIERS, Message, Notifier, failed, grabbed, imported
+from .notify import (NOTIFIERS, Message, Notifier, failed, grabbed, imported,
+                     update_available)
 from .profiles import Blocklist, ReleaseProfile, release_id
 from .upgrade import is_upgrade, merge_tags, scan as scan_directory
 from .metadata import Metadata, calendar as metadata_calendar
@@ -74,6 +75,8 @@ from .platforms import PLATFORMS, resolve
 from .sso import ForwardAuth
 from .totp import Totp
 from .playability import DOWNLOAD, StreamServer, routes_for
+from .lists import LIST_TYPES
+from .scheduler import Scheduler, next_search_due
 from .selection import best_release, judge, score
 from .store import Event, Store
 from .ui import page as ui_page
@@ -456,6 +459,46 @@ class ROMarr:
         self._library_cache: tuple[list | None, float, str] = (None, 0.0, "")
         self._count_thread = threading.Thread(target=self._refresh_counts, daemon=True)
         self._count_thread.start()
+
+        # The clock. Until this existed, "Import completed downloads
+        # automatically" was a checkbox nothing read, and the Wanted list was
+        # only ever searched when somebody pressed the button. Intervals are
+        # read from settings at every tick, so changing one applies without a
+        # restart; setting one to zero turns the job off.
+        def _minutes(key: str, *, gate: str = "") -> object:
+            def read() -> float:
+                if gate and not self.store.settings.get(gate, True):
+                    return 0
+                return float(self.store.settings.get(key) or 0) * 60
+            return read
+
+        def _hours(key: str) -> object:
+            def read() -> float:
+                return float(self.store.settings.get(key) or 0) * 3600
+            return read
+
+        self.scheduler = Scheduler()
+        self.scheduler.add(
+            "ImportCompleted", "Import completed downloads",
+            _minutes("auto_import_interval_minutes", gate="auto_import"),
+            lambda: self._auto_import_summary())
+        self.scheduler.add(
+            "MissingGameSearch", "Search the Wanted list",
+            _hours("search_missing_interval_hours"),
+            lambda: self.search_missing(auto=True)["message"])
+        self.scheduler.add(
+            "RssSync", "Watch indexer feeds for wanted games",
+            _minutes("rss_sync_interval_minutes"),
+            self.rss_sync)
+        self.scheduler.add(
+            "ListSync", "Sync import lists into Wanted",
+            _hours("list_sync_interval_hours"),
+            lambda: self.list_sync()["message"])
+        self.scheduler.add(
+            "UpdateCheck", "Check github.com for a newer ROMarr",
+            lambda: 86400 if self.store.settings.get("update_check", True) else 0,
+            lambda: self.check_update()["message"])
+        self.scheduler.start()
 
     def _refresh_counts(self) -> None:
         """Keep the count and the library fresh without ever blocking a request.
@@ -1156,6 +1199,14 @@ class ROMarr:
                                     size=getattr(pick, "size", 0),
                                     indexer=getattr(pick, "indexer", ""),
                                     detail="chosen by hand" if manual else ""))
+            # The message other tools cannot send: what the scorer weighed.
+            # A failure to explain must never fail the grab it explains.
+            try:
+                reasons = judge(pick, game, resolve(platform_slug)).why()
+            except Exception:
+                reasons = ()
+            self.notify(grabbed(pick.title, platform_slug,
+                                getattr(pick, "indexer", ""), reasons))
         else:
             self.store.want(game, platform_slug)
             self.store.note_failure(game, platform_slug, item.detail)
@@ -1214,6 +1265,10 @@ class ROMarr:
                 "indexer": r.indexer,
                 "protocol": r.protocol,
                 "private": r.private,
+                # The release's page on its indexer. Unlike download_url it
+                # never carries a credential, so it is the one link the
+                # browser may have.
+                "info_url": getattr(r, "info_url", ""),
                 "score": verdict.points,
                 "accepted": verdict.accepted,
                 "reasons": verdict.why(),
@@ -1922,15 +1977,208 @@ class ROMarr:
         return {"games": games, "missing": len(self.store.wanted), "queued": queued}
 
 
-    def search_missing(self) -> dict:
-        """Retry everything in Wanted, the way *arr's missing search does."""
-        searched = grabbed = 0
+    def stats(self) -> dict:
+        """The numbers page: what this install has actually done.
+
+        Everything here is read from state already in memory -- events, the
+        wanted list, the shelf metadata -- so the page costs nothing and can
+        never stall behind a slow library backend.
+        """
+        from collections import Counter
+
+        events = list(self.store.events)
+        by_kind = Counter(e.kind for e in events)
+        imported_by_platform = Counter(
+            e.platform for e in events if e.kind == "imported" and e.platform)
+        grabbed_by_indexer = Counter(
+            e.indexer for e in events if e.kind == "grabbed" and e.indexer)
+        meta = self.store.all_game_meta()
+        ratings = [int(m["rating"]) for m in meta if m.get("rating")]
+        statuses = Counter(m["status"] for m in meta if m.get("status"))
+        games, _ = self._count_cache
+        return {
+            "version": VERSION,
+            "update_available": bool(self.store.settings.get("_update_available")),
+            "latest_version": self.store.settings.get("_latest_version", ""),
+            "uptime_seconds": int(time.monotonic() - self._started),
+            "library_games": games,
+            "wanted": len(self.store.wanted),
+            "events": dict(by_kind),
+            "imported_by_platform": dict(imported_by_platform.most_common(15)),
+            "grabbed_by_indexer": dict(grabbed_by_indexer.most_common(10)),
+            "statuses": dict(statuses),
+            "rated": len(ratings),
+            "average_rating": round(sum(ratings) / len(ratings), 1) if ratings else None,
+        }
+
+    def search_missing(self, *, auto: bool = False) -> dict:
+        """Retry Wanted, the way *arr's missing search does.
+
+        Manual (the Tasks page button) searches everything: pressing the
+        button is consent. The scheduled sweep honours each item's backoff,
+        so a title that has failed for months is retried weekly rather than
+        on every sweep -- hammering indexers for games that were not there
+        this morning is how trackers hand out bans.
+        """
+        searched = grabbed_count = skipped = 0
         for item in list(self.store.wanted):
+            if auto and not next_search_due(item.attempts, item.searched_at):
+                skipped += 1
+                continue
             searched += 1
+            if auto:
+                self.store.mark_searched(item.game, item.platform)
             if self.request(item.game, item.platform).get("ok"):
-                grabbed += 1
-        return {"searched": searched, "grabbed": grabbed,
-                "message": f"Searched {searched}, grabbed {grabbed}"}
+                grabbed_count += 1
+        message = f"Searched {searched}, grabbed {grabbed_count}"
+        if skipped:
+            message += f", {skipped} waiting out backoff"
+        return {"searched": searched, "grabbed": grabbed_count,
+                "skipped": skipped, "message": message}
+
+    def rss_sync(self) -> str:
+        """Watch what is new instead of asking again for everything.
+
+        Torznab's convention: a search with no query is the indexer's latest
+        releases -- its RSS feed. Every feed item is thrown at the same
+        scorer a real search uses, per wanted title, so RSS can never grab
+        something a search would have refused. This is what closes the gap
+        between missing-search sweeps: a release that appears an hour after
+        you asked is grabbed within the hour, not at the next sweep.
+        """
+        wanted = list(self.store.wanted)
+        if not wanted:
+            return "nothing wanted, nothing to match"
+        releases, sources = [], 0
+        candidates: list[tuple[str, object]] = []
+        if self.prowlarr._config.base_url:
+            candidates.append(("prowlarr", self.prowlarr))
+        candidates += [(getattr(i, "name", "indexer"), i)
+                       for i in getattr(self, "indexers", [])]
+        for label, source in candidates:
+            try:
+                releases += source.search("", limit=100)
+                sources += 1
+            except Exception as err:
+                log.warning("%s feed read failed: %s", label,
+                            err.__class__.__name__)
+        if not sources:
+            return "no indexer could be read"
+        grabbed_count = 0
+        for item in wanted:
+            platform = resolve(item.platform)
+            if platform is None:
+                continue
+            pick = best_release(releases, item.game, platform)
+            if pick is None or not pick.download_url:
+                continue
+            if self.grab(pick, item.game, platform.slug).get("ok"):
+                grabbed_count += 1
+        return (f"{len(releases)} feed item(s) from {sources} source(s), "
+                f"grabbed {grabbed_count}")
+
+    #: Where release news comes from. Only ever read, never written to.
+    RELEASES_URL = "https://api.github.com/repos/BlizzHacker/romarr/releases/latest"
+
+    def check_update(self) -> dict:
+        """Ask github.com whether a newer ROMarr exists. Telling somebody is
+        the entire feature -- nothing is downloaded or applied, because an
+        *arr that updates itself is an *arr that restarts mid-import."""
+        import requests as _requests
+        try:
+            response = _requests.get(
+                self.RELEASES_URL, timeout=10,
+                headers={"Accept": "application/vnd.github+json"})
+            response.raise_for_status()
+            body = response.json()
+        except Exception as err:
+            return {"ok": False,
+                    "message": f"could not reach github.com: {err.__class__.__name__}"}
+        latest = str(body.get("tag_name") or "").lstrip("vV")
+        url = str(body.get("html_url") or "")
+        if not latest:
+            return {"ok": False, "message": "github.com answered without a tag"}
+
+        def parts(version: str) -> tuple:
+            try:
+                return tuple(int(p) for p in version.split("."))
+            except ValueError:
+                return (0,)
+
+        newer = parts(latest) > parts(VERSION)
+        self.store.settings["_latest_version"] = latest
+        self.store.settings["_update_available"] = newer
+        if newer and self.store.settings.get("_update_notified") != latest:
+            # Once per version, not once per day: the daily check repeating
+            # the same news is an alarm everybody learns to ignore.
+            self.store.settings["_update_notified"] = latest
+            self.notify(update_available(VERSION, latest, url))
+        self.store.save()
+        message = (f"{latest} is available (running {VERSION})" if newer
+                   else f"up to date ({VERSION})")
+        return {"ok": True, "latest": latest, "update_available": newer,
+                "message": message}
+
+    def _auto_import_summary(self) -> str:
+        done = self.import_finished(retry_failed=False)
+        if not done:
+            return "nothing finished"
+        ok = sum(1 for d in done if d.get("ok"))
+        return f"imported {ok} of {len(done)} finished download(s)"
+
+    def list_sync(self) -> dict:
+        """Sync every enabled import list into Wanted.
+
+        Each list carries a ledger of what it already added. A title is added
+        once, ever: a list is an instruction to acquire, not a state to
+        enforce, and without the ledger every re-sync would resurrect titles
+        that were acquired, imported and fulfilled -- a slow loop
+        re-downloading its own history.
+        """
+        from .lists import fetch_entries
+        lists = self.store.list_items("import_lists")
+        if not lists:
+            return {"added": 0, "message": "no lists configured"}
+        added = known = unknown = failed_lists = 0
+        for cfg in lists:
+            if not cfg.get("enable", True):
+                continue
+            try:
+                entries = fetch_entries(cfg)
+            except Exception as err:
+                # Which list failed matters; an expired URL must not read as
+                # an empty list, because empty reads as success.
+                log.warning("import list %r failed: %s", cfg.get("name"),
+                            err.__class__.__name__)
+                failed_lists += 1
+                continue
+            ledger = set(cfg.get("added") or [])
+            changed = False
+            for entry in entries:
+                platform = resolve(entry.platform or cfg.get("platform") or "")
+                if platform is None:
+                    unknown += 1
+                    continue
+                key = f"{platform.slug}/{entry.game.strip().lower()}"
+                if key in ledger:
+                    known += 1
+                    continue
+                ledger.add(key)
+                changed = True
+                self.store.want(entry.game, platform.slug)
+                added += 1
+            if changed:
+                cfg["added"] = sorted(ledger)
+                self.store.put_item("import_lists", cfg)
+        message = f"added {added} to Wanted"
+        if known:
+            message += f", {known} already added before"
+        if unknown:
+            message += f", {unknown} with no resolvable platform"
+        if failed_lists:
+            message += f", {failed_lists} list(s) unreadable"
+        return {"added": added, "known": known, "unknown": unknown,
+                "failed_lists": failed_lists, "message": message}
 
     def run_command(self, name: str) -> dict:
         """The Tasks page. Names match how *arr labels its commands."""
@@ -1939,6 +2187,12 @@ class ROMarr:
         if name == "ImportCompleted":
             done = self.import_finished()
             return {"imported": done, "message": f"Imported {len(done)}"}
+        if name == "RssSync":
+            return {"message": self.rss_sync()}
+        if name == "ListSync":
+            return self.list_sync()
+        if name == "UpdateCheck":
+            return self.check_update()
         if name == "RefreshLibrary":
             counted, failed = 0, []
             for cfg, backend in self.game_libraries:
@@ -1957,8 +2211,23 @@ class ROMarr:
             return {"message": msg + ("; " + ", ".join(failed) if failed else "")}
         return {"error": f"unknown command: {name}"}
 
-    def import_finished(self) -> list[dict]:
-        """Import anything the download client has completed."""
+    def import_finished(self, *, retry_failed: bool = True) -> list[dict]:
+        """Import anything the download client has completed.
+
+        Runs on the scheduler as well as from the Tasks page, so it has to be
+        quiet about work already done: a queue item that imported (or failed
+        to) is marked and skipped on later sweeps, or a one-minute timer
+        would re-attempt every finished download forever and fill History
+        with "already in the library". The manual button passes
+        `retry_failed=True`, which clears the failure marks first -- pressing
+        it after fixing a path mapping is exactly how a stuck import should
+        be retried.
+        """
+        if retry_failed:
+            with self._lock:
+                for item in self.queue:
+                    if item.state == "import-failed":
+                        item.state = "grabbed"
         results = []
         finished = []
         for client in self.clients:
@@ -1979,11 +2248,18 @@ class ROMarr:
                 self.store.settings.get("remote_path_mappings"),
             )
             platform = None
+            queue_item = None
             with self._lock:
                 for item in self.queue:
                     if item.release == name:
+                        if item.state in ("imported", "import-failed"):
+                            queue_item = item
+                            break
                         platform = resolve(item.platform)
+                        queue_item = item
                         break
+            if queue_item is not None and queue_item.state in ("imported", "import-failed"):
+                continue
             if platform is None:
                 continue
             # Which library this platform belongs to. A platform rule wins over
@@ -1999,6 +2275,8 @@ class ROMarr:
                 self.store.record(Event(kind="failed", game=name,
                                         platform=platform.slug, detail=detail))
                 results.append({"name": name, "ok": False, "reason": detail})
+                if queue_item is not None:
+                    queue_item.state = "import-failed"
                 continue
             target_cfg, target_lib = target
             label = target_cfg.get("name") or getattr(target_lib, "name", "library")
@@ -2010,6 +2288,8 @@ class ROMarr:
                                         detail="no ROMs found in download"))
                 results.append({"name": name, "ok": False,
                                 "reason": "no ROMs found", "library": label})
+                if queue_item is not None:
+                    queue_item.state = "import-failed"
                 continue
 
             any_ok = any(o.ok for o in outcomes)
@@ -2019,10 +2299,17 @@ class ROMarr:
                                             platform=platform.slug, release=name,
                                             library=label,
                                             detail=str(outcome.destination)))
+                    self.notify(imported(name, platform.slug,
+                                         outcome.verification))
                 else:
                     self.store.record(Event(kind="failed", game=name,
                                             platform=platform.slug,
                                             detail=outcome.reason))
+                    self.notify(failed(name, str(outcome.reason)))
+            if queue_item is not None:
+                # Marked so the scheduled sweep never re-attempts it; the
+                # Tasks page button clears failure marks to retry.
+                queue_item.state = "imported" if any_ok else "import-failed"
             if any_ok:
                 if self.store.settings.get("rescan_after_import", True):
                     target_lib.rescan(platform.slug)
@@ -2355,6 +2642,26 @@ def make_handler(service: ROMarr):
                 return self._json(200, service.status())
             if route.path == "/api/v1/system/counts":
                 return self._json(200, service.counts())
+            if route.path == "/api/v1/system/tasks":
+                return self._json(200, {"items": service.scheduler.status()})
+            if route.path == "/api/v1/stats":
+                return self._json(200, service.stats())
+            if route.path == "/api/v1/game/meta":
+                platform = (query.get("platform") or [""])[0]
+                game = (query.get("game") or [""])[0]
+                if platform and game:
+                    return self._json(200, service.store.game_meta(platform, game))
+                return self._json(200, {"items": service.store.all_game_meta()})
+            if route.path == "/api/v1/importlist":
+                items = []
+                for cfg in service.store.list_items("import_lists"):
+                    # The ledger is bookkeeping, not configuration; its size
+                    # is the interesting part.
+                    ledger = cfg.pop("added", None) or []
+                    items.append({**cfg, "added_count": len(ledger)})
+                return self._json(200, {"items": items})
+            if route.path == "/api/v1/importlist/schema":
+                return self._json(200, {"types": LIST_TYPES})
             if route.path == "/api/health" and not self._authorised():
                 # Liveness needs one bit. The full report names library paths,
                 # client URLs and counts, and this endpoint is reachable
@@ -2445,6 +2752,62 @@ def make_handler(service: ROMarr):
                     str(body.get("path") or ""),
                     str(body.get("platform") or ""),
                     force=bool(body.get("force"))))
+            if route.path == "/api/v1/game/meta":
+                platform = str(body.get("platform") or "")
+                game = str(body.get("game") or "")
+                if not platform or not game:
+                    return self._json(400, {"error": "platform and game are required"})
+                try:
+                    meta = service.store.set_game_meta(
+                        platform, game,
+                        status=body.get("status"),
+                        rating=body.get("rating"),
+                        notes=body.get("notes"))
+                except ValueError as exc:
+                    return self._json(400, {"error": str(exc)})
+                return self._json(200, meta)
+            if route.path == "/api/v1/importlist":
+                cfg = {k: body.get(k, "") for k in
+                       ("id", "name", "type", "platform", "content", "url")}
+                cfg["enable"] = bool(body.get("enable", True))
+                cfg["type"] = str(cfg["type"] or "paste").lower()
+                if cfg["type"] not in LIST_TYPES:
+                    return self._json(400, {
+                        "error": f"unknown list type {cfg['type']!r}",
+                        "known": sorted(LIST_TYPES)})
+                if not cfg.get("id"):
+                    cfg.pop("id", None)
+                else:
+                    # An edit must not wipe the ledger of what this list
+                    # already added -- losing it would resurrect every
+                    # fulfilled title on the next sync.
+                    old = service.store.get_item("import_lists", cfg["id"])
+                    if old:
+                        cfg["added"] = old.get("added") or []
+                saved = service.store.put_item("import_lists", cfg)
+                saved.pop("added", None)
+                return self._json(200, saved)
+            if route.path == "/api/v1/importlist/preview":
+                from .lists import fetch_entries as _fetch_entries
+                try:
+                    entries = _fetch_entries({
+                        "type": str(body.get("type") or "paste"),
+                        "content": body.get("content") or "",
+                        "url": body.get("url") or "",
+                    })
+                except ValueError as exc:
+                    return self._json(400, {"error": str(exc)})
+                except Exception as exc:
+                    return self._json(502, {
+                        "error": f"could not fetch the list: {exc.__class__.__name__}"})
+                default = str(body.get("platform") or "")
+                out = []
+                for entry in entries[:500]:
+                    platform = resolve(entry.platform or default)
+                    out.append({"game": entry.game,
+                                "platform": platform.slug if platform else "",
+                                "unresolved": platform is None})
+                return self._json(200, {"items": out, "total": len(entries)})
             if route.path == "/api/v1/setup":
                 # First-run claim. Open only while unclaimed, and it closes the
                 # moment it succeeds -- so this is a one-shot, not a standing
@@ -2619,6 +2982,10 @@ def make_handler(service: ROMarr):
                     removed = service.store.delete_item(key, item_id)
                     service.reload_clients()
                     return self._json(200 if removed else 404, {"deleted": removed})
+            if route.path.startswith("/api/v1/importlist/"):
+                item_id = route.path[len("/api/v1/importlist/"):]
+                removed = service.store.delete_item("import_lists", item_id)
+                return self._json(200 if removed else 404, {"deleted": removed})
             return self._json(404, {"error": "not found"})
 
         def _put(self):
@@ -2649,5 +3016,26 @@ def make_handler(service: ROMarr):
 def serve(port: int = 6868, env: dict[str, str] | None = None):
     service = ROMarr(env)
     httpd = ThreadingHTTPServer(("0.0.0.0", port), make_handler(service))
-    log.info("ROMarr listening on :%d, library=%s", port, service.library)
+
+    # Native HTTPS, for installs with no reverse proxy in front. Both
+    # variables or neither: half a cert is a typo, and refusing to boot over
+    # a typo would take the whole service down -- so it logs, serves HTTP,
+    # and the operator reads why.
+    e = env if env is not None else os.environ
+    cert = e.get("ROMARR_SSL_CERT", "")
+    key = e.get("ROMARR_SSL_KEY", "")
+    scheme = "http"
+    if cert or key:
+        import ssl
+        try:
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(certfile=cert, keyfile=key or None)
+            httpd.socket = context.wrap_socket(httpd.socket, server_side=True)
+            scheme = "https"
+        except (OSError, ssl.SSLError) as err:
+            log.error("could not load ROMARR_SSL_CERT/ROMARR_SSL_KEY (%s); "
+                      "serving plain HTTP", err)
+
+    log.info("ROMarr listening on %s://0.0.0.0:%d, library=%s",
+             scheme, port, service.library)
     httpd.serve_forever()

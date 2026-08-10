@@ -209,6 +209,10 @@ class Release:
     # count of zero means (see score) and whether a magnet may be rebuilt from
     # a bare infohash (see indexers._download_link).
     private: bool = False
+    # The release's page on its indexer, when the indexer names one. Safe for
+    # a browser -- unlike download_url it never carries a credential, and the
+    # Search page links it so "what is this release" has a one-click answer.
+    info_url: str = ""
 
 
 def is_game_release(release: Release) -> bool:

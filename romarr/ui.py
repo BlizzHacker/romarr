@@ -207,7 +207,8 @@ input:focus,select:focus{border-color:var(--accent)}
 NAV = [
     ("Library",  [("library", "Games", "games"), ("add", "Add New", None),
                   ("search", "Interactive Search", None)]),
-    ("Wanted",   [("missing", "Missing", "missing"), ("calendar", "Calendar", None)]),
+    ("Wanted",   [("missing", "Missing", "missing"), ("lists", "Lists", None),
+                  ("calendar", "Calendar", None)]),
     ("Activity", [("queue", "Queue", "queued"), ("history", "History", None),
                   ("blocklist", "Blocklist", None)]),
     ("Hub",      [("hub", "Plugins", None)]),
@@ -216,7 +217,8 @@ NAV = [
                   ("libraries", "Libraries", None),
                   ("connections", "Connections", None),
                   ("metadata", "Metadata", None), ("general", "General", None)]),
-    ("System",   [("status", "Status", None), ("platforms", "Platforms", None),
+    ("System",   [("status", "Status", None), ("stats", "Stats", None),
+                  ("platforms", "Platforms", None),
                   ("getstarted", "Get Started", None),
                   ("collections", "Collections", None),
                   ("manualimport", "Manual Import", None),
@@ -257,7 +259,7 @@ function go(page){
   document.querySelectorAll('.nav').forEach(n=>
     n.classList.toggle('on', n.dataset.page===page));
   const titles={library:'Games',add:'Add New Game',search:'Interactive Search',
-    missing:'Wanted — Missing',
+    missing:'Wanted — Missing',lists:'Import Lists',stats:'Statistics',
     queue:'Queue',history:'History',media:'Media Management',profiles:'Profiles',
     indexers:'Indexers',clients:'Download Clients',libraries:'Libraries',
     general:'General',
@@ -453,11 +455,66 @@ RENDER.library=async()=>{
       ${q?'No game matches that.':'No games returned by RomM.'}</div>`;
     return;
   }
-  p.innerHTML=stale+`<div class="grid">${items.map(g=>`<div class="tile">
+  // The shelf: status, rating and notes set by the operator, overlaid on the
+  // grid. One fetch for the whole page -- the metadata is tiny.
+  const meta=await j('/api/v1/game/meta').catch(()=>({items:[]}));
+  const shelf={};
+  (meta.items||[]).forEach(x=>{
+    shelf[`${x.platform}/${(x.game||'').toLowerCase()}`]=x; });
+  const mark=g=>{
+    const x=shelf[`${g.platform||''}/${(g.name||'').toLowerCase()}`];
+    if(!x) return '';
+    const bits=[];
+    if(x.status) bits.push(`<span class="pill">${esc(x.status)}</span>`);
+    if(x.rating) bits.push(`<span class="pill">★ ${x.rating}</span>`);
+    return bits.length?`<div style="margin-top:2px">${bits.join(' ')}</div>`:'';
+  };
+  p.innerHTML=stale+`<div class="grid">${items.map((g,i)=>`<div class="tile"
+      data-shelf="${i}" style="cursor:pointer" title="Click to set status, rating, notes">
     <div class="art" style="background-image:url('${esc(g.cover||'')}')"></div>
     <div class="nm">${esc(g.name)}</div>
-    <div class="pf">${esc(g.platform||'')}</div></div>`).join('')}</div>`;
+    <div class="pf">${esc(g.platform||'')}</div>${mark(g)}</div>`).join('')}</div>`;
+  document.querySelectorAll('[data-shelf]').forEach(t=>t.onclick=()=>
+    shelfEditor(items[Number(t.dataset.shelf)],
+      shelf[`${items[Number(t.dataset.shelf)].platform||''}/`
+        +`${(items[Number(t.dataset.shelf)].name||'').toLowerCase()}`]||{}));
 };
+
+function shelfEditor(g, meta){
+  const m=document.createElement('div');
+  m.className='modal';
+  const opt=(v,label)=>`<option value="${v}"${(meta.status||'')===v?' selected':''}>${label}</option>`;
+  m.innerHTML=`<div class="box">
+    <h3>${esc(g.name)}</h3>
+    <div class="sub">${esc(g.platform||'')} &mdash; the shelf: what you are
+      doing with this game, and what you thought of it.</div>
+    <div class="field"><label>Status</label>
+      <select data-f="status">${opt('','—')}${opt('playing','Playing')}
+        ${opt('completed','Completed')}${opt('shelved','Shelved')}</select></div>
+    <div class="field"><label>Rating</label>
+      <select data-f="rating"><option value="0">unrated</option>
+        ${[1,2,3,4,5,6,7,8,9,10].map(n=>`<option value="${n}"${
+          meta.rating===n?' selected':''}>${'★'.repeat(Math.ceil(n/2))} ${n}/10</option>`).join('')}
+      </select></div>
+    <div class="field"><label>Notes</label>
+      <textarea data-f="notes" rows="4"
+        style="width:100%;resize:vertical">${esc(meta.notes||'')}</textarea></div>
+    <div class="foot">
+      <button class="btn ghost sp" data-close>Cancel</button>
+      <button class="btn" id="sh-save">Save</button>
+    </div></div>`;
+  document.body.append(m);
+  m.onclick=e=>{ if(e.target===m||e.target.dataset.close!==undefined) closeModal(); };
+  m.querySelector('#sh-save').onclick=async()=>{
+    const f=readForm();
+    const r=await j('/api/v1/game/meta',{method:'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify({platform:g.platform||'',game:g.name,
+        status:f.status,rating:Number(f.rating)||0,notes:f.notes})});
+    closeModal();
+    toast(r.error?r.error:'Saved'); if(!r.error) go('library');
+  };
+}
 
 RENDER.add=async()=>{
   $('#page').innerHTML=`<div class="card">
@@ -537,7 +594,10 @@ RENDER.search=async()=>{
         <th>Seeders</th><th>Indexer</th><th>Why</th><th></th></tr></thead><tbody>
       ${d.items.map((r,i)=>`<tr style="${r.accepted?'':'opacity:.62'}">
         <td><span class="pill ${r.accepted?'imported':'failed'}">${r.score}</span></td>
-        <td>${esc(r.title)}${r.private?' <span class="pill">private</span>':''}
+        <td>${esc(r.title)}${r.info_url?` <a href="${esc(r.info_url)}" target="_blank"
+            rel="noopener noreferrer" title="Open on ${esc(r.indexer||'the indexer')}"
+            style="text-decoration:none">&#8599;</a>`:''}
+          ${r.private?' <span class="pill">private</span>':''}
           ${r.protocol==='usenet'?' <span class="pill">usenet</span>':''}</td>
         <td style="white-space:nowrap">${mb(r.size)}</td>
         <td>${r.seeders}</td>
@@ -582,6 +642,150 @@ RENDER.missing=async()=>{
     toast(`Searched ${r.searched??0}, grabbed ${r.grabbed??0}`);
     go('missing'); refreshCounts();
   };
+};
+
+RENDER.lists=async()=>{
+  const d=await j('/api/v1/importlist').catch(()=>({items:[]}));
+  $('#page').innerHTML=`<div class="row" style="margin-bottom:14px">
+      <button class="btn" id="l-add">Add List</button>
+      <button class="btn ghost" id="l-sync">Sync Now</button>
+      <span style="color:var(--dim);font-size:12.5px">Feed Wanted from a
+        list &mdash; a top-100 article, a homebrew catalogue, a friend's
+        spreadsheet. Each title is added once, ever; full sets and 1G1R live
+        under Collections.</span></div>
+    ${d.items.length?`<table><thead><tr><th>Name</th><th>Type</th>
+      <th>Platform</th><th>Added so far</th><th>Enabled</th><th></th></tr></thead><tbody>
+      ${d.items.map((l,i)=>`<tr><td><b>${esc(l.name||'—')}</b>${
+          l.type==='url'?`<div style="color:var(--dim);font-size:11.5px">${esc(l.url||'')}</div>`:''}</td>
+        <td>${esc(l.type)}</td><td>${esc(l.platform||'per line')}</td>
+        <td>${l.added_count||0}</td>
+        <td><span class="dot ${l.enable!==false?'up':'down'}"></span></td>
+        <td style="text-align:right"><div class="rowact">
+          <button data-ledit="${i}">Edit</button></div></td></tr>`).join('')}
+      </tbody></table>`
+      :'<div class="empty">No lists yet. Paste one and let the clock do the asking.</div>'}`;
+  $('#l-add').onclick=()=>editList({type:'paste'});
+  $('#l-sync').onclick=async e=>{
+    e.target.disabled=true; e.target.textContent='Syncing…';
+    const r=await j('/api/v1/command',{method:'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify({name:'ListSync'})});
+    toast(r.message||'Synced'); go('lists'); refreshCounts();
+  };
+  document.querySelectorAll('[data-ledit]').forEach(b=>b.onclick=()=>
+    editList(d.items[Number(b.dataset.ledit)]));
+};
+
+function editList(item){
+  const isNew=!item.id;
+  const m=document.createElement('div');
+  m.className='modal';
+  m.innerHTML=`<div class="box">
+    <h3>${isNew?'Add':'Edit'} Import List</h3>
+    <div class="sub">One title per line. '# comments', ranking numbers and
+      'Title&nbsp;&rarr;tab&larr;&nbsp;platform' lines are understood.</div>
+    <div class="field"><label>Name</label>
+      <input type="text" data-f="name" value="${esc(item.name||'')}"></div>
+    <div class="field"><label>Type</label>
+      <select data-f="type">
+        <option value="paste"${item.type!=='url'?' selected':''}>Pasted list</option>
+        <option value="url"${item.type==='url'?' selected':''}>List at a URL</option>
+      </select></div>
+    <div class="field"><label>Default platform</label>
+      <select data-f="platform"><option value="">Named per line</option>
+        ${PLATFORMS.map(p=>`<option value="${esc(p.slug)}"${
+          item.platform===p.slug?' selected':''}>${esc(p.name)}</option>`).join('')}
+      </select></div>
+    <div class="field" id="l-url" style="${item.type==='url'?'':'display:none'}">
+      <label>URL</label>
+      <input type="text" data-f="url" value="${esc(item.url||'')}"
+        placeholder="https://example.org/top-100.txt"></div>
+    <div class="field" id="l-content" style="${item.type==='url'?'display:none':''}">
+      <label>Titles</label>
+      <textarea data-f="content" rows="10"
+        style="width:100%;resize:vertical">${esc(item.content||'')}</textarea></div>
+    <label class="check"><input type="checkbox" data-f="enable"
+      ${item.enable!==false?'checked':''}><span>Enabled</span></label>
+    <div id="testline"></div>
+    <div class="foot">
+      <button class="btn ghost" id="l-preview">Preview</button>
+      ${isNew?'':'<button class="btn danger" id="l-del">Delete</button>'}
+      <button class="btn ghost sp" data-close>Cancel</button>
+      <button class="btn" id="l-save">Save</button>
+    </div></div>`;
+  document.body.append(m);
+  m.onclick=e=>{ if(e.target===m||e.target.dataset.close!==undefined) closeModal(); };
+  m.querySelector('[data-f=type]').onchange=e=>{
+    m.querySelector('#l-url').style.display=e.target.value==='url'?'':'none';
+    m.querySelector('#l-content').style.display=e.target.value==='url'?'none':'';
+  };
+  const payload=()=>({...readForm(), id:item.id});
+  const line=(ok,msg)=>{
+    m.querySelector('#testline').className='testline '+(ok?'ok':'bad');
+    m.querySelector('#testline').textContent=msg;
+  };
+  m.querySelector('#l-preview').onclick=async e=>{
+    e.target.disabled=true; line(true,'Reading…');
+    const r=await j('/api/v1/importlist/preview',{method:'POST',
+      headers:{'content-type':'application/json'},body:JSON.stringify(payload())});
+    if(r.error){ line(false,r.error); }
+    else{
+      const unresolved=r.items.filter(x=>x.unresolved).length;
+      line(!unresolved,`${r.total} title(s)`
+        +(unresolved?`, ${unresolved} with no resolvable platform`:'')
+        +(r.total?` — first: ${r.items[0].game}`:''));
+    }
+    e.target.disabled=false;
+  };
+  m.querySelector('#l-save').onclick=async()=>{
+    await j('/api/v1/importlist',{method:'POST',
+      headers:{'content-type':'application/json'},body:JSON.stringify(payload())});
+    closeModal(); toast('Saved'); go('lists');
+  };
+  const del=m.querySelector('#l-del');
+  if(del) del.onclick=async()=>{
+    if(!confirm(`Remove ${item.name||'this list'}?`)) return;
+    await fetch(`/api/v1/importlist/${item.id}`,{method:'DELETE'});
+    closeModal(); toast('Removed'); go('lists');
+  };
+}
+
+RENDER.stats=async()=>{
+  const s=await j('/api/v1/stats');
+  const hours=Math.floor((s.uptime_seconds||0)/3600);
+  const bar=(entries)=>{
+    const rows=Object.entries(entries||{});
+    if(!rows.length) return '<div class="empty">Nothing yet.</div>';
+    const max=Math.max(...rows.map(([,v])=>v));
+    return rows.map(([k,v])=>`<div style="display:flex;align-items:center;gap:8px;margin:4px 0">
+      <span style="width:180px;color:var(--dim);font-size:12.5px;text-align:right">${esc(k)}</span>
+      <div style="flex:1;background:var(--line);border-radius:3px;height:14px">
+        <div style="width:${Math.max(4,Math.round(v/max*100))}%;height:14px;
+          background:var(--acc);border-radius:3px"></div></div>
+      <b style="width:48px">${v}</b></div>`).join('');
+  };
+  $('#page').innerHTML=`
+    ${s.update_available?`<div class="card" style="border-color:var(--warn)">
+      <h3>Update available</h3><p class="help">ROMarr ${esc(s.latest_version)} is out;
+      this install is running ${esc(s.version)}. Nothing updates itself &mdash;
+      pull the new image when it suits you.</p></div>`:''}
+    <div class="card"><h3>This install</h3><div class="st">
+      <div><b>${esc(s.version)}</b><span>Version</span></div>
+      <div><b>${s.library_games??'—'}</b><span>Games in library</span></div>
+      <div><b>${s.wanted}</b><span>Wanted</span></div>
+      <div><b>${hours}h</b><span>Uptime</span></div>
+      <div><b>${(s.events||{}).grabbed||0}</b><span>Grabbed, ever</span></div>
+      <div><b>${(s.events||{}).imported||0}</b><span>Imported, ever</span></div>
+      <div><b>${(s.events||{}).failed||0}</b><span>Failures</span></div>
+      <div><b>${s.average_rating??'—'}</b><span>Avg rating (${s.rated||0} rated)</span></div>
+    </div></div>
+    <div class="card"><h3>Imports by platform</h3>${bar(s.imported_by_platform)}</div>
+    <div class="card"><h3>Grabs by indexer</h3>${bar(s.grabbed_by_indexer)}</div>
+    <div class="card"><h3>Shelf</h3><div class="st">
+      <div><b>${(s.statuses||{}).playing||0}</b><span>Playing</span></div>
+      <div><b>${(s.statuses||{}).completed||0}</b><span>Completed</span></div>
+      <div><b>${(s.statuses||{}).shelved||0}</b><span>Shelved</span></div>
+    </div><p class="help">Set from any game tile in the Library.</p></div>`;
 };
 
 RENDER.queue=async()=>{
@@ -924,7 +1128,20 @@ RENDER.general=()=>settingsPage('General',
      <select data-k="protocol">
        <option value="torrent"${SETTINGS.protocol==='torrent'?' selected':''}>Torrent</option>
        <option value="usenet"${SETTINGS.protocol==='usenet'?' selected':''}>Usenet</option>
-     </select></div>`);
+     </select></div>
+   <h3 style="margin-top:18px">The clock</h3>
+   <p class="help">How often the scheduled jobs run. Zero turns a job off;
+     changes apply at the next tick, no restart.</p>`
+  +fld('auto_import_interval_minutes','Import check (minutes)',
+       SETTINGS.auto_import_interval_minutes,'number')
+  +fld('search_missing_interval_hours','Wanted search (hours)',
+       SETTINGS.search_missing_interval_hours,'number')
+  +fld('rss_sync_interval_minutes','RSS sync (minutes)',
+       SETTINGS.rss_sync_interval_minutes,'number')
+  +fld('list_sync_interval_hours','List sync (hours)',
+       SETTINGS.list_sync_interval_hours,'number')
+  +chk('update_check','Check github.com daily for a newer ROMarr (never auto-updates)',
+       SETTINGS.update_check));
 
 /* ---------------- system ---------------- */
 RENDER.status=async()=>{
@@ -1565,15 +1782,24 @@ RENDER.manualimport=async()=>{
 
 
 RENDER.tasks=async()=>{
-  const tasks=[
-    ['MissingGameSearch','Search for everything in Wanted'],
-    ['ImportCompleted','Import finished downloads and rescan RomM'],
-    ['RefreshLibrary','Re-read the library from RomM'],
-  ];
+  const d=await j('/api/v1/system/tasks').catch(()=>({items:[]}));
+  const every=s=>!s?'off'
+    :s%3600===0?`every ${s/3600} h`
+    :s%60===0?`every ${s/60} min`:`every ${s} s`;
+  const scheduled=(d.items||[]).map(t=>[t.name,t.label,t]);
+  const manualOnly=[['RefreshLibrary','Re-read the library from RomM',null]];
   $('#page').innerHTML=`<div class="card"><h3>Tasks</h3>
-    <p class="help">Run on demand. These are the same jobs the service runs itself.</p>
-    <table><tbody>${tasks.map(([n,d])=>`<tr><td><b>${n}</b>
-      <div style="color:var(--dim);font-size:12px">${d}</div></td>
+    <p class="help">The service runs these on its own clock &mdash; intervals live
+      under Settings &rarr; General. Run starts one now regardless.</p>
+    <table><thead><tr><th>Task</th><th>Schedule</th><th>Last ran</th>
+      <th>Result</th><th></th></tr></thead><tbody>
+    ${scheduled.concat(manualOnly).map(([n,label,t])=>`<tr><td><b>${n}</b>
+      <div style="color:var(--dim);font-size:12px">${esc(label)}</div></td>
+      <td>${t?every(t.interval_seconds):'manual only'}</td>
+      <td style="color:var(--dim)">${t&&t.last_run?esc(t.last_run.replace('T',' ').slice(0,16)):'—'}</td>
+      <td style="color:var(--dim);font-size:12px">${
+        t&&t.last_error?`<span style="color:var(--warn)">${esc(t.last_error)}</span>`
+        :esc((t&&t.last_result)||'—')}</td>
       <td style="text-align:right"><button class="btn ghost" data-task="${n}">Run</button></td>
       </tr>`).join('')}</tbody></table></div>`;
   document.querySelectorAll('[data-task]').forEach(b=>b.onclick=async()=>{
@@ -1581,7 +1807,7 @@ RENDER.tasks=async()=>{
     const r=await j('/api/v1/command',{method:'POST',
       headers:{'content-type':'application/json'},
       body:JSON.stringify({name:b.dataset.task})});
-    toast(r.message||'Done'); b.disabled=false; b.textContent='Run'; refreshCounts();
+    toast(r.message||'Done'); go('tasks'); refreshCounts();
   });
 };
 

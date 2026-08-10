@@ -64,6 +64,11 @@ class WantedItem:
     added: str = field(default_factory=now_iso)
     attempts: int = 0
     last_error: str = ""
+    # When the scheduler last searched for this automatically. Empty means
+    # never, which makes a fresh request immediately eligible; together with
+    # `attempts` it drives the re-search backoff, so a title that has failed
+    # for months is retried weekly rather than hourly.
+    searched_at: str = ""
 
 
 # Defaults are spelled out here rather than scattered through the UI so a fresh
@@ -100,6 +105,11 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     #
     # Each entry is {"remote": "<what the client says>", "local": "<what we see>"}.
     "remote_path_mappings": [],
+    # Import lists: titles fed into Wanted on the List Sync schedule. Each
+    # entry keeps a ledger of what it already added, so a list re-syncing
+    # never resurrects a title that was acquired and fulfilled.
+    "import_lists": [],
+    "list_sync_interval_hours": 6,
     # Download clients and indexers, each a list of stored configurations.
     #
     # These used to come from environment variables only, which meant the
@@ -112,6 +122,20 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # Behaviour
     "auto_import": True,
     "rescan_after_import": True,
+    # The clock. Zero disables a job; the scheduler reads these live, so a
+    # change applies at the next tick without a restart.
+    #
+    # Import polls often because it is cheap and the person is usually
+    # waiting; the missing search is hours apart because hammering indexers
+    # for titles that were not there this morning is how trackers hand out
+    # bans; RSS fills the gap between those sweeps by watching what is new
+    # instead of asking again for everything.
+    "auto_import_interval_minutes": 1,
+    "search_missing_interval_hours": 12,
+    "rss_sync_interval_minutes": 60,
+    # Whether to ask github.com once a day if a newer ROMarr exists. Checking
+    # is the whole feature -- nothing is ever downloaded or applied.
+    "update_check": True,
 }
 
 
@@ -231,6 +255,85 @@ class Store:
                     item.last_error = reason
                     break
         self.save()
+
+    def mark_searched(self, game: str, platform: str) -> None:
+        """Stamp when an automatic search ran, whatever it found.
+
+        Separate from note_failure on purpose: the backoff clock starts when
+        a search RUNS. Stamping only failures would make an item whose search
+        crashed mid-way immediately eligible again, which is a retry storm
+        with extra steps.
+        """
+        with self._lock:
+            for item in self.wanted:
+                if item.game.lower() == game.lower() and item.platform == platform:
+                    item.searched_at = now_iso()
+                    break
+        self.save()
+
+    # -- per-game shelf state ------------------------------------------------
+    #
+    # What Questarr tracks per game -- playing / completed / shelved, a
+    # rating, a note -- and the two states it also has that ROMarr derives
+    # instead of storing: "wanted" IS the wanted list, and "owned" is the
+    # library. Storing either would create a second copy that drifts.
+
+    #: The statuses a person can set. Empty string clears.
+    GAME_STATUSES = ("playing", "completed", "shelved")
+
+    @staticmethod
+    def _meta_key(platform: str, game: str) -> str:
+        return f"{platform}/{game.strip().lower()}"
+
+    def set_game_meta(self, platform: str, game: str, *, status=None,
+                      rating=None, notes=None) -> dict:
+        """Update the fields that were sent and leave the rest alone.
+
+        `None` means "not in this request"; empty string (or 0) means
+        "clear it". A record with nothing left in it is removed entirely so
+        the file does not fill with empty husks of games somebody once rated.
+        """
+        key = self._meta_key(platform, game)
+        with self._lock:
+            table = self.settings.setdefault("game_meta", {})
+            row = dict(table.get(key) or {})
+            if status is not None:
+                status = str(status).strip().lower()
+                if status and status not in self.GAME_STATUSES:
+                    raise ValueError(
+                        f"unknown status {status!r}; one of "
+                        f"{', '.join(self.GAME_STATUSES)} or empty to clear")
+                row["status"] = status
+            if rating is not None:
+                rating = int(rating)
+                if not 0 <= rating <= 10:
+                    raise ValueError("rating is 0-10, where 0 clears it")
+                row["rating"] = rating
+            if notes is not None:
+                row["notes"] = str(notes)
+            fields = {k: v for k, v in row.items()
+                      if k in ("status", "rating", "notes")
+                      and v not in ("", 0, None)}
+            if fields:
+                row = {**fields, "game": game, "platform": platform}
+                table[key] = row
+            else:
+                # Nothing left worth keeping: remove the record entirely so
+                # the file does not fill with empty husks of games somebody
+                # once rated.
+                row = {}
+                table.pop(key, None)
+        self.save()
+        return dict(row)
+
+    def game_meta(self, platform: str, game: str) -> dict:
+        with self._lock:
+            return dict((self.settings.get("game_meta") or {})
+                        .get(self._meta_key(platform, game)) or {})
+
+    def all_game_meta(self) -> list[dict]:
+        with self._lock:
+            return [dict(v) for v in (self.settings.get("game_meta") or {}).values()]
 
     # -- settings ----------------------------------------------------------
 

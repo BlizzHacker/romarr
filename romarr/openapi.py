@@ -83,6 +83,17 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
                                    "a link. ROMarr does not post it."),
     "/api/v1/webhook": ("POST", "Inbound game request from a front-end."),
     "/api/request": ("POST", "Request a game."),
+    "/api/v1/system/tasks": ("GET", "The scheduled jobs: interval, last run, "
+                                    "last result."),
+    "/api/v1/stats": ("GET", "What this install has done: events, imports by "
+                             "platform, grabs by indexer, shelf totals."),
+    "/api/v1/game/meta": ("GET", "The shelf: status, rating and notes, for "
+                                 "one game (?platform=&game=) or all."),
+    "/api/v1/importlist": ("GET", "Import lists and how many titles each has "
+                                  "fed into Wanted."),
+    "/api/v1/importlist/schema": ("GET", "The list types and their fields."),
+    "/api/v1/importlist/preview": ("POST", "Parse a list without saving it: "
+                                           "titles and platform resolution."),
     "/api/v1/openapi.json": ("GET", "This document."),
     "/api/v1/webhook/ggrequestz": ("POST", "Inbound request, GG Requestz shape."),
     "/api/search": ("GET", "Search every configured indexer."),

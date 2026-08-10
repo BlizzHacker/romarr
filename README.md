@@ -33,7 +33,7 @@ If you run Radarr for films and Sonarr for TV, this is the missing one.
 
 - [Features](#features)
 - [Requirements](#requirements)
-- [Installation](#installation) — [Docker](#docker) · [Docker Compose](#docker-compose) · [Proxmox LXC](#proxmox-lxc) · [Source](#from-source)
+- [Installation](#installation) — [Docker](#docker) · [Docker Compose](#docker-compose) · [Proxmox LXC](#proxmox-lxc) · [Home Assistant](#home-assistant) · [Source](#from-source)
 - [Signing in](#signing-in)
 - [Configuration](#configuration)
 - [Usage](#usage)
@@ -47,23 +47,31 @@ If you run Radarr for films and Sonarr for TV, this is the missing one.
 ## Features
 
 - **Automated acquisition** — searches Prowlarr (or Torznab/Newznab indexers directly), scores releases, grabs the best, imports the ROM.
+- **Runs on its own clock** — completed downloads import within a minute, the Wanted list is re-searched on a backoff schedule, and indexer RSS feeds are watched in between, so a release that appears an hour after you asked is grabbed within the hour.
+- **Import lists** — paste a "top 100" article, point at a URL, or drop in a homebrew catalogue; every title feeds Wanted, added once, ever. Full sets and 1G1R live under Collections, planned straight from No-Intro/Redump DATs.
 - **Release scoring** — ranks on seeders, region (USA → World → Europe → Japan) and size sanity; rejects hacks, betas, demos and compilations.
-- **Interactive search** — every release scored with the reasoning shown, and a Grab button to override the ranking.
+- **Interactive search** — every release scored with the reasoning shown, a Grab button to override the ranking, and a link to the release's page on its indexer.
+- **DAT verification** — imports are checksummed against No-Intro/Redump; a verified dump upgrades an unverified one, and the shelf shows which is which.
+- **The shelf** — playing / completed / shelved status, ratings and notes on any game, straight from the Library grid.
 - **Multi-backend** — RomM, Gaseous, Retrom, or a plain folder (Batocera, RetroPie, ES-DE, EmuDeck, LaunchBox, Playnite…).
 - **Multiple libraries** — route platforms to different servers from one instance.
 - **Plugin sources** — 22 ROM Hub plugins add extra sources (Internet Archive, No-Intro, Demozoo, itch.io, homebrew, metadata and BIOS providers), managed from the Hub tab.
-- **Torrent and Usenet** — qBittorrent, SABnzbd and NZBGet; each release routed to a client that speaks its protocol.
+- **Torrent, Usenet and debrid** — qBittorrent, Transmission, Deluge, rTorrent, Synology Download Station, Real-Debrid, SABnzbd and NZBGet; each release routed to a client that speaks its protocol.
+- **Notifications with reasons** — Discord, Slack, Telegram, Pushover, Gotify, ntfy, Apprise and plain webhooks; every "grabbed" message carries what the scorer weighed.
+- **Statistics** — imports by platform, grabs by indexer, shelf totals and ratings, on their own page.
+- **Update check** — asks GitHub daily whether a newer ROMarr exists and says so. Never updates itself.
+- **Auth built in** — password + optional TOTP, API keys, or ForwardAuth SSO behind a proxy; native HTTPS with `ROMARR_SSL_CERT`/`ROMARR_SSL_KEY`.
 - **Remote path mapping** — for download clients running on another host or container.
-- **Persistent state** — history, wanted list and settings survive restarts.
+- **Persistent state** — history, wanted list, shelf and settings survive restarts.
 
 ## Requirements
 
 | | |
 |---|---|
-| **Indexer** | Prowlarr, or any Torznab / Newznab indexer |
-| **Download client** | qBittorrent (torrent) and/or SABnzbd / NZBGet (usenet) |
+| **Indexer** | Prowlarr, or any Torznab / Newznab indexer, or a plain torrent RSS feed |
+| **Download client** | qBittorrent / Transmission / Deluge / rTorrent / Synology DS / Real-Debrid (torrent) and/or SABnzbd / NZBGet (usenet) |
 | **Game library** | RomM, Gaseous, Retrom, or a directory on disk |
-| **Runtime** | Docker, or Python 3.11+ |
+| **Runtime** | Docker, Home Assistant, or Python 3.11+ |
 
 ---
 
@@ -113,6 +121,13 @@ docker compose up -d
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/BlizzHacker/romarr/main/proxmox/ct/romarr.sh)"
 ```
+
+### Home Assistant
+
+Settings → Add-ons → Add-on Store → ⋮ → Repositories, add
+`https://github.com/BlizzHacker/romarr`, install **ROMarr**. Options set on
+the add-on page become ROMarr's environment — see
+[homeassistant/romarr](homeassistant/romarr/README.md).
 
 ### From source
 
@@ -464,6 +479,17 @@ stack by MoveWeight.
 Brand and naming: [BRAND.md](https://github.com/BlizzHacker/rom-hub/blob/master/BRAND.md).
 
 ## Acknowledgements
+
+**[Questarr](https://github.com/Doezer/Questarr)** by Doezer (GPL-3.0),
+the same *arr idea built for PC games, and built well. Several ROMarr
+features exist because Questarr proved they belong in a game *arr: the
+scheduled search / RSS-sync clock, per-game status, ratings and notes, the
+stats page, the wider download-client roster (Transmission, Deluge,
+rTorrent, Synology Download Station), native SSL, and Home Assistant
+packaging. No code was taken — Questarr is TypeScript and ROMarr is Python —
+but the case for those features was made there first. If your library is
+Steam and FitGirl rather than cartridges and DATs, use Questarr — it is the
+right tool for that shelf.
 
 **[gamarr](https://github.com/JeremiahM37/gamarr)** by JeremiahM37 (MIT).
 Several features here exist because gamarr had them first and its README made

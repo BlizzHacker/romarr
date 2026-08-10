@@ -191,6 +191,12 @@ class Prowlarr:
             int(indexer_id) if indexer_id is not None else -1, False))
         download_url = _download_link(row, private=private)
 
+        # The page a person can read about the release, distinct from the
+        # link a client downloads. infoUrl is Prowlarr's own name for it.
+        info_url = str(row.get("infoUrl") or row.get("commentUrl") or "")
+        if not info_url.startswith(("http://", "https://")):
+            info_url = ""
+
         return Release(
             title=row.get("title") or "",
             size=int(row.get("size") or 0),
@@ -202,6 +208,7 @@ class Prowlarr:
             protocol=(row.get("protocol") or "torrent").lower(),
             indexer=row.get("indexer") or "",
             private=private,
+            info_url=info_url,
         )
 
     def indexers(self) -> list[dict]:
@@ -380,6 +387,14 @@ class Torznab:
             "infoHash": attr("infohash"),
         }
 
+        # Torznab's <comments> is the release's page; a plain-http guid is
+        # the conventional fallback. Either is safe for a browser, which the
+        # download link is not.
+        info_url = text("comments") or ""
+        if not info_url.startswith(("http://", "https://")):
+            guid = text("guid") or ""
+            info_url = guid if guid.startswith(("http://", "https://")) else ""
+
         return Release(
             title=row["title"],
             size=as_int(attr("size")) or as_int(text("size")),
@@ -389,6 +404,7 @@ class Torznab:
             protocol=self._config.protocol,
             indexer=self._config.name,
             private=self._config.private,
+            info_url=info_url,
         )
 
 
