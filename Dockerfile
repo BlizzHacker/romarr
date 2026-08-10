@@ -9,11 +9,27 @@
 FROM python:3.13-alpine AS builder
 
 # build-base is needed only where a wheel is missing for the target arch. It is
-# unused on amd64/arm64 and load-bearing on armv7.
-RUN apk add --no-cache build-base
+# unused on amd64/arm64 and load-bearing on armv7. libseccomp-dev is what
+# pyseccomp compiles against -- the sandbox ROM Hub confines plugins with.
+RUN apk add --no-cache build-base libseccomp-dev
 
 COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir --prefix=/install -r /tmp/requirements.txt
+
+# ROM Hub, the plugin host the Hub tab drives (issue #10: the image shipped
+# the bridge but never the package, so Docker installs reported "rom_hub is
+# missing" with nothing to be done about it). Pinned to a commit, because
+# "whatever master was when the image built" is not a version.
+#
+# Skipped on armv7: rom-hub depends on pydantic, whose compiled core ships no
+# musl wheel for 32-bit ARM and would drag a Rust toolchain into the build.
+# ROMarr itself runs fine there; the Hub tab reports plugins as unavailable,
+# which is the truth.
+ARG TARGETARCH
+RUN if [ "$TARGETARCH" != "arm" ]; then \
+      pip install --no-cache-dir --prefix=/install \
+        "rom-hub @ https://github.com/BlizzHacker/rom-hub/archive/7e25e40c908eea2b023cc96a5546f6893b2822b1.tar.gz"; \
+    fi
 
 
 FROM python:3.13-alpine
@@ -26,7 +42,8 @@ FROM python:3.13-alpine
 # entirely as .7z, so without it every PlayStation, PS2 and Wii import fails
 # on a format it cannot open. Alpine's busybox `tar` is not a substitute and
 # is deliberately not accepted -- see romarr/library.py::_bsdtar.
-RUN apk add --no-cache su-exec tzdata libarchive-tools
+# libseccomp is the runtime half of the sandbox pyseccomp was built against.
+RUN apk add --no-cache su-exec tzdata libarchive-tools libseccomp
 
 COPY --from=builder /install /usr/local
 
@@ -42,7 +59,12 @@ RUN chmod +x /entrypoint.sh && mkdir -p /config /roms
 # ROMM_LIBRARY, and an image ENV beats the application's fallback chain -- so
 # setting it here would silently ignore the ROMM_LIBRARY an existing install
 # brought with it. The entrypoint defaults it only when neither name is given.
+# ROM_HUB_HOME lives under /config so installed plugins survive a container
+# recreation the same way settings do. The application default is a path
+# inside the container filesystem, which silently loses every plugin on
+# `docker compose pull`.
 ENV ROMARR_DATA=/config/romarr.json \
+    ROM_HUB_HOME=/config/rom-hub \
     ROMARR_PORT=6868 \
     PUID=1000 \
     PGID=1000 \

@@ -613,6 +613,21 @@ class FolderLibrary:
         return True
 
 
+class GameyfinLibrary(FolderLibrary):
+    """Gameyfin, integrated the only way its architecture allows.
+
+    Gameyfin v2 is a Vaadin server-side application with no public REST API to
+    query or to trigger a scan through -- and it does not need one: it watches
+    its library directories and picks up new files itself. So the durable
+    integration is the same one every folder frontend gets: file the ROM into
+    a directory Gameyfin watches, and its own watcher does the rest. Listed as
+    its own type rather than hidden behind "Folder" so the Libraries page can
+    say Gameyfin plainly and this docstring has somewhere to live.
+    """
+
+    name = "Gameyfin"
+
+
 # ------------------------------------------------------- many servers, one arr --
 #
 # One library was a fair simplification until it wasn't. People run more than
@@ -677,6 +692,17 @@ LIBRARY_TYPES = {
         # field would invite somebody to fill it in and then wonder why nothing
         # connects.
         "fields": [f for f in _COMMON_LIBRARY_FIELDS if f["name"] != "url"],
+    },
+    "gameyfin": {
+        "label": "Gameyfin",
+        "default_port": 0,
+        # Same shape as Folder on purpose: Gameyfin watches its library
+        # directories itself, so the path IS the integration. See
+        # GameyfinLibrary for why there is no URL to give it.
+        "fields": [f if f["name"] != "path" else
+                   {**f, "help": "A directory Gameyfin watches as a library; "
+                                 "its own watcher picks up what ROMarr files"}
+                   for f in _COMMON_LIBRARY_FIELDS if f["name"] != "url"],
     },
 }
 
@@ -830,6 +856,8 @@ def build_library_from_config(cfg: dict):
         return RetromLibrary(RetromConfig(base_url=url, api_key=key))
     if kind == "folder":
         return FolderLibrary(FolderConfig(root=cfg.get("path", "")))
+    if kind == "gameyfin":
+        return GameyfinLibrary(FolderConfig(root=cfg.get("path", "")))
     if kind == "romm":
         return Romm(RommConfig(base_url=url, username=user, password=pw,
                                api_token=key))

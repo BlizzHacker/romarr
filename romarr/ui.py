@@ -688,19 +688,41 @@ function editList(item){
       <input type="text" data-f="name" value="${esc(item.name||'')}"></div>
     <div class="field"><label>Type</label>
       <select data-f="type">
-        <option value="paste"${item.type!=='url'?' selected':''}>Pasted list</option>
+        <option value="paste"${!['url','steam','gog'].includes(item.type)?' selected':''}>Pasted list</option>
         <option value="url"${item.type==='url'?' selected':''}>List at a URL</option>
+        <option value="steam"${item.type==='steam'?' selected':''}>Steam library / wishlist</option>
+        <option value="gog"${item.type==='gog'?' selected':''}>GOG profile</option>
       </select></div>
     <div class="field"><label>Default platform</label>
       <select data-f="platform"><option value="">Named per line</option>
         ${PLATFORMS.map(p=>`<option value="${esc(p.slug)}"${
           item.platform===p.slug?' selected':''}>${esc(p.name)}</option>`).join('')}
       </select></div>
-    <div class="field" id="l-url" style="${item.type==='url'?'':'display:none'}">
+    <div class="field" data-lt="url" style="${item.type==='url'?'':'display:none'}">
       <label>URL</label>
       <input type="text" data-f="url" value="${esc(item.url||'')}"
         placeholder="https://example.org/top-100.txt"></div>
-    <div class="field" id="l-content" style="${item.type==='url'?'display:none':''}">
+    <div data-lt="steam" style="${item.type==='steam'?'':'display:none'}">
+      <div class="field"><label>SteamID (64-bit)</label>
+        <input type="text" data-f="steam_id" value="${esc(item.steam_id||'')}"
+          placeholder="76561198000000000"></div>
+      <div class="field"><label>Web API key</label>
+        <input type="password" data-f="api_key" autocomplete="new-password"
+          value="${esc(item.api_key||'')}"
+          placeholder="steamcommunity.com/dev/apikey"></div>
+      <div class="field"><label>Source</label>
+        <select data-f="source">
+          <option value="owned"${item.source!=='wishlist'?' selected':''}>Owned games</option>
+          <option value="wishlist"${item.source==='wishlist'?' selected':''}>Wishlist</option>
+        </select></div>
+      <p class="help">The profile's game details must be public. Titles land
+        against the default platform above &mdash; the scorer decides what each
+        title means there.</p></div>
+    <div class="field" data-lt="gog" style="${item.type==='gog'?'':'display:none'}">
+      <label>GOG username</label>
+      <input type="text" data-f="gog_username" value="${esc(item.gog_username||'')}"
+        placeholder="a public gog.com profile name"></div>
+    <div class="field" data-lt="paste" style="${['url','steam','gog'].includes(item.type)?'display:none':''}">
       <label>Titles</label>
       <textarea data-f="content" rows="10"
         style="width:100%;resize:vertical">${esc(item.content||'')}</textarea></div>
@@ -716,8 +738,9 @@ function editList(item){
   document.body.append(m);
   m.onclick=e=>{ if(e.target===m||e.target.dataset.close!==undefined) closeModal(); };
   m.querySelector('[data-f=type]').onchange=e=>{
-    m.querySelector('#l-url').style.display=e.target.value==='url'?'':'none';
-    m.querySelector('#l-content').style.display=e.target.value==='url'?'none':'';
+    const kind=['url','steam','gog'].includes(e.target.value)?e.target.value:'paste';
+    m.querySelectorAll('[data-lt]').forEach(el=>
+      el.style.display=el.dataset.lt===kind?'':'none');
   };
   const payload=()=>({...readForm(), id:item.id});
   const line=(ok,msg)=>{

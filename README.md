@@ -48,12 +48,12 @@ If you run Radarr for films and Sonarr for TV, this is the missing one.
 
 - **Automated acquisition** — searches Prowlarr (or Torznab/Newznab indexers directly), scores releases, grabs the best, imports the ROM.
 - **Runs on its own clock** — completed downloads import within a minute, the Wanted list is re-searched on a backoff schedule, and indexer RSS feeds are watched in between, so a release that appears an hour after you asked is grabbed within the hour.
-- **Import lists** — paste a "top 100" article, point at a URL, or drop in a homebrew catalogue; every title feeds Wanted, added once, ever. Full sets and 1G1R live under Collections, planned straight from No-Intro/Redump DATs.
+- **Import lists** — paste a "top 100" article, point at a URL, sync a Steam library or wishlist, or pull a public GOG profile; every title feeds Wanted, added once, ever. Full sets and 1G1R live under Collections, planned straight from No-Intro/Redump DATs.
 - **Release scoring** — ranks on seeders, region (USA → World → Europe → Japan) and size sanity; rejects hacks, betas, demos and compilations.
 - **Interactive search** — every release scored with the reasoning shown, a Grab button to override the ranking, and a link to the release's page on its indexer.
 - **DAT verification** — imports are checksummed against No-Intro/Redump; a verified dump upgrades an unverified one, and the shelf shows which is which.
 - **The shelf** — playing / completed / shelved status, ratings and notes on any game, straight from the Library grid.
-- **Multi-backend** — RomM, Gaseous, Retrom, or a plain folder (Batocera, RetroPie, ES-DE, EmuDeck, LaunchBox, Playnite…).
+- **Multi-backend** — RomM, Gaseous, Retrom, Gameyfin, or a plain folder (Batocera, RetroPie, ES-DE, EmuDeck, LaunchBox, Playnite…).
 - **Multiple libraries** — route platforms to different servers from one instance.
 - **Plugin sources** — 22 ROM Hub plugins add extra sources (Internet Archive, No-Intro, Demozoo, itch.io, homebrew, metadata and BIOS providers), managed from the Hub tab.
 - **Torrent, Usenet and debrid** — qBittorrent, Transmission, Deluge, rTorrent, Synology Download Station, Real-Debrid, SABnzbd and NZBGet; each release routed to a client that speaks its protocol.
@@ -460,6 +460,38 @@ python -m pytest tests/ -q
 
 Release selection, ROM identification and archive-entry safety are pure functions
 and are tested directly.
+
+## State of the project
+
+An honest map of what is solid, what is thin, and where a contribution
+lands hardest. 1,170+ tests run on every push; the numbers below are per
+area, and "tested against fakes" means the protocol conversation is
+asserted but no live server was in the loop.
+
+| Area | Confidence | Why |
+|---|---|---|
+| Release scoring & selection | **High** — 100+ tests | Pure functions; every scoring rule has a test naming the incident that motivated it |
+| DAT verification (No-Intro/Redump) | **High** — 28 tests + live use | Copier headers, multi-track discs, bad-dump detection all covered; runs daily against a 166k-game library |
+| Import pipeline (zip/7z/rar, zip-slip, multi-ROM sets) | **High** — 70+ tests | Includes the disc formats and the header-sniffing fallback |
+| Auth (password, TOTP, API key, ForwardAuth SSO) | **High** — 100+ tests | HTTP-level tests: every route checked for the 401 it must return |
+| Indexers (Prowlarr, Torznab, Newznab, RSS) | **High** — 66 tests, live use | Runs against a dozen live trackers daily |
+| qBittorrent / SABnzbd / NZBGet | **High** — live use | The clients the maintainer runs |
+| Transmission / Deluge / rTorrent / Synology / Real-Debrid | **Medium** — tested against fakes | Protocol conversations asserted; needs people with live instances to confirm. **Reports welcome.** |
+| Scheduler, RSS sync, import lists | **Medium-high** — 40+ tests, new | Shipped 2026-08-10; live on the maintainer's install |
+| Steam / GOG list sources | **Medium** — tested against fakes | Steam's store API rate limits are handled but only field-tested lightly |
+| Library backends: RomM, folder | **High** — live use | |
+| Library backends: Gaseous, Retrom, Gameyfin | **Medium** — tested against fakes/disk | Gaseous confirmed against a test instance; Retrom and Gameyfin **need field reports** |
+| Frontend exports (LaunchBox, ES-DE, Playnite) | **Medium** — output asserted, apps not driven | The XML/JSON is tested; nobody has scripted LaunchBox itself |
+| `contrib/` .NET plugins | **Untested** | .NET cannot build in CI here; the exports above are the supported path. **A .NET contributor could own this.** |
+| Home Assistant add-on | **New, lightly tested** | The options→environment bridge is tested; the add-on lifecycle needs HA users |
+| armv7 Docker | **Degraded by design** | ROM Hub plugins unavailable there (no pydantic musl wheel); core works |
+
+**Where help lands hardest:** field reports for the medium-confidence
+download clients and library backends; a .NET owner for the contrib
+plugins; Home Assistant users for the add-on; DAT sources for platforms
+beyond No-Intro/Redump coverage; and issues — a report with a log line is
+usually fixed the same week. Open issues:
+[github.com/BlizzHacker/romarr/issues](https://github.com/BlizzHacker/romarr/issues).
 
 ---
 

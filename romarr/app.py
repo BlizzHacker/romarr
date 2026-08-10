@@ -2658,6 +2658,8 @@ def make_handler(service: ROMarr):
                     # The ledger is bookkeeping, not configuration; its size
                     # is the interesting part.
                     ledger = cfg.pop("added", None) or []
+                    if cfg.get("api_key"):
+                        cfg["api_key"] = "********"
                     items.append({**cfg, "added_count": len(ledger)})
                 return self._json(200, {"items": items})
             if route.path == "/api/v1/importlist/schema":
@@ -2768,7 +2770,8 @@ def make_handler(service: ROMarr):
                 return self._json(200, meta)
             if route.path == "/api/v1/importlist":
                 cfg = {k: body.get(k, "") for k in
-                       ("id", "name", "type", "platform", "content", "url")}
+                       ("id", "name", "type", "platform", "content", "url",
+                        "steam_id", "api_key", "source", "gog_username")}
                 cfg["enable"] = bool(body.get("enable", True))
                 cfg["type"] = str(cfg["type"] or "paste").lower()
                 if cfg["type"] not in LIST_TYPES:
@@ -2780,21 +2783,31 @@ def make_handler(service: ROMarr):
                 else:
                     # An edit must not wipe the ledger of what this list
                     # already added -- losing it would resurrect every
-                    # fulfilled title on the next sync.
+                    # fulfilled title on the next sync. The same rule keeps
+                    # the stored Steam key when the form sends back the
+                    # placeholder.
                     old = service.store.get_item("import_lists", cfg["id"])
                     if old:
                         cfg["added"] = old.get("added") or []
+                        if cfg.get("api_key") in ("********", ""):
+                            cfg["api_key"] = old.get("api_key", "")
                 saved = service.store.put_item("import_lists", cfg)
                 saved.pop("added", None)
+                if saved.get("api_key"):
+                    saved["api_key"] = "********"
                 return self._json(200, saved)
             if route.path == "/api/v1/importlist/preview":
                 from .lists import fetch_entries as _fetch_entries
+                preview_cfg = {k: body.get(k) or ""
+                               for k in ("type", "content", "url", "steam_id",
+                                         "api_key", "source", "gog_username")}
+                preview_cfg["type"] = preview_cfg["type"] or "paste"
+                if preview_cfg["api_key"] == "********" and body.get("id"):
+                    stored = service.store.get_item("import_lists",
+                                                    str(body["id"]))
+                    preview_cfg["api_key"] = (stored or {}).get("api_key", "")
                 try:
-                    entries = _fetch_entries({
-                        "type": str(body.get("type") or "paste"),
-                        "content": body.get("content") or "",
-                        "url": body.get("url") or "",
-                    })
+                    entries = _fetch_entries(preview_cfg)
                 except ValueError as exc:
                     return self._json(400, {"error": str(exc)})
                 except Exception as exc:

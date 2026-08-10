@@ -94,7 +94,7 @@ def parse_list(text: str) -> list[ListEntry]:
 def fetch_entries(cfg: dict, *, session=None) -> list[ListEntry]:
     """The entries a stored list currently names.
 
-    A `paste` list reads its stored content; a `url` list fetches. A fetch
+    A `paste` list reads its stored content; the others fetch. A fetch
     failure raises so the caller can report WHICH list failed -- swallowing
     it here would make an expired URL look like an empty list, and an empty
     list looks like success.
@@ -110,7 +110,106 @@ def fetch_entries(cfg: dict, *, session=None) -> list[ListEntry]:
         response = (session or requests).get(url, timeout=30)
         response.raise_for_status()
         return parse_list(response.text)
+    if kind == "steam":
+        return _steam_entries(cfg, session=session)
+    if kind == "gog":
+        return _gog_entries(cfg, session=session)
     raise ValueError(f"unknown list type {kind!r}")
+
+
+# --- Steam ------------------------------------------------------------------
+#
+# The retro case for a Steam list is real: a lot of a Steam library IS retro
+# -- the collections, the DOS re-releases, the ports -- and "get me the
+# original cartridge versions of everything I own on Steam" is a sensible
+# thing to ask an *arr for. The titles land in Wanted; the scorer decides
+# what a title means on the chosen platform, exactly as it does for a pasted
+# list.
+
+STEAM_API = "https://api.steampowered.com"
+STEAM_STORE = "https://store.steampowered.com"
+
+#: How many wishlist appids get their names resolved per sync. The store's
+#: appdetails endpoint answers one app per call and rate-limits around 200
+#: per five minutes; a cap keeps a big wishlist from turning one sync into a
+#: ban. The rest resolve on later syncs -- the ledger makes that cheap.
+STEAM_WISHLIST_CAP = 150
+
+
+def _steam_entries(cfg: dict, *, session=None) -> list[ListEntry]:
+    import requests
+    http = session or requests
+    steam_id = str(cfg.get("steam_id") or "").strip()
+    api_key = str(cfg.get("api_key") or "").strip()
+    if not steam_id or not api_key:
+        return []
+    source = str(cfg.get("source") or "owned").lower()
+
+    if source == "owned":
+        response = http.get(
+            f"{STEAM_API}/IPlayerService/GetOwnedGames/v1/",
+            params={"key": api_key, "steamid": steam_id,
+                    "include_appinfo": 1, "include_played_free_games": 1},
+            timeout=30)
+        response.raise_for_status()
+        games = ((response.json().get("response") or {}).get("games")) or []
+        return [ListEntry(game=g["name"]) for g in games if g.get("name")]
+
+    # Wishlist appids come without names; each name is a store lookup.
+    response = http.get(
+        f"{STEAM_API}/IWishlistService/GetWishlist/v1/",
+        params={"key": api_key, "steamid": steam_id}, timeout=30)
+    response.raise_for_status()
+    items = ((response.json().get("response") or {}).get("items")) or []
+    out: list[ListEntry] = []
+    for item in items[:STEAM_WISHLIST_CAP]:
+        appid = item.get("appid")
+        if not appid:
+            continue
+        try:
+            detail = http.get(f"{STEAM_STORE}/api/appdetails",
+                              params={"appids": appid,
+                                      "filters": "basic"}, timeout=15)
+            body = (detail.json() or {}).get(str(appid)) or {}
+            name = ((body.get("data") or {}).get("name")) if body.get("success") else ""
+        except Exception:
+            # One unnamed app must not fail the list; it resolves next sync.
+            continue
+        if name:
+            out.append(ListEntry(game=name))
+    return out
+
+
+# --- GOG --------------------------------------------------------------------
+#
+# GOG's public profile pages are backed by a JSON endpoint that needs no
+# credential at all -- the profile just has to be public. GOG's catalogue is
+# the most retro-relevant of the stores: most of it IS DOS and Amiga-era
+# software sold again.
+
+GOG_PROFILE = "https://www.gog.com/u/{username}/games/stats?page={page}"
+
+
+def _gog_entries(cfg: dict, *, session=None) -> list[ListEntry]:
+    import requests
+    http = session or requests
+    username = str(cfg.get("gog_username") or "").strip()
+    if not username:
+        return []
+    out: list[ListEntry] = []
+    page, pages = 1, 1
+    while page <= pages and page <= 50:
+        response = http.get(GOG_PROFILE.format(username=username, page=page),
+                            timeout=30)
+        response.raise_for_status()
+        body = response.json() or {}
+        pages = int(body.get("pages") or 1)
+        for item in ((body.get("_embedded") or {}).get("items")) or []:
+            title = ((item.get("game") or {}).get("title") or "").strip()
+            if title:
+                out.append(ListEntry(game=title))
+        page += 1
+    return out
 
 
 # The Settings page renders list forms from this, the same way download
@@ -127,5 +226,19 @@ LIST_TYPES = {
         "help": "A plain-text list fetched on the List Sync schedule, so a "
                 "list somebody else maintains keeps feeding Wanted.",
         "fields": ["name", "enable", "platform", "url"],
+    },
+    "steam": {
+        "label": "Steam library / wishlist",
+        "help": "Owned games or wishlist for a Steam profile. Needs a free "
+                "Web API key (steamcommunity.com/dev/apikey) and the 64-bit "
+                "SteamID; the profile's game details must be public.",
+        "fields": ["name", "enable", "platform", "steam_id", "api_key",
+                   "source"],
+    },
+    "gog": {
+        "label": "GOG profile",
+        "help": "Every game on a public GOG profile. No credential -- the "
+                "profile just has to be public under Privacy settings.",
+        "fields": ["name", "enable", "platform", "gog_username"],
     },
 }

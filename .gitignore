@@ -4,3 +4,22 @@ __pycache__/
 .venv/
 venv/
 .pytest_cache/
+
+# Live state and scratch artefacts that accumulate beside a deployed install.
+romarr.json
+romarr.json.*
+*.log
+*.jsonl
+*.done
+*.sqlite
+*.sqlite-*
+backends/
+.rom-hub/
+.env.*
+broken-downloads-*.json
+bios-after-scan.py
+build_*index*.py
+testfull.py
+testhub.py
+testinstall.py
+.firecrawl/
