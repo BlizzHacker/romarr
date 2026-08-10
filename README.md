@@ -37,7 +37,8 @@ full claim-by-claim evidence file.*
 
 ## Contents
 
-- [Features](#features)
+- [How it works](#how-it-works)
+- [The tour](#the-tour) — every feature, what it is for, and what it looks like
 - [Requirements](#requirements)
 - [Installation](#installation) — [Docker](#docker) · [Docker Compose](#docker-compose) · [Proxmox LXC](#proxmox-lxc) · [Home Assistant](#home-assistant) · [Source](#from-source)
 - [Signing in](#signing-in)
@@ -50,35 +51,152 @@ full claim-by-claim evidence file.*
 
 ---
 
-## Features
+## How it works
 
-- **Automated acquisition** — searches Prowlarr (or Torznab/Newznab indexers directly), scores releases, grabs the best, imports the ROM.
-- **Runs on its own clock** — completed downloads import within a minute, the Wanted list is re-searched on a backoff schedule, and indexer RSS feeds are watched in between, so a release that appears an hour after you asked is grabbed within the hour.
-- **Import lists** — paste a "top 100" article, point at a URL, sync a Steam library or wishlist, or pull a public GOG profile; every title feeds Wanted, added once, ever. Full sets and 1G1R live under Collections, planned straight from No-Intro/Redump DATs.
-- **Release scoring** — ranks on seeders, region (USA → World → Europe → Japan) and size sanity; rejects hacks, betas, demos and compilations.
-- **Interactive search** — every release scored with the reasoning shown, a Grab button to override the ranking, and a link to the release's page on its indexer.
-- **DAT verification** — imports are checksummed against No-Intro/Redump; a verified dump upgrades an unverified one, and the shelf shows which is which.
-- **The shelf** — playing / completed / shelved status, ratings and notes on any game, straight from the Library grid.
-- **Multi-backend** — RomM, Gaseous, Retrom, Gameyfin, or a plain folder (Batocera, RetroPie, ES-DE, EmuDeck, LaunchBox, Playnite…).
-- **Multiple libraries** — route platforms to different servers from one instance.
-- **Plugin sources** — 22 ROM Hub plugins add extra sources (Internet Archive, No-Intro, Demozoo, itch.io, homebrew, metadata and BIOS providers), managed from the Hub tab.
-- **Torrent, Usenet and debrid** — qBittorrent, Transmission, Deluge, rTorrent, Synology Download Station, Real-Debrid, SABnzbd and NZBGet; each release routed to a client that speaks its protocol.
-- **Notifications with reasons** — Discord, Slack, Telegram, Pushover, Gotify, ntfy, Apprise and plain webhooks; every "grabbed" message carries what the scorer weighed.
-- **Statistics** — imports by platform, grabs by indexer, shelf totals and ratings, on their own page.
-- **Update check** — asks GitHub daily whether a newer ROMarr exists and says so. Never updates itself.
-- **Auth built in** — password + optional TOTP, API keys, or ForwardAuth SSO behind a proxy; native HTTPS with `ROMARR_SSL_CERT`/`ROMARR_SSL_KEY`.
-- **Remote path mapping** — for download clients running on another host or container.
-- **Persistent state** — history, wanted list, shelf and settings survive restarts.
+One request, end to end:
 
-## Screenshots
+```
+you: "Chrono Trigger, SNES"
+  │
+  ▼
+SEARCH     every indexer at once, via Prowlarr or directly
+  │          two queries per source — the bare title and the qualified one —
+  │          because indexers match whole strings and recall wins
+  ▼
+SCORE      every release, with written reasons
+  │          + seeders, + right region, + carries a .smc, + verified dump
+  │          − hack/beta/repack, − wrong platform named, − too big to be real
+  ▼
+GRAB       the winner goes to whichever client speaks its protocol
+  │          torrent → qBittorrent/Transmission/Deluge/rTorrent/Synology/Real-Debrid
+  │          usenet  → SABnzbd/NZBGet
+  ▼
+IMPORT     within a minute of completion, on the clock
+  │          the actual ROM picked out of the archive (zip/7z/rar, zip-slip safe)
+  │          multi-track discs kept together as a set
+  ▼
+VERIFY     checksummed against your No-Intro / Redump DATs
+  │          verified · bad dump · unknown — and only bad dumps are refused
+  ▼
+FILE       into RomM / Gaseous / Retrom / Gameyfin / a plain folder
+  │          per-platform routing if you run more than one
+  ▼
+RESCAN     your library server is told; the game appears with art
+```
 
-All from a live install with a 166,578-game library — not a seeded demo.
+Nothing in that pipeline needs you after the first line — and with lists,
+connected accounts and RSS, it doesn't even need the first line.
 
-| | |
-|---|---|
-| ![Library](docs/img/library.png) *The library grid — shelf status and ratings on the tiles* | ![Stats](docs/img/stats.png) *Statistics: 860 grabs across ten indexers, imports by platform* |
-| ![Lists](docs/img/lists.png) *Import Lists — a pasted top-100 and the connected-accounts truth table* | ![Collections](docs/img/collections.png) *Collections: full sets and 1G1R planned from DATs* |
-| ![Tasks](docs/img/tasks.png) *The clock: every scheduled job, its interval and last result* | ![Live log](docs/img/logs.png) *The process log, tailed live in the browser* |
+## The tour
+
+Everything below is real: each screenshot comes from the maintainer's
+production install (166,578 games, ten live indexers), and every claim links
+to its evidence in [docs/PROOF.md](docs/PROOF.md).
+
+### Ask for a game, argue with the ranking
+
+**Add New** takes a title and a platform and does the whole pipeline.
+**Interactive Search** is for when you want to see the machine think: every
+release your indexers returned, scored, with the reasoning written next to
+it, a link to the release's page on its indexer, and a Grab button for when
+you disagree. A manual grab flows through the same queue and history as an
+automatic one.
+
+The scoring knows things a film downloader can't: that a 40GB "SNES" result
+is a romset or a PC port (every platform declares a hardware ceiling), that
+"Super Nintendo Entertainment System" containing "Nintendo Entertainment
+System" is a trap (longest alias wins, unknown platforms are refused, never
+guessed), and that a Wii Virtual Console WAD is not a Genesis cartridge.
+
+### Proof, not vibes: DAT verification
+
+The one thing no other *arr can do. There is no canonical hash for a movie —
+but No-Intro (cartridges) and Redump (discs) publish the CRC32/MD5/SHA1 of
+every known-good dump. ROMarr checksums every import against your DATs:
+
+- **verified** — byte-for-byte the published dump. Shown as `[!]` everywhere.
+- **bad dump** — right size, wrong hash. The case worth catching; refused
+  unless you explicitly force it.
+- **unknown** — not in your DAT. *Not treated as bad*: homebrew,
+  translations and romhacks live here and import without ceremony.
+
+Copier headers are handled (the reason naive hashers match nothing on
+NES/SNES), discs verify per-track, and **a verified dump automatically
+upgrades an unverified copy** — the only upgrade rule in this category that
+is a fact about bytes rather than a taste in bitrates.
+
+### The clock
+
+![The Tasks page: five scheduled jobs with their intervals and last results](docs/img/tasks.png)
+
+Five jobs run without you: completed downloads import **every minute**;
+the Wanted list is re-searched every 12 hours with a **per-title backoff
+ladder** (4h → 7 days, so a game that isn't dumped yet doesn't get your
+tracker account banned); indexer **RSS feeds are watched hourly** in
+between, so a release that appears an hour after you asked is grabbed
+within the hour; lists sync every 6; and once a day ROMarr asks GitHub if a
+newer version exists — and *tells* you, because an *arr that updates itself
+is an *arr that restarts mid-import. Every RSS match goes through the same
+scorer as a search: the feed can never grab what a search would refuse.
+Intervals are editable live; zero disables a job.
+
+### Lists, and the accounts that feed them
+
+![Import Lists: a synced top-100 and the connected-accounts table](docs/img/lists.png)
+
+Paste a numbered "top 100" article exactly as you copied it — rank numbers,
+`# comments` and `Title<TAB>platform` lines all parse. Point at a URL that
+re-syncs on the clock. Or connect an account: **Steam** (library or
+wishlist), **GOG** (public profile), **Xbox** (via OpenXBL), **PlayStation**
+(via NPSSO), **itch.io** (API key). Every title feeds Wanted **once, ever**
+— a ledger per list means a fulfilled game is never re-downloaded by its own
+list. And the stores that *can't* connect are named on the page with the
+reason (EA and Nintendo have no API; Epic's workarounds break monthly;
+Battle.net's API has no owned-games list) — because pretending a connector
+exists only defers the disappointment to sync time.
+
+### Collections: whole sets and 1G1R
+
+![Collections: a DAT diffed against the shelf, acquisition in batches](docs/img/collections.png)
+
+Load a DAT, and ROMarr can answer "what does a complete set look like, and
+how far off am I?" — full sets or **one-game-one-ROM** with your region
+ladder, diffed against what's actually on disk, acquired in resumable
+batches. A 3,000-title set is not an all-or-nothing operation: pause it,
+resume it, retry the failures.
+
+### The library is also a shelf
+
+![The library grid on a live install](docs/img/library.png)
+
+Click any tile: **playing / completed / shelved**, a 0–10 rating, and
+notes. Wanted and owned are deliberately *derived* (from the wanted list
+and the library) so nothing drifts. **Discover** adds the three storefront
+shelves — popular, new, upcoming — browsable onto a Request button, and the
+**Stats** page turns the history into numbers:
+
+![Statistics from the live install: 860 grabs across ten indexers](docs/img/stats.png)
+
+### Notifications that explain themselves
+
+Discord, Slack, Telegram, Pushover, Gotify, ntfy, plain webhooks, and
+Apprise (which unlocks ~100 more). Every other tool sends "Grabbed: Chrono
+Trigger". ROMarr's message carries **what the scorer weighed** —
+`+50 verified good dump [!], +40 region usa, +40 30 seeders` — so you can
+tell a good pick from a lucky one without opening the UI.
+
+### Boring, load-bearing
+
+![The live process log, tailed in the browser](docs/img/logs.png)
+
+Auth is on by default (password + optional TOTP, API keys, ForwardAuth SSO
+behind Authentik/Authelia); native HTTPS via `ROMARR_SSL_CERT`/`KEY`; the
+**Logs** page tails the actual process log live; backups strip credentials
+before they leave; Prometheus metrics and an OpenAPI spec for everything;
+remote path mapping for clients on other hosts; and history, wanted, shelf
+and settings all survive restarts. Prowlarr's API keys never reach a
+browser or a log, archives cannot zip-slip out of the library root, and an
+existing ROM is never silently overwritten.
 
 ## Requirements
 
@@ -492,13 +610,15 @@ asserted but no live server was in the loop.
 | Auth (password, TOTP, API key, ForwardAuth SSO) | **High** — 100+ tests | HTTP-level tests: every route checked for the 401 it must return |
 | Indexers (Prowlarr, Torznab, Newznab, RSS) | **High** — 66 tests, live use | Runs against a dozen live trackers daily |
 | qBittorrent / SABnzbd / NZBGet | **High** — live use | The clients the maintainer runs |
-| Transmission / Deluge / rTorrent / Synology / Real-Debrid | **Medium** — tested against fakes | Protocol conversations asserted; needs people with live instances to confirm. **Reports welcome.** |
+| Transmission / Deluge / rTorrent | **High** — proven against live daemons | `scripts/live_proof.py`: 9/9 against real Transmission 4.1, Deluge 2.2 and rTorrent 0.9.8 — auth handshakes, adds, labels, listings |
+| Synology DS / Real-Debrid | **Medium** — tested against fakes | The two that need hardware or a paid account. Protocol conversations asserted; `scripts/live_proof.py` extends to them the day someone runs it with either. **Reports welcome.** |
 | Scheduler, RSS sync, import lists | **Medium-high** — 40+ tests, new | Shipped 2026-08-10; live on the maintainer's install |
-| Steam / GOG list sources | **Medium** — tested against fakes | Steam's store API rate limits are handled but only field-tested lightly |
+| Steam / GOG / Xbox / PSN / itch.io list sources | **Medium** — tested against fakes | Credential-gated, so only an account holder can prove them live: `python scripts/account_proof.py <service>` does it in one command. **Run it, open an issue, get your name on the row.** |
 | Library backends: RomM, folder | **High** — live use | |
 | Library backends: Gaseous, Retrom, Gameyfin | **Medium** — tested against fakes/disk | Gaseous confirmed against a test instance; Retrom and Gameyfin **need field reports** |
 | Frontend exports (LaunchBox, ES-DE, Playnite) | **Medium** — output asserted, apps not driven | The XML/JSON is tested; nobody has scripted LaunchBox itself |
-| `contrib/` .NET plugins | **Untested** | .NET cannot build in CI here; the exports above are the supported path. **A .NET contributor could own this.** |
+| `contrib/` Playnite extension | **High** — runtime-proven | `scripts/playnite_proof.ps1`: runs against the real Playnite SDK 6.11 and a live export — 200 games imported as real SDK objects, dedupe verified |
+| `contrib/` LaunchBox plugin | **Medium-high** — compiled + logic executed | `scripts/launchbox_proof/`: compiles clean, `Import()` runs against a live export with dedupe and platform auto-creation. The un-testable inch: LaunchBox's DLL is not redistributable, so the compile is against a reconstruction of its API |
 | Home Assistant add-on | **New, lightly tested** | The options→environment bridge is tested; the add-on lifecycle needs HA users |
 | armv7 Docker | **Degraded by design** | ROM Hub plugins unavailable there (no pydantic musl wheel); core works |
 

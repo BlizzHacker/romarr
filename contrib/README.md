@@ -12,12 +12,22 @@ export format is a pure function from library rows to text, and the tests cover
 the platform-name mapping, XML escaping, relative paths, missing files and an
 empty library.
 
-**The plugins in this directory are not.** LaunchBox plugins are compiled .NET
-assemblies and Playnite extensions run inside Playnite; neither can be built or
-executed in the environment ROMarr is developed in. The source is written
-against each project's documented API, and it has not been run.
+**The plugins are proven as far as their licences allow.** As of 2026-08-10:
 
-That is why the integration is built on the exports rather than on the plugins.
+- The **Playnite** extension runs end-to-end against the real
+  `Playnite.SDK` 6.11 from NuGet and a live ROMarr — 200 games imported as
+  real `Playnite.SDK.Models.Game` objects with play actions, full dedupe on
+  re-sync. Reproduce with [`scripts/playnite_proof.ps1`](../scripts/playnite_proof.ps1).
+- The **LaunchBox** plugin compiles clean and its `Import()` logic executes
+  against a live export — games added, missing platforms auto-created,
+  dedupe on re-run. Reproduce with
+  [`scripts/launchbox_proof/`](../scripts/launchbox_proof/). The one inch
+  that cannot be tested: `Unbroken.LaunchBox.Plugins.dll` is not
+  redistributable, so the compile is against a reconstruction of the eight
+  API members the plugin touches, not the shipping assembly.
+
+The integration is still built on the exports first: a `gamelist.xml` has
+been read the same way for fifteen years, and no plugin API can break it.
 A plugin breaks when the host changes its API; a `gamelist.xml` has been read
 the same way for fifteen years. **If a plugin here ever stops working, use the
 export — it is the supported path.**

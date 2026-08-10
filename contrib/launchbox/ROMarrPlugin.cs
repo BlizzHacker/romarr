@@ -3,10 +3,13 @@
 // A system menu item that pulls the library from ROMarr and adds anything
 // LaunchBox does not already have.
 //
-// NOT BUILT OR RUN. LaunchBox plugins are compiled .NET assemblies referencing
-// Unbroken.LaunchBox.Plugins.dll, which ships with LaunchBox and is not
-// redistributable, so this cannot be compiled in ROMarr's own environment.
-// It is written against the documented API and has not been executed.
+// PROVEN AS FAR AS THE LICENCE ALLOWS. Unbroken.LaunchBox.Plugins.dll ships
+// with LaunchBox and is not redistributable, so this cannot link against the
+// real assembly in CI. What scripts/launchbox_proof/ does instead: compiles
+// THIS file against a reconstruction of the eight API members it touches and
+// executes Import() against a live ROMarr export -- games added, platforms
+// auto-created, dedupe on re-run, Save called. The remaining untested inch
+// is whether the real assembly's signatures match the reconstruction.
 //
 // The supported path is the XML export -- Tools -> Import -> LaunchBox XML.
 // See contrib/README.md.

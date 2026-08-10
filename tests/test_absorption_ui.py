@@ -51,3 +51,18 @@ def test_general_settings_expose_the_clock():
 
 def test_the_stats_page_says_updates_are_never_automatic():
     assert "Nothing updates itself" in page()
+
+
+def test_frontend_rows_survive_pathless_backend_rows(tmp_path):
+    """RomM's cached rows carry no filesystem path. Building the fallback
+    from library_root(None) was a 500 on every export -- caught by the live
+    Playnite proof, of all things."""
+    from romarr.app import ROMarr
+    from romarr.libraries import Game
+    svc = ROMarr(env={"ROMARR_DATA": str(tmp_path / "s.json"),
+                      "LIBRARY_PATH": str(tmp_path)})
+    svc._library_cache = ([Game(id="1", name="Super Metroid (USA)",
+                                platform="snes")], 9e18, "")
+    rows = svc.frontend_rows()
+    assert "snes" in rows[0]["path"]
+    assert rows[0]["path"].endswith("Super Metroid (USA)")

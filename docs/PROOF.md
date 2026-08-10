@@ -19,7 +19,9 @@ report is worth the most.
 | RSS can never grab what a search would refuse | RSS matches go through `best_release` — the same scorer — asserted directly | `test_rss_sync_grabs_a_wanted_match_through_the_scorer` in [`tests/test_scheduling_integration.py`](../tests/test_scheduling_integration.py) |
 | Import lists: paste/URL/Steam/GOG/Xbox/PSN/itch.io, added once ever | Parser, ledger and every account fetcher tested; a pasted top-100 synced live | [`tests/test_lists.py`](../tests/test_lists.py), [`tests/test_store_lists.py`](../tests/test_store_lists.py), [`tests/test_discover_logs_accounts.py`](../tests/test_discover_logs_accounts.py); [Lists screenshot](img/lists.png) shows a synced list with its ledger count. Steam/GOG/Xbox/PSN/itch.io are tested against protocol fakes — live-account field reports welcome |
 | Collections: full sets and 1G1R from DATs, resumable batches | 20 tests over planning/batching; page live | [`tests/test_collections.py`](../tests/test_collections.py); [screenshot](img/collections.png) |
-| Eight download clients | qBittorrent/SAB/NZBGet: production use (860 grabs — [stats](img/stats.png)). Transmission/Deluge/rTorrent/Synology/Real-Debrid: protocol fakes | [`tests/test_more_clients.py`](../tests/test_more_clients.py) (34), [`tests/test_new_clients.py`](../tests/test_new_clients.py) (16) — the fakes assert the exact conversations, including rTorrent's two dialects and Synology's sid-expiry relogin |
+| Eight download clients | qBittorrent/SAB/NZBGet: production use (860 grabs — [stats](img/stats.png)). **Transmission/Deluge/rTorrent: proven against live daemons** — real Transmission 4.1.0, Deluge 2.2.0 and rTorrent 0.9.8, driven through `build_client` exactly as the Settings page builds them | [`scripts/live_proof.py`](../scripts/live_proof.py), run 2026-08-10: **9/9** — the 409 handshake, `auth.login`+`web.connect`, both rTorrent dialects over XML-RPC, adds landing in each live queue with the label applied. Plus the fakes: [`tests/test_more_clients.py`](../tests/test_more_clients.py) (34), [`tests/test_new_clients.py`](../tests/test_new_clients.py) (16) |
+| Playnite extension | **Runtime-proven against the real SDK and a live server**: `Playnite.SDK` 6.11 from NuGet, config pointed at the production install, only dialogs and the game database stubbed | [`scripts/playnite_proof.ps1`](../scripts/playnite_proof.ps1), run 2026-08-10: 200 live-export games imported as real `Playnite.SDK.Models.Game` objects with play actions; second sync added 0 (dedupe). The proof also caught a live 500 in the export endpoint, fixed the same hour — see `frontend_rows` in app.py |
+| LaunchBox plugin | **Compiled (first time ever) and executed**: the unmodified plugin source built against a reconstruction of the eight API members it touches, `Import()` reflection-invoked with live export XML | [`scripts/launchbox_proof/`](../scripts/launchbox_proof/), run 2026-08-10: 5/5 — 200 games, 2 platforms auto-created, `Save()` called once, re-import added 0. Stated gap: `Unbroken.LaunchBox.Plugins.dll` is not redistributable, so real-assembly signatures remain unverified |
 | The shelf: status/ratings/notes | Store round-trip + case-insensitivity + husk-cleanup tested; API exercised live | [`tests/test_game_meta.py`](../tests/test_game_meta.py); the live API round-trip is in this file's history: set → read → clear returned `{}` |
 | Live log tail | Ring semantics (cursor, level floor, eviction-safe sequence) tested; page live | [`tests/test_discover_logs_accounts.py`](../tests/test_discover_logs_accounts.py); [screenshot](img/logs.png) |
 | Auth: password, TOTP, API key, ForwardAuth; every route gated | HTTP-level: unauthenticated requests to each route must 401 | [`tests/test_auth_http.py`](../tests/test_auth_http.py) (36), [`tests/test_sso.py`](../tests/test_sso.py) (30), [`tests/test_totp.py`](../tests/test_totp.py) (21) |
@@ -31,15 +33,27 @@ report is worth the most.
 
 ## What is NOT proven, in the same breath
 
-- The five newer download clients and the five account connectors have
-  never met a live server in CI. The fakes are faithful to the documented
-  protocols; documented and deployed sometimes differ.
-- The `contrib/` .NET frontend plugins are untested entirely (no .NET in
-  CI). The format exports they wrap are tested.
-- Gameyfin and Retrom integration is asserted against their declared
-  behavior, not against lived-in installs.
-- armv7 Docker ships without ROM Hub plugins (no pydantic musl wheel), by
-  design and stated at build.
+This list was five entries long on the morning of 2026-08-10 and is now
+this. Each survivor names exactly what would close it.
 
-If you can turn any row of that second list into a row of the first —
-that is the most valuable contribution this project can receive today.
+- **Synology Download Station and Real-Debrid** have only met protocol
+  fakes: one needs Synology hardware, the other a paid account.
+  [`scripts/live_proof.py`](../scripts/live_proof.py) is ready for both —
+  running it against either and posting the output closes the row.
+- **The five account connectors** (Steam, GOG, Xbox, PSN, itch.io) are
+  credential-gated, so only an account holder can prove them:
+  `python scripts/account_proof.py <service>` does it in one command
+  through ROMarr's own fetcher and prints your library. Open an issue
+  titled "account proof: <service>" with the (redacted) output.
+- **LaunchBox's real assembly signatures** — the plugin compiles and its
+  logic runs, but against a reconstruction of the API, because the DLL is
+  not redistributable. One person dropping the built plugin into a real
+  LaunchBox closes it.
+- **Gameyfin and Retrom** are asserted against their declared behavior,
+  not lived-in installs.
+- **armv7 Docker** ships without ROM Hub plugins (no pydantic musl wheel)
+  — by design, stated at build time, and not going to change until
+  pydantic ships the wheel.
+
+Turning any of these into a row of the first table is the most valuable
+contribution this project can receive today.

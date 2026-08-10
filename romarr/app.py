@@ -1906,8 +1906,13 @@ class ROMarr:
                 "title": item.get("name") or item.get("title") or name,
                 "platform": slug,
                 "filename": name,
+                # The default library root, not library_root(None): that
+                # helper reads its argument, and handing it None was a 500
+                # on every export whose backend rows carry no path -- which
+                # is what RomM's cached rows look like. Caught live by
+                # scripts/playnite_proof.ps1.
                 "path": item.get("path") or item.get("full_path")
-                        or (str(self.library_root(None) / slug / name)
+                        or (str(self.library / slug / name)
                             if name and slug else ""),
                 "region": item.get("region") or "",
                 "verified": item.get("verified") or "",
