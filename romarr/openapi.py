@@ -101,6 +101,13 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "/api/v1/launchers": ("GET", "Games the launchers installed on this "
                                  "machine know about — Steam, Epic, GOG "
                                  "Galaxy, Battle.net, EA. No credentials."),
+    "/api/v1/connect/sources": ("GET", "Stores that issue a token from a "
+                                       "signed-in page, and which page."),
+    "/api/v1/connect/steam": ("GET", "Start Steam's OpenID sign-in. Redirects "
+                                     "the browser to Steam."),
+    "/api/v1/connect/steam/return": ("GET", "Steam's OpenID return. Verifies "
+                                            "the assertion with Steam and "
+                                            "connects the library."),
     "/api/v1/launchers/connect": ("POST", "Scan this machine's launchers and "
                                           "save the result as an import list."),
     "/api/v1/openapi.json": ("GET", "This document."),

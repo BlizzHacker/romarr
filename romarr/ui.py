@@ -666,25 +666,68 @@ RENDER.lists=async()=>{
           <button data-ledit="${i}">Edit</button></div></td></tr>`).join('')}
       </tbody></table>`
       :'<div class="empty">No lists yet. Paste one, or connect an account, and let the clock do the asking.</div>'}
-    <div class="card" style="margin-top:14px"><h3>Connected accounts</h3>
-      <p class="help"><b>Remote libraries</b> connect as list types above
-        &mdash; add a list and pick the store. Steam and GOG need only a
-        public profile name; Xbox, PlayStation and itch.io take a token.</p>
-      <p class="help"><b>Everything installed on your gaming PC</b> &mdash;
-        including EA, Battle.net and Epic, which have no usable web API.
-        If ROMarr runs on that PC, one button does it:</p>
-      <div class="row" style="margin:8px 0">
-        <button class="btn" id="l-scan">Scan this machine</button>
-        <span class="help" style="margin:0">Reads Steam, Epic, GOG Galaxy,
-          Battle.net and EA manifests. No credential.</span></div>
-      <p class="help">If ROMarr runs on a server instead, run this on the
-        gaming PC:</p>
+    <div class="card" style="margin-top:14px"><h3>Connect an account</h3>
+      <p class="help">One click each. You are already signed in to these in
+        your browser &mdash; that is what makes it one click.</p>
+      <div class="row" style="flex-wrap:wrap;gap:10px;margin:10px 0">
+        <a class="btn" href="/api/v1/connect/steam"
+           style="text-decoration:none">Sign in through Steam</a>
+        <button class="btn ghost" data-token="gog">Connect GOG</button>
+        <button class="btn ghost" data-token="psn">Connect PlayStation</button>
+        <button class="btn ghost" data-token="xbox">Connect Xbox</button>
+        <button class="btn ghost" data-token="itchio">Connect itch.io</button>
+      </div>
+      <p class="help"><b>Steam</b> is a true one-click: Steam's own
+        "Sign in through Steam", no key, no app registration &mdash; it comes
+        straight back with your library connected. The rest open the page
+        that issues your token, where you are already signed in, and take
+        the paste.</p>
+      <div id="l-token"></div>
+      <h3 style="margin-top:18px">Games installed on your gaming PC</h3>
+      <p class="help">EA, Battle.net and Epic have no usable web API &mdash;
+        but every launcher writes your library to disk when it installs a
+        game, which needs no credential at all. Run this <b>on the PC you
+        play on</b>:</p>
       <pre style="font:12px/1.6 ui-monospace,Menlo,monospace;color:var(--dim);
         background:var(--bg);border:1px solid var(--line);border-radius:6px;
         padding:10px;white-space:pre-wrap">python scripts/connect_launchers.py --url ${location.origin} --key &lt;your API key&gt;</pre>
-      <p class="help">It reads the manifests the launchers already wrote when
-        they installed each game. No store credential is involved.</p>
+      <div class="row" style="margin:8px 0">
+        <button class="btn ghost" id="l-scan">Scan the ROMarr server</button>
+        <span class="help" style="margin:0">Only useful if ROMarr runs on
+          the machine you play on &mdash; it scans wherever ROMarr itself
+          lives, which is usually a server with no launchers.</span></div>
       <div id="l-noapi" style="color:var(--dim);font-size:12.5px"></div></div>`;
+
+  document.querySelectorAll('[data-token]').forEach(b=>b.onclick=async()=>{
+    const s=await j('/api/v1/connect/sources').catch(()=>({token_sources:{}}));
+    const spec=(s.token_sources||{})[b.dataset.token];
+    if(!spec){toast('Unknown store');return;}
+    window.open(spec.open,'_blank','noopener');
+    $('#l-token').innerHTML=`<div class="card" style="margin:10px 0">
+      <h3>Connect ${esc(spec.label)}</h3>
+      <p class="help">${esc(spec.how)}</p>
+      <div class="row">
+        <input type="password" id="tok-v" autocomplete="new-password"
+          placeholder="paste it here" style="flex:1;padding:8px 12px;
+          background:var(--bg);color:var(--fg);border:1px solid var(--line);
+          border-radius:6px">
+        <button class="btn" id="tok-save">Connect</button></div></div>`;
+    $('#tok-save').onclick=async()=>{
+      const value=$('#tok-v').value.trim();
+      if(!value){toast('Paste the value first');return;}
+      const body={name:spec.label+' library',type:b.dataset.token,
+                  platform:'',enable:true};
+      body[spec.field]=value;
+      const saved=await j('/api/v1/importlist',{method:'POST',
+        headers:{'content-type':'application/json'},body:JSON.stringify(body)});
+      if(saved.error){toast(saved.error);return;}
+      const r=await j('/api/v1/command',{method:'POST',
+        headers:{'content-type':'application/json'},
+        body:JSON.stringify({name:'ListSync'})});
+      toast(r.message||'Connected');
+      go('lists');
+    };
+  });
   j('/api/v1/importlist/schema').then(s=>{
     const rows=Object.entries(s.no_api||{});
     $('#l-noapi').innerHTML=rows.map(([store,why])=>

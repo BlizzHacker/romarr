@@ -2160,6 +2160,26 @@ class ROMarr:
         ok = sum(1 for d in done if d.get("ok"))
         return f"imported {ok} of {len(done)} finished download(s)"
 
+    def connect_steam(self, steam_id: str) -> dict:
+        """Save a verified SteamID64 as a list, and sync it immediately.
+
+        Called only after `connect.steam_verify` has checked the assertion
+        with Steam, so the id here is one Steam vouched for rather than one
+        a caller supplied.
+        """
+        existing = next((cfg for cfg in self.store.list_items("import_lists")
+                         if cfg.get("type") == "steam"
+                         and str(cfg.get("steam_id")) == str(steam_id)), None)
+        cfg = existing or {"name": "Steam library", "type": "steam",
+                           "platform": "", "enable": True}
+        cfg["steam_id"] = str(steam_id)
+        cfg["profile"] = str(steam_id)      # the keyless public-profile path
+        cfg["source"] = "owned"
+        saved = self.store.put_item("import_lists", cfg)
+        result = self.list_sync()
+        return {"ok": True, "id": saved.get("id"), "steam_id": steam_id,
+                "message": f"Steam connected. {result.get('message', '')}".strip()}
+
     def scan_launchers(self) -> dict:
         """Every game the launchers on THIS machine have installed.
 
@@ -2763,6 +2783,45 @@ def make_handler(service: ROMarr):
                                         "no_api": NO_API_STORES})
             if route.path == "/api/v1/launchers":
                 return self._json(200, service.scan_launchers())
+            if route.path == "/api/v1/connect/sources":
+                from .connect import TOKEN_SOURCES
+                return self._json(200, {"token_sources": TOKEN_SOURCES})
+            if route.path == "/api/v1/connect/steam":
+                # Step one: bounce the browser to Steam. The return URL is
+                # built from the request's own host so it works on a LAN
+                # address and behind a proxy alike, without configuration.
+                from .connect import steam_login_url
+
+                host = self.headers.get("X-Forwarded-Host") \
+                    or self.headers.get("Host") or "localhost"
+                scheme = self.headers.get("X-Forwarded-Proto") or "http"
+                base = f"{scheme}://{host}"
+                self.send_response(303)
+                self.send_header(
+                    "Location",
+                    steam_login_url(f"{base}/api/v1/connect/steam/return",
+                                    realm=base))
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return None
+            if route.path == "/api/v1/connect/steam/return":
+                # Step two: Steam has sent the browser back. Verify what it
+                # asserted with Steam itself before believing any of it.
+                from .connect import steam_verify
+
+                steam_id = steam_verify(query)
+                if not steam_id:
+                    body = ("<h2>Steam sign-in could not be verified</h2>"
+                            "<p>Nothing was connected. "
+                            "<a href='/#lists'>Back to Lists</a></p>")
+                    return self._send(400, body.encode(),
+                                      "text/html; charset=utf-8")
+                out = service.connect_steam(steam_id)
+                body = (f"<h2>Steam connected</h2><p>{out['message']}</p>"
+                        "<p><a href='/#lists'>Back to Lists</a></p>"
+                        "<script>location.replace('/#lists')</script>")
+                return self._send(200, body.encode(),
+                                  "text/html; charset=utf-8")
             if route.path == "/api/health" and not self._authorised():
                 # Liveness needs one bit. The full report names library paths,
                 # client URLs and counts, and this endpoint is reachable
