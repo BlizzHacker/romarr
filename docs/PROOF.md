@@ -31,6 +31,7 @@ report is worth the most.
 | Questarr feature + roadmap parity | Item-by-item audit in the design doc, each row implemented and tested above | [design doc](design/2026-08-10-questarr-absorption-design.md); their P0–P6 mapped in the commit messages of `76eaf1e`, `b92ea04`, `a56a72f` |
 | Local launcher connect (Steam/Epic/GOG/Battle.net/EA) | **Proven on real hardware**: the scanner found a live Epic library and a Blizzard install on the maintainer's PC, then pushed them to the production server over the network | 17 tests in [`tests/test_launchers.py`](../tests/test_launchers.py); `scripts/connect_launchers.py` run 2026-08-10 against 192.168.0.182 — "Local launchers" appears in the [Lists screenshot](img/lists.png). Correctly found **nothing** for an empty EA folder and a Steam library on an unplugged drive, which matters more than the positives: a scanner that invents games is worse than none |
 | The screenshots are real | Taken by script against the production instance, same session as this file's date | [`docs/screenshots.py`](screenshots.py) — point it at your install and diff |
+| Every page renders its actions | A browser signs in and visits all 27 pages the way a user navigates, asserting each shows its action control with no JS error | [`scripts/prove_pages.py`](../scripts/prove_pages.py), run 2026-08-11: **27/27**. Building it caught four latent late-write bugs (a fetch resolving after navigation), all fixed |
 
 ## What is NOT proven, in the same breath
 
