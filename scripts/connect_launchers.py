@@ -88,7 +88,10 @@ def main() -> int:
 
     print(f"\nSent {len(games)} title(s) to ROMarr as list "
           f"{saved.get('id', '?')!r}.")
-    print("Wanted → Lists shows it; Sync Now runs it immediately.")
+    # ASCII only: the default Windows console is cp1252 and a stray arrow
+    # here raised UnicodeEncodeError *after* the list had already been sent,
+    # which reads as a failed run of a command that actually worked.
+    print("Wanted -> Lists shows it; Sync Now runs it immediately.")
     return 0
 
 

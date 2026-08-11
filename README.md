@@ -146,14 +146,29 @@ Intervals are editable live; zero disables a job.
 
 Paste a numbered "top 100" article exactly as you copied it — rank numbers,
 `# comments` and `Title<TAB>platform` lines all parse. Point at a URL that
-re-syncs on the clock. Or connect an account: **Steam** (library or
-wishlist), **GOG** (public profile), **Xbox** (via OpenXBL), **PlayStation**
-(via NPSSO), **itch.io** (API key). Every title feeds Wanted **once, ever**
-— a ledger per list means a fulfilled game is never re-downloaded by its own
-list. And the stores that *can't* connect are named on the page with the
-reason (EA and Nintendo have no API; Epic's workarounds break monthly;
-Battle.net's API has no owned-games list) — because pretending a connector
-exists only defers the disappointment to sync time.
+re-syncs on the clock. Every title feeds Wanted **once, ever** — a ledger
+per list means a fulfilled game is never re-downloaded by its own list.
+
+**Connect the stores you already own games on**, two ways:
+
+| Route | Covers | What it needs |
+|---|---|---|
+| **Remote libraries** — list types | Steam, GOG | *nothing but a public profile name* |
+| | Xbox, PlayStation, itch.io | a token you paste once |
+| **Local launchers** — one button | Steam, Epic, GOG Galaxy, **Battle.net**, **EA** | *no credential at all* |
+
+That second row is the interesting one. This README used to claim EA,
+Battle.net and Epic "have no API" and could not be connected — which was
+wrong, and Playnite and LaunchBox were the standing counter-example. They
+read what the launcher already wrote to disk: Steam's `appmanifest_*.acf`,
+Epic's JSON manifests, GOG Galaxy's SQLite database, Battle.net's
+`product.db`, and the `installerdata.xml` EA drops beside every install.
+ROMarr does the same — **Scan this machine** on the Lists page when ROMarr
+runs on your gaming PC, or `scripts/connect_launchers.py` run there when it
+doesn't. No OAuth, no scraped cookies, no store credential anywhere.
+
+Nintendo is the one honest exception: no API, and nothing written to a PC
+to read. It says so on the page.
 
 ### Collections: whole sets and 1G1R
 
