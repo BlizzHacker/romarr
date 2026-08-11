@@ -1104,6 +1104,7 @@ RENDER.discover=async()=>{
 RENDER.peers=async()=>{
   const d=await j('/api/v1/peer').catch(()=>({peers:[]}));
   const list=d.peers||[];
+  const hx=await j('/api/v1/hashes').catch(()=>({count:0}));
   const scopeLabel={none:'Nothing',platforms:'Named platforms only',
     verified:'Verified dumps only',all:'Everything'};
   const accessLabel={catalogue:'See titles only',stream:'Play here',
@@ -1118,12 +1119,37 @@ RENDER.peers=async()=>{
       <div class="row" style="flex-wrap:wrap;gap:8px">
         <button class="btn" id="p-invite">Invite a friend</button>
         <button class="btn ghost" id="p-redeem">I have an invitation</button>
+        <button class="btn ghost" id="p-romm">Add a RomM server</button>
       </div>
+      <p class="help" style="margin-top:10px">Your friend does not have to run
+        ROMarr. If they run <b>RomM</b>, ask them for an account on it and use
+        <b>Add a RomM server</b> — RomM already publishes a hash for every ROM,
+        so browsing and netplay matching both work with nothing installed on
+        their side. The trade is honest: an account on their RomM grants
+        whatever their RomM grants it, and no setting here can narrow that.</p>
       <div id="p-out" style="margin-top:12px"></div></div>
+    <div class="card"><h3>What netplay can prove</h3>
+      <p class="help">Netplay is settled on the ROM's SHA1, never its title —
+        “Super Mario Kart” is four different ROMs, and two of them desync
+        within seconds in a way that reads as lag. ROMarr can only match games
+        whose hash it knows.</p>
+      ${hx.count
+        ? `<div class="panel"><b>${hx.count.toLocaleString()}</b> dump(s) can be
+             matched, across ${Object.keys(hx.platforms||{}).length} platform(s).</div>`
+        : `<div class="panel panel-warn">No hashes yet, so every netplay offer
+             will come back <i>missing</i>. ROMarr reads these from your library
+             server automatically — it already stores a hash for every ROM it
+             has scanned.</div>`}
+      <div id="p-seedlive"></div>
+      <div class="row" style="gap:8px;margin-top:10px">
+        <button class="btn ghost" id="p-seed">Read them again now</button>
+      </div>
+      <div id="p-seedout"></div></div>
     ${list.length?`<div class="card"><h3>Your friends</h3>
       <table><thead><tr><th>Name</th><th>They see</th><th>They may</th>
         <th>State</th><th></th></tr></thead><tbody>
       ${list.map((p,i)=>`<tr><td><b>${esc(p.name)}</b>
+        ${p.kind==='romm'?' <span class="pill">RomM</span>':''}
         <div style="color:var(--dim);font-size:11.5px">${esc(p.url||'')}</div></td>
         <td>${esc(scopeLabel[p.scope]||p.scope)}${
           p.scope==='platforms'&&(p.platforms||[]).length
@@ -1199,6 +1225,82 @@ RENDER.peers=async()=>{
     sharingEditor(list[Number(b.dataset.pedit)]));
   document.querySelectorAll('[data-pbrowse]').forEach(b=>b.onclick=()=>
     friendShelf(b.dataset.pbrowse));
+
+  //: Poll while the background read is running, so the page shows it moving
+  //: rather than looking stuck. Stops itself when the page changes.
+  const seedPoll=async()=>{
+    if(location.hash.replace('#','')!=='peers') return;
+    const s=await j('/api/v1/hashes').catch(()=>null);
+    if(!s) return;
+    const st=s.seed||{};
+    const live=$('#p-seedlive');
+    if(!live) return;
+    if(st.running){
+      live.innerHTML=`<div class="panel" style="margin-top:10px">
+        Reading your library — <b>${(st.seen||0).toLocaleString()}</b> entries
+        checked, <b>${(st.added||0).toLocaleString()}</b> with a hash so far.
+        You can leave this page.</div>`;
+      setTimeout(seedPoll,2000);
+    } else if(st.status==='done'&&st.seen){
+      live.innerHTML=`<div class="panel" style="margin-top:10px">${
+        esc(st.detail||'')}</div>`;
+    } else if(st.status==='failed'){
+      live.innerHTML=`<div class="panel panel-warn" style="margin-top:10px">${
+        esc(st.error||'The library read failed.')}</div>`;
+    }
+  };
+  seedPoll();
+
+  $('#p-seed').onclick=async()=>{
+    const b=$('#p-seed');
+    b.disabled=true; b.textContent='Starting…';
+    const r=await j('/api/v1/hashes/seed',{method:'POST',
+      headers:{'content-type':'application/json'},body:'{}'});
+    b.disabled=false; b.textContent='Read them again now';
+    toast(r.detail||r.error||'');
+    seedPoll();
+  };
+
+  $('#p-romm').onclick=()=>{
+    const m=document.createElement('div');
+    m.className='modal';
+    m.innerHTML=`<div class="box">
+      <h3>Add a friend who runs RomM</h3>
+      <div class="sub">They do not need ROMarr, and nothing has to be
+        installed on their server. Ask them to make you an account on their
+        RomM — read-only is enough.</div>
+      <div class="field"><label>Their RomM address</label>
+        <input type="text" data-f="url" placeholder="https://romm.their-server.com"></div>
+      <div class="field"><label>Username they gave you</label>
+        <input type="text" data-f="username" autocomplete="off"></div>
+      <div class="field"><label>Password</label>
+        <input type="password" data-f="password" autocomplete="off"></div>
+      <div class="field"><label>Call them (optional)</label>
+        <input type="text" data-f="name" placeholder="Dave's RomM"></div>
+      <div class="panel">ROMarr reads their library through RomM's own API,
+        including the SHA1 RomM stores for every ROM — which is what lets
+        netplay agree on the bytes with a server that has never heard of this
+        protocol.</div>
+      <div class="row" style="justify-content:flex-end;gap:8px;margin-top:14px">
+        <button class="btn ghost" data-close="1">Cancel</button>
+        <button class="btn" id="rm-go">Connect</button></div></div>`;
+    document.body.appendChild(m);
+    const close=()=>m.remove();
+    m.querySelector('[data-close]').onclick=close;
+    m.onclick=e=>{ if(e.target===m) close(); };
+    m.querySelector('#rm-go').onclick=async()=>{
+      const val=f=>m.querySelector(`[data-f="${f}"]`).value.trim();
+      const btn=m.querySelector('#rm-go');
+      btn.disabled=true; btn.textContent='Connecting…';
+      const r=await j('/api/v1/peer/romm',{method:'POST',
+        headers:{'content-type':'application/json'},
+        body:JSON.stringify({url:val('url'),username:val('username'),
+          password:val('password'),name:val('name')})});
+      btn.disabled=false; btn.textContent='Connect';
+      if(r.error){ toast(r.error); return; }
+      close(); toast(r.detail||'Connected'); go('peers');
+    };
+  };
 };
 
 //: Browsing a friend's library. Their shelf is fetched once and filtered

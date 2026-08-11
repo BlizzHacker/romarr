@@ -137,3 +137,56 @@ def test_both_sides_derive_the_same_room_without_talking_about_it():
     assert room != Federation.netplay_room("other", SHA_A), \
         "a different relationship is a different room"
     assert len(room) == 16
+
+
+# -- reading hashes from a library server -----------------------------------
+
+
+class FakeRomm:
+    """A RomM where most entries have no hash, which is the normal case."""
+
+    def __init__(self, total=1200, hashed_every=10):
+        self.total, self.hashed_every = total, hashed_every
+        self.pages = []
+
+    def hashes(self, limit=500, offset=0, timeout=None):
+        self.pages.append((limit, offset))
+        raw = max(0, min(limit, self.total - offset))
+        rows = []
+        for i in range(offset, offset + raw):
+            if i % self.hashed_every == 0:
+                rows.append({"sha1": f"{i:040x}", "name": f"Game {i}",
+                             "platform": "snes", "verified": False,
+                             "path": f"g{i}.sfc"})
+        return rows, raw
+
+
+def test_seeding_paginates_on_what_the_server_returned(tmp_path):
+    """The bug this pins: pagination must not stop on a short FILTERED page.
+
+    Most of a large RomM is catalogued entries with no hash. Filtering those
+    makes a full page look short, so paginating on len(rows) stops after the
+    first page -- it read 491 dumps out of 166,578 and reported success.
+    """
+    from romarr.app import ROMarr
+
+    svc = ROMarr(env={"ROMARR_DATA": str(tmp_path / "r.json")})
+    svc.romm = svc.game_library = FakeRomm(total=1200, hashed_every=10)
+
+    result = svc.index_hashes_from_library()
+
+    assert result["ok"] is True
+    assert result["seen"] == 1200, "every entry was read, not just page one"
+    assert result["added"] == 120, "one in ten carried a hash"
+    # Three pages: 0, 500, 1000 -- not one.
+    assert svc.romm.pages == [(500, 0), (500, 500), (500, 1000)]
+
+
+def test_seeding_says_how_many_entries_had_no_hash(tmp_path):
+    from romarr.app import ROMarr
+
+    svc = ROMarr(env={"ROMARR_DATA": str(tmp_path / "r.json")})
+    svc.romm = svc.game_library = FakeRomm(total=100, hashed_every=10)
+    result = svc.index_hashes_from_library()
+    assert "90" in result["detail"], \
+        "an operator needs to know the gap is their library, not a failure"

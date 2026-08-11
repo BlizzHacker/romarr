@@ -21,7 +21,7 @@ def test_the_service_registers_its_jobs(tmp_path):
     s = svc(tmp_path)
     names = {j["name"] for j in s.scheduler.status()}
     assert names == {"ImportCompleted", "MissingGameSearch", "RssSync",
-                     "ListSync", "UpdateCheck"}
+                     "ListSync", "UpdateCheck", "HashIndex"}
 
 
 def test_turning_off_auto_import_disables_the_job_live(tmp_path):

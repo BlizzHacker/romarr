@@ -70,6 +70,22 @@ class Peer:
     name: str
     url: str = ""
     token: str = ""
+    #: How ROMarr talks to them.
+    #:
+    #:   romarr -- they run ROMarr and speak this protocol. Mutual, and they
+    #:             decide what I see: I get a projection, never their rows.
+    #:   romm   -- they run a plain RomM that has never heard of any of this.
+    #:             They hand me an account on it, and ROMarr reads their
+    #:             library through RomM's own API. This works today, with
+    #:             nothing installed or merged on their side.
+    #:
+    #: The second is less good and it is worth being plain about why: an
+    #: account on somebody's RomM grants whatever RomM grants it, and no
+    #: scope set here can narrow that. ROMarr shows what it reads, but it is
+    #: not the thing holding the door.
+    kind: str = "romarr"
+    username: str = ""
+    password: str = ""
     #: Outbound: what THEY may see of MINE.
     scope: str = "none"
     platforms: tuple[str, ...] = ()
@@ -167,6 +183,29 @@ class Federation:
         self.peers[peer.peer_id] = peer
         return peer
 
+    def add_romm(self, url: str, username: str = "", password: str = "",
+                 *, name: str = "", token: str = "") -> Peer:
+        """Befriend somebody running a plain RomM.
+
+        There is no handshake, because there is nobody on the far side to
+        shake hands with: RomM does not know this protocol exists. What makes
+        the relationship is an account my friend created for me on their
+        server, so it is confirmed on arrival -- I typed the address and the
+        credential myself, which is the same consent the two-step handshake
+        exists to establish.
+        """
+        url = str(url or "").strip().rstrip("/")
+        if not url:
+            raise ValueError("a RomM friend needs an address")
+        if not (username and password) and not token:
+            raise ValueError("a RomM friend needs either a username and "
+                             "password or an API token on their server")
+        peer = Peer(peer_id=new_peer_id(), name=name or url, url=url,
+                    kind="romm", username=username, password=password,
+                    token=token, confirmed=True)
+        self.peers[peer.peer_id] = peer
+        return peer
+
     def accept(self, peer_id: str, secret: str, *, name: str = "",
                url: str = "") -> Peer:
         """Somebody redeemed my invitation. Verify and hold it, unconfirmed.
@@ -241,6 +280,13 @@ class Federation:
         """The peer behind a request, or None. Constant-time compare."""
         peer = self.peers.get(peer_id)
         if peer is None or not peer.confirmed or not peer.token:
+            return None
+        if peer.kind != "romarr":
+            # A RomM friend's token is a credential *I* hold for *their*
+            # server, not one they present to mine. Letting it authenticate
+            # inbound would turn a key my friend gave me into a key to my
+            # own library -- and anyone who learned it, including their
+            # admins, would hold it.
             return None
         if not hmac.compare_digest(peer.token, str(token or "")):
             return None
@@ -363,6 +409,7 @@ class Federation:
         """The Peers page. Tokens never appear here."""
         return [
             {"peer_id": p.peer_id, "name": p.name, "url": p.url,
+             "kind": p.kind,
              "scope": p.scope, "platforms": list(p.platforms),
              "access": p.access, "delegate_users": p.delegate_users,
              "confirmed": p.confirmed, "created": p.created}

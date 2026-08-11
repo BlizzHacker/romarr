@@ -127,6 +127,12 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
                                      "library."),
     "/api/v1/hashes": ("GET", "How many dumps netplay can prove, by "
                               "platform. Populated by audits and imports."),
+    "/api/v1/hashes/seed": ("POST", "Fill the hash index from the library "
+                                    "server's own hashes, so netplay works "
+                                    "without walking the whole library."),
+    "/api/v1/peer/romm": ("POST", "Befriend somebody running a plain RomM, "
+                                  "using an account on their server. Needs "
+                                  "nothing installed on their side."),
     "/api/v1/friends/shelf": ("GET", "Browse what a friend shares with you. "
                                      "Filtered here, fetched from them at "
                                      "most once every two minutes."),

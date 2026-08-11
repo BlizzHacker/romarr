@@ -549,7 +549,26 @@ class ROMarr:
             "UpdateCheck", "Check github.com for a newer ROMarr",
             lambda: 86400 if self.store.settings.get("update_check", True) else 0,
             lambda: self.check_update()["message"])
+        # Netplay is useless without hashes, and a shelf this size takes
+        # minutes to read. Nobody should have to know that, or press a
+        # button for it, so it runs daily and once at startup.
+        self.scheduler.add(
+            "HashIndex", "Read ROM hashes from the library for netplay",
+            lambda: 86400 if self.store.settings.get("hash_index", True) else 0,
+            lambda: self.start_hash_seed(quiet=True).get("detail", ""))
         self.scheduler.start()
+
+        # The scheduler does not fire a daily job until a day has passed, so
+        # a fresh install would have no hashes for 24 hours and every netplay
+        # offer would come back "missing" with nothing to explain why. Kick
+        # it once here instead.
+        try:
+            client = getattr(self, "game_library", None)
+            if (self.store.settings.get("hash_index", True)
+                    and hasattr(client, "hashes")):
+                self.start_hash_seed(quiet=True)
+        except Exception:                          # noqa: BLE001 - never fatal
+            log.debug("startup hash seed did not start", exc_info=True)
 
     def _refresh_counts(self) -> None:
         """Keep the count and the library fresh without ever blocking a request.
@@ -2393,10 +2412,184 @@ class ROMarr:
                         str(destination or ""))
         self.hashes.save()
 
+    #: Progress of the background hash seed, so the UI can show it moving
+    #: instead of holding a request open for twenty minutes.
+    _seed_thread = None
+    _seed_state: dict = {"status": "idle", "seen": 0, "added": 0}
+
+    def seed_status(self) -> dict:
+        state = dict(ROMarr._seed_state)
+        state["total"] = len(self.hashes)
+        state["running"] = bool(ROMarr._seed_thread
+                                and ROMarr._seed_thread.is_alive())
+        return state
+
+    def start_hash_seed(self, *, quiet: bool = False) -> dict:
+        """Seed hashes in the background.
+
+        Reading 166,578 entries out of RomM in pages is minutes of HTTP. Doing
+        it inside the request meant the page sat there loading, which is not a
+        thing anybody should have to wait through -- and it is the reason this
+        runs itself at startup rather than waiting to be asked.
+        """
+        import threading as _threading
+
+        if ROMarr._seed_thread is not None and ROMarr._seed_thread.is_alive():
+            return {"ok": True, "already": True, **self.seed_status(),
+                    "detail": "Already reading your library."}
+
+        ROMarr._seed_state = {"status": "running", "seen": 0, "added": 0,
+                              "started": datetime.now(timezone.utc)
+                              .isoformat(timespec="seconds")}
+
+        def run():
+            try:
+                result = self.index_hashes_from_library(
+                    progress=ROMarr._seed_state)
+                ROMarr._seed_state.update(result, status="done")
+            except Exception as err:                # noqa: BLE001 - reported
+                log.warning("hash seed failed: %s", err)
+                ROMarr._seed_state.update(status="failed", error=str(err))
+
+        ROMarr._seed_thread = _threading.Thread(
+            target=run, name="romarr-hash-seed", daemon=True)
+        ROMarr._seed_thread.start()
+        if not quiet:
+            log.info("reading hashes from the library in the background")
+        return {"ok": True, "started": True, **self.seed_status(),
+                "detail": "Reading your library in the background. This page "
+                          "does not have to stay open."}
+
+    def index_hashes_from_library(self, progress: dict | None = None) -> dict:
+        """Fill the hash index from the library server, not from disk.
+
+        RomM stores a SHA1 against every rom it has scanned and serves it on
+        the normal listing. Reading that is seconds of HTTP against a library
+        an audit would need hours to walk -- and on a shelf of 166,578 entries
+        the audit is not a thing anybody actually runs, which meant netplay
+        was theoretically supported and practically unusable.
+
+        These entries are recorded as UNVERIFIED. RomM's hash says what the
+        file is; it does not say anybody checked it against No-Intro or
+        Redump. An audit still upgrades them, and `HashIndex.add` prefers the
+        verified copy when one turns up.
+        """
+        library = getattr(self, "library_server", None) or self.romm
+        client = getattr(library, "_client", library)
+        if not hasattr(client, "hashes"):
+            return {"ok": False,
+                    "error": "the attached library server does not publish "
+                             "file hashes, so netplay cannot be seeded from "
+                             "it -- run an audit instead"}
+        added = offset = seen = 0
+        while offset < 250_000:
+            try:
+                page, raw = client.hashes(limit=500, offset=offset)
+            except Exception as err:                # noqa: BLE001 - reported
+                if not added:
+                    return {"ok": False, "error": f"library read failed: {err}"}
+                break
+            if not raw:
+                break
+            seen += raw
+            for row in page:
+                if self.hashes.add(row["sha1"], row["name"], row["platform"],
+                                   row["verified"], row.get("path", "")):
+                    added += 1
+            if progress is not None:
+                progress["seen"], progress["added"] = seen, added
+                # Save as we go: a restart part-way through should keep the
+                # work already done rather than starting from nothing. It
+                # lost 30,000 hashes to a restart once, which is exactly the
+                # kind of thing that makes a feature feel unreliable.
+                if seen % 2_500 < 500:
+                    self.hashes.save()
+            # Paginate on what the SERVER returned, never on what survived
+            # filtering -- most of a large library has no hash, and a short
+            # filtered page is the normal case rather than the last one.
+            if raw < 500:
+                break
+            offset += 500
+        self.hashes.save()
+        log.info("seeded the hash index from the library: %d dump(s) with a "
+                 "hash out of %d entries; %d known in total",
+                 added, seen, len(self.hashes))
+        without = max(0, seen - added)
+        return {"ok": True, "added": added, "seen": seen,
+                "total": len(self.hashes),
+                "detail": f"Read {seen:,} entries and found {added:,} with a "
+                          f"hash. Netplay can match those. The other "
+                          f"{without:,} are catalogued entries your library "
+                          f"has never scanned off a disk, so there is nothing "
+                          f"to match them on. They are all marked unverified "
+                          f"until an audit checks them against a DAT."}
+
     def save_peers(self) -> None:
         """Persist relationships. Called after every change to one."""
         self.store.settings["_peers"] = self.federation.dump()
         self.store.save()
+
+    class _RommDump:
+        """One of a RomM friend's files, shaped like a hash-index entry.
+
+        netplay_answer reads `.sha1`, `.name` and `.verified` off whatever it
+        is handed. Adapting here means a RomM friend goes through the exact
+        same verdict logic as a ROMarr one rather than a parallel copy that
+        could drift into disagreeing about what "mismatch" means.
+        """
+
+        __slots__ = ("sha1", "name", "verified")
+
+        def __init__(self, row):
+            self.sha1 = row.get("sha1", "")
+            self.name = row.get("title", "")
+            self.verified = bool(row.get("verified"))
+
+    def _romm_friend_client(self, peer):
+        """A RomM client pointed at a friend's server, using their account."""
+        from .clients import Romm, RommConfig
+        return Romm(RommConfig(base_url=peer.url, username=peer.username,
+                               password=peer.password,
+                               api_token=peer.token if not peer.username
+                               else "", timeout=30))
+
+    #: A RomM friend's library is read in pages of this size. Larger than the
+    #: poster grid uses because nothing here renders -- it is hashes and
+    #: titles going into a cache.
+    ROMM_FRIEND_PAGE = 500
+    ROMM_FRIEND_MAX = 10_000
+
+    def _romm_friend_rows(self, peer) -> tuple[list, str]:
+        """A RomM friend's shelf, in the same shape a ROMarr peer projects.
+
+        Projected to exactly the ROMarr peer fields on purpose: the rest of
+        the app should not need to know which kind of friend it is looking
+        at, and a RomM row carries far more (paths, ids) that has no business
+        being in a friends view.
+        """
+        client = self._romm_friend_client(peer)
+        rows, offset = [], 0
+        while offset < self.ROMM_FRIEND_MAX:
+            try:
+                page, raw = client.hashes(limit=self.ROMM_FRIEND_PAGE,
+                                          offset=offset)
+            except Exception as err:            # noqa: BLE001 - reported
+                if rows:
+                    break                        # partial is better than none
+                return [], f"could not read {peer.name}: {err}"
+            if not raw:
+                break
+            for row in page:
+                rows.append({"title": row["name"], "platform": row["platform"],
+                             "year": 0, "verified": False,
+                             "origin": peer.name,
+                             #: Carried for netplay, not for display. It is a
+                             #: fact about a file, not a credential.
+                             "sha1": row["sha1"]})
+            if len(page) < self.ROMM_FRIEND_PAGE:
+                break
+            offset += self.ROMM_FRIEND_PAGE
+        return rows, ""
 
     def _friend(self, peer_id: str):
         """The peer I am about to call, or a reason I cannot."""
@@ -2452,6 +2645,18 @@ class ROMarr:
         cached = self._friend_shelves.get(peer.peer_id)
         if refresh or cached is None or \
                 (time.monotonic() - cached[1]) > self.FRIEND_SHELF_TTL:
+            if peer.kind == "romm":
+                rows, err = self._romm_friend_rows(peer)
+                if err and cached is None:
+                    return {"ok": False, "error": err, "items": [],
+                            "total": 0}
+                if not err:
+                    self._friend_shelves[peer.peer_id] = (rows,
+                                                          time.monotonic())
+                rows = self._friend_shelves[peer.peer_id][0]
+                return {**self._slice_shelf(rows, q, platform, offset, limit),
+                        "ok": True, "friend": peer.name, "kind": "romm",
+                        "access": "catalogue"}
             body, err = self._call_friend(peer, "GET", "/api/v1/peer/shelf")
             if body is None:
                 if cached is None:
@@ -2532,10 +2737,30 @@ class ROMarr:
         offer = {"title": entry.name, "platform": entry.platform,
                  "sha1": entry.sha1, "verified": entry.verified,
                  "host": self.federation.name}
-        body, err = self._call_friend(peer, "POST", "/api/v1/peer/netplay",
-                                      {"offer": offer})
-        if body is None:
-            return {"ok": False, "status": "error", "detail": err}
+
+        if peer.kind == "romm":
+            # Their RomM cannot answer an offer, so ROMarr answers it on
+            # their behalf from the hashes RomM already publishes. The
+            # verdict is decided by exactly the same function, so a RomM
+            # friend and a ROMarr friend cannot disagree about what the four
+            # words mean.
+            rows, err = (self._friend_shelves.get(peer.peer_id, ([], 0))[0],
+                         "")
+            if not rows:
+                rows, err = self._romm_friend_rows(peer)
+                if not err:
+                    self._friend_shelves[peer.peer_id] = (rows,
+                                                          time.monotonic())
+            if err:
+                return {"ok": False, "status": "error", "detail": err}
+            theirs = [_RommDump(r) for r in rows if r.get("sha1")]
+            body = self.federation.netplay_answer(offer, theirs)
+        else:
+            body, err = self._call_friend(peer, "POST",
+                                          "/api/v1/peer/netplay",
+                                          {"offer": offer})
+            if body is None:
+                return {"ok": False, "status": "error", "detail": err}
 
         status = str(body.get("status") or "")
         answer = {
@@ -3555,8 +3780,10 @@ def make_handler(service: ROMarr):
                 return self._json(200, {
                     "count": len(service.hashes),
                     "platforms": service.hashes.platforms(),
-                    "detail": "Populated by an audit (Tasks -> Verify a "
-                              "platform) and by every verified import."})
+                    "seed": service.seed_status(),
+                    "detail": "Read from your library server's own hashes, "
+                              "and upgraded to verified by an audit or a "
+                              "verified import."})
             if route.path == "/api/v1/friends/shelf":
                 # The other direction: I browse THEIR library. Operator
                 # session, because this one is a person at a screen.
@@ -3914,6 +4141,36 @@ def make_handler(service: ROMarr):
                 # could only ever say "missing".
                 return self._json(200, service.federation.netplay_answer(
                     body.get("offer") or {}, service.hashes.entries()))
+            if route.path == "/api/v1/hashes/seed":
+                # Netplay from the library server's own hashes, so it works
+                # on a shelf too large to audit. Backgrounded: this is
+                # minutes of HTTP against a large library.
+                return self._json(200, service.start_hash_seed())
+            if route.path == "/api/v1/peer/romm":
+                # Befriend somebody running a plain RomM. No handshake:
+                # there is nobody on the far side who speaks this protocol.
+                try:
+                    peer = service.federation.add_romm(
+                        str(body.get("url") or ""),
+                        str(body.get("username") or ""),
+                        str(body.get("password") or ""),
+                        name=str(body.get("name") or ""),
+                        token=str(body.get("token") or ""))
+                except ValueError as exc:
+                    return self._json(400, {"error": str(exc)})
+                rows, err = service._romm_friend_rows(peer)
+                if err:
+                    # Do not keep a friend we could not read: a row that
+                    # never works is worse than a clear failure now.
+                    service.federation.revoke(peer.peer_id)
+                    return self._json(400, {"error": err})
+                service._friend_shelves[peer.peer_id] = (rows, time.monotonic())
+                service.save_peers()
+                return self._json(200, {
+                    "peer_id": peer.peer_id, "name": peer.name,
+                    "titles": len(rows),
+                    "detail": f"Connected to {peer.name}: {len(rows)} title(s) "
+                              f"with hashes ROMarr can match on."})
             if route.path == "/api/v1/friends/want":
                 # Something off a friend's shelf, into MY wanted list. My
                 # indexers fetch it; nothing comes from my friend.

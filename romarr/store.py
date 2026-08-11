@@ -79,6 +79,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # an invitation carries it, and without one the friend who redeems the
     # invitation has nowhere to call back to.
     "public_url": "",
+    # Read ROM hashes from the library server so netplay can match on bytes.
+    # Daily and at startup; off only if you never want the traffic.
+    "hash_index": True,
     # Media management
     #
     # Empty means "nobody has chosen one", which is what a fresh install is.

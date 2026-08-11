@@ -329,6 +329,56 @@ class Romm:
             })
         return sorted(out, key=lambda p: (-p["count"], p["platform"]))
 
+    def hashes(self, limit: int = 500, offset: int = 0,
+               timeout: int | None = None) -> tuple[list[dict], int]:
+        """One page of `{sha1, name, platform, verified}` straight from RomM.
+
+        Returns `(rows, seen)`, and the second number is load-bearing: most
+        of a large RomM is entries with no hash at all -- catalogued cloud
+        titles that were never scanned off a disk. Filtering those out makes
+        a full page look short, so a caller that paginates on `len(rows)`
+        stops after the first page. That is not hypothetical: it read 491
+        dumps out of 166,578 and reported success.
+
+        RomM stores `sha1_hash`, `md5_hash` and `crc_hash` against every rom
+        and serves them on the normal listing, which means netplay does not
+        need ROMarr to have walked and hashed the library itself. That matters
+        twice over: it makes matching work on a library too large to audit in
+        an evening, and it is what lets ROMarr agree on bytes with somebody
+        running a plain RomM that has never heard of this protocol.
+
+        `verified` is deliberately False. A hash from RomM says what the file
+        is, not that anybody checked it against No-Intro or Redump -- that
+        remains ROMarr's own claim to make, and overstating it here would put
+        a "verified" badge on a shelf nobody verified.
+        """
+        url = f"{self._config.base_url.rstrip('/')}/api/roms"
+        response = self._get(url, {"limit": limit, "offset": offset},
+                             timeout or self._config.timeout)
+        response.raise_for_status()
+        payload = response.json()
+        items = payload.get("items",
+                            payload if isinstance(payload, list) else [])
+        out = []
+        for it in items:
+            if not isinstance(it, dict):
+                continue
+            sha1 = str(it.get("sha1_hash") or "").strip().lower()
+            if not sha1:
+                # Unidentified or still scanning. Skipped rather than
+                # guessed at: a netplay match on a missing hash is the
+                # failure this whole mechanism exists to prevent.
+                continue
+            out.append({
+                "sha1": sha1,
+                "name": it.get("name") or it.get("fs_name_no_tags")
+                        or it.get("fs_name") or "",
+                "platform": it.get("platform_slug") or "",
+                "verified": False,
+                "path": it.get("fs_name") or "",
+            })
+        return out, len(items)
+
     def games(self, limit: int = 60, offset: int = 0,
               timeout: int | None = None) -> list[dict]:
         """The library, flattened to what a poster grid needs.

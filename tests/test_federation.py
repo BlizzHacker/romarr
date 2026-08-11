@@ -214,3 +214,51 @@ def test_restore_skips_junk_rather_than_refusing_to_start():
     assert fed.restore([{}, {"peer_id": ""}, "not a dict", None]) == 0
     assert fed.restore([{"peer_id": "x", "name": "y", "nonsense": 1}]) == 1, \
         "an unknown field from a newer version must not lose the peer"
+
+
+# -- friends who run a plain RomM -------------------------------------------
+#
+# The far side has never heard of this protocol. There is nobody to shake
+# hands with, so the relationship is made by an account my friend created for
+# me on their server.
+
+
+def test_a_romm_friend_needs_an_address_and_a_credential():
+    fed = Federation("Alice")
+    with pytest.raises(ValueError):
+        fed.add_romm("", "user", "pass")
+    with pytest.raises(ValueError):
+        fed.add_romm("https://romm.example", "", "")
+
+
+def test_a_romm_friend_is_confirmed_on_arrival():
+    """No handshake, because I typed the address and credential myself."""
+    fed = Federation("Alice")
+    peer = fed.add_romm("https://romm.example/", "me", "secret",
+                        name="Dave's RomM")
+    assert peer.kind == "romm"
+    assert peer.confirmed is True
+    assert peer.url == "https://romm.example", "trailing slash is trimmed"
+    assert peer.name == "Dave's RomM"
+
+
+def test_a_romm_friends_credential_cannot_open_my_own_library():
+    """The token is one *I* hold for *them*, not one they present to me.
+
+    Letting it authenticate inbound would turn a key my friend handed me --
+    which their admins also hold -- into a key to my library.
+    """
+    fed = Federation("Alice")
+    peer = fed.add_romm("https://romm.example", token="their-api-token")
+    assert peer.token == "their-api-token"
+    assert fed.authenticate(peer.peer_id, "their-api-token") is None
+
+
+def test_a_romm_friend_survives_a_restart_with_its_credential():
+    fed = Federation("Alice")
+    peer = fed.add_romm("https://romm.example", "me", "secret")
+    restarted = Federation("Alice")
+    restarted.restore(fed.dump())
+    back = restarted.peers[peer.peer_id]
+    assert back.kind == "romm"
+    assert (back.username, back.password) == ("me", "secret")
