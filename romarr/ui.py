@@ -680,6 +680,9 @@ RENDER.lists=async()=>{
         <button class="btn ghost" data-token="psn">Connect PlayStation</button>
         <button class="btn ghost" data-token="xbox">Connect Xbox</button>
         <button class="btn ghost" data-token="itchio">Connect itch.io</button>
+        <button class="btn ghost" data-token="humble">Connect Humble</button>
+        <button class="btn ghost" data-paste="amazon">Amazon / Prime</button>
+        <button class="btn ghost" data-paste="ubisoft">Ubisoft</button>
       </div>
       <p class="help"><b>Steam</b> is a true one-click: Steam's own
         "Sign in through Steam", no key, no app registration &mdash; it comes
@@ -704,6 +707,14 @@ RENDER.lists=async()=>{
           lives, which is usually a server with no launchers.</span></div>
       <div id="l-noapi" style="color:var(--dim);font-size:12.5px"></div></div>`;
 
+  document.querySelectorAll('[data-paste]').forEach(b=>b.onclick=async()=>{
+    const s=await j('/api/v1/connect/sources').catch(()=>({paste_sources:{}}));
+    const spec=(s.paste_sources||{})[b.dataset.paste];
+    if(!spec){toast('Unknown store');return;}
+    window.open(spec.open,'_blank','noopener');
+    toast(spec.how);
+    editList({type:'paste',name:spec.label+' library'});
+  });
   document.querySelectorAll('[data-token]').forEach(b=>b.onclick=async()=>{
     const s=await j('/api/v1/connect/sources').catch(()=>({token_sources:{}}));
     const spec=(s.token_sources||{})[b.dataset.token];

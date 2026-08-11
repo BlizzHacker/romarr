@@ -152,3 +152,55 @@ def test_all_three_are_real_connectors_now():
     for store in ("epic", "ea", "battlenet"):
         assert store in LIST_TYPES
     assert set(NO_API_STORES) == {"Nintendo"}
+
+
+# -- Humble Bundle -------------------------------------------------------------
+
+class FakeHumble:
+    def __init__(self, status=200):
+        self.status = status
+
+    def get(self, url, headers=None, timeout=None):
+        assert "_simpleauth_sess=" in headers["Cookie"]
+        if self.status != 200:
+            return R(status=self.status)
+        if url.endswith("/user/order"):
+            return R([{"gamekey": "k1"}, {"gamekey": "k2"}])
+        assert "orders?" in url and "gamekey=k1" in url
+        return R({"k1": {"subproducts": [
+            {"human_name": "FTL: Faster Than Light",
+             "downloads": [{"platform": "windows"}]},
+            {"human_name": "FTL Soundtrack",
+             "downloads": [{"platform": "audio"}]},
+        ]}, "k2": {"subproducts": [
+            {"human_name": "Psychonauts",
+             "downloads": [{"platform": "linux"}]},
+            {"human_name": "Psychonauts",          # owned in two bundles
+             "downloads": [{"platform": "windows"}]},
+        ]}})
+
+
+def test_humble_returns_games_and_not_soundtracks():
+    entries = fetch_entries({"type": "humble", "humble_cookie": "COOKIE"},
+                            session=FakeHumble())
+    assert [e.game for e in entries] == ["FTL: Faster Than Light",
+                                        "Psychonauts"]
+
+
+def test_humble_accepts_the_bare_cookie_value():
+    """The field is the value; the connector adds the cookie name."""
+    entries = fetch_entries({"type": "humble", "humble_cookie": "RAWVALUE"},
+                            session=FakeHumble())
+    assert entries, "a bare value must work"
+
+
+def test_humble_names_the_fix_for_a_dead_cookie():
+    import pytest
+    with pytest.raises(ValueError) as err:
+        fetch_entries({"type": "humble", "humble_cookie": "OLD"},
+                      session=FakeHumble(status=401))
+    assert "_simpleauth_sess" in str(err.value)
+
+
+def test_humble_without_a_cookie_is_empty():
+    assert fetch_entries({"type": "humble", "humble_cookie": ""}) == []

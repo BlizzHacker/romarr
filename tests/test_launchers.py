@@ -188,3 +188,52 @@ def test_scan_all_deduplicates_across_libraries(tmp_path):
     games = scan_all({"steam": [one, two], "epic": [], "gog": [],
                       "battlenet": [], "ea": []})
     assert len(games) == 1
+
+
+# -- Amazon Games -------------------------------------------------------------
+
+def test_amazon_reads_the_launchers_sqlite(tmp_path):
+    import sqlite3
+    from romarr.launchers import amazon_games
+    db = tmp_path / "GameInstallInfo.sqlite"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE DbSet (Id TEXT, ProductTitle TEXT, "
+                 "InstallDirectory TEXT)")
+    conn.execute("INSERT INTO DbSet VALUES ('1', 'Fallout 76', 'C:/x')")
+    conn.execute("INSERT INTO DbSet VALUES ('2', 'Blade Runner', 'C:/y')")
+    conn.commit()
+    conn.close()
+    assert sorted(g.name for g in amazon_games(db)) == \
+        ["Blade Runner", "Fallout 76"]
+    assert all(g.launcher == "amazon" for g in amazon_games(db))
+
+
+def test_amazon_survives_a_schema_it_does_not_know(tmp_path):
+    import sqlite3
+    from romarr.launchers import amazon_games
+    db = tmp_path / "GameInstallInfo.sqlite"
+    conn = sqlite3.connect(db)
+    conn.execute("CREATE TABLE Other (x INTEGER)")
+    conn.commit()
+    conn.close()
+    assert amazon_games(db) == []
+    assert amazon_games(tmp_path / "absent.sqlite") == []
+
+
+# -- Ubisoft ------------------------------------------------------------------
+
+def test_ubisoft_names_games_from_their_install_dirs():
+    from romarr.launchers import ubisoft_games
+    games = ubisoft_games([r"C:\Games\Assassin's Creed Origins",
+                           "D:/Ubisoft/Rayman Legends/"])
+    assert [g.name for g in games] == ["Assassin's Creed Origins",
+                                      "Rayman Legends"]
+    assert all(g.launcher == "ubisoft" for g in games)
+
+
+def test_scan_all_never_reads_the_registry_behind_a_tests_back(tmp_path):
+    """An explicit location dict without a ubisoft key must not fall
+    through to the real machine's registry."""
+    games = scan_all({"steam": [], "epic": [], "gog": [],
+                      "battlenet": [], "ea": [], "amazon": []})
+    assert games == []

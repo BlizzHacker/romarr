@@ -300,4 +300,35 @@ TOKEN_SOURCES = {
                "your games. Copy the whole document and paste it -- it is "
                "data, not a credential, so nothing secret is stored.",
     },
+    "humble": {
+        "label": "Humble Bundle",
+        "open": "https://www.humblebundle.com/home/library",
+        "field": "humble_cookie",
+        "how": "Humble's API answers to your browser session and nothing "
+               "else. With the library open: press F12, Application tab, "
+               "Cookies, humblebundle.com, and copy the _simpleauth_sess "
+               "value. Every game ever bought or claimed comes back.",
+    },
+}
+
+#: Stores whose library exists behind a login with no token page and no
+#: API at all -- the honest route is their own library page plus the paste
+#: parser, which eats numbered, messy, select-all'd text happily.
+PASTE_SOURCES = {
+    "amazon": {
+        "label": "Amazon / Prime Gaming",
+        "open": "https://gaming.amazon.com/library",
+        "how": "Amazon's only API needs full device registration -- there "
+               "is no page that issues a token. Select-all-copy your "
+               "library page and paste it as a list; the parser pulls the "
+               "titles out of the mess.",
+    },
+    "ubisoft": {
+        "label": "Ubisoft Connect",
+        "open": "https://account.ubisoft.com/",
+        "how": "Same story: no token page, no key programme. Copy your "
+               "games list from the account portal (or the Ubisoft Connect "
+               "app) and paste it as a list. Installed Ubisoft games are "
+               "also picked up by the gaming-PC scan.",
+    },
 }

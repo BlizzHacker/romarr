@@ -84,7 +84,7 @@ from .lists import LIST_TYPES
 #: edit when the form returns the placeholder.
 LIST_SECRETS = ("api_key", "openxbl_key", "npsso", "itchio_key",
                 "epic_code", "epic_refresh", "ea_token",
-                "battlenet_cookie")
+                "battlenet_cookie", "humble_cookie")
 from .scheduler import Scheduler, next_search_due
 from .selection import best_release, judge, score
 from .store import Event, Store
@@ -2826,8 +2826,9 @@ def make_handler(service: ROMarr):
             if route.path == "/api/v1/launchers":
                 return self._json(200, service.scan_launchers())
             if route.path == "/api/v1/connect/sources":
-                from .connect import TOKEN_SOURCES
-                return self._json(200, {"token_sources": TOKEN_SOURCES})
+                from .connect import PASTE_SOURCES, TOKEN_SOURCES
+                return self._json(200, {"token_sources": TOKEN_SOURCES,
+                                        "paste_sources": PASTE_SOURCES})
             if route.path == "/api/v1/connect/steam":
                 # Step one: bounce the browser to Steam. The return URL is
                 # built from the request's own host so it works on a LAN
@@ -3029,7 +3030,8 @@ def make_handler(service: ROMarr):
                                          "profile", "api_key", "source",
                                          "gog_username", "openxbl_key",
                                          "npsso", "itchio_key", "epic_code",
-                                         "ea_token", "battlenet_json")}
+                                         "ea_token", "battlenet_json",
+                                         "humble_cookie")}
                 preview_cfg["type"] = preview_cfg["type"] or "paste"
                 if body.get("id"):
                     stored = service.store.get_item("import_lists",

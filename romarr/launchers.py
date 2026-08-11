@@ -258,6 +258,101 @@ def ea_games(roots: list[Path]) -> list[LocalGame]:
     return out
 
 
+# --- Amazon Games -------------------------------------------------------------
+
+def amazon_games(database: Path) -> list[LocalGame]:
+    """Installed Amazon Games titles, from the launcher's own SQLite.
+
+    `GameInstallInfo.sqlite` is what the Amazon Games app itself reads.
+    Opened read-only; the schema has moved between versions, so the query
+    hunts for a table carrying a ProductTitle column rather than assuming
+    a name -- a missing table is "nothing installed", not an error.
+    """
+    path = Path(database)
+    if not path.exists():
+        return []
+    try:
+        connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return []
+    names: list[str] = []
+    try:
+        try:
+            tables = [r[0] for r in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")]
+        except sqlite3.Error:
+            tables = []
+        for table in tables:
+            try:
+                columns = [c[1] for c in connection.execute(
+                    f'PRAGMA table_info("{table}")')]
+                if "ProductTitle" not in columns:
+                    continue
+                for (name,) in connection.execute(
+                        f'SELECT ProductTitle FROM "{table}"'):
+                    text = str(name or "").strip()
+                    if text:
+                        names.append(text)
+            except sqlite3.Error:
+                continue
+    finally:
+        connection.close()
+    return [LocalGame(name=n, launcher="amazon") for n in sorted(set(names))]
+
+
+# --- Ubisoft Connect ----------------------------------------------------------
+
+_UBISOFT_KEY = r"SOFTWARE\WOW6432Node\Ubisoft\Launcher\Installs"
+
+
+def _ubisoft_registry_dirs() -> list[str]:
+    """InstallDir values from Ubisoft's registry, on Windows only."""
+    try:
+        import winreg
+    except ImportError:
+        return []
+    out = []
+    try:
+        installs = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, _UBISOFT_KEY)
+    except OSError:
+        return []
+    try:
+        index = 0
+        while True:
+            try:
+                sub = winreg.EnumKey(installs, index)
+            except OSError:
+                break
+            index += 1
+            try:
+                with winreg.OpenKey(installs, sub) as key:
+                    value, _ = winreg.QueryValueEx(key, "InstallDir")
+                    if value:
+                        out.append(str(value))
+            except OSError:
+                continue
+    finally:
+        installs.Close()
+    return out
+
+
+def ubisoft_games(install_dirs=None) -> list[LocalGame]:
+    """Installed Ubisoft games.
+
+    The registry lists each install directory and the directory's name is
+    the game's -- the same source Ubisoft Connect itself launches from.
+    `install_dirs` is injectable for tests and for platforms with no
+    registry.
+    """
+    dirs = install_dirs if install_dirs is not None else _ubisoft_registry_dirs()
+    out = []
+    for raw in dirs or []:
+        name = Path(str(raw).rstrip("/\\")).name.strip()
+        if name:
+            out.append(LocalGame(name=name, launcher="ubisoft", path=str(raw)))
+    return out
+
+
 # --- everything at once -----------------------------------------------------
 
 def default_locations() -> dict[str, list[Path]]:
@@ -275,6 +370,10 @@ def default_locations() -> dict[str, list[Path]]:
         "ea": [d / "Program Files" / "EA Games" for d in drives]
               + [d / "Program Files (x86)" / "Origin Games" for d in drives]
               + [d / "EA Games" for d in drives],
+        "amazon": [local / "Amazon Games" / "Data" / "Games" / "Sql"
+                   / "GameInstallInfo.sqlite"],
+        # None means "ask the registry"; a test passes an explicit list.
+        "ubisoft": None,
     }
 
 
@@ -314,6 +413,18 @@ def scan_all(locations: dict[str, list[Path]] | None = None) -> list[LocalGame]:
         games += ea_games(places.get("ea", []))
     except Exception as exc:                # noqa: BLE001
         log.warning("ea scan failed: %s", exc)
+    for path in places.get("amazon", []):
+        try:
+            games += amazon_games(path)
+        except Exception as exc:            # noqa: BLE001
+            log.warning("amazon scan failed: %s", exc)
+    if "ubisoft" in places:
+        # Only when the caller named it: a test's explicit location dict
+        # must never fall through to the real machine's registry.
+        try:
+            games += ubisoft_games(places["ubisoft"])
+        except Exception as exc:            # noqa: BLE001
+            log.warning("ubisoft scan failed: %s", exc)
 
     # One title per (name, launcher): Steam libraries on two drives list the
     # same game twice, and so does a game reinstalled elsewhere.

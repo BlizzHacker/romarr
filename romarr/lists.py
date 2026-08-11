@@ -139,6 +139,8 @@ def fetch_entries(cfg: dict, *, session=None) -> list[ListEntry]:
         return _ea_entries(cfg, session=session)
     if kind == "battlenet":
         return _battlenet_entries(cfg, session=session)
+    if kind == "humble":
+        return _humble_entries(cfg, session=session)
     raise ValueError(f"unknown list type {kind!r}")
 
 
@@ -708,7 +710,71 @@ LIST_TYPES = {
                 "page while signed in and paste the JSON it shows.",
         "fields": ["name", "enable", "platform", "battlenet_json"],
     },
+    "humble": {
+        "label": "Humble Bundle library",
+        "help": "Every game ever bought or claimed on Humble, via its own "
+                "API. Needs the _simpleauth_sess cookie from a signed-in "
+                "browser -- no key programme exists.",
+        "fields": ["name", "enable", "platform", "humble_cookie"],
+    },
 }
+
+# --- Humble Bundle -----------------------------------------------------------
+
+HUMBLE_API = "https://www.humblebundle.com/api/v1"
+
+
+def _humble_entries(cfg: dict, *, session=None) -> list[ListEntry]:
+    """Everything ever bought or claimed on Humble, via its own API.
+
+    Humble's API answers to the browser's session cookie
+    (`_simpleauth_sess`) and nothing else -- no key programme exists. Two
+    calls: the order keys, then the orders in batches, keeping the
+    subproducts that are actually games (a bundle also carries soundtracks
+    and ebooks, identified by their download platforms).
+    """
+    import requests
+    http = session or requests
+    cookie = str(cfg.get("humble_cookie") or "").strip()
+    if not cookie:
+        return []
+    if "_simpleauth_sess" not in cookie:
+        cookie = f"_simpleauth_sess={cookie}"
+    headers = {"Cookie": cookie, "Accept": "application/json"}
+
+    response = http.get(f"{HUMBLE_API}/user/order", headers=headers,
+                        timeout=30)
+    if getattr(response, "status_code", 200) in (401, 403):
+        raise ValueError(
+            "Humble rejected that cookie. Sign in at humblebundle.com, then "
+            "copy the _simpleauth_sess cookie value again -- it rotates "
+            "when you sign out.")
+    response.raise_for_status()
+    keys = [str(o.get("gamekey") or "") for o in (response.json() or [])
+            if o.get("gamekey")]
+
+    out: list[ListEntry] = []
+    seen: set[str] = set()
+    for start in range(0, len(keys), 40):
+        batch = keys[start:start + 40]
+        query = "&".join(f"gamekey={k}" for k in batch)
+        response = http.get(f"{HUMBLE_API}/orders?all_tpkds=true&{query}",
+                            headers=headers, timeout=60)
+        response.raise_for_status()
+        for order in (response.json() or {}).values():
+            for sub in (order.get("subproducts") or []):
+                platforms = {str(d.get("platform") or "")
+                             for d in (sub.get("downloads") or [])}
+                # Games download for a platform; soundtracks and ebooks
+                # download as "audio" and "ebook".
+                if not platforms & {"windows", "mac", "linux", "android"}:
+                    continue
+                name = clean_title(str(sub.get("human_name") or ""))
+                if name and name.lower() not in seen:
+                    seen.add(name.lower())
+                    out.append(ListEntry(game=name))
+    return out
+
 
 #: The one store with nothing to connect to, and why. This used to list EA,
 #: Battle.net and Epic too, which was wrong: all three have web APIs that
