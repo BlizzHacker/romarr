@@ -459,10 +459,16 @@ RENDER.library=async()=>{
   }
 
   const items=d.items||[];
-  const chips=(d.platforms||[]).map(x=>
-    `<button class="btn ${LIB.platform===x.platform?'':'ghost'}" data-plat="${esc(x.platform)}"
-      style="padding:4px 10px;font-size:12px">${esc(x.platform)}
-      <span style="opacity:.7">${x.count}</span></button>`).join('');
+  // Every platform the library server holds, from the first second --
+  // even ones the background walk has not reached. When a platform is only
+  // partly cached the chip says so rather than under-reporting silently.
+  const chips=(d.platforms||[]).map(x=>{
+    const part=x.cached!==undefined&&x.cached<x.count;
+    return `<button class="btn ${LIB.platform===x.platform?'':'ghost'}" data-plat="${esc(x.platform)}"
+      style="padding:4px 10px;font-size:12px"
+      title="${part?`${x.cached} of ${x.count} loaded so far`:''}">${esc(x.platform)}
+      <span style="opacity:.7">${part?x.cached+'/'+x.count:x.count}</span></button>`;
+  }).join('');
   const f=d.facets||{};
   const sel=(key,label,list,fmt)=>{
     if(!list||!list.length) return '';

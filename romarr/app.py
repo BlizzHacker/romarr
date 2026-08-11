@@ -541,6 +541,31 @@ class ROMarr:
                 continue
 
             ok, total, shelf, failures = True, 0, [], []
+            # The authoritative platform list, straight from each backend.
+            # Derived-from-the-cache chips are a prefix of the truth while
+            # the walk runs, and a person looking for a platform the walk
+            # has not reached concludes it is unsupported.
+            server_platforms: dict[str, int] = {}
+            for _cfg, backend in self.game_libraries:
+                lister = getattr(backend, "platforms", None)
+                if not callable(lister):
+                    continue
+                try:
+                    for row in lister():
+                        name = row.get("platform") or ""
+                        if name:
+                            server_platforms[name] = (
+                                server_platforms.get(name, 0)
+                                + int(row.get("count") or 0))
+                except Exception as err:      # noqa: BLE001
+                    log.warning("platform list unavailable from %s: %s",
+                                getattr(backend, "name", backend),
+                                err.__class__.__name__)
+            if server_platforms:
+                self._server_platforms = [
+                    {"platform": name, "count": count}
+                    for name, count in sorted(server_platforms.items(),
+                                              key=lambda kv: (-kv[1], kv[0]))]
             # Per library, so the Libraries page can say which one is unhappy
             # and why. A joined string was enough for a log line and no use to
             # a row that has to render one server's state.
@@ -2134,10 +2159,23 @@ class ROMarr:
         snapshot = sorted(shelf, key=lambda g: (str(g.platform).lower(),
                                                 str(g.name).lower()))
         platforms = Counter(str(g.platform) or "unknown" for g in snapshot)
-        self._library_platforms = [
+        cached_platforms = [
             {"platform": name, "count": count}
             for name, count in sorted(platforms.items(),
                                       key=lambda kv: (-kv[1], kv[0]))]
+        # Prefer the server's own list: it is complete from the first
+        # second, where the cached one grows a platform at a time and hides
+        # everything the walk has not reached yet. `cached` rides along so
+        # the UI can show how much of each platform is browsable now.
+        authoritative = getattr(self, "_server_platforms", None)
+        if authoritative:
+            have = {p["platform"]: p["count"] for p in cached_platforms}
+            self._library_platforms = [
+                {**row, "cached": have.get(row["platform"], 0)}
+                for row in authoritative]
+        else:
+            self._library_platforms = [{**p, "cached": p["count"]}
+                                       for p in cached_platforms]
 
         # Every other axis worth cutting a 166k-game shelf on, counted once
         # per publish rather than per request. Genre and year only exist for

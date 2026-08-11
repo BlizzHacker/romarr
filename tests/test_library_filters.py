@@ -131,3 +131,34 @@ def test_both_say_so_before_the_library_is_read(tmp_path):
     s._library_cache = (None, 0.0, "")
     assert "not been read" in s.discover_library()["error"]
     assert "not been read" in s.library_calendar()["error"]
+
+
+# -- platform chips come from the server, not the partial cache ---------------
+
+def test_platform_chips_show_everything_the_server_has(tmp_path):
+    """A 166k-game walk reaches platforms one at a time; chips derived from
+    the cache showed eight platforms for minutes and a person looking for
+    PC or Xbox concluded they were unsupported."""
+    from romarr.app import ROMarr
+    s = ROMarr(env={"ROMARR_DATA": str(tmp_path / "s.json")})
+    # The server knows about three platforms; the walk has reached one.
+    s._server_platforms = [
+        {"platform": "PC (Windows)", "count": 900},
+        {"platform": "Xbox", "count": 400},
+        {"platform": "SNES", "count": 100},
+    ]
+    s._publish_library([Game(id="1", name="A", platform="SNES")],
+                       "", partial=True)
+    chips = {p["platform"]: p for p in s.library_view()["platforms"]}
+    assert set(chips) == {"PC (Windows)", "Xbox", "SNES"}
+    assert chips["PC (Windows)"]["count"] == 900
+    # ...and the UI can say how much of each is browsable right now.
+    assert chips["PC (Windows)"]["cached"] == 0
+    assert chips["SNES"]["cached"] == 1
+
+
+def test_without_a_server_list_the_cache_still_answers(tmp_path):
+    """A folder library has no platform endpoint; chips must still work."""
+    s = shelf(tmp_path)
+    chips = {p["platform"]: p for p in s.library_view()["platforms"]}
+    assert chips["snes"]["count"] == chips["snes"]["cached"] == 3

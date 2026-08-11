@@ -263,6 +263,41 @@ class Romm:
     # this off whichever library is attached, so it is part of the protocol.
     BACKGROUND_TIMEOUT = DEFAULT_BACKGROUND_TIMEOUT
 
+    def platforms(self) -> list[dict]:
+        """Every platform and its rom count, in one fast call.
+
+        The shelf's platform chips used to be derived from whatever rows the
+        background walk had cached so far, which meant a 166,578-game
+        library showed eight platforms for the first several minutes and
+        grew them one at a time -- a person looking for PC or Xbox
+        concluded they were not supported.
+
+        RomM knows all of this instantly and exactly. Asking it is one
+        request against an endpoint with no rows in it, and the answer is
+        the whole truth rather than a prefix of it.
+        """
+        url = f"{self._config.base_url.rstrip('/')}/api/platforms"
+        response = self._get(url, {}, self.HEALTH_TIMEOUT)
+        response.raise_for_status()
+        payload = response.json()
+        rows = payload if isinstance(payload, list) else payload.get("items", [])
+        out = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            count = int(row.get("rom_count") or 0)
+            # Platforms RomM defines but holds nothing for are noise: it
+            # ships 393 of them and this library has content in 84.
+            if count <= 0:
+                continue
+            out.append({
+                "platform": str(row.get("display_name") or row.get("name")
+                                or row.get("slug") or ""),
+                "slug": str(row.get("slug") or ""),
+                "count": count,
+            })
+        return sorted(out, key=lambda p: (-p["count"], p["platform"]))
+
     def games(self, limit: int = 60, offset: int = 0,
               timeout: int | None = None) -> list[dict]:
         """The library, flattened to what a poster grid needs.
