@@ -107,6 +107,53 @@ def new_state() -> str:
     return secrets.token_urlsafe(24)
 
 
+class StateStore:
+    """Short-lived, single-use tokens for an OpenID round trip.
+
+    **This is what makes the return leg work at all.** ROMarr's session
+    cookie is `SameSite=Strict`, so when Steam redirects the browser back,
+    the browser deliberately withholds the cookie and the request arrives
+    unauthenticated -- a 401, every time, no matter how correct the rest of
+    the flow is. Loosening the cookie to Lax would fix the symptom by
+    weakening every other endpoint.
+
+    So the return leg carries its own credential instead: a token minted
+    here by an *authenticated* request, unguessable, usable once, and
+    expiring in minutes. Presenting it proves the flow was started from a
+    signed-in session, which is exactly what the cookie would have proved.
+    """
+
+    #: Long enough to sign in to Steam if you were not already, short
+    #: enough that a token left in a browser history is worthless.
+    TTL = 600
+
+    def __init__(self, ttl: int | None = None):
+        import threading
+        self._ttl = ttl if ttl is not None else self.TTL
+        self._lock = threading.Lock()
+        self._issued: dict[str, float] = {}
+
+    def issue(self) -> str:
+        import time
+        token = new_state()
+        with self._lock:
+            now = time.monotonic()
+            # Opportunistic sweep: no timer, and the dict cannot grow
+            # without bound because every entry expires.
+            self._issued = {k: v for k, v in self._issued.items() if v > now}
+            self._issued[token] = now + self._ttl
+        return token
+
+    def spend(self, token: str) -> bool:
+        """True once per token, and never after it expires."""
+        import time
+        if not token:
+            return False
+        with self._lock:
+            expires = self._issued.pop(token, None)
+        return expires is not None and expires > time.monotonic()
+
+
 # --- the stores that hand out a token from a signed-in page ------------------
 #
 # No OAuth here on purpose. Each of these issues a credential from a page
@@ -138,11 +185,38 @@ TOKEN_SOURCES = {
     },
     "gog": {
         "label": "GOG",
-        "open": "https://auth.gog.com/auth?client_id=46899977096215655"
-                "&redirect_uri=https%3A%2F%2Fembed.gog.com%2Fon_login_success"
-                "%3Forigin%3Dclient&response_type=code&layout=client2",
+        "open": "https://www.gog.com/account",
         "field": "gog_username",
-        "how": "GOG's own login. Easier: if your profile is public, just "
-               "paste your GOG username -- no login needed at all.",
+        "how": "Paste your GOG username (the name in your profile URL). No "
+               "login or token needed -- set your profile's games list to "
+               "public and that is the whole credential.",
+    },
+    "epic": {
+        "label": "Epic Games",
+        "open": "https://www.epicgames.com/id/api/redirect"
+                "?clientId=34a02cf8f4414e29b15921876da36f9a&responseType=code",
+        "field": "epic_code",
+        "how": 'Signed in to Epic, that page shows {"authorizationCode":"..."}. '
+               "Copy the code. It is single-use and expires in minutes, so "
+               "paste it straight away -- ROMarr swaps it for a refresh "
+               "token and never needs one again.",
+    },
+    "ea": {
+        "label": "EA",
+        "open": "https://accounts.ea.com/connect/auth?client_id=ORIGIN_JS_SDK"
+                "&response_type=token&redirect_uri=nucleus%3Arest"
+                "&prompt=none&release_type=prod",
+        "field": "ea_token",
+        "how": 'Signed in to EA, that page shows {"access_token":"..."}. '
+               "Copy the token. EA issues no application keys, so this is "
+               "the same credential Playnite uses.",
+    },
+    "battlenet": {
+        "label": "Battle.net",
+        "open": "https://account.blizzard.com/api/games-and-subs",
+        "field": "battlenet_json",
+        "how": "Signed in to Blizzard, that page is a plain JSON list of "
+               "your games. Copy the whole document and paste it -- it is "
+               "data, not a credential, so nothing secret is stored.",
     },
 }

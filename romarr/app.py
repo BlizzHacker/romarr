@@ -82,7 +82,9 @@ from .lists import LIST_TYPES
 
 #: List-source fields that are credentials: masked on the way out, kept on
 #: edit when the form returns the placeholder.
-LIST_SECRETS = ("api_key", "openxbl_key", "npsso", "itchio_key")
+LIST_SECRETS = ("api_key", "openxbl_key", "npsso", "itchio_key",
+                "epic_code", "epic_refresh", "ea_token",
+                "battlenet_cookie")
 from .scheduler import Scheduler, next_search_due
 from .selection import best_release, judge, score
 from .store import Event, Store
@@ -470,6 +472,12 @@ class ROMarr:
         # The live log: a ring buffer behind the Logs page. Attached to the
         # root logger so every module's lines land in it, exactly as they go
         # to stdout -- the page is a tail, not a second logging system.
+        # One-shot tokens for the Steam OpenID return leg. The session
+        # cookie is SameSite=Strict, so Steam's cross-site redirect back
+        # arrives without it; this is the credential that replaces it.
+        from .connect import StateStore
+        self.connect_states = StateStore()
+
         self.logring = LogRing()
         logging.getLogger().addHandler(self.logring.handler())
 
@@ -2251,6 +2259,12 @@ class ROMarr:
                             err.__class__.__name__)
                 failed_lists += 1
                 continue
+            # Epic swaps its single-use code for a refresh token during the
+            # fetch; persisting that is what makes the next sync silent.
+            if cfg.get("epic_refresh") and not cfg.get("_epic_saved"):
+                cfg["epic_code"] = ""
+                cfg["_epic_saved"] = True
+                self.store.put_item("import_lists", cfg)
             ledger = set(cfg.get("added") or [])
             changed = False
             for entry in entries:
@@ -2471,8 +2485,13 @@ def make_handler(service: ROMarr):
         # first-run claim, so both have to answer somebody with no credential
         # -- that is the entire point of them. `/setup` guards itself: it
         # refuses once the install is claimed.
+        #: Reachable without the session cookie. The Steam return is here
+        #: because it CANNOT carry one: it arrives as a cross-site redirect
+        #: from Steam and the cookie is SameSite=Strict. Its single-use,
+        #: short-lived `state` -- minted by an authenticated request -- is
+        #: what authorises it instead.
         OPEN_PATHS = ("/", "/login", "/api/health", "/api/v1/login",
-                      "/api/v1/setup")
+                      "/api/v1/setup", "/api/v1/connect/steam/return")
 
         def _send_session(self, token: str, payload: dict):
             """Answer with a session cookie set.
@@ -2796,11 +2815,13 @@ def make_handler(service: ROMarr):
                     or self.headers.get("Host") or "localhost"
                 scheme = self.headers.get("X-Forwarded-Proto") or "http"
                 base = f"{scheme}://{host}"
+                state = service.connect_states.issue()
                 self.send_response(303)
                 self.send_header(
                     "Location",
-                    steam_login_url(f"{base}/api/v1/connect/steam/return",
-                                    realm=base))
+                    steam_login_url(
+                        f"{base}/api/v1/connect/steam/return?state={state}",
+                        realm=base))
                 self.send_header("Content-Length", "0")
                 self.end_headers()
                 return None
@@ -2809,6 +2830,13 @@ def make_handler(service: ROMarr):
                 # asserted with Steam itself before believing any of it.
                 from .connect import steam_verify
 
+                if not service.connect_states.spend(
+                        (query.get("state") or [""])[0]):
+                    body = ("<h2>That sign-in link has expired</h2>"
+                            "<p>Start again from Lists. "
+                            "<a href='/#lists'>Back</a></p>")
+                    return self._send(400, body.encode(),
+                                      "text/html; charset=utf-8")
                 steam_id = steam_verify(query)
                 if not steam_id:
                     body = ("<h2>Steam sign-in could not be verified</h2>"
@@ -2930,8 +2958,9 @@ def make_handler(service: ROMarr):
             if route.path == "/api/v1/importlist":
                 cfg = {k: body.get(k, "") for k in
                        ("id", "name", "type", "platform", "content", "url",
-                        "steam_id", "api_key", "source", "gog_username",
-                        "openxbl_key", "npsso", "itchio_key")}
+                        "steam_id", "profile", "api_key", "source",
+                        "gog_username", "openxbl_key", "npsso", "itchio_key",
+                        "epic_code", "ea_token", "battlenet_json")}
                 cfg["enable"] = bool(body.get("enable", True))
                 cfg["type"] = str(cfg["type"] or "paste").lower()
                 if cfg["type"] not in LIST_TYPES:
@@ -2966,8 +2995,10 @@ def make_handler(service: ROMarr):
                 from .lists import fetch_entries as _fetch_entries
                 preview_cfg = {k: body.get(k) or ""
                                for k in ("type", "content", "url", "steam_id",
-                                         "api_key", "source", "gog_username",
-                                         "openxbl_key", "npsso", "itchio_key")}
+                                         "profile", "api_key", "source",
+                                         "gog_username", "openxbl_key",
+                                         "npsso", "itchio_key", "epic_code",
+                                         "ea_token", "battlenet_json")}
                 preview_cfg["type"] = preview_cfg["type"] or "paste"
                 if body.get("id"):
                     stored = service.store.get_item("import_lists",

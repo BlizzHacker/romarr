@@ -673,21 +673,26 @@ RENDER.lists=async()=>{
         <a class="btn" href="/api/v1/connect/steam"
            style="text-decoration:none">Sign in through Steam</a>
         <button class="btn ghost" data-token="gog">Connect GOG</button>
+        <button class="btn ghost" data-token="epic">Connect Epic</button>
+        <button class="btn ghost" data-token="ea">Connect EA</button>
+        <button class="btn ghost" data-token="battlenet">Connect Battle.net</button>
         <button class="btn ghost" data-token="psn">Connect PlayStation</button>
         <button class="btn ghost" data-token="xbox">Connect Xbox</button>
         <button class="btn ghost" data-token="itchio">Connect itch.io</button>
       </div>
       <p class="help"><b>Steam</b> is a true one-click: Steam's own
         "Sign in through Steam", no key, no app registration &mdash; it comes
-        straight back with your library connected. The rest open the page
-        that issues your token, where you are already signed in, and take
-        the paste.</p>
+        straight back with your library connected. <b>Epic, EA and
+        Battle.net</b> pull your <i>owned</i> library through the same web
+        APIs Playnite uses &mdash; none of them issues an application key,
+        so each opens the page your signed-in browser already has and takes
+        one paste. <b>GOG</b> needs only your public profile name.</p>
       <div id="l-token"></div>
       <h3 style="margin-top:18px">Games installed on your gaming PC</h3>
-      <p class="help">EA, Battle.net and Epic have no usable web API &mdash;
-        but every launcher writes your library to disk when it installs a
-        game, which needs no credential at all. Run this <b>on the PC you
-        play on</b>:</p>
+      <p class="help">A second route, useful alongside the above: every
+        launcher writes what it installed to disk, so this needs no
+        credential of any kind &mdash; and it catches anything a store's
+        API misses. Run it <b>on the PC you play on</b>:</p>
       <pre style="font:12px/1.6 ui-monospace,Menlo,monospace;color:var(--dim);
         background:var(--bg);border:1px solid var(--line);border-radius:6px;
         padding:10px;white-space:pre-wrap">python scripts/connect_launchers.py --url ${location.origin} --key &lt;your API key&gt;</pre>

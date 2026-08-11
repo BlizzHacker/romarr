@@ -34,7 +34,8 @@ def test_the_documented_open_paths_are_the_actual_open_paths(doc, tmp_path):
     handler = make_handler(ROMarr({"ROMARR_DATA": str(tmp_path / "s.json")}))
     actual = set(handler.OPEN_PATHS)
     assert actual == {"/", "/login", "/api/health", "/api/v1/login",
-                      "/api/v1/setup"}, (
+                      "/api/v1/setup",
+                      "/api/v1/connect/steam/return"}, (
         "the set of unauthenticated routes changed; SECURITY.md lists them")
     for path in actual:
         assert path in doc, f"{path} answers without a credential and is undocumented"

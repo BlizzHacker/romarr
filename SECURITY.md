@@ -82,9 +82,28 @@ Exactly five routes answer without a credential, and no others:
 | `/api/v1/login` | Exchanges a password or key for a session. |
 | `/api/v1/setup` | First-run claim. Open only while unclaimed; `409` after. |
 | `/api/health` | Container health checks have no credential to offer. |
+| `/api/v1/connect/steam/return` | Steam's OpenID redirect. It *cannot* carry the session cookie — see below. |
 
 `/api/health` returns one bit unauthenticated — it used to return library paths
 and client URLs, which is what a health check does not need.
+
+**The Steam return is open because it has to be, and carries its own
+credential instead.** The session cookie is `SameSite=Strict`, so when Steam
+redirects the browser back to ROMarr the browser deliberately withholds it and
+the request arrives with nothing. Loosening the cookie to `Lax` would fix that
+one flow by weakening every other route against cross-site requests, so it is
+not done. Instead the start of the flow — `/api/v1/connect/steam`, which *is*
+authenticated — mints a `state`: 24 bytes of `secrets.token_urlsafe`, single
+use, expiring in ten minutes. The return leg is refused without a live one, so
+possession of it stands in for the cookie, and it can only have come from a
+signed-in session.
+
+Two further checks apply before anything is connected: the identity Steam
+asserts must match `https://steamcommunity.com/openid/id/<17 digits>` exactly,
+and the whole assertion is posted back to Steam with `check_authentication` and
+must come back `is_valid:true`. The parameters arrive through the user's
+browser and are treated as attacker-controlled until Steam itself confirms
+them.
 
 ### `ROMARR_AUTH=disabled`
 

@@ -162,15 +162,14 @@ def test_accounts_without_credentials_are_empty_not_errors():
         assert fetch_entries({"type": kind, field: ""}) == []
 
 
-def test_the_no_api_list_names_the_route_it_does_have():
-    """This list used to say EA/Battle.net/Epic simply could not be
-    connected. Playnite and LaunchBox were the standing counter-example --
-    the launcher writes your library to disk -- so every entry now names
-    the way in, and only Nintendo is genuinely paste-only."""
-    keys = " | ".join(NO_API_STORES)
-    for store in ("EA", "Battle.net", "Epic", "Nintendo"):
-        assert store in keys, store
-    for store, why in NO_API_STORES.items():
-        assert why, "every entry carries its reason"
-        if "Nintendo" not in store:
-            assert "connector" in why or "connect_launchers" in why,                 f"{store} must name the launcher connector as its route in"
+def test_only_nintendo_is_left_with_nothing_to_connect_to():
+    """This list once held EA, Battle.net and Epic, on the claim that they
+    had no usable web API. Playnite and LaunchBox pulled owned libraries
+    from all three for years, so the claim was simply false -- each is now
+    a real connector, and Nintendo is the only honest entry left."""
+    assert set(NO_API_STORES) == {"Nintendo"}
+    assert NO_API_STORES["Nintendo"]
+
+    from romarr.lists import LIST_TYPES
+    for store in ("epic", "ea", "battlenet"):
+        assert store in LIST_TYPES, f"{store} must be a real connector now"

@@ -120,7 +120,201 @@ def fetch_entries(cfg: dict, *, session=None) -> list[ListEntry]:
         return _psn_entries(cfg, session=session)
     if kind == "itchio":
         return _itchio_entries(cfg, session=session)
+    if kind == "epic":
+        return _epic_entries(cfg, session=session)
+    if kind == "ea":
+        return _ea_entries(cfg, session=session)
+    if kind == "battlenet":
+        return _battlenet_entries(cfg, session=session)
     raise ValueError(f"unknown list type {kind!r}")
+
+
+# --- Epic, EA, Battle.net ----------------------------------------------------
+#
+# ROMarr's README used to say these three "have no usable web API". That was
+# wrong, and Playnite and LaunchBox were the standing counter-example: they
+# have pulled *owned* libraries -- not just installed games -- from all
+# three for years. Each does have a web API; what none of them has is an
+# API key you can request. They authenticate with the session you already
+# have in your browser, which is why the shape here is "open the page you
+# are signed in to, copy what it shows you".
+#
+# So the credential ROMarr stores is the same one Playnite stores, obtained
+# the same way, and every one of these is a real remote library sync rather
+# than a local file scan.
+
+#: Epic's launcher OAuth client. Public and unchanged for years -- it is
+#: what Legendary, Heroic and Playnite all authenticate as, because Epic
+#: issues no per-application credentials for this.
+EPIC_CLIENT = "34a02cf8f4414e29b15921876da36f9a"
+EPIC_SECRET = "daafbccc737745039dffe53d94fc76cf"
+EPIC_TOKEN = ("https://account-public-service-prod03.ol.epicgames.com"
+              "/account/api/oauth/token")
+EPIC_LIBRARY = ("https://library-service.live.use1a.on.epicgames.com"
+                "/library/api/public/items")
+#: Where a signed-in browser is sent to mint an authorization code.
+EPIC_CODE_PAGE = ("https://www.epicgames.com/id/api/redirect"
+                  f"?clientId={EPIC_CLIENT}&responseType=code")
+
+
+def _epic_token(cfg: dict, http) -> tuple[str, str]:
+    """An access token, from a stored refresh token or a fresh auth code.
+
+    Epic's authorization code is single-use and dies in minutes, so it is
+    exchanged once and the refresh token that comes back is what persists.
+    The caller writes the new refresh token back, which is why this returns
+    both.
+    """
+    import base64
+
+    auth = base64.b64encode(f"{EPIC_CLIENT}:{EPIC_SECRET}".encode()).decode()
+    headers = {"Authorization": f"basic {auth}",
+               "Content-Type": "application/x-www-form-urlencoded"}
+    refresh = str(cfg.get("epic_refresh") or "").strip()
+    code = str(cfg.get("epic_code") or "").strip()
+    if refresh:
+        data = {"grant_type": "refresh_token", "refresh_token": refresh}
+    elif code:
+        data = {"grant_type": "authorization_code", "code": code}
+    else:
+        return "", ""
+    response = http.post(EPIC_TOKEN, data=data, headers=headers, timeout=30)
+    if getattr(response, "status_code", 200) >= 400:
+        raise ValueError(
+            "Epic refused that code. It is single-use and expires in "
+            "minutes -- open the code page again and paste a fresh one.")
+    body = response.json() or {}
+    return (str(body.get("access_token") or ""),
+            str(body.get("refresh_token") or ""))
+
+
+def _epic_entries(cfg: dict, *, session=None) -> list[ListEntry]:
+    import requests
+    http = session or requests
+    access, refresh = _epic_token(cfg, http)
+    if not access:
+        return []
+    # Handed back so the caller can persist it: the next sync uses the
+    # refresh token and never asks for a code again.
+    cfg["epic_refresh"] = refresh or cfg.get("epic_refresh", "")
+
+    out: list[ListEntry] = []
+    cursor, pages = "", 0
+    while pages < 20:
+        params = {"includeMetadata": "true"}
+        if cursor:
+            params["cursor"] = cursor
+        response = http.get(EPIC_LIBRARY, params=params,
+                            headers={"Authorization": f"bearer {access}"},
+                            timeout=30)
+        response.raise_for_status()
+        body = response.json() or {}
+        for record in body.get("records") or []:
+            name = str(record.get("sandboxName")
+                       or (record.get("metadata") or {}).get("title")
+                       or "").strip()
+            if name:
+                out.append(ListEntry(game=name))
+        cursor = str((body.get("responseMetadata") or {}).get("nextCursor") or "")
+        pages += 1
+        if not cursor:
+            break
+    return out
+
+
+#: EA's own JS SDK client, the one accounts.ea.com issues browser tokens to.
+EA_AUTH_PAGE = ("https://accounts.ea.com/connect/auth?client_id=ORIGIN_JS_SDK"
+                "&response_type=token&redirect_uri=nucleus%3Arest"
+                "&prompt=none&release_type=prod")
+EA_IDENTITY = "https://gateway.ea.com/proxy/identity/pids/me"
+EA_ENTITLEMENTS = ("https://api1.origin.com/ecommerce2/"
+                   "consolidatedentitlements/{pid}?machine_hash=1")
+
+
+def _ea_entries(cfg: dict, *, session=None) -> list[ListEntry]:
+    """Owned EA titles, via the same entitlements API Playnite uses.
+
+    The access token comes from EA's own auth endpoint in a signed-in
+    browser -- EA issues no application keys, so this is the only
+    credential that exists for it.
+    """
+    import requests
+    http = session or requests
+    token = str(cfg.get("ea_token") or "").strip()
+    if not token:
+        return []
+    headers = {"Authorization": f"Bearer {token}",
+               "Accept": "application/json"}
+    response = http.get(EA_IDENTITY, headers=headers, timeout=30)
+    if getattr(response, "status_code", 200) >= 400:
+        raise ValueError(
+            "EA rejected that token. They are short-lived -- open the EA "
+            "token page again and paste a fresh one.")
+    pid = ((response.json() or {}).get("pid") or {}).get("pidId")
+    if not pid:
+        raise ValueError("EA did not return an account id for that token")
+    response = http.get(EA_ENTITLEMENTS.format(pid=pid), headers=headers,
+                        timeout=30)
+    response.raise_for_status()
+    out = []
+    for entitlement in (response.json() or {}).get("entitlements") or []:
+        name = str(entitlement.get("originDisplayName")
+                   or entitlement.get("productName")
+                   or entitlement.get("offerId") or "").strip()
+        # Base games only: EA lists every DLC and beta as an entitlement.
+        if name and str(entitlement.get("offerType") or "").upper() in (
+                "", "BASE_GAME", "BASEGAME"):
+            out.append(ListEntry(game=name))
+    return out
+
+
+#: What a signed-in browser gets from Blizzard's own account page. It is a
+#: plain JSON document listing the games on the account -- no key, no OAuth,
+#: and the same source Playnite's Battle.net library reads.
+BATTLENET_PAGE = "https://account.blizzard.com/api/games-and-subs"
+
+
+def _battlenet_entries(cfg: dict, *, session=None) -> list[ListEntry]:
+    """Owned Blizzard games.
+
+    Two ways in, because Blizzard's page is JSON a person can simply copy:
+    paste that document, or paste the session cookie and let ROMarr fetch
+    it on every sync.
+    """
+    import json as _json
+    import requests
+
+    pasted = str(cfg.get("battlenet_json") or "").strip()
+    if pasted:
+        try:
+            body = _json.loads(pasted)
+        except ValueError:
+            raise ValueError(
+                "That is not the JSON from account.blizzard.com/api/"
+                "games-and-subs -- copy the whole document the page shows.")
+    else:
+        cookie = str(cfg.get("battlenet_cookie") or "").strip()
+        if not cookie:
+            return []
+        http = session or requests
+        response = http.get(BATTLENET_PAGE,
+                            headers={"Cookie": cookie,
+                                     "Accept": "application/json"},
+                            timeout=30)
+        if getattr(response, "status_code", 200) >= 400:
+            raise ValueError("Blizzard rejected that session cookie; sign in "
+                             "again and copy a fresh one.")
+        body = response.json() or {}
+
+    games = body.get("gameAccounts") or body.get("games") or []
+    out = []
+    for game in games:
+        name = str((game.get("localizedGameName")
+                    or game.get("gameName")
+                    or game.get("name") or "")).strip()
+        if name:
+            out.append(ListEntry(game=name))
+    return out
 
 
 # --- Steam ------------------------------------------------------------------
@@ -447,29 +641,36 @@ LIST_TYPES = {
                 "itch.io/user/settings/api-keys.",
         "fields": ["name", "enable", "platform", "itchio_key"],
     },
+    "epic": {
+        "label": "Epic Games library",
+        "help": "Everything you own on Epic. Open Epic's code page while "
+                "signed in and paste the authorizationCode -- it is "
+                "exchanged once for a refresh token, so later syncs need "
+                "nothing from you.",
+        "fields": ["name", "enable", "platform", "epic_code"],
+    },
+    "ea": {
+        "label": "EA library",
+        "help": "Everything you own on EA, via the entitlements API. Open "
+                "EA's token page while signed in and paste the access_token.",
+        "fields": ["name", "enable", "platform", "ea_token"],
+    },
+    "battlenet": {
+        "label": "Battle.net library",
+        "help": "Your Blizzard games. Open account.blizzard.com's games "
+                "page while signed in and paste the JSON it shows.",
+        "fields": ["name", "enable", "platform", "battlenet_json"],
+    },
 }
 
-#: Stores with no usable *web* API, and how ROMarr connects them anyway.
-#:
-#: This list used to say EA, Battle.net and Epic simply "could not be
-#: connected". That was wrong, and Playnite and LaunchBox were the standing
-#: counter-example: they have managed those libraries for years. The way
-#: they do it is not a private API -- the launcher already wrote your
-#: library to disk when it installed the game, and reading that needs no
-#: credential at all. `romarr.launchers` does the same, and
-#: `scripts/connect_launchers.py` pushes the result here.
+#: The one store with nothing to connect to, and why. This used to list EA,
+#: Battle.net and Epic too, which was wrong: all three have web APIs that
+#: return an owned library -- they authenticate with a browser session
+#: rather than an issued key, which is what Playnite and LaunchBox have
+#: always done and what ROMarr now does.
 NO_API_STORES = {
-    "EA (formerly Origin)": "No public web API — but the EA app writes an "
-                            "installerdata.xml beside every game it installs. "
-                            "Run scripts/connect_launchers.py on your gaming "
-                            "PC and they arrive here. No credential involved.",
-    "Battle.net": "Blizzard's web API exposes game data, not an owned list — "
-                  "but Battle.net records installed products in product.db. "
-                  "The launcher connector reads it.",
-    "Epic Games": "No public library API, and the OAuth workarounds are "
-                  "brittle — but Epic writes a JSON manifest per installed "
-                  "game. The launcher connector reads those.",
-    "Nintendo": "No API, and nothing written to a PC to read either. This is "
-                "the one that is genuinely paste-only — and it is also the "
-                "one where DAT-verified acquisition matters most.",
+    "Nintendo": "No web API, and nothing written to a PC to read either. "
+                "Genuinely paste-only — and the one where DAT-verified "
+                "acquisition matters most anyway.",
 }
+

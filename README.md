@@ -155,20 +155,25 @@ per list means a fulfilled game is never re-downloaded by its own list.
 |---|---|---|
 | **Remote libraries** — list types | Steam, GOG | *nothing but a public profile name* |
 | | Xbox, PlayStation, itch.io | a token you paste once |
-| **Local launchers** — one button | Steam, Epic, GOG Galaxy, **Battle.net**, **EA** | *no credential at all* |
+| | **Epic, EA, Battle.net** | one paste from a page you are already signed in to |
+| **Local launchers** — a script on your gaming PC | everything *installed*, any store | *no credential at all* |
 
-That second row is the interesting one. This README used to claim EA,
-Battle.net and Epic "have no API" and could not be connected — which was
-wrong, and Playnite and LaunchBox were the standing counter-example. They
-read what the launcher already wrote to disk: Steam's `appmanifest_*.acf`,
-Epic's JSON manifests, GOG Galaxy's SQLite database, Battle.net's
-`product.db`, and the `installerdata.xml` EA drops beside every install.
-ROMarr does the same — **Scan this machine** on the Lists page when ROMarr
-runs on your gaming PC, or `scripts/connect_launchers.py` run there when it
-doesn't. No OAuth, no scraped cookies, no store credential anywhere.
+An earlier version of this README claimed EA, Battle.net and Epic "have no
+API" and could not be connected. **That was wrong**, and Playnite and
+LaunchBox were the standing counter-example — they have pulled *owned*
+libraries from all three for years. Each does have a web API; what none of
+them has is an application key you can request, so they authenticate with
+the browser session you already have. ROMarr now uses exactly the same
+routes Playnite does: Epic's launcher OAuth, EA's entitlements API, and
+Blizzard's own account games list. One click opens the page, one paste
+connects it, and Epic's is a one-time code traded for a refresh token so
+later syncs are silent.
 
-Nintendo is the one honest exception: no API, and nothing written to a PC
-to read. It says so on the page.
+The local scan is a complement, not a substitute: it catches everything
+*installed* regardless of store, and needs no credential at all.
+
+Nintendo is the one honest exception: no web API, and nothing written to a
+PC to read. It says so on the page.
 
 ### Collections: whole sets and 1G1R
 
