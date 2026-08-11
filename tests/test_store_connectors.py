@@ -77,16 +77,23 @@ def test_epic_without_anything_is_empty():
 # -- EA ----------------------------------------------------------------------
 
 class FakeEa:
+    """EA's two dialects: tokeninfo takes the token as a query param, and
+    the Origin-era entitlements API wants an `authtoken` header with
+    Origin's own Accept string -- a Bearer there is a 401 on a perfectly
+    good token, which a live run proved."""
+
     def __init__(self, identity_status=200):
         self.identity_status = identity_status
 
-    def get(self, url, headers=None, timeout=None):
-        assert headers["Authorization"] == "Bearer TOKEN"
-        if "identity/pids/me" in url:
+    def get(self, url, headers=None, params=None, timeout=None):
+        if "connect/tokeninfo" in url:
+            assert params["access_token"] == "TOKEN"
             if self.identity_status >= 400:
                 return R(status=self.identity_status)
-            return R({"pid": {"pidId": "9001"}})
+            return R({"pid_id": "9001"})
         assert "consolidatedentitlements/9001" in url
+        assert headers["authtoken"] == "TOKEN"
+        assert "vnd.origin.v3+json" in headers["Accept"]
         return R({"entitlements": [
             {"originDisplayName": "Dead Space", "offerType": "BASE_GAME"},
             {"originDisplayName": "Dead Space DLC", "offerType": "EXPANSION"},

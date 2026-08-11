@@ -560,12 +560,27 @@ class ROMarr:
                     log.warning("library count refresh failed for %s: %s",
                                 label, err.__class__.__name__)
                 try:
-                    games = backend.games(limit=self.LIBRARY_PAGE,
-                                          timeout=backend.BACKGROUND_TIMEOUT)
-                    # Tag the source only when there is more than one library,
-                    # so a single-library install shows no redundant badge.
-                    shelf.extend(replace(g, source=label) if multiple else g
-                                 for g in games)
+                    # The WHOLE library, in pages, published progressively.
+                    # This used to stop at one 200-row page, which made a
+                    # 166,578-game install render as "about the first 100" --
+                    # the grid was honest about exactly the slice it had and
+                    # useless about the rest. Progressive publishing means
+                    # the page improves while the fetch runs instead of
+                    # showing a spinner for the minutes a big RomM takes.
+                    offset = 0
+                    while offset < self.LIBRARY_MAX:
+                        batch = backend.games(
+                            limit=self.LIBRARY_PAGE, offset=offset,
+                            timeout=backend.BACKGROUND_TIMEOUT)
+                        if not batch:
+                            break
+                        shelf.extend(
+                            replace(g, source=label) if multiple else g
+                            for g in batch)
+                        offset += len(batch)
+                        self._publish_library(shelf, "", partial=True)
+                        if len(batch) < self.LIBRARY_PAGE:
+                            break
                 except Exception as err:
                     ok = False
                     failures.append(f"{label}: {err.__class__.__name__}")
@@ -576,7 +591,8 @@ class ROMarr:
             self._library_reasons = reasons
             if shelf or ok:
                 self._count_cache = (total, time.monotonic())
-                self._library_cache = (shelf, time.monotonic(), "; ".join(failures))
+                self._publish_library(shelf, "; ".join(failures),
+                                      partial=False)
                 log.info("library refreshed: %d games across %d librar%s",
                          len(shelf), len(self.game_libraries),
                          "y" if len(self.game_libraries) == 1 else "ies")
@@ -600,8 +616,13 @@ class ROMarr:
         self._refresh_now.wait(seconds)
         self._refresh_now.clear()
 
-    def library_view(self) -> dict:
-        """The cached library, with enough state for the page to explain itself.
+    def library_view(self, platform: str = "", q: str = "",
+                     offset: int = 0, limit: int = 120) -> dict:
+        """One page of the library, organised the way RomM organises it.
+
+        Platform chips, alphabetical within a platform, server-side search
+        and pagination -- because the whole cache is 166k rows and a grid
+        that renders all of them is a browser tab that dies.
 
         Not named `library`: that attribute is the ROM library Path and has
         been since the first commit, so a method of the same name is shadowed
@@ -616,7 +637,25 @@ class ROMarr:
                     "error": err or "",
                     "libraries": names,
                     "message": f"Reading the library from {where}…"}
-        return {"items": [asdict(g) for g in games], "loading": False,
+
+        rows = games
+        wanted = str(platform or "").strip().lower()
+        if wanted:
+            rows = [g for g in rows if str(g.platform).lower() == wanted]
+        needle = str(q or "").strip().lower()
+        if needle:
+            rows = [g for g in rows if needle in str(g.name).lower()]
+        offset = max(0, int(offset))
+        limit = max(1, min(int(limit or 120), 500))
+        page = rows[offset:offset + limit]
+
+        return {"items": [asdict(g) for g in page],
+                "loading": False,
+                "partial": getattr(self, "_library_partial", False),
+                "total": len(rows),
+                "grand_total": len(games),
+                "offset": offset,
+                "platforms": getattr(self, "_library_platforms", []),
                 "libraries": names,
                 "library": self.game_library.name,
                 "age_seconds": int(time.monotonic() - at) if at else None,
@@ -2001,9 +2040,34 @@ class ROMarr:
 
     # How often the count and library are refreshed in the background.
     COUNT_TTL = 300
-    # How much of the library is held for the grid. Enough to browse; the whole
-    # of a 72,000-row library is neither renderable nor wanted in memory.
-    LIBRARY_PAGE = 200
+    # How many rows each backend request fetches during the background walk.
+    LIBRARY_PAGE = 1000
+    # The ceiling on rows held in memory. A row is a name, a slug and a
+    # cover URL -- ~200 bytes -- so a quarter million is ~50MB, which a
+    # 512MB install carries comfortably. This replaced a 200-row page that
+    # made big libraries render as "about the first 100 games".
+    LIBRARY_MAX = 250_000
+
+    def _publish_library(self, shelf: list, error: str, *,
+                         partial: bool) -> None:
+        """Swap the served library snapshot, sorted the way a shelf reads.
+
+        Platform first, then title, the way RomM and every folder frontend
+        lay a library out. Sorted here once per publish rather than per
+        request, because sorting 166k rows on every page view is a page
+        that saccades.
+        """
+        from collections import Counter
+
+        snapshot = sorted(shelf, key=lambda g: (str(g.platform).lower(),
+                                                str(g.name).lower()))
+        platforms = Counter(str(g.platform) or "unknown" for g in snapshot)
+        self._library_platforms = [
+            {"platform": name, "count": count}
+            for name, count in sorted(platforms.items(),
+                                      key=lambda kv: (-kv[1], kv[0]))]
+        self._library_partial = partial
+        self._library_cache = (snapshot, time.monotonic(), error)
 
     def counts(self) -> dict:
         """Badge numbers for the nav rail.
@@ -2251,8 +2315,12 @@ class ROMarr:
         for cfg in lists:
             if not cfg.get("enable", True):
                 continue
+            from .store import now_iso
             try:
                 entries = fetch_entries(cfg)
+                cfg["last_sync"] = {"at": now_iso(),
+                                    "fetched": len(entries)}
+                self.store.put_item("import_lists", cfg)
             except Exception as err:
                 # Which list failed matters, and so does WHY: "2 list(s)
                 # unreadable" sends somebody hunting through logs for a
@@ -2264,6 +2332,8 @@ class ROMarr:
                 log.warning("import list %r failed: %s", cfg.get("name"), reason)
                 failures.append({"id": cfg.get("id"),
                                  "name": cfg.get("name"), "reason": reason})
+                cfg["last_sync"] = {"at": now_iso(), "error": reason}
+                self.store.put_item("import_lists", cfg)
                 failed_lists += 1
                 continue
             # Epic swaps its single-use code for a refresh token during the
@@ -2646,7 +2716,11 @@ def make_handler(service: ROMarr):
             if route.path == "/api/v1/game":
                 # Served from the background cache. Calling RomM here meant the
                 # page waited behind whatever else was querying that table.
-                return self._json(200, service.library_view())
+                return self._json(200, service.library_view(
+                    platform=(query.get("platform") or [""])[0],
+                    q=(query.get("q") or [""])[0],
+                    offset=int((query.get("offset") or ["0"])[0] or 0),
+                    limit=int((query.get("limit") or ["120"])[0] or 120)))
             if route.path == "/api/v1/wanted/missing":
                 return self._json(200, {"items": service.store.missing()})
             if route.path == "/api/v1/queue":

@@ -280,19 +280,31 @@ def _ea_entries(cfg: dict, *, session=None) -> list[ListEntry]:
     token = str(cfg.get("ea_token") or "").strip()
     if not token:
         return []
-    headers = {"Authorization": f"Bearer {token}",
-               "Accept": "application/json"}
-    response = http.get(EA_IDENTITY, headers=headers, timeout=30)
+    # tokeninfo is the public way from a token to the account id, and the
+    # entitlements API is Origin-era: it wants the token in an `authtoken`
+    # header with Origin's own Accept string, not a Bearer -- sending
+    # Bearer is a 401 on a perfectly good token, which a live run hit.
+    response = http.get("https://accounts.ea.com/connect/tokeninfo",
+                        params={"access_token": token}, timeout=30)
     if getattr(response, "status_code", 200) >= 400:
         raise ValueError(
             "EA rejected that token. They are short-lived -- open the EA "
             "token page again and paste a fresh one.")
-    pid = ((response.json() or {}).get("pid") or {}).get("pidId")
+    pid = (response.json() or {}).get("pid_id")
     if not pid:
-        raise ValueError("EA did not return an account id for that token")
-    response = http.get(EA_ENTITLEMENTS.format(pid=pid), headers=headers,
-                        timeout=30)
-    response.raise_for_status()
+        raise ValueError("EA did not return an account id for that token; "
+                         "paste a fresh one from the EA token page")
+    response = http.get(
+        EA_ENTITLEMENTS.format(pid=pid),
+        headers={"authtoken": token,
+                 "Accept": "application/vnd.origin.v3+json; "
+                           "x-cache/force-write"},
+        timeout=30)
+    if getattr(response, "status_code", 200) >= 400:
+        raise ValueError(
+            f"EA's entitlements API refused the request "
+            f"(HTTP {response.status_code}). The token may have expired -- "
+            "they last a few hours -- paste a fresh one.")
     out = []
     for entitlement in (response.json() or {}).get("entitlements") or []:
         name = str(entitlement.get("originDisplayName")

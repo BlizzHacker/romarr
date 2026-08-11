@@ -433,9 +433,14 @@ RENDER.hub=async()=>{
   render(await load());
 };
 
+let LIB={platform:'',offset:0,limit:120};
 RENDER.library=async()=>{
-  const p=$('#page'); p.innerHTML='<div class="empty">Loading library…</div>';
-  const d=await j('/api/v1/game').catch(()=>({items:[],error:'unreachable'}));
+  const p=$('#page');
+  if(!p.querySelector('#lib-grid')) p.innerHTML='<div class="empty">Loading library…</div>';
+  const q=($('#search').value||'').trim();
+  const d=await j(`/api/v1/game?platform=${encodeURIComponent(LIB.platform)}`
+    +`&q=${encodeURIComponent(q)}&offset=${LIB.offset}&limit=${LIB.limit}`)
+    .catch(()=>({items:[],error:'unreachable'}));
 
   if(d.loading){
     // The first fetch has not landed yet. Say so, rather than showing an
@@ -446,16 +451,26 @@ RENDER.library=async()=>{
     return;
   }
 
-  const q=($('#search').value||'').toLowerCase();
-  const items=(d.items||[]).filter(g=>!q||g.name.toLowerCase().includes(q));
-  const stale=d.error
-    ? `<p class="help" style="color:var(--warn)">RomM last refused this list
-        (${esc(d.error)}); showing the last good copy.</p>` : '';
+  const items=d.items||[];
+  const chips=(d.platforms||[]).map(x=>
+    `<button class="btn ${LIB.platform===x.platform?'':'ghost'}" data-plat="${esc(x.platform)}"
+      style="padding:4px 10px;font-size:12px">${esc(x.platform)}
+      <span style="opacity:.7">${x.count}</span></button>`).join('');
+  const head=`<div class="row" style="flex-wrap:wrap;gap:6px;margin-bottom:10px">
+      <button class="btn ${LIB.platform?'ghost':''}" data-plat=""
+        style="padding:4px 10px;font-size:12px">All
+        <span style="opacity:.7">${d.grand_total}</span></button>${chips}</div>
+    <p class="help" style="margin-bottom:10px">
+      Showing ${d.total?LIB.offset+1:0}–${Math.min(LIB.offset+items.length,d.total)}
+      of ${d.total}${LIB.platform?` on ${esc(LIB.platform)}`:''}${q?` matching “${esc(q)}”`:''}
+      · ${d.grand_total} across ${(d.platforms||[]).length} platforms
+      ${d.partial?' · <b>still loading from the library server…</b>':''}
+      ${d.error?` · <span style="color:var(--warn)">last refresh: ${esc(d.error)}</span>`:''}</p>`;
 
   if(!items.length){
-    p.innerHTML=stale+`<div class="empty">
-      ${q?'No game matches that.':'No games returned by RomM.'}</div>`;
-    return;
+    p.innerHTML=head+`<div class="empty">
+      ${q||LIB.platform?'No game matches that.':'No games returned by the library.'}</div>`;
+    bindLibraryChips(p); return;
   }
   // The shelf: status, rating and notes set by the operator, overlaid on the
   // grid. One fetch for the whole page -- the metadata is tiny.
@@ -471,16 +486,31 @@ RENDER.library=async()=>{
     if(x.rating) bits.push(`<span class="pill">★ ${x.rating}</span>`);
     return bits.length?`<div style="margin-top:2px">${bits.join(' ')}</div>`:'';
   };
-  p.innerHTML=stale+`<div class="grid">${items.map((g,i)=>`<div class="tile"
+  const grid=`<div class="grid" id="lib-grid">${items.map((g,i)=>`<div class="tile"
       data-shelf="${i}" style="cursor:pointer" title="Click to set status, rating, notes">
     <div class="art" style="background-image:url('${esc(g.cover||'')}')"></div>
     <div class="nm">${esc(g.name)}</div>
     <div class="pf">${esc(g.platform||'')}</div>${mark(g)}</div>`).join('')}</div>`;
+  const more=LIB.offset+items.length<d.total
+    ?`<div class="row" style="justify-content:center;margin:16px 0">
+       <button class="btn" id="lib-more">Show more
+         (${d.total-LIB.offset-items.length} left)</button></div>`:'';
+  p.innerHTML=head+grid+more;
+  bindLibraryChips(p);
+  const moreBtn=p.querySelector('#lib-more');
+  if(moreBtn) moreBtn.onclick=()=>{LIB.limit+=240;go('library');};
   document.querySelectorAll('[data-shelf]').forEach(t=>t.onclick=()=>
     shelfEditor(items[Number(t.dataset.shelf)],
       shelf[`${items[Number(t.dataset.shelf)].platform||''}/`
         +`${(items[Number(t.dataset.shelf)].name||'').toLowerCase()}`]||{}));
 };
+
+function bindLibraryChips(p){
+  p.querySelectorAll('[data-plat]').forEach(b=>b.onclick=()=>{
+    LIB.platform=b.dataset.plat; LIB.offset=0; LIB.limit=120;
+    go('library');
+  });
+}
 
 function shelfEditor(g, meta){
   const m=document.createElement('div');
@@ -661,7 +691,10 @@ RENDER.lists=async()=>{
           l.type==='url'?`<div style="color:var(--dim);font-size:11.5px">${esc(l.url||'')}</div>`:''}</td>
         <td>${esc(l.type)}</td><td>${esc(l.platform||'per line')}</td>
         <td>${l.added_count||0}${l.unmatched_count
-          ?` <span class="pill" title="Titles with no ROM platform — modern store games. Open Edit to see them.">${l.unmatched_count} kept aside</span>`:''}</td>
+          ?` <span class="pill" title="Titles with no ROM platform — modern store games. Open Edit to see them.">${l.unmatched_count} kept aside</span>`:''}
+          ${l.last_sync?`<div style="font-size:11px;color:${l.last_sync.error?'var(--warn)':'var(--dim)'}">
+            ${l.last_sync.error?esc(l.last_sync.error.slice(0,90))
+              :`fetched ${l.last_sync.fetched} at ${esc((l.last_sync.at||'').replace('T',' ').slice(0,16))}`}</div>`:''}</td>
         <td><span class="dot ${l.enable!==false?'up':'down'}"></span></td>
         <td style="text-align:right"><div class="rowact">
           <button data-ledit="${i}">Edit</button></div></td></tr>`).join('')}
@@ -2125,8 +2158,14 @@ async function refreshCounts(){
 }
 (async()=>{
   document.querySelectorAll('.nav').forEach(n=>n.onclick=()=>go(n.dataset.page));
+  let searchTimer=null;
   $('#search').oninput=()=>{const p=location.hash.slice(1)||'library';
-    if(p==='library') RENDER.library();};
+    if(p!=='library') return;
+    // Debounced: the search is server-side now, and a request per
+    // keystroke over 166k rows is rude to everyone involved.
+    LIB.offset=0; LIB.limit=120;
+    clearTimeout(searchTimer);
+    searchTimer=setTimeout(()=>RENDER.library(),250);};
   [PLATFORMS,SETTINGS]=await Promise.all([
     j('/api/platforms').catch(()=>[]), j('/api/v1/config').catch(()=>({}))]);
   go(location.hash.slice(1)||'library');

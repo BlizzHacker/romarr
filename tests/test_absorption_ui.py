@@ -66,3 +66,44 @@ def test_frontend_rows_survive_pathless_backend_rows(tmp_path):
     rows = svc.frontend_rows()
     assert "snes" in rows[0]["path"]
     assert rows[0]["path"].endswith("Super Metroid (USA)")
+
+
+def test_the_library_serves_organised_pages_not_the_first_100(tmp_path):
+    """A 166k-game install rendered 'about the first 100 games' because the
+    cache held one 200-row page. The view is platform-grouped, sorted,
+    searchable and paged now."""
+    from romarr.app import ROMarr
+    from romarr.libraries import Game
+    svc = ROMarr(env={"ROMARR_DATA": str(tmp_path / "s.json"),
+                      "LIBRARY_PATH": str(tmp_path)})
+    shelf = [Game(id=str(n), name=f"Game {n:04d}", platform="snes")
+             for n in range(300)]
+    shelf += [Game(id=f"n{n}", name=f"NES Game {n}", platform="nes")
+              for n in range(5)]
+    svc._publish_library(shelf, "", partial=False)
+
+    page = svc.library_view(limit=120)
+    assert page["grand_total"] == 305
+    assert len(page["items"]) == 120
+    # nes sorts before snes, platform first then title.
+    assert page["items"][0]["platform"] == "nes"
+    assert {p["platform"] for p in page["platforms"]} == {"snes", "nes"}
+
+    nes = svc.library_view(platform="nes")
+    assert nes["total"] == 5 and len(nes["items"]) == 5
+
+    found = svc.library_view(q="game 020")
+    assert found["total"] == 10, "server-side search over the whole cache"
+
+    beyond = svc.library_view(offset=290, limit=120)
+    assert len(beyond["items"]) == 15, "pagination reaches past any one page"
+
+
+def test_a_failing_list_records_why_on_the_list_itself(tmp_path):
+    from romarr.app import ROMarr
+    svc = ROMarr(env={"ROMARR_DATA": str(tmp_path / "s.json")})
+    svc.store.put_item("import_lists", {
+        "name": "dead", "type": "psn", "npsso": "EXPIRED"})
+    svc.list_sync()
+    stored = svc.store.list_items("import_lists")[0]
+    assert "ssocookie" in stored["last_sync"]["error"]
