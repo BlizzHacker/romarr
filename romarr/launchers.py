@@ -347,7 +347,11 @@ def ubisoft_games(install_dirs=None) -> list[LocalGame]:
     dirs = install_dirs if install_dirs is not None else _ubisoft_registry_dirs()
     out = []
     for raw in dirs or []:
-        name = Path(str(raw).rstrip("/\\")).name.strip()
+        # Not Path().name: these are Windows paths, and on a Linux server
+        # (ROMarr's normal home) POSIX Path treats the backslashes as part
+        # of one long component. Split both separators by hand.
+        cleaned = str(raw).rstrip("/\\").replace("\\", "/")
+        name = cleaned.rsplit("/", 1)[-1].strip()
         if name:
             out.append(LocalGame(name=name, launcher="ubisoft", path=str(raw)))
     return out
