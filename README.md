@@ -21,6 +21,7 @@ patching ROMarr.
 
 If you run Radarr for films and Sonarr for TV, this is the missing one.
 
+[![CI](https://github.com/BlizzHacker/romarr/actions/workflows/docker.yml/badge.svg)](https://github.com/BlizzHacker/romarr/actions/workflows/docker.yml)
 [![licence MIT](https://img.shields.io/badge/licence-MIT-blue)](LICENSE)
 [![Docker](https://img.shields.io/badge/docker-ghcr.io-2496ed)](https://github.com/BlizzHacker/romarr/pkgs/container/romarr)
 [![platforms](https://img.shields.io/badge/arch-amd64%20%7C%20arm64%20%7C%20armv7-lightgrey)](#docker)
