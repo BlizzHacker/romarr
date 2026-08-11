@@ -65,6 +65,20 @@ not by a user session — the caller is a server, not a browser).
 | `POST /peer/netplay` | **a peer** | Answer a session offer, by hash |
 | `DELETE /peer/{id}` | operator | Revoke, immediately |
 
+The consuming side is not part of the wire protocol — it is whatever your UI
+calls to *use* a relationship. ROMarr's looks like this, and is listed only
+so the shape is clear:
+
+| Endpoint | Purpose |
+|---|---|
+| `GET  /friends/shelf` | Browse a friend's projection, filtered locally |
+| `POST /friends/want` | Add a title you saw there to your OWN wanted list |
+| `POST /friends/netplay` | Offer a friend a game, carrying your SHA1 |
+
+Fetch a friend's shelf once and filter it on your side. Proxying every
+keystroke to somebody else's server makes your UI responsiveness their
+hosting cost.
+
 ### The handshake
 
 ```
@@ -152,6 +166,41 @@ Four answers, one of which starts a session:
 
 Any project holding a hash for its files can implement this. A library that
 verifies against No-Intro/Redump already has it.
+
+### The part that is easy to get wrong
+
+**An implementation needs a hash it can look up by game.** This is worth
+stating because the reference implementation got it wrong first: offers were
+built from the library server's game object, which carries a title, a
+platform and a cover — and no hash. Every offer went out with `sha1: ""`,
+and the far side answered `missing` every time. Nothing errored. The
+handshake completed, both servers agreed, and the agreement was empty.
+
+If your library model has no hash field, netplay cannot be built on it, and
+the failure is silent rather than loud. ROMarr now keeps a separate index of
+`sha1 -> (title, platform, verified)`, populated by DAT verification, and
+answers from that.
+
+Two lookups are needed, not one: `by_sha1` to answer an offer, and
+`for_game` to *build* one. The second needs title normalisation, because the
+name on disk and the name in a metadata server disagree about punctuation and
+region tags far more often than they agree.
+
+## Two requirements that are not endpoints
+
+**Relationships must be persisted, tokens included.** Obvious once stated,
+and the reference implementation shipped without it: peers lived in a
+dictionary, so a restart dropped every friend, token and sharing policy. The
+Friends page came back empty and a returning peer authenticated as nobody,
+with nothing in the log to say why. Invitations are the exception — they
+should *not* survive a restart, since they expire in 24 hours anyway and
+persisting them only widens the window a leaked one is useful for.
+
+**A peer token is a credential.** It has to be excluded from whatever
+endpoint feeds your settings UI, by name. Do not rely on a naming convention
+to do it: ROMarr stores several `_`-prefixed keys it deliberately *does*
+show, so a "hide anything underscored" rule would have hidden the wrong half
+and shown the tokens.
 
 ## Reference implementation
 

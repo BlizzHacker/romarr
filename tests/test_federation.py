@@ -171,3 +171,46 @@ def test_status_never_includes_a_token():
 def test_the_vocabularies_are_what_the_design_says():
     assert SCOPES == ("none", "platforms", "verified", "all")
     assert ACCESS == ("catalogue", "stream", "fetch")
+
+
+# -- surviving a restart ----------------------------------------------------
+#
+# Peers lived only in memory, so every friend and sharing policy vanished on
+# restart. The Friends page came back empty and a peer that called in was an
+# unknown peer -- silently, with nothing in the log to explain it.
+
+
+def test_relationships_survive_a_restart():
+    alice, _bob, peer, _invite = pair()
+    peer_id = peer.peer_id
+    alice.confirm(peer_id)
+    alice.peers[peer_id].scope = "verified"
+    alice.peers[peer_id].platforms = ("snes", "n64")
+    alice.peers[peer_id].access = "stream"
+
+    restarted = Federation("Alice", "https://alice.example")
+    assert restarted.restore(alice.dump()) == 1
+
+    peer = restarted.peers[peer_id]
+    assert peer.scope == "verified"
+    assert peer.platforms == ("snes", "n64"), "tuples survive JSON's lists"
+    assert peer.access == "stream"
+    assert peer.confirmed is True
+    # And the credential still works, which is the point of persisting it.
+    assert restarted.authenticate(peer_id, peer.token) is not None
+
+
+def test_a_restart_does_not_resurrect_an_invitation():
+    alice = Federation("Alice", "https://alice.example")
+    alice.invite()
+    restarted = Federation("Alice", "https://alice.example")
+    restarted.restore(alice.dump())
+    assert restarted._invites == {}, \
+        "an unredeemed invite must not outlive the process that minted it"
+
+
+def test_restore_skips_junk_rather_than_refusing_to_start():
+    fed = Federation("Alice")
+    assert fed.restore([{}, {"peer_id": ""}, "not a dict", None]) == 0
+    assert fed.restore([{"peer_id": "x", "name": "y", "nonsense": 1}]) == 1, \
+        "an unknown field from a newer version must not lose the peer"

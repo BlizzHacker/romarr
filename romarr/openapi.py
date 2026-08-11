@@ -125,6 +125,17 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "/api/v1/peer/netplay": ("POST", "Peer-facing: answer a session offer by "
                                      "matching its DAT hash against this "
                                      "library."),
+    "/api/v1/hashes": ("GET", "How many dumps netplay can prove, by "
+                              "platform. Populated by audits and imports."),
+    "/api/v1/friends/shelf": ("GET", "Browse what a friend shares with you. "
+                                     "Filtered here, fetched from them at "
+                                     "most once every two minutes."),
+    "/api/v1/friends/want": ("POST", "Add a title seen on a friend's shelf to "
+                                     "your own Wanted list; your indexers "
+                                     "acquire it, not your friend."),
+    "/api/v1/friends/netplay": ("POST", "Offer a friend a game to play, "
+                                        "carrying the SHA1 of your dump so "
+                                        "both sides agree on the bytes."),
     "/api/v1/ecosystem": ("GET", "The projects ROMarr stands on: library "
                                  "servers, players, indexers, DAT databases "
                                  "-- repo, site and install command for each."),

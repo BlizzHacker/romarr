@@ -478,13 +478,35 @@ class ROMarr:
         from .connect import StateStore
         self.connect_states = StateStore()
 
-        # Peering. Step one of the federation design: the trust model and
-        # the catalogue projection exist and are proven; the HTTP surface
-        # that lets two servers talk over them is the next step.
+        # Peering: the trust model, the catalogue projection, and the HTTP
+        # surface two servers talk over.
         from .federation import Federation
         self.federation = Federation(
             name=e.get("ROMARR_PEER_NAME", "ROMarr"),
-            url=e.get("ROMARR_PUBLIC_URL", ""))
+            url=e.get("ROMARR_PUBLIC_URL",
+                      self.store.settings.get("public_url", "")))
+        # Under a leading underscore: peer tokens are credentials, and that
+        # prefix is what keeps them structurally outside safe_settings rather
+        # than relying on a list somebody has to remember to update.
+        restored = self.federation.restore(
+            self.store.settings.get("_peers") or [])
+        if restored:
+            log.info("restored %d peer relationship(s)", restored)
+
+        # What netplay is judged on. Kept beside the data file rather than
+        # inside it: the index is one entry per ROM, and romarr.json is
+        # rewritten on every recorded event.
+        from .hashes import HashIndex
+        self.hashes = HashIndex(
+            Path(e.get("ROMARR_DATA", "/opt/romarr/romarr.json"))
+            .with_name("romarr-hashes.json"))
+        self.hashes.load()
+        if len(self.hashes):
+            log.info("hash index: %d dump(s) known to netplay", len(self.hashes))
+
+        #: peer_id -> (rows, fetched_at). A friend's shelf, so browsing and
+        #: filtering it does not bill their server per keystroke.
+        self._friend_shelves: dict[str, tuple[list, float]] = {}
 
         self.logring = LogRing()
         logging.getLogger().addHandler(self.logring.handler())
@@ -990,7 +1012,11 @@ class ROMarr:
         # than by a leading-underscore rule, because the other underscore keys
         # (`_prowlarr_url`, `_romm_url`, `_stream_url`) are deliberately shown
         # -- a rule would have hidden the wrong half of them.
-        for secret in ("_api_key", "_password_hash"):
+        # `_peers` carries one bearer token per relationship. It is removed
+        # here by name for the same reason as the two above: the underscore
+        # is a naming convention, not a boundary, and `_romm_url` proves the
+        # convention is not a reliable one to filter on.
+        for secret in ("_api_key", "_password_hash", "_peers"):
             out.pop(secret, None)
         return out
 
@@ -1809,6 +1835,8 @@ class ROMarr:
                 continue
 
             forced = force and status == BAD_DUMP
+            self._index_hash(verdict, platform.slug, source.stem,
+                             outcome.destination)
             self.store.record(Event(
                 kind="imported", game=source.stem, platform=platform.slug,
                 release=source.name, library=label,
@@ -2340,6 +2368,200 @@ class ROMarr:
                              "request downloads"}
         return self.request(title, platform)
 
+    # ------------------------------------------------- the outbound half --
+    #
+    # Everything above answers a peer. Everything below CALLS one. The two
+    # halves use the same credential in opposite directions: the invitation
+    # secret is stored as `token` on both sides, so no second exchange is
+    # needed to talk back.
+
+    def _index_hash(self, verdict, platform: str, fallback: str,
+                    destination=None) -> None:
+        """Record an imported file's hash, if verification produced one.
+
+        Import is where new ROMs arrive, so without this the index only ever
+        reflects the last audit and netplay would go stale the moment the
+        acquisition pipeline did its job.
+        """
+        rom = getattr(verdict, "rom", None)
+        sha1 = str(getattr(rom, "sha1", "") or "")
+        if not sha1:
+            return
+        from .dat import VERIFIED
+        self.hashes.add(sha1, getattr(verdict, "game", "") or fallback,
+                        platform, getattr(verdict, "status", "") == VERIFIED,
+                        str(destination or ""))
+        self.hashes.save()
+
+    def save_peers(self) -> None:
+        """Persist relationships. Called after every change to one."""
+        self.store.settings["_peers"] = self.federation.dump()
+        self.store.save()
+
+    def _friend(self, peer_id: str):
+        """The peer I am about to call, or a reason I cannot."""
+        peer = self.federation.peers.get(str(peer_id or ""))
+        if peer is None:
+            return None, "no such friend"
+        if not peer.confirmed:
+            return None, ("this friend is not confirmed yet -- confirm them "
+                          "before asking their server for anything")
+        if not peer.url:
+            return None, ("this friend's invitation carried no address, so "
+                          "there is nowhere to call. Ask them to set their "
+                          "public URL and send a fresh invitation.")
+        return peer, ""
+
+    def _call_friend(self, peer, method: str, path: str, payload=None,
+                     timeout: int = 20):
+        """One request to a friend's server, as a server rather than a user."""
+        import requests as _rq
+        url = peer.url.rstrip("/") + path
+        try:
+            response = _rq.request(method, url, headers=peer.headers(),
+                                   json=payload, timeout=timeout)
+        except _rq.RequestException as err:
+            return None, f"could not reach {peer.name}: {err}"
+        if response.status_code == 401:
+            return None, (f"{peer.name} refused the credential -- they may "
+                          f"have removed you, or not confirmed you yet")
+        if not response.ok:
+            return None, f"{peer.name} answered HTTP {response.status_code}"
+        try:
+            return response.json(), ""
+        except ValueError:
+            return None, f"{peer.name} sent something that was not JSON"
+
+    #: A friend's shelf is refetched at most this often. Their library does
+    #: not change per keystroke, and filtering happens here.
+    FRIEND_SHELF_TTL = 120.0
+
+    def friend_shelf(self, peer_id: str, *, q: str = "", platform: str = "",
+                     offset: int = 0, limit: int = 200,
+                     refresh: bool = False) -> dict:
+        """Browse what a friend shares with me.
+
+        Fetched once and filtered locally: the projection is capped at 5,000
+        rows and asking their server again for every keystroke would make
+        somebody else's install pay for my typing.
+        """
+        peer, why = self._friend(peer_id)
+        if peer is None:
+            return {"ok": False, "error": why, "items": [], "total": 0}
+
+        cached = self._friend_shelves.get(peer.peer_id)
+        if refresh or cached is None or \
+                (time.monotonic() - cached[1]) > self.FRIEND_SHELF_TTL:
+            body, err = self._call_friend(peer, "GET", "/api/v1/peer/shelf")
+            if body is None:
+                if cached is None:
+                    return {"ok": False, "error": err, "items": [], "total": 0}
+                # Serve what we last saw rather than blanking the page.
+                rows, at = cached
+                return {**self._slice_shelf(rows, q, platform, offset, limit),
+                        "ok": True, "stale": True, "error": err,
+                        "friend": peer.name}
+            rows = [r for r in (body.get("items") or []) if isinstance(r, dict)]
+            self._friend_shelves[peer.peer_id] = (rows, time.monotonic())
+        rows = self._friend_shelves[peer.peer_id][0]
+        return {**self._slice_shelf(rows, q, platform, offset, limit),
+                "ok": True, "friend": peer.name, "access": peer.access}
+
+    @staticmethod
+    def _slice_shelf(rows, q: str, platform: str, offset: int,
+                     limit: int) -> dict:
+        needle = str(q or "").strip().lower()
+        slug = str(platform or "").strip().lower()
+        matched = [r for r in rows
+                   if (not needle or needle in str(r.get("title", "")).lower())
+                   and (not slug or str(r.get("platform", "")).lower() == slug)]
+        platforms = sorted({str(r.get("platform", "")) for r in rows if
+                            r.get("platform")})
+        offset = max(0, int(offset or 0))
+        limit = max(1, min(int(limit or 200), 1000))
+        return {"items": matched[offset:offset + limit],
+                "total": len(matched), "shelf_total": len(rows),
+                "offset": offset, "limit": limit, "platforms": platforms}
+
+    def friend_want(self, peer_id: str, title: str, platform: str) -> dict:
+        """Add something off a friend's shelf to MY wanted list.
+
+        This is what `catalogue` access means and why it is the default: I
+        saw it at theirs, and my own indexers go and find it. Nothing is
+        fetched from my friend, so seeing a shelf never turns the person
+        showing it into a distributor.
+        """
+        peer, why = self._friend(peer_id)
+        if peer is None:
+            return {"ok": False, "error": why}
+        if not str(title or "").strip():
+            return {"ok": False, "error": "no title"}
+        self.store.want(title, platform)
+        self.store.record(Event(
+            kind="wanted", game=title, platform=platform,
+            detail=f"added from {peer.name}'s shelf"))
+        self.store.save()
+        return {"ok": True, "title": title, "platform": platform,
+                "detail": f"added to Wanted -- your indexers will look for it"}
+
+    def netplay_invite(self, peer_id: str, title: str,
+                       platform: str = "") -> dict:
+        """Offer a friend a game, and report honestly what came back.
+
+        The offer carries the SHA1 of my copy, which is the whole point: a
+        title agrees far too easily, and two servers agreeing on a title and
+        not the bytes is the failure this exists to prevent.
+        """
+        peer, why = self._friend(peer_id)
+        if peer is None:
+            return {"ok": False, "status": "error", "detail": why}
+
+        entry = self.hashes.for_game(title, platform)
+        if entry is None:
+            return {
+                "ok": False, "status": "unhashed",
+                "detail": ("ROMarr has not hashed this game yet, so it cannot "
+                           "prove which dump you have. Run an audit of "
+                           f"{platform or 'this platform'} under Tasks and "
+                           "try again."),
+            }
+
+        from .playability import LOCAL, routes_for
+        in_browser = LOCAL in routes_for(platform or entry.platform).kinds
+
+        offer = {"title": entry.name, "platform": entry.platform,
+                 "sha1": entry.sha1, "verified": entry.verified,
+                 "host": self.federation.name}
+        body, err = self._call_friend(peer, "POST", "/api/v1/peer/netplay",
+                                      {"offer": offer})
+        if body is None:
+            return {"ok": False, "status": "error", "detail": err}
+
+        status = str(body.get("status") or "")
+        answer = {
+            "ok": status in ("ready", "unverified"),
+            "status": status,
+            "friend": peer.name,
+            "title": entry.name,
+            "platform": entry.platform,
+            "sha1": entry.sha1,
+            "detail": str(body.get("detail") or ""),
+        }
+        if answer["ok"]:
+            answer["room"] = self.federation.netplay_room(peer.peer_id,
+                                                          entry.sha1)
+            # Say plainly when the match is good but the machine has no
+            # in-browser core: agreeing on the bytes does not conjure an
+            # emulator, and claiming otherwise would be the same overreach
+            # netplay-by-title makes.
+            answer["in_browser"] = in_browser
+            if not in_browser:
+                answer["detail"] = (
+                    f"You both have this exact dump, but EmulatorJS has no "
+                    f"core for {entry.platform} -- you will need a native "
+                    f"emulator that can join a room.")
+        return answer
+
     def stats(self) -> dict:
         """The numbers page: what this install has actually done.
 
@@ -2415,6 +2637,10 @@ class ROMarr:
         def run():
             from .dat import BAD_DUMP, VERIFIED, hash_file
             seen: dict[str, str] = {}
+            # Replace this platform's hashes rather than accumulating them,
+            # so a re-audit after a cleanup does not leave netplay offering
+            # dumps that are no longer on disk.
+            self.hashes.clear_platform(platform.slug)
             try:
                 files = [p for p in sorted(root.rglob("*"))
                          if p.is_file()][:50_000]
@@ -2439,19 +2665,31 @@ class ROMarr:
                 else:
                     state["unknown"] += 1
                 sha = digest.get("sha1", "")
+                # Keep the hash. Netplay is decided on bytes, and this walk
+                # is the only place ROMarr ever computes them; discarding
+                # them here is what left an offer with nothing to carry.
+                if sha:
+                    self.hashes.add(
+                        sha, verdict.game or path.stem, platform.slug,
+                        verdict.status == VERIFIED,
+                        str(path.relative_to(self.library)))
                 if sha in seen and len(state["duplicates"]) < 200:
                     state["duplicates"].append({
                         "file": str(path.relative_to(self.library)),
                         "same_as": seen[sha]})
                 elif sha:
                     seen[sha] = str(path.relative_to(self.library))
+            self.hashes.save()
             state["status"] = "done"
+            state["indexed"] = len(self.hashes)
             state["finished"] = datetime.now(timezone.utc)\
                 .isoformat(timespec="seconds")
             log.info("audit of %s: %d scanned, %d verified, %d bad, "
-                     "%d unknown, %d duplicate(s)", platform.slug,
+                     "%d unknown, %d duplicate(s); %d dump(s) now known to "
+                     "netplay", platform.slug,
                      state["scanned"], state["verified"], state["bad"],
-                     state["unknown"], len(state["duplicates"]))
+                     state["unknown"], len(state["duplicates"]),
+                     len(self.hashes))
 
         ROMarr._audit_thread = _threading.Thread(
             target=run, name="romarr-audit", daemon=True)
@@ -3310,6 +3548,25 @@ def make_handler(service: ROMarr):
                     return self._json(401, {"error": "unknown peer"})
                 return self._json(200, {"items": service.peer_shelf(peer),
                                         "origin": service.federation.name})
+            if route.path == "/api/v1/hashes":
+                # What netplay can actually prove. Without this an operator
+                # has no way to tell "we disagree on the dump" apart from
+                # "I never audited that platform".
+                return self._json(200, {
+                    "count": len(service.hashes),
+                    "platforms": service.hashes.platforms(),
+                    "detail": "Populated by an audit (Tasks -> Verify a "
+                              "platform) and by every verified import."})
+            if route.path == "/api/v1/friends/shelf":
+                # The other direction: I browse THEIR library. Operator
+                # session, because this one is a person at a screen.
+                return self._json(200, service.friend_shelf(
+                    (query.get("peer_id") or [""])[0],
+                    q=(query.get("q") or [""])[0],
+                    platform=(query.get("platform") or [""])[0],
+                    offset=int((query.get("offset") or ["0"])[0] or 0),
+                    limit=int((query.get("limit") or ["200"])[0] or 200),
+                    refresh=(query.get("refresh") or [""])[0] == "1"))
             if route.path == "/api/v1/peer":
                 return self._json(200, {
                     "name": service.federation.name,
@@ -3568,18 +3825,35 @@ def make_handler(service: ROMarr):
                                 "the provider answered but found nothing -- "
                                 "check the key")})
             if route.path == "/api/v1/peer/invite":
+                # Pick up a public URL set since startup, so the operator
+                # does not have to restart to mint a usable invitation.
+                configured = str(
+                    service.store.settings.get("public_url") or "").strip()
+                if configured:
+                    service.federation.url = configured.rstrip("/")
                 invite = service.federation.invite(
                     name=str(body.get("name") or service.federation.name))
-                return self._json(200, {
+                payload = {
                     "invite": invite.blob(),
                     "note": "Send this to your friend out of band. It works "
                             "once and expires in 24 hours; you confirm the "
-                            "peer here before they can see anything."})
+                            "peer here before they can see anything."}
+                if not service.federation.url:
+                    # An invitation with no address is a dead end: the
+                    # friend's server has nowhere to call back to, and the
+                    # failure would surface much later as a silent nothing.
+                    payload["warning"] = (
+                        "This invitation carries no address for your server, "
+                        "so your friend's ROMarr cannot call you back. Set "
+                        "your public URL under Settings -> General, then mint "
+                        "a fresh invitation.")
+                return self._json(200, payload)
             if route.path == "/api/v1/peer/redeem":
                 try:
                     peer = service.federation.redeem(body.get("invite") or {})
                 except ValueError as exc:
                     return self._json(400, {"error": str(exc)})
+                service.save_peers()
                 return self._json(200, {"peer_id": peer.peer_id,
                                         "name": peer.name})
             if route.path == "/api/v1/peer/accept":
@@ -3593,6 +3867,7 @@ def make_handler(service: ROMarr):
                         url=str(body.get("url") or ""))
                 except ValueError as exc:
                     return self._json(400, {"error": str(exc)})
+                service.save_peers()
                 return self._json(200, {"peer_id": peer.peer_id,
                                         "confirmed": peer.confirmed,
                                         "note": "held until the operator "
@@ -3603,6 +3878,7 @@ def make_handler(service: ROMarr):
                         str(body.get("peer_id") or ""))
                 except ValueError as exc:
                     return self._json(404, {"error": str(exc)})
+                service.save_peers()
                 return self._json(200, {"peer_id": peer.peer_id,
                                         "confirmed": True})
             if route.path == "/api/v1/peer/policy":
@@ -3622,6 +3898,7 @@ def make_handler(service: ROMarr):
                     peer.platforms = tuple(body.get("platforms") or ())
                 if body.get("delegate_users") is not None:
                     peer.delegate_users = bool(body.get("delegate_users"))
+                service.save_peers()
                 return self._json(200, {"peer_id": peer.peer_id,
                                         "scope": peer.scope,
                                         "access": peer.access})
@@ -3632,9 +3909,24 @@ def make_handler(service: ROMarr):
                     self.headers.get("X-Peer-Token", ""))
                 if peer is None:
                     return self._json(401, {"error": "unknown peer"})
-                games, _, _ = service._library_cache
+                # Judged against the hash index, not the shelf: a library
+                # server's game object has no SHA1, so answering from it
+                # could only ever say "missing".
                 return self._json(200, service.federation.netplay_answer(
-                    body.get("offer") or {}, games or []))
+                    body.get("offer") or {}, service.hashes.entries()))
+            if route.path == "/api/v1/friends/want":
+                # Something off a friend's shelf, into MY wanted list. My
+                # indexers fetch it; nothing comes from my friend.
+                return self._json(200, service.friend_want(
+                    str(body.get("peer_id") or ""),
+                    str(body.get("title") or ""),
+                    str(body.get("platform") or "")))
+            if route.path == "/api/v1/friends/netplay":
+                # I offer a friend a game. The offer carries my SHA1.
+                return self._json(200, service.netplay_invite(
+                    str(body.get("peer_id") or ""),
+                    str(body.get("title") or ""),
+                    str(body.get("platform") or "")))
             if route.path == "/api/v1/audit":
                 return self._json(200, service.audit_library(
                     str(body.get("platform") or "")))
@@ -3914,6 +4206,8 @@ def make_handler(service: ROMarr):
             if route.path.startswith("/api/v1/peer/"):
                 peer_id = route.path[len("/api/v1/peer/"):]
                 gone = service.federation.revoke(peer_id)
+                if gone:
+                    service.save_peers()
                 return self._json(200 if gone else 404, {"revoked": gone})
             if route.path.startswith("/api/v1/connection/"):
                 item_id = route.path[len("/api/v1/connection/"):]

@@ -106,6 +106,16 @@ would make federation impossible. Each authenticates differently instead:
 Revocation is one-sided and immediate: deleting a peer invalidates its
 token without that peer's cooperation, and touches no other peer's.
 
+Relationships are persisted under `_peers`, tokens included, so they survive
+a restart. That table is removed from the config endpoint **by name**,
+alongside `_api_key` and `_password_hash` — not by a leading-underscore rule,
+because several `_`-prefixed settings (`_romm_url`, `_prowlarr_url`) are
+deliberately shown, and such a rule would have hidden the wrong half and
+served the tokens. A test asserts no peer token appears in that response.
+Invitations are deliberately *not* persisted: they expire in 24 hours, and
+keeping them across a restart would only widen the window a leaked one is
+useful for.
+
 `/api/health` returns one bit unauthenticated — it used to return library paths
 and client URLs, which is what a health check does not need.
 

@@ -24,11 +24,12 @@ give.
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import logging
 import secrets
 import time
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 
 log = logging.getLogger(__name__)
@@ -80,6 +81,15 @@ class Peer:
     delegate_users: bool = False
     confirmed: bool = False
     created: str = field(default_factory=_now)
+
+    def headers(self) -> dict[str, str]:
+        """What I send when I call THEM.
+
+        The invitation secret ends up as `token` on both sides -- mine for
+        verifying them, theirs for verifying me -- so one pair authenticates
+        the relationship in both directions without a second exchange.
+        """
+        return {"X-Peer-Id": self.peer_id, "X-Peer-Token": self.token}
 
     def may_see(self, game) -> bool:
         """Whether one game appears in this peer's projection."""
@@ -181,6 +191,39 @@ class Federation:
         self.peers[peer_id] = peer
         return peer
 
+    # -- surviving a restart -------------------------------------------------
+    #
+    # Peers lived only in memory until this existed, so every friend, token
+    # and sharing policy was lost on restart. Nothing failed loudly: the
+    # Friends page simply came back empty, and a peer that called in was an
+    # unknown peer. Invitations in flight are deliberately NOT persisted --
+    # they expire in 24 hours and a restart is a fine reason to mint a new
+    # one, whereas persisting them would widen the window a leaked invite is
+    # useful for.
+
+    def dump(self) -> list[dict]:
+        """Every relationship, in a form that round-trips through JSON."""
+        return [{**asdict(p), "platforms": list(p.platforms)}
+                for p in self.peers.values()]
+
+    def restore(self, rows) -> int:
+        """Rebuild relationships saved by `dump`. Unknown fields are ignored."""
+        known = {f.name for f in fields(Peer)}
+        restored = 0
+        for row in rows or []:
+            if not isinstance(row, dict) or not row.get("peer_id"):
+                continue
+            data = {k: v for k, v in row.items() if k in known}
+            data["platforms"] = tuple(data.get("platforms") or ())
+            try:
+                peer = Peer(**data)
+            except TypeError:
+                log.warning("skipping an unreadable saved peer")
+                continue
+            self.peers[peer.peer_id] = peer
+            restored += 1
+        return restored
+
     def confirm(self, peer_id: str) -> Peer:
         peer = self.peers.get(peer_id)
         if peer is None:
@@ -250,6 +293,20 @@ class Federation:
             "verified": bool(getattr(game, "verified", False)),
             "host": self.name,
         }
+
+    @staticmethod
+    def netplay_room(peer_id: str, sha1: str) -> str:
+        """The room both sides join, derived rather than negotiated.
+
+        Both servers already hold the same two facts -- the peer id of the
+        relationship and the SHA1 they just agreed on -- so each can compute
+        the room independently and arrive at the same string. That removes
+        the one piece of central infrastructure a lobby would otherwise
+        need, and it means the room name cannot be guessed by somebody who
+        does not already know both halves.
+        """
+        material = f"{peer_id}:{str(sha1 or '').lower()}".encode()
+        return hashlib.sha256(material).hexdigest()[:16]
 
     @staticmethod
     def netplay_answer(offer: dict, library) -> dict:

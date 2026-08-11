@@ -1133,10 +1133,16 @@ RENDER.peers=async()=>{
         <td>${p.confirmed?'<span class="pill imported">confirmed</span>'
           :'<span class="pill failed">awaiting your confirmation</span>'}</td>
         <td style="text-align:right"><div class="rowact">
-          ${p.confirmed?`<button data-pedit="${i}">Sharing</button>`
+          ${p.confirmed?`<button data-pbrowse="${esc(p.peer_id)}"${
+             p.url?'':' disabled title="Their invitation carried no address, '
+                     +'so there is nowhere to call. Ask them to set their '
+                     +'public URL and send a fresh invitation."'}
+             >Browse library</button>
+            <button data-pedit="${i}">Sharing</button>`
             :`<button data-pconfirm="${esc(p.peer_id)}">Confirm</button>`}
           <button data-prevoke="${esc(p.peer_id)}">Remove</button>
-        </div></td></tr>`).join('')}</tbody></table></div>`
+        </div></td></tr>`).join('')}</tbody></table>
+      <div id="p-shelf"></div></div>`
       :'<div class="empty">No friends yet. Invite someone, or paste an invitation they sent you.</div>'}`;
 
   $('#p-invite').onclick=async()=>{
@@ -1145,6 +1151,7 @@ RENDER.peers=async()=>{
     $('#p-out').innerHTML=`<div class="card" style="margin:0">
       <h3>Send this to your friend</h3>
       <p class="help">${esc(r.note||'')}</p>
+      ${r.warning?`<div class="panel panel-warn">${esc(r.warning)}</div>`:''}
       <div class="field"><textarea rows="4" readonly
         style="width:100%;font:12px/1.5 ui-monospace,
         Menlo,monospace">${esc(JSON.stringify(r.invite||{}))}</textarea></div>
@@ -1190,7 +1197,126 @@ RENDER.peers=async()=>{
   });
   document.querySelectorAll('[data-pedit]').forEach(b=>b.onclick=()=>
     sharingEditor(list[Number(b.dataset.pedit)]));
+  document.querySelectorAll('[data-pbrowse]').forEach(b=>b.onclick=()=>
+    friendShelf(b.dataset.pbrowse));
 };
+
+//: Browsing a friend's library. Their shelf is fetched once and filtered
+//: here, so typing in the search box does not bill somebody else's server
+//: for every keystroke.
+const FSHELF={peer:'',q:'',platform:'',offset:0};
+
+async function friendShelf(peerId, opts){
+  Object.assign(FSHELF, {peer:peerId}, opts||{});
+  const out=$('#p-shelf');
+  if(!out) return;
+  out.innerHTML='<div class="empty">Asking your friend’s server…</div>';
+  const p=new URLSearchParams({peer_id:FSHELF.peer, q:FSHELF.q,
+    platform:FSHELF.platform, offset:FSHELF.offset, limit:100});
+  const r=await j('/api/v1/friends/shelf?'+p.toString()).catch(()=>({}));
+  if(!r.ok){
+    out.innerHTML=`<div class="panel panel-warn" style="margin-top:14px">${
+      esc(r.error||'Could not reach that friend.')}</div>`;
+    return;
+  }
+  const rows=r.items||[];
+  const pages=Math.ceil((r.total||0)/100);
+  const page=Math.floor(FSHELF.offset/100)+1;
+  out.innerHTML=`<div style="margin-top:18px;border-top:1px solid var(--line);
+      padding-top:16px">
+    <h3 style="margin:0 0 4px">${esc(r.friend||'Your friend')}’s library</h3>
+    <p class="help">${r.total||0} of ${r.shelf_total||0} shared title(s).
+      ${r.access==='catalogue'
+        ? 'You can add anything here to your own Wanted list — your '
+          +'indexers fetch it, not your friend.'
+        : 'They allow: '+esc(r.access||'')}
+      ${r.stale?'<b>Showing the last copy — their server did not answer.</b>':''}</p>
+    <div class="row" style="flex-wrap:wrap;gap:8px;margin-bottom:10px">
+      <input type="text" id="fs-q" placeholder="Search their library"
+        value="${esc(FSHELF.q)}" style="flex:1;min-width:200px">
+      <select id="fs-plat"><option value="">All platforms</option>
+        ${(r.platforms||[]).map(pl=>`<option value="${esc(pl)}"${
+          pl===FSHELF.platform?' selected':''}>${esc(pl)}</option>`).join('')}
+      </select>
+      <button class="btn ghost" id="fs-refresh">Refresh from them</button>
+    </div>
+    ${rows.length?`<table><thead><tr><th>Title</th><th>Platform</th>
+      <th>Year</th><th>Verified</th><th></th></tr></thead><tbody>
+      ${rows.map(g=>`<tr>
+        <td>${esc(g.title||'')}</td>
+        <td>${esc(g.platform||'')}</td>
+        <td>${g.year||''}</td>
+        <td>${g.verified?'<span class="pill imported">verified</span>':''}</td>
+        <td style="text-align:right"><div class="rowact">
+          <button data-fwant="${esc(g.title||'')}"
+            data-fplat="${esc(g.platform||'')}">Add to Wanted</button>
+          <button data-fplay="${esc(g.title||'')}"
+            data-fpplat="${esc(g.platform||'')}">Play together</button>
+        </div></td></tr>`).join('')}</tbody></table>
+      ${pages>1?`<div class="row" style="gap:8px;margin-top:10px">
+        <button class="btn ghost" id="fs-prev"${page<=1?' disabled':''}>Previous</button>
+        <span style="color:var(--dim);font-size:12px;align-self:center"
+          >Page ${page} of ${pages}</span>
+        <button class="btn ghost" id="fs-next"${page>=pages?' disabled':''}>Next</button>
+      </div>`:''}`
+      :'<div class="empty">Nothing matches. They may not share this platform.</div>'}
+    <div id="fs-out"></div></div>`;
+
+  const reload=o=>friendShelf(FSHELF.peer,o);
+  $('#fs-q').onchange=e=>reload({q:e.target.value,offset:0});
+  $('#fs-plat').onchange=e=>reload({platform:e.target.value,offset:0});
+  $('#fs-refresh').onclick=async()=>{
+    const rp=new URLSearchParams({peer_id:FSHELF.peer,refresh:'1',limit:1});
+    await j('/api/v1/friends/shelf?'+rp.toString()).catch(()=>({}));
+    reload({});
+  };
+  if($('#fs-prev')) $('#fs-prev').onclick=()=>reload({offset:Math.max(0,FSHELF.offset-100)});
+  if($('#fs-next')) $('#fs-next').onclick=()=>reload({offset:FSHELF.offset+100});
+
+  document.querySelectorAll('[data-fwant]').forEach(b=>b.onclick=async()=>{
+    const r=await j('/api/v1/friends/want',{method:'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify({peer_id:FSHELF.peer,title:b.dataset.fwant,
+        platform:b.dataset.fplat})});
+    toast(r.ok?('Added — '+(r.detail||'')):(r.error||'Could not add'));
+  });
+  document.querySelectorAll('[data-fplay]').forEach(b=>b.onclick=async()=>{
+    $('#fs-out').innerHTML='<div class="empty">Comparing dumps…</div>';
+    const r=await j('/api/v1/friends/netplay',{method:'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify({peer_id:FSHELF.peer,title:b.dataset.fplay,
+        platform:b.dataset.fpplat})});
+    $('#fs-out').innerHTML=netplayVerdict(r);
+  });
+}
+
+//: Netplay never reports a bare success. Each verdict says what was compared
+//: and what it means, because "mismatch" is the one people otherwise spend an
+//: evening blaming on their connection.
+function netplayVerdict(r){
+  const cls=r.ok?'panel':'panel panel-warn';
+  const head={
+    ready:'Ready — you both have the same dump',
+    unverified:'Playable, with a caveat',
+    mismatch:'Same game, different dumps',
+    missing:'They do not have this dump',
+    unhashed:'ROMarr has not hashed your copy yet',
+    error:'Could not ask'
+  }[r.status]||r.status||'No answer';
+  let extra='';
+  if(r.room){
+    extra=`<div style="margin-top:8px">Room <code>${esc(r.room)}</code>
+      — both servers derive this independently, so you and
+      ${esc(r.friend||'your friend')} can join it without a lobby.</div>`;
+  }
+  if(r.sha1){
+    extra+=`<div style="margin-top:6px;color:var(--dim);font-size:11.5px">
+      Compared on SHA1 <code>${esc(r.sha1)}</code>, not the title.</div>`;
+  }
+  return `<div class="${cls}" style="margin-top:12px"><b>${esc(head)}</b>
+    ${r.detail?`<div style="margin-top:6px">${esc(r.detail)}</div>`:''}
+    ${extra}</div>`;
+}
 
 function sharingEditor(peer){
   const m=document.createElement('div');
@@ -1764,7 +1890,15 @@ RENDER.general=()=>settingsPage('General',
    <div class="field"><label>qBittorrent</label>
      <input type="text" value="${esc(SETTINGS._qbit_url||'')}" disabled></div>
    <div class="field"><label>RomM</label>
-     <input type="text" value="${esc(SETTINGS._romm_url||'')}" disabled></div>`
+     <input type="text" value="${esc(SETTINGS._romm_url||'')}" disabled></div>
+   <div class="field"><label>Your public URL (for Friends)</label>
+     <input type="text" data-k="public_url"
+       value="${esc(SETTINGS.public_url||'')}"
+       placeholder="https://romarr.example.com">
+     <div style="color:var(--dim);font-size:11.5px;margin-top:4px">
+       How a friend’s server reaches yours. An invitation carries this — without
+       it, whoever redeems your invitation has nowhere to call back to. Peering
+       is the only feature that needs ROMarr to know its own address.</div></div>`
   +chk('auto_import','Import completed downloads automatically',SETTINGS.auto_import)
   +`<div class="field"><label>Protocol</label>
      <select data-k="protocol">

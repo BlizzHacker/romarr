@@ -320,3 +320,26 @@ def test_a_403_is_not_retried():
     except Exception:
         pass
     assert len(session.gets) == 1
+
+
+def test_peer_tokens_never_reach_the_config_endpoint(tmp_path):
+    """`_peers` holds one bearer token per relationship.
+
+    The leading underscore is a naming convention, not a boundary --
+    safe_settings deliberately shows `_romm_url` and `_prowlarr_url` -- so
+    the peer table has to be removed by name like the other two secrets.
+    """
+    from romarr.app import ROMarr
+
+    svc = ROMarr(env={"ROMARR_DATA": str(tmp_path / "r.json")})
+    invite = svc.federation.invite(name="Alice")
+    svc.federation.accept(invite.peer_id, invite.secret, name="Bob",
+                          url="https://bob.example")
+    svc.save_peers()
+
+    assert svc.store.settings["_peers"], "the token really is stored"
+    token = svc.federation.peers[invite.peer_id].token
+
+    body = json.dumps(svc.safe_settings())
+    assert "_peers" not in svc.safe_settings()
+    assert token not in body, "a peer token reached a page a browser reads"
