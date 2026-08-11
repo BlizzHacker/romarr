@@ -142,11 +142,61 @@ STEAM_STORE = "https://store.steampowered.com"
 STEAM_WISHLIST_CAP = 150
 
 
+STEAM_COMMUNITY = "https://steamcommunity.com"
+
+
+def _steam_public_entries(cfg: dict, http) -> list[ListEntry]:
+    """Owned games from a PUBLIC Steam profile, with no API key at all.
+
+    Steam's community pages expose an account's games as XML when the
+    profile's game details are public -- the same data the Web API returns,
+    reachable without a secret. This is the keyless path: a profile URL, a
+    vanity name, or a 64-bit id is all it needs, so ROMarr never has to hold
+    a Steam credential for the common case.
+    """
+    import re as _re
+    import xml.etree.ElementTree as ET
+
+    handle = str(cfg.get("profile") or cfg.get("steam_id") or "").strip()
+    if not handle:
+        return []
+    # Accept a full profile URL, a bare vanity name, or a 64-bit id.
+    handle = handle.rstrip("/")
+    if "steamcommunity.com" in handle:
+        base = handle
+    elif handle.isdigit():
+        base = f"{STEAM_COMMUNITY}/profiles/{handle}"
+    else:
+        base = f"{STEAM_COMMUNITY}/id/{handle}"
+    response = http.get(f"{base}/games?tab=all&xml=1", timeout=30)
+    response.raise_for_status()
+    try:
+        root = ET.fromstring(response.text)
+    except ET.ParseError:
+        # A private games list answers with an HTML error page, not XML.
+        raise ValueError(
+            "Steam returned no game list -- set the profile's Game Details to "
+            "Public (Steam -> Edit Profile -> Privacy Settings), or use an "
+            "API key instead")
+    out = []
+    for game in root.findall(".//game/name"):
+        name = (game.text or "").strip()
+        if name:
+            out.append(ListEntry(game=name))
+    if not out and root.tag == "response":
+        raise ValueError("Steam did not recognise that profile")
+    return out
+
+
 def _steam_entries(cfg: dict, *, session=None) -> list[ListEntry]:
     import requests
     http = session or requests
     steam_id = str(cfg.get("steam_id") or "").strip()
     api_key = str(cfg.get("api_key") or "").strip()
+    # No key? Take the keyless public-profile path -- owned games only, which
+    # is what a public profile exposes (a wishlist still needs the API).
+    if not api_key and str(cfg.get("source") or "owned").lower() != "wishlist":
+        return _steam_public_entries(cfg, http)
     if not steam_id or not api_key:
         return []
     source = str(cfg.get("source") or "owned").lower()
@@ -363,11 +413,12 @@ LIST_TYPES = {
     },
     "steam": {
         "label": "Steam library / wishlist",
-        "help": "Owned games or wishlist for a Steam profile. Needs a free "
-                "Web API key (steamcommunity.com/dev/apikey) and the 64-bit "
-                "SteamID; the profile's game details must be public.",
-        "fields": ["name", "enable", "platform", "steam_id", "api_key",
-                   "source"],
+        "help": "Owned games need NO credential: paste your profile URL or "
+                "vanity name with Game Details set to Public. A Web API key "
+                "(steamcommunity.com/dev/apikey) is only required for the "
+                "wishlist.",
+        "fields": ["name", "enable", "platform", "profile", "steam_id",
+                   "api_key", "source"],
     },
     "gog": {
         "label": "GOG profile",
@@ -398,20 +449,27 @@ LIST_TYPES = {
     },
 }
 
-#: Stores with no usable API, and what to do instead. Rendered in the UI so
-#: "why can't I connect X" has its answer where the person is looking.
-#: This is the honest list -- pretending an EA connector exists would only
-#: defer the disappointment to sync time.
+#: Stores with no usable *web* API, and how ROMarr connects them anyway.
+#:
+#: This list used to say EA, Battle.net and Epic simply "could not be
+#: connected". That was wrong, and Playnite and LaunchBox were the standing
+#: counter-example: they have managed those libraries for years. The way
+#: they do it is not a private API -- the launcher already wrote your
+#: library to disk when it installed the game, and reading that needs no
+#: credential at all. `romarr.launchers` does the same, and
+#: `scripts/connect_launchers.py` pushes the result here.
 NO_API_STORES = {
-    "EA (Origin)": "EA retired every public API; there is nothing to call. "
-                   "Paste your library as a list -- the EA app's collection "
-                   "page selects cleanly.",
-    "Battle.net": "Blizzard's API exposes game data, not an owned-games "
-                  "list -- and the catalogue is a dozen titles. A pasted "
-                  "list covers it in under a minute.",
-    "Epic Games": "No public library API; the community workarounds need "
-                  "captcha-solving logins that break monthly. Paste the "
-                  "list from your transactions page.",
-    "Nintendo": "No API of any kind. Paste, and DAT-verified acquisition "
-                "takes it from there.",
+    "EA (formerly Origin)": "No public web API — but the EA app writes an "
+                            "installerdata.xml beside every game it installs. "
+                            "Run scripts/connect_launchers.py on your gaming "
+                            "PC and they arrive here. No credential involved.",
+    "Battle.net": "Blizzard's web API exposes game data, not an owned list — "
+                  "but Battle.net records installed products in product.db. "
+                  "The launcher connector reads it.",
+    "Epic Games": "No public library API, and the OAuth workarounds are "
+                  "brittle — but Epic writes a JSON manifest per installed "
+                  "game. The launcher connector reads those.",
+    "Nintendo": "No API, and nothing written to a PC to read either. This is "
+                "the one that is genuinely paste-only — and it is also the "
+                "one where DAT-verified acquisition matters most.",
 }

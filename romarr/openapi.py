@@ -98,6 +98,11 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "/api/v1/importlist/schema": ("GET", "The list types and their fields."),
     "/api/v1/importlist/preview": ("POST", "Parse a list without saving it: "
                                            "titles and platform resolution."),
+    "/api/v1/launchers": ("GET", "Games the launchers installed on this "
+                                 "machine know about — Steam, Epic, GOG "
+                                 "Galaxy, Battle.net, EA. No credentials."),
+    "/api/v1/launchers/connect": ("POST", "Scan this machine's launchers and "
+                                          "save the result as an import list."),
     "/api/v1/openapi.json": ("GET", "This document."),
     "/api/v1/webhook/ggrequestz": ("POST", "Inbound request, GG Requestz shape."),
     "/api/search": ("GET", "Search every configured indexer."),

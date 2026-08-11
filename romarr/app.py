@@ -2160,6 +2160,51 @@ class ROMarr:
         ok = sum(1 for d in done if d.get("ok"))
         return f"imported {ok} of {len(done)} finished download(s)"
 
+    def scan_launchers(self) -> dict:
+        """Every game the launchers on THIS machine have installed.
+
+        Useful directly when ROMarr runs on the gaming PC, which is a common
+        Windows install; when it runs on a server,
+        `scripts/connect_launchers.py` performs the same scan on the PC and
+        pushes the result here. Either way no store credential is involved:
+        the launchers already wrote their libraries to disk.
+        """
+        from .launchers import scan_all
+
+        try:
+            games = scan_all()
+        except Exception as exc:            # noqa: BLE001 - best effort
+            log.warning("launcher scan failed: %s", exc)
+            return {"items": [], "error": f"scan failed: {exc.__class__.__name__}"}
+        counts: dict[str, int] = {}
+        for game in games:
+            counts[game.launcher] = counts.get(game.launcher, 0) + 1
+        return {
+            "items": [{"name": g.name, "launcher": g.launcher, "path": g.path}
+                      for g in games],
+            "counts": counts,
+            "total": len(games),
+        }
+
+    def connect_launchers(self, name: str = "Local launchers",
+                          platform: str = "") -> dict:
+        """Scan this machine's launchers and save the result as an import list."""
+        found = self.scan_launchers()
+        if found.get("error"):
+            return found
+        if not found["items"]:
+            return {"ok": False, "added": 0,
+                    "message": "no launcher libraries found on this machine"}
+        content = "\n".join(g["name"] for g in found["items"])
+        saved = self.store.put_item("import_lists", {
+            "name": name, "type": "paste", "platform": platform,
+            "content": content, "enable": True,
+        })
+        return {"ok": True, "id": saved.get("id"), "total": found["total"],
+                "counts": found["counts"],
+                "message": f"connected {found['total']} game(s) from "
+                           f"{len(found['counts'])} launcher(s)"}
+
     def list_sync(self) -> dict:
         """Sync every enabled import list into Wanted.
 
@@ -2716,6 +2761,8 @@ def make_handler(service: ROMarr):
                 from .lists import NO_API_STORES
                 return self._json(200, {"types": LIST_TYPES,
                                         "no_api": NO_API_STORES})
+            if route.path == "/api/v1/launchers":
+                return self._json(200, service.scan_launchers())
             if route.path == "/api/health" and not self._authorised():
                 # Liveness needs one bit. The full report names library paths,
                 # client URLs and counts, and this endpoint is reachable
@@ -2852,6 +2899,10 @@ def make_handler(service: ROMarr):
                     if saved.get(secret):
                         saved[secret] = "********"
                 return self._json(200, saved)
+            if route.path == "/api/v1/launchers/connect":
+                return self._json(200, service.connect_launchers(
+                    str(body.get("name") or "Local launchers"),
+                    str(body.get("platform") or "")))
             if route.path == "/api/v1/importlist/preview":
                 from .lists import fetch_entries as _fetch_entries
                 preview_cfg = {k: body.get(k) or ""

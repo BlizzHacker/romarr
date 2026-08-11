@@ -667,15 +667,38 @@ RENDER.lists=async()=>{
       </tbody></table>`
       :'<div class="empty">No lists yet. Paste one, or connect an account, and let the clock do the asking.</div>'}
     <div class="card" style="margin-top:14px"><h3>Connected accounts</h3>
-      <p class="help">Steam, GOG, Xbox, PlayStation and itch.io connect as
-        list types above &mdash; add a list and pick the store. The ones that
-        cannot connect, and why (no marketing, just the truth):</p>
+      <p class="help"><b>Remote libraries</b> connect as list types above
+        &mdash; add a list and pick the store. Steam and GOG need only a
+        public profile name; Xbox, PlayStation and itch.io take a token.</p>
+      <p class="help"><b>Everything installed on your gaming PC</b> &mdash;
+        including EA, Battle.net and Epic, which have no usable web API.
+        If ROMarr runs on that PC, one button does it:</p>
+      <div class="row" style="margin:8px 0">
+        <button class="btn" id="l-scan">Scan this machine</button>
+        <span class="help" style="margin:0">Reads Steam, Epic, GOG Galaxy,
+          Battle.net and EA manifests. No credential.</span></div>
+      <p class="help">If ROMarr runs on a server instead, run this on the
+        gaming PC:</p>
+      <pre style="font:12px/1.6 ui-monospace,Menlo,monospace;color:var(--dim);
+        background:var(--bg);border:1px solid var(--line);border-radius:6px;
+        padding:10px;white-space:pre-wrap">python scripts/connect_launchers.py --url ${location.origin} --key &lt;your API key&gt;</pre>
+      <p class="help">It reads the manifests the launchers already wrote when
+        they installed each game. No store credential is involved.</p>
       <div id="l-noapi" style="color:var(--dim);font-size:12.5px"></div></div>`;
   j('/api/v1/importlist/schema').then(s=>{
     const rows=Object.entries(s.no_api||{});
     $('#l-noapi').innerHTML=rows.map(([store,why])=>
       `<p style="margin:6px 0"><b>${esc(store)}</b> — ${esc(why)}</p>`).join('');
   }).catch(()=>{});
+  const scanBtn=$('#l-scan');
+  if(scanBtn) scanBtn.onclick=async()=>{
+    scanBtn.disabled=true; scanBtn.textContent='Scanning…';
+    const r=await j('/api/v1/launchers/connect',{method:'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify({name:'Local launchers'})}).catch(()=>({error:'scan failed'}));
+    toast(r.error||r.message||'Done');
+    if(r.ok) go('lists'); else { scanBtn.disabled=false; scanBtn.textContent='Scan this machine'; }
+  };
   $('#l-add').onclick=()=>editList({type:'paste'});
   $('#l-sync').onclick=async e=>{
     e.target.disabled=true; e.target.textContent='Syncing…';

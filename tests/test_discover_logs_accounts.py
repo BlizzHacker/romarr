@@ -162,7 +162,15 @@ def test_accounts_without_credentials_are_empty_not_errors():
         assert fetch_entries({"type": kind, field: ""}) == []
 
 
-def test_the_no_api_list_tells_the_truth_about_the_big_absentees():
-    for store in ("EA (Origin)", "Battle.net", "Epic Games", "Nintendo"):
-        assert store in NO_API_STORES
-        assert NO_API_STORES[store], "every refusal carries its reason"
+def test_the_no_api_list_names_the_route_it_does_have():
+    """This list used to say EA/Battle.net/Epic simply could not be
+    connected. Playnite and LaunchBox were the standing counter-example --
+    the launcher writes your library to disk -- so every entry now names
+    the way in, and only Nintendo is genuinely paste-only."""
+    keys = " | ".join(NO_API_STORES)
+    for store in ("EA", "Battle.net", "Epic", "Nintendo"):
+        assert store in keys, store
+    for store, why in NO_API_STORES.items():
+        assert why, "every entry carries its reason"
+        if "Nintendo" not in store:
+            assert "connector" in why or "connect_launchers" in why,                 f"{store} must name the launcher connector as its route in"
