@@ -100,6 +100,10 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
                                            "titles and platform resolution."),
     "/api/v1/connection": ("GET", "Configured notification connections, "
                                   "webhook URLs masked."),
+    "/api/v1/audit": ("GET", "Verify the existing library against your DATs, "
+                             "one platform at a time: POST {platform} starts, "
+                             "GET polls — verified / bad-dump / unknown "
+                             "counts plus byte-identical duplicates."),
     "/api/v1/system/apikey": ("GET", "The API key, for the Settings page. "
                                      "Authenticated, unlike safe_settings "
                                      "which exists to strip credentials."),

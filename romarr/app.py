@@ -2117,6 +2117,90 @@ class ROMarr:
             "average_rating": round(sum(ratings) / len(ratings), 1) if ratings else None,
         }
 
+    #: One audit at a time; the state the UI polls.
+    _audit_state: dict = {}
+    _audit_thread = None
+
+    def audit_library(self, platform_slug: str) -> dict:
+        """Verify what is already on the shelf, one platform at a time.
+
+        The import path verifies files at the border; this walks files that
+        were already there -- hashed against the loaded DATs, so the answer
+        is the same three verdicts an import gets: verified, bad dump (the
+        one worth finding: right size, wrong bytes -- bit rot or a tampered
+        file), unknown (homebrew, translations, a stale DAT). Duplicates
+        are reported by HASH, because two byte-identical files are a dupe
+        whatever their names, and two different dumps of one game are not.
+
+        One platform per run, in its own thread: hashing a whole 166k-game
+        library in one go is a job measured in hours, and an audit that
+        blocks the scheduler starves every import while it runs.
+        """
+        import threading as _threading
+
+        if self._audit_thread is not None and self._audit_thread.is_alive():
+            return {"error": "an audit is already running",
+                    **self._audit_state}
+        platform = resolve(platform_slug)
+        if platform is None:
+            return {"error": f"unknown platform: {platform_slug!r}"}
+        if self.dats is None:
+            return {"error": "no DATs loaded -- set the DAT directory under "
+                             "Settings -> Media Management first"}
+
+        root = self.library / platform.slug
+        state = {"status": "running", "platform": platform.slug,
+                 "scanned": 0, "verified": 0, "bad": 0, "unknown": 0,
+                 "bad_files": [], "duplicates": [],
+                 "started": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+        ROMarr._audit_state = state
+
+        def run():
+            from .dat import BAD_DUMP, VERIFIED, hash_file
+            seen: dict[str, str] = {}
+            try:
+                files = [p for p in sorted(root.rglob("*"))
+                         if p.is_file()][:50_000]
+            except OSError as err:
+                state.update(status="failed", error=str(err))
+                return
+            for path in files:
+                try:
+                    digest = hash_file(path)
+                except OSError:
+                    continue
+                state["scanned"] += 1
+                verdict = self.dats.lookup(**digest)
+                if verdict.status == VERIFIED:
+                    state["verified"] += 1
+                elif verdict.status == BAD_DUMP:
+                    state["bad"] += 1
+                    if len(state["bad_files"]) < 200:
+                        state["bad_files"].append({
+                            "file": str(path.relative_to(self.library)),
+                            "detail": verdict.detail or ""})
+                else:
+                    state["unknown"] += 1
+                sha = digest.get("sha1", "")
+                if sha in seen and len(state["duplicates"]) < 200:
+                    state["duplicates"].append({
+                        "file": str(path.relative_to(self.library)),
+                        "same_as": seen[sha]})
+                elif sha:
+                    seen[sha] = str(path.relative_to(self.library))
+            state["status"] = "done"
+            state["finished"] = datetime.now(timezone.utc)\
+                .isoformat(timespec="seconds")
+            log.info("audit of %s: %d scanned, %d verified, %d bad, "
+                     "%d unknown, %d duplicate(s)", platform.slug,
+                     state["scanned"], state["verified"], state["bad"],
+                     state["unknown"], len(state["duplicates"]))
+
+        ROMarr._audit_thread = _threading.Thread(
+            target=run, name="romarr-audit", daemon=True)
+        ROMarr._audit_thread.start()
+        return dict(state)
+
     def search_missing(self, *, auto: bool = False) -> dict:
         """Retry Wanted, the way *arr's missing search does.
 
@@ -2940,6 +3024,9 @@ def make_handler(service: ROMarr):
                 return self._json(200, {"api_key": service.auth.api_key})
             if route.path == "/api/v1/system/tasks":
                 return self._json(200, {"items": service.scheduler.status()})
+            if route.path == "/api/v1/audit":
+                return self._json(200, dict(service._audit_state)
+                                  or {"status": "never run"})
             if route.path == "/api/v1/stats":
                 return self._json(200, service.stats())
             if route.path == "/api/v1/game/meta":
@@ -3186,6 +3273,9 @@ def make_handler(service: ROMarr):
                                 if found else
                                 "the provider answered but found nothing -- "
                                 "check the key")})
+            if route.path == "/api/v1/audit":
+                return self._json(200, service.audit_library(
+                    str(body.get("platform") or "")))
             if route.path == "/api/v1/game/meta":
                 platform = str(body.get("platform") or "")
                 game = str(body.get("game") or "")

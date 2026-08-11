@@ -1036,11 +1036,54 @@ RENDER.stats=async()=>{
     </div></div>
     <div class="card"><h3>Imports by platform</h3>${bar(s.imported_by_platform)}</div>
     <div class="card"><h3>Grabs by indexer</h3>${bar(s.grabbed_by_indexer)}</div>
+    <div class="card"><h3>Library audit</h3>
+      <p class="help">Verify what is already on the shelf: every file hashed
+        against your DATs — <b>bad dump</b> means right size, wrong bytes
+        (bit rot or tampering) — and byte-identical duplicates found by
+        hash. One platform per run; it works in the background.</p>
+      <div class="row">
+        <select id="au-plat">${PLATFORMS.map(p=>
+          `<option value="${esc(p.slug)}">${esc(p.name)}</option>`).join('')}</select>
+        <button class="btn" id="au-go">Audit</button></div>
+      <div id="au-out" style="margin-top:10px"></div></div>
     <div class="card"><h3>Shelf</h3><div class="st">
       <div><b>${(s.statuses||{}).playing||0}</b><span>Playing</span></div>
       <div><b>${(s.statuses||{}).completed||0}</b><span>Completed</span></div>
       <div><b>${(s.statuses||{}).shelved||0}</b><span>Shelved</span></div>
     </div><p class="help">Set from any game tile in the Library.</p></div>`;
+
+  const paintAudit=a=>{
+    if(!a||!a.status||a.status==='never run'){$('#au-out').innerHTML='';return;}
+    $('#au-out').innerHTML=`<p class="help">
+      <b>${esc(a.platform||'')}</b> — ${esc(a.status)} ·
+      ${a.scanned||0} scanned · ${a.verified||0} verified ·
+      <b style="color:${a.bad?'var(--bad)':'inherit'}">${a.bad||0} bad</b> ·
+      ${a.unknown||0} unknown · ${(a.duplicates||[]).length} duplicate(s)</p>
+      ${(a.bad_files||[]).length?`<details><summary class="help"
+        style="cursor:pointer;margin:0">Bad dumps</summary>
+        <div style="color:var(--dim);font-size:12px">${a.bad_files.map(f=>
+          esc(f.file)+' — '+esc(f.detail)).join('<br>')}</div></details>`:''}
+      ${(a.duplicates||[]).length?`<details><summary class="help"
+        style="cursor:pointer;margin:0">Duplicates (byte-identical)</summary>
+        <div style="color:var(--dim);font-size:12px">${a.duplicates.map(d=>
+          esc(d.file)+' = '+esc(d.same_as)).join('<br>')}</div></details>`:''}`;
+  };
+  j('/api/v1/audit').then(paintAudit).catch(()=>{});
+  let auditTimer=null;
+  $('#au-go').onclick=async()=>{
+    const a=await j('/api/v1/audit',{method:'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify({platform:$('#au-plat').value})});
+    if(a.error){toast(a.error);return;}
+    paintAudit(a);
+    clearInterval(auditTimer);
+    auditTimer=setInterval(async()=>{
+      if(!$('#au-out')){clearInterval(auditTimer);return;}
+      const s=await j('/api/v1/audit').catch(()=>null);
+      if(s) paintAudit(s);
+      if(s&&s.status!=='running') clearInterval(auditTimer);
+    },2000);
+  };
 };
 
 RENDER.queue=async()=>{
