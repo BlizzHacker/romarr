@@ -380,7 +380,12 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
                                         verification=verdict))
             continue
 
-        destination = target_dir / _set_name(chosen.primary)
+        # A digital set is named after the download, not its primary: every
+        # repack's installer is called setup.exe, and a library of
+        # directories all named "setup" is a library of nothing.
+        set_name = (download.stem if platform.media == "digital"
+                    else _set_name(chosen.primary))
+        destination = target_dir / set_name
         if destination.exists() and any(destination.iterdir()) and not overwrite:
             results.append(
                 ImportResult(False, destination, "already in the library"))

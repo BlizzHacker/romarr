@@ -309,6 +309,20 @@ PLATFORMS: tuple[Platform, ...] = (
              # "this is a PC port" for every console. Here they are the
              # platform.
              native_markers=("dos", "pc", "windows")),
+    # Modern PC, which is Questarr's home turf and now also ours. `win` is
+    # the slug RomM's own filesystem layout uses for Windows. media="digital"
+    # is what flips the scorer's rules: on every other platform a FitGirl or
+    # DODI repack is a wrong grab, on this one it is the normal shipping
+    # form -- and the whole download is one installer set, so import keeps
+    # it together instead of cherry-picking a setup.exe.
+    Platform("win", "PC (Windows)", (".exe", ".msi", ".iso"),
+             ("pc", "windows", "microsoft windows", "pc (windows)",
+              "pc windows"),
+             max_size=250 * GB, media="digital",
+             native_markers=("pc", "windows", "repack", "steam", "gog",
+                             "codex", "tenoke", "rune", "empress", "skidrow",
+                             "plaza", "flt", "razor1911", "cracked",
+                             "crackfix", "goldberg", "online-fix")),
 )
 
 _BY_SLUG = {p.slug: p for p in PLATFORMS}

@@ -111,6 +111,20 @@ _JUNK_MARKERS = (
     "translat", "trainer", "repack", "update only", "dlc",
 )
 
+#: The same idea for PC, where "repack" is FitGirl's and DODI's normal
+#: shipping form rather than a defect, and "patched" describes half the
+#: catalogue. What still marks junk on PC: betas, demos, trainers, bare
+#: updates and DLC-only uploads.
+_JUNK_MARKERS_DIGITAL = (
+    "beta", "demo", "sample", "trainer", "update only", "dlc only",
+)
+
+#: Repack groups with long, consistent track records. The bonus exists so a
+#: FitGirl repack outranks an anonymous upload of the same game -- the same
+#: judgement a person makes on the search page.
+_TRUSTED_REPACKERS = ("fitgirl", "dodi", "elamigos", "kaoskrew", "masquerade",
+                      "gog-rip", "razor1911")
+
 # Language markers, and what they mean here.
 #
 # A release title says what was DONE to a ROM at least as often as it says
@@ -344,7 +358,9 @@ def judge(release: Release, wanted: str,
     if _GOOD_DUMP_MARKER in lowered:
         add(_GOOD_DUMP_BONUS, "verified good dump [!]")
 
-    hit = next((m for m in _JUNK_MARKERS if m in lowered), "")
+    _digital = platform is not None and platform.media == "digital"
+    junk = _JUNK_MARKERS_DIGITAL if _digital else _JUNK_MARKERS
+    hit = next((m for m in junk if m in lowered), "")
     if hit:
         add(-120, f"looks like a hack, beta or repack ({hit!r})")
 
@@ -357,12 +373,16 @@ def judge(release: Release, wanted: str,
     translated = (
         any(_mentions(lowered, marker) for marker in _NON_ENGLISH_MARKERS)
         or _TRANSLATION_TAG.search(lowered) is not None
-        or _MULTI_LANGUAGE.search(lowered) is not None
+        # MULTi12 on a PC repack is a feature -- the installer carries
+        # every language -- not a sign the game is in the wrong one.
+        or (_MULTI_LANGUAGE.search(lowered) is not None and not _digital)
     )
     if translated:
         add(-_TRANSLATION_PENALTY, "not English, or a fan translation")
 
-    if _CREDITED_TO_A_GROUP.search(lowered):
+    if _CREDITED_TO_A_GROUP.search(lowered) and not _digital:
+        # On a cartridge a group credit usually means a hack; on PC it is
+        # how every release is signed.
         add(-_CREDIT_PENALTY, "credited to a group, which usually means a hack")
 
     # Reject a release that names a system other than the one requested. Its own
@@ -389,10 +409,17 @@ def judge(release: Release, wanted: str,
     # A cracked PC release, whatever it is named. Rejected rather than
     # penalised for the same reason a compilation is: there is no ROM inside
     # for the importer to file, so the grab would succeed and the import
-    # could not.
-    for marker in PC_RELEASE_MARKERS:
-        if _mentions(lowered, marker):
-            return Judgement(-300, verdict=f"a PC release ({marker})")
+    # could not. Unless PC is the platform being asked for -- then a scene
+    # or repack name is the normal shipping form, not a wrong turn.
+    digital = platform is not None and platform.media == "digital"
+    if not digital:
+        for marker in PC_RELEASE_MARKERS:
+            if _mentions(lowered, marker):
+                return Judgement(-300, verdict=f"a PC release ({marker})")
+    else:
+        repacker = next((g for g in _TRUSTED_REPACKERS if g in lowered), "")
+        if repacker:
+            add(40, f"trusted repacker ({repacker})")
 
     # A compilation is not a cartridge dump, and cannot be imported as one.
     #
@@ -577,6 +604,24 @@ def pick_rom_file(filenames: list[str], platform: Platform) -> str | None:
     return chosen.primary if chosen else None
 
 
+def _digital_set(filenames: list[str]) -> RomSet | None:
+    """A PC release as one set: the installer and everything it needs.
+
+    A FitGirl or DODI download is setup.exe plus its .bin archives plus
+    whatever else the repacker shipped, and cherry-picking the .exe out of
+    that is how you import an installer that cannot install. Everything is
+    kept -- including the files other platforms treat as extras -- and the
+    primary is the setup executable when one exists, because that is the
+    file a person runs.
+    """
+    if not filenames:
+        return None
+    exes = [f for f in filenames if f.lower().endswith(".exe")]
+    primary = next((f for f in exes if "setup" in f.lower()),
+                   exes[0] if exes else filenames[0])
+    return RomSet(primary, tuple(filenames))
+
+
 def pick_rom_set(filenames: list[str], platform: Platform, *,
                  read=None) -> RomSet | None:
     """Which files in a finished download make up the game.
@@ -593,6 +638,9 @@ def pick_rom_set(filenames: list[str], platform: Platform, *,
     """
     if not filenames:
         return None
+
+    if platform.media == "digital":
+        return _digital_set(filenames)
 
     playable = [f for f in filenames if not _is_extra(f)]
 
@@ -629,6 +677,10 @@ def pick_all_rom_sets(filenames: list[str], platform: Platform, *,
     """
     if not filenames:
         return []
+
+    if platform.media == "digital":
+        one = _digital_set(filenames)
+        return [one] if one else []
 
     playable = [f for f in filenames if not _is_extra(f)]
 

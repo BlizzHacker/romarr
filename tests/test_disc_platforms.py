@@ -138,9 +138,12 @@ def test_every_alias_resolves_to_the_platform_that_declares_it():
                 f"{platform.slug} alias {alias!r} resolves to {got.slug}")
 
 
-def test_media_is_one_of_the_three_known_values():
+def test_media_is_one_of_the_four_known_values():
+    # "digital" is the fourth medium: modern PC, where there is no physical
+    # dump and a 100GB installer is a normal size.
     for platform in platforms.PLATFORMS:
-        assert platform.media in (CARTRIDGE, DISC, COMPUTER), platform.slug
+        assert platform.media in (CARTRIDGE, DISC, COMPUTER,
+                                  "digital"), platform.slug
 
 
 def test_all_extensions_still_answers_for_every_platform():

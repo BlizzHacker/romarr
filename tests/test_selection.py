@@ -480,6 +480,10 @@ def test_every_platform_declares_a_ceiling_matched_to_its_medium():
         CARTRIDGE: 300 * 1024 * 1024,
         DISC: 16 * GB,
         COMPUTER: 4 * GB,
+        # Modern PC: a AAA install routinely passes 100GB, and the ceiling
+        # exists to reject romsets-pretending-to-be-cartridges, a failure
+        # mode digital does not have.
+        "digital": 300 * GB,
     }
     big_cards = {"nds", "3ds"}
     for p in PLATFORMS:
