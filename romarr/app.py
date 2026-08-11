@@ -2322,6 +2322,24 @@ class ROMarr:
                       for g in rows],
         }
 
+    def peer_shelf(self, peer) -> list[dict]:
+        """The projection this peer is allowed to see, from the live cache."""
+        games, _, _ = self._library_cache
+        return self.federation.project(peer, games or [])
+
+    def peer_request(self, peer, title: str, platform: str) -> dict:
+        """A peer asking me to acquire something.
+
+        Allowed only for `fetch`; a `catalogue` peer sees the shelf and
+        acquires through its OWN indexers, which is the safe default and
+        the reason catalogue exists as a separate grant.
+        """
+        if peer.access != "fetch":
+            return {"ok": False,
+                    "error": "this peer may see the catalogue but not "
+                             "request downloads"}
+        return self.request(title, platform)
+
     def stats(self) -> dict:
         """The numbers page: what this install has actually done.
 
@@ -2905,7 +2923,13 @@ def make_handler(service: ROMarr):
         #: short-lived `state` -- minted by an authenticated request -- is
         #: what authorises it instead.
         OPEN_PATHS = ("/", "/login", "/api/health", "/api/v1/login",
-                      "/api/v1/setup", "/api/v1/connect/steam/return")
+                      "/api/v1/setup", "/api/v1/connect/steam/return",
+                      # Peer-facing: authenticated by peer id + token in
+                      # headers, which is a DIFFERENT credential from the
+                      # operator's session. Open to the session gate and
+                      # closed to anyone without a valid peer token.
+                      "/api/v1/peer/accept", "/api/v1/peer/shelf",
+                      "/api/v1/peer/netplay")
 
         def _send_session(self, token: str, payload: dict):
             """Answer with a session cookie set.
@@ -3276,6 +3300,16 @@ def make_handler(service: ROMarr):
                 return self._json(200, {"api_key": service.auth.api_key})
             if route.path == "/api/v1/system/tasks":
                 return self._json(200, {"items": service.scheduler.status()})
+            if route.path == "/api/v1/peer/shelf":
+                # Peer-facing. Authenticated by peer id + token, never by
+                # the operator's session -- a peer is not a user here.
+                peer = service.federation.authenticate(
+                    self.headers.get("X-Peer-Id", ""),
+                    self.headers.get("X-Peer-Token", ""))
+                if peer is None:
+                    return self._json(401, {"error": "unknown peer"})
+                return self._json(200, {"items": service.peer_shelf(peer),
+                                        "origin": service.federation.name})
             if route.path == "/api/v1/peer":
                 return self._json(200, {
                     "name": service.federation.name,
@@ -3533,6 +3567,74 @@ def make_handler(service: ROMarr):
                                 if found else
                                 "the provider answered but found nothing -- "
                                 "check the key")})
+            if route.path == "/api/v1/peer/invite":
+                invite = service.federation.invite(
+                    name=str(body.get("name") or service.federation.name))
+                return self._json(200, {
+                    "invite": invite.blob(),
+                    "note": "Send this to your friend out of band. It works "
+                            "once and expires in 24 hours; you confirm the "
+                            "peer here before they can see anything."})
+            if route.path == "/api/v1/peer/redeem":
+                try:
+                    peer = service.federation.redeem(body.get("invite") or {})
+                except ValueError as exc:
+                    return self._json(400, {"error": str(exc)})
+                return self._json(200, {"peer_id": peer.peer_id,
+                                        "name": peer.name})
+            if route.path == "/api/v1/peer/accept":
+                # Called BY a peer redeeming my invitation, so it carries
+                # the one-time secret rather than a session.
+                try:
+                    peer = service.federation.accept(
+                        str(body.get("peer_id") or ""),
+                        str(body.get("secret") or ""),
+                        name=str(body.get("name") or "peer"),
+                        url=str(body.get("url") or ""))
+                except ValueError as exc:
+                    return self._json(400, {"error": str(exc)})
+                return self._json(200, {"peer_id": peer.peer_id,
+                                        "confirmed": peer.confirmed,
+                                        "note": "held until the operator "
+                                                "confirms it"})
+            if route.path == "/api/v1/peer/confirm":
+                try:
+                    peer = service.federation.confirm(
+                        str(body.get("peer_id") or ""))
+                except ValueError as exc:
+                    return self._json(404, {"error": str(exc)})
+                return self._json(200, {"peer_id": peer.peer_id,
+                                        "confirmed": True})
+            if route.path == "/api/v1/peer/policy":
+                from .federation import ACCESS, SCOPES
+                peer = service.federation.peers.get(
+                    str(body.get("peer_id") or ""))
+                if peer is None:
+                    return self._json(404, {"error": "no such peer"})
+                scope = str(body.get("scope") or peer.scope)
+                access = str(body.get("access") or peer.access)
+                if scope not in SCOPES or access not in ACCESS:
+                    return self._json(400, {
+                        "error": "unknown scope or access",
+                        "scopes": list(SCOPES), "access": list(ACCESS)})
+                peer.scope, peer.access = scope, access
+                if body.get("platforms") is not None:
+                    peer.platforms = tuple(body.get("platforms") or ())
+                if body.get("delegate_users") is not None:
+                    peer.delegate_users = bool(body.get("delegate_users"))
+                return self._json(200, {"peer_id": peer.peer_id,
+                                        "scope": peer.scope,
+                                        "access": peer.access})
+            if route.path == "/api/v1/peer/netplay":
+                # A peer proposing a session. The answer is about bytes.
+                peer = service.federation.authenticate(
+                    self.headers.get("X-Peer-Id", ""),
+                    self.headers.get("X-Peer-Token", ""))
+                if peer is None:
+                    return self._json(401, {"error": "unknown peer"})
+                games, _, _ = service._library_cache
+                return self._json(200, service.federation.netplay_answer(
+                    body.get("offer") or {}, games or []))
             if route.path == "/api/v1/audit":
                 return self._json(200, service.audit_library(
                     str(body.get("platform") or "")))
@@ -3809,6 +3911,10 @@ def make_handler(service: ROMarr):
                 item_id = route.path[len("/api/v1/importlist/"):]
                 removed = service.store.delete_item("import_lists", item_id)
                 return self._json(200 if removed else 404, {"deleted": removed})
+            if route.path.startswith("/api/v1/peer/"):
+                peer_id = route.path[len("/api/v1/peer/"):]
+                gone = service.federation.revoke(peer_id)
+                return self._json(200 if gone else 404, {"revoked": gone})
             if route.path.startswith("/api/v1/connection/"):
                 item_id = route.path[len("/api/v1/connection/"):]
                 removed = service.store.delete_item("connections", item_id)

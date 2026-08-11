@@ -35,7 +35,9 @@ def test_the_documented_open_paths_are_the_actual_open_paths(doc, tmp_path):
     actual = set(handler.OPEN_PATHS)
     assert actual == {"/", "/login", "/api/health", "/api/v1/login",
                       "/api/v1/setup",
-                      "/api/v1/connect/steam/return"}, (
+                      "/api/v1/connect/steam/return",
+                      "/api/v1/peer/accept", "/api/v1/peer/shelf",
+                      "/api/v1/peer/netplay"}, (
         "the set of unauthenticated routes changed; SECURITY.md lists them")
     for path in actual:
         assert path in doc, f"{path} answers without a credential and is undocumented"

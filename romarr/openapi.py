@@ -112,6 +112,19 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
                                         "?decade=1990s lists that decade."),
     "/api/v1/peer": ("GET", "Peered ROMarr instances: scope, access and "
                             "confirmation state. Tokens never appear here."),
+    "/api/v1/peer/invite": ("POST", "Mint a one-time invitation to send a "
+                                    "friend out of band."),
+    "/api/v1/peer/redeem": ("POST", "Redeem a friend's invitation."),
+    "/api/v1/peer/accept": ("POST", "Called BY a peer redeeming your "
+                                    "invitation; held unconfirmed."),
+    "/api/v1/peer/confirm": ("POST", "Confirm a peer that redeemed your "
+                                     "invitation."),
+    "/api/v1/peer/policy": ("POST", "Set one peer's scope and access."),
+    "/api/v1/peer/shelf": ("GET", "Peer-facing: the projection this peer may "
+                                  "see. Peer id + token headers."),
+    "/api/v1/peer/netplay": ("POST", "Peer-facing: answer a session offer by "
+                                     "matching its DAT hash against this "
+                                     "library."),
     "/api/v1/ecosystem": ("GET", "The projects ROMarr stands on: library "
                                  "servers, players, indexers, DAT databases "
                                  "-- repo, site and install command for each."),

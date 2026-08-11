@@ -83,6 +83,28 @@ Exactly five routes answer without a credential, and no others:
 | `/api/v1/setup` | First-run claim. Open only while unclaimed; `409` after. |
 | `/api/health` | Container health checks have no credential to offer. |
 | `/api/v1/connect/steam/return` | Steam's OpenID redirect. It *cannot* carry the session cookie — see below. |
+| `/api/v1/peer/accept` | A peer redeeming an invitation you minted. Carries the one-time secret. |
+| `/api/v1/peer/shelf` | A peer reading what you share. Requires peer id + token. |
+| `/api/v1/peer/netplay` | A peer proposing a session. Requires peer id + token. |
+
+**The three peer routes are open to the *session* gate and closed to
+everyone without a peer credential.** They are called by another server,
+not by a person with a browser, so requiring the operator's session cookie
+would make federation impossible. Each authenticates differently instead:
+
+- `/api/v1/peer/accept` requires the **one-time invitation secret** you
+  minted and sent out of band. It is single-use, expires in 24 hours, and
+  compared in constant time. Redeeming it does not grant access to
+  anything — the peer is held **unconfirmed** until you confirm it, so a
+  leaked invitation is recoverable rather than final.
+- `/api/v1/peer/shelf` and `/api/v1/peer/netplay` require an
+  `X-Peer-Id` + `X-Peer-Token` pair issued to exactly one peer, compared
+  in constant time. An unconfirmed peer authenticates as nobody, and a
+  confirmed peer with the default `scope: none` sees an empty shelf, so
+  neither route leaks anything by existing.
+
+Revocation is one-sided and immediate: deleting a peer invalidates its
+token without that peer's cooperation, and touches no other peer's.
 
 `/api/health` returns one bit unauthenticated — it used to return library paths
 and client URLs, which is what a health check does not need.

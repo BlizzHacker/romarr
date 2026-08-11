@@ -212,7 +212,7 @@ NAV = [
                   ("calendar", "Calendar", None)]),
     ("Activity", [("queue", "Queue", "queued"), ("history", "History", None),
                   ("blocklist", "Blocklist", None)]),
-    ("Hub",      [("hub", "Plugins", None)]),
+    ("Hub",      [("hub", "Plugins", None), ("peers", "Friends", None)]),
     ("Settings", [("media", "Media Management", None), ("profiles", "Profiles", None),
                   ("indexers", "Indexers", None), ("clients", "Download Clients", None),
                   ("libraries", "Libraries", None),
@@ -262,7 +262,7 @@ function go(page){
     n.classList.toggle('on', n.dataset.page===page));
   const titles={library:'Games',add:'Add New Game',search:'Interactive Search',
     missing:'Wanted — Missing',lists:'Import Lists',stats:'Statistics',
-    discover:'Discover',ecosystem:'The Ecosystem',
+    discover:'Discover',ecosystem:'The Ecosystem',peers:'Friends',
     queue:'Queue',history:'History',media:'Media Management',profiles:'Profiles',
     indexers:'Indexers',clients:'Download Clients',libraries:'Libraries',
     general:'General',
@@ -1100,6 +1100,140 @@ RENDER.discover=async()=>{
     refreshCounts();
   });
 };
+
+RENDER.peers=async()=>{
+  const d=await j('/api/v1/peer').catch(()=>({peers:[]}));
+  const list=d.peers||[];
+  const scopeLabel={none:'Nothing',platforms:'Named platforms only',
+    verified:'Verified dumps only',all:'Everything'};
+  const accessLabel={catalogue:'See titles only',stream:'Play here',
+    fetch:'Download from me'};
+  $('#page').innerHTML=`<div class="card"><h3>Friends</h3>
+      <p class="help">Share a library with someone running their own server —
+        RomM, Gaseous, Retrom, it does not matter, because ROMarr speaks all
+        of them. Peering is by invitation and confirmed on both sides: there
+        is no directory, and nobody finds you.
+        <b>Peering shares nothing by itself</b> — you choose what each friend
+        sees, and separately what they may do with it.</p>
+      <div class="row" style="flex-wrap:wrap;gap:8px">
+        <button class="btn" id="p-invite">Invite a friend</button>
+        <button class="btn ghost" id="p-redeem">I have an invitation</button>
+      </div>
+      <div id="p-out" style="margin-top:12px"></div></div>
+    ${list.length?`<div class="card"><h3>Your friends</h3>
+      <table><thead><tr><th>Name</th><th>They see</th><th>They may</th>
+        <th>State</th><th></th></tr></thead><tbody>
+      ${list.map((p,i)=>`<tr><td><b>${esc(p.name)}</b>
+        <div style="color:var(--dim);font-size:11.5px">${esc(p.url||'')}</div></td>
+        <td>${esc(scopeLabel[p.scope]||p.scope)}${
+          p.scope==='platforms'&&(p.platforms||[]).length
+            ?`<div style="color:var(--dim);font-size:11.5px">${esc(p.platforms.join(', '))}</div>`:''}</td>
+        <td>${esc(accessLabel[p.access]||p.access)}${
+          p.delegate_users?' <span class="pill">their users too</span>':''}</td>
+        <td>${p.confirmed?'<span class="pill imported">confirmed</span>'
+          :'<span class="pill failed">awaiting your confirmation</span>'}</td>
+        <td style="text-align:right"><div class="rowact">
+          ${p.confirmed?`<button data-pedit="${i}">Sharing</button>`
+            :`<button data-pconfirm="${esc(p.peer_id)}">Confirm</button>`}
+          <button data-prevoke="${esc(p.peer_id)}">Remove</button>
+        </div></td></tr>`).join('')}</tbody></table></div>`
+      :'<div class="empty">No friends yet. Invite someone, or paste an invitation they sent you.</div>'}`;
+
+  $('#p-invite').onclick=async()=>{
+    const r=await j('/api/v1/peer/invite',{method:'POST',
+      headers:{'content-type':'application/json'},body:'{}'});
+    $('#p-out').innerHTML=`<div class="card" style="margin:0">
+      <h3>Send this to your friend</h3>
+      <p class="help">${esc(r.note||'')}</p>
+      <textarea rows="4" readonly style="width:100%;font:12px/1.5 ui-monospace,
+        Menlo,monospace">${esc(JSON.stringify(r.invite||{}))}</textarea>
+      <button class="btn ghost" id="p-copy">Copy invitation</button></div>`;
+    $('#p-copy').onclick=async()=>{
+      try{await navigator.clipboard.writeText(JSON.stringify(r.invite||{}));
+        toast('Invitation copied');}catch{toast('Select and copy it');}
+    };
+  };
+
+  $('#p-redeem').onclick=()=>{
+    $('#p-out').innerHTML=`<div class="card" style="margin:0">
+      <h3>Paste your friend's invitation</h3>
+      <textarea id="p-blob" rows="4" style="width:100%;font:12px/1.5
+        ui-monospace,Menlo,monospace" placeholder='{"peer_id":"...","secret":"..."}'></textarea>
+      <div id="testline"></div>
+      <button class="btn" id="p-go">Become friends</button></div>`;
+    $('#p-go').onclick=async()=>{
+      let blob;
+      try{ blob=JSON.parse($('#p-blob').value); }
+      catch{ toast('That is not a valid invitation'); return; }
+      const r=await j('/api/v1/peer/redeem',{method:'POST',
+        headers:{'content-type':'application/json'},
+        body:JSON.stringify({invite:blob})});
+      if(r.error){toast(r.error);return;}
+      toast('Friend added — they confirm on their side');
+      go('peers');
+    };
+  };
+
+  document.querySelectorAll('[data-pconfirm]').forEach(b=>b.onclick=async()=>{
+    await j('/api/v1/peer/confirm',{method:'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify({peer_id:b.dataset.pconfirm})});
+    toast('Confirmed'); go('peers');
+  });
+  document.querySelectorAll('[data-prevoke]').forEach(b=>b.onclick=async()=>{
+    if(!confirm('Remove this friend? They lose access immediately and do '
+      +'not have to agree.')) return;
+    await fetch('/api/v1/peer/'+b.dataset.prevoke,{method:'DELETE'});
+    toast('Removed'); go('peers');
+  });
+  document.querySelectorAll('[data-pedit]').forEach(b=>b.onclick=()=>
+    sharingEditor(list[Number(b.dataset.pedit)]));
+};
+
+function sharingEditor(peer){
+  const m=document.createElement('div');
+  m.className='modal';
+  const opt=(v,cur,label)=>`<option value="${v}"${v===cur?' selected':''}>${label}</option>`;
+  m.innerHTML=`<div class="box">
+    <h3>What ${esc(peer.name)} can see</h3>
+    <div class="sub">Seeing and fetching are separate on purpose.</div>
+    <div class="field"><label>They see</label>
+      <select data-f="scope">
+        ${opt('none',peer.scope,'Nothing (peered for netplay only)')}
+        ${opt('platforms',peer.scope,'Only the platforms I name')}
+        ${opt('verified',peer.scope,'Only DAT-verified dumps')}
+        ${opt('all',peer.scope,'Everything in my library')}
+      </select></div>
+    <div class="field"><label>Platforms (comma separated, for the option above)</label>
+      <input type="text" data-f="platforms" data-list="1"
+        value="${esc((peer.platforms||[]).join(', '))}" placeholder="snes, n64"></div>
+    <div class="field"><label>They may</label>
+      <select data-f="access">
+        ${opt('catalogue',peer.access,'See titles only — they acquire it themselves')}
+        ${opt('stream',peer.access,'Play it here, no file transfer')}
+        ${opt('fetch',peer.access,'Download the file from me')}
+      </select>
+      <div style="color:var(--dim);font-size:11.5px;margin-top:4px">
+        Download makes your server a source for this person. Choose it
+        deliberately.</div></div>
+    <label class="check"><input type="checkbox" data-f="delegate_users"
+      ${peer.delegate_users?'checked':''}><span>Their users get this too,
+      not just them</span></label>
+    <div class="foot">
+      <button class="btn ghost sp" data-close>Cancel</button>
+      <button class="btn" id="p-save">Save</button></div></div>`;
+  document.body.append(m);
+  m.onclick=e=>{ if(e.target===m||e.target.dataset.close!==undefined) closeModal(); };
+  m.querySelector('#p-save').onclick=async()=>{
+    const f=readForm();
+    const r=await j('/api/v1/peer/policy',{method:'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify({peer_id:peer.peer_id,scope:f.scope,
+        access:f.access,platforms:f.platforms,
+        delegate_users:f.delegate_users})});
+    closeModal(); toast(r.error||'Saved'); go('peers');
+  };
+}
 
 RENDER.ecosystem=async()=>{
   const d=await j('/api/v1/ecosystem').catch(()=>({categories:{}}));

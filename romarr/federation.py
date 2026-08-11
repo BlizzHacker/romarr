@@ -226,6 +226,82 @@ class Federation:
                 break
         return out
 
+    # -- netplay -------------------------------------------------------------
+    #
+    # EmulatorJS coordinates a session; what it cannot do is agree on the
+    # ROM. Two players on different servers running different dumps of the
+    # same game desync within seconds, and the failure looks like a network
+    # problem -- so people blame their connection and never find it.
+    #
+    # ROMarr is the only tool in this stack that already knows a file's
+    # SHA1 from DAT verification, so it is the only one that can settle the
+    # question before the session starts rather than after it fails.
+
+    def netplay_offer(self, game) -> dict:
+        """What I send a peer when inviting them to play.
+
+        The hash is the invitation. A title is not: "Super Mario Kart" is
+        four different ROMs.
+        """
+        return {
+            "title": getattr(game, "name", ""),
+            "platform": getattr(game, "platform", ""),
+            "sha1": str(getattr(game, "sha1", "") or "").lower(),
+            "verified": bool(getattr(game, "verified", False)),
+            "host": self.name,
+        }
+
+    @staticmethod
+    def netplay_answer(offer: dict, library) -> dict:
+        """Whether this side can join, judged on bytes rather than names.
+
+        Four honest outcomes, and only one of them starts a session:
+
+          ready      -- same SHA1, both verified. Play.
+          mismatch   -- the title is here and the bytes differ. This is the
+                        case that silently ruins netplay, so it is named.
+          unverified -- the hash matches but one side never checked it
+                        against a DAT; playable, with a caveat said out loud.
+          missing    -- not here at all; the normal acquisition pipeline can
+                        fetch exactly this dump, because the hash identifies
+                        it precisely.
+        """
+        wanted = str(offer.get("sha1") or "").lower()
+        title = str(offer.get("title") or "")
+        if not wanted:
+            return {"status": "missing",
+                    "detail": "the invitation carried no hash, so the dump "
+                              "cannot be matched -- ROMarr will not start a "
+                              "session it cannot prove"}
+
+        by_title = None
+        for game in library:
+            if str(getattr(game, "sha1", "") or "").lower() == wanted:
+                both_verified = (bool(offer.get("verified"))
+                                 and bool(getattr(game, "verified", False)))
+                return {
+                    "status": "ready" if both_verified else "unverified",
+                    "title": getattr(game, "name", title),
+                    "detail": "" if both_verified else
+                              "the bytes match, but one side has not verified "
+                              "this dump against a DAT",
+                }
+            if not by_title and str(getattr(game, "name", "")).lower() \
+                    == title.lower():
+                by_title = game
+
+        if by_title is not None:
+            return {
+                "status": "mismatch",
+                "title": getattr(by_title, "name", title),
+                "detail": "you both have this game and they are different "
+                          "dumps -- netplay would desync within seconds, "
+                          "which usually gets blamed on the connection",
+            }
+        return {"status": "missing", "title": title,
+                "detail": "not in this library; the hash identifies exactly "
+                          "which dump to acquire"}
+
     def status(self) -> list[dict]:
         """The Peers page. Tokens never appear here."""
         return [
