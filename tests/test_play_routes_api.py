@@ -54,7 +54,9 @@ def test_configuring_a_stream_server_is_visible_in_status(tmp_path):
 def test_an_unreachable_stream_server_does_not_break_the_status_page(tmp_path):
     """A LAN service being down is normal and must cost a route, not a page."""
     wired = svc(tmp_path, STREAM_SERVER_URL="http://stream.invalid:9")
-    wired.stream.timeout = 0.05
+    # `service.stream` is the combiner that fronts both stream tiers; the
+    # RetroArch client is the thing with a socket on it.
+    wired.retroarch.timeout = 0.05
     status = wired.status()
     assert status["play_routes"]["total"] > 30
     assert status["play_routes"]["download_only"] >= 5
@@ -70,17 +72,17 @@ def test_a_down_stream_server_is_asked_once_not_once_per_platform(tmp_path):
     """
     wired = svc(tmp_path, STREAM_SERVER_URL="http://stream.invalid:9")
     attempts = []
-    real = wired.stream.tier
+    real = wired.retroarch.tier
 
     def counting(slug):
         attempts.append(slug)
         return real(slug)
 
-    wired.stream.timeout = 0.05
-    wired.stream.tier = counting
+    wired.retroarch.timeout = 0.05
+    wired.retroarch.tier = counting
     wired.status()
 
     # Every platform is still asked; the client answers all but the first
     # from its own breaker without touching the network.
     assert len(attempts) > 30
-    assert wired.stream._down_until > 0
+    assert wired.retroarch._down_until > 0

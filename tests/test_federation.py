@@ -4,7 +4,10 @@ from dataclasses import dataclass
 
 import pytest
 
-from romarr.federation import ACCESS, SCOPES, Federation, Peer
+from romarr.federation import (ACCESS, CLAIM_ALPHABET, CLAIM_CODE_TTL,
+                               CLAIM_LENGTH, MAX_CLAIM_ATTEMPTS, SCOPES,
+                               Federation, Peer, new_claim_code,
+                               normalise_claim_code, parse_invite_link)
 
 
 @dataclass
@@ -75,6 +78,160 @@ def test_an_expired_invite_is_refused_and_forgotten():
 def test_a_malformed_invitation_is_refused():
     with pytest.raises(ValueError):
         Federation("Bob").redeem({"url": "https://alice.example"})
+
+
+# -- the link, which must never be worth stealing -----------------------------
+#
+# A URL is the worst envelope there is for a bearer credential: history, chat
+# previews, referrers and proxy logs all see it. So the link carries an id and
+# a name and nothing else, and the secret is a code the friend types.
+
+
+def test_the_invitation_link_contains_no_secret():
+    """The property the whole two-part design exists for."""
+    alice = Federation("Alice", "https://alice.example")
+    invite = alice.invite(name="Alice")
+    link = invite.link()
+    assert invite.secret not in link
+    assert invite.code not in link
+    assert invite.code_display not in link
+    assert link.startswith("https://alice.example/link#")
+
+
+def test_everything_identifying_is_in_the_fragment():
+    """A fragment is not transmitted. That is what keeps the invitation id
+    out of the inviter's access log and out of a link preview's fetch."""
+    alice = Federation("Alice", "https://alice.example")
+    invite = alice.invite(name="Alice")
+    before_hash, _, fragment = invite.link().partition("#")
+    assert before_hash == "https://alice.example/link", \
+        "anything before the # is sent to the server on every click"
+    assert invite.peer_id in fragment
+
+
+def test_a_server_with_no_address_mints_no_link():
+    """A link to nowhere reads as a working invitation and fails later, as
+    silence -- so there is no link at all until a public URL is set."""
+    assert Federation("Alice").invite().link() == ""
+
+
+def test_a_link_names_the_server_it_came_from():
+    alice = Federation("Alice", "https://alice.example")
+    invite = alice.invite(name="Alice's shelf")
+    parsed = parse_invite_link(invite.link())
+    assert parsed == {"url": "https://alice.example",
+                      "peer_id": invite.peer_id,
+                      "name": "Alice's shelf", "rehomed": False}
+
+
+def test_a_rehomed_link_carries_the_inviters_address_instead():
+    """Once the landing page moves the link onto the recipient's own host,
+    the origin is no longer the inviter's and `u` has to carry it."""
+    parsed = parse_invite_link(
+        "http://bob.local:7878/link#i=abc123&u=https%3A%2F%2Falice.example")
+    assert parsed["url"] == "https://alice.example"
+    assert parsed["rehomed"] is True
+
+
+def test_junk_is_not_an_invitation_link():
+    for bad in ("", "not a url", "https://alice.example/link",
+                "ftp://alice.example/link#i=abc", "https://alice.example#i="):
+        with pytest.raises(ValueError):
+            parse_invite_link(bad)
+
+
+# -- the claim code -----------------------------------------------------------
+
+
+def test_a_claim_code_is_short_enough_to_read_aloud():
+    code = new_claim_code()
+    assert len(code) == CLAIM_LENGTH
+    assert set(code) <= set(CLAIM_ALPHABET)
+    # The letters that come back as digits over a phone are never minted.
+    assert not set("ILOU") & set(code)
+
+
+def test_a_mistyped_claim_code_still_works():
+    """Crockford's rule: never mint the ambiguous characters, always forgive
+    them. This costs no entropy and is the difference between a code that
+    works over the phone and one that works on the third try."""
+    assert normalise_claim_code("k7rm-9tfq") == "K7RM9TFQ"
+    assert normalise_claim_code("K7RM 9TFQ") == "K7RM9TFQ"
+    assert normalise_claim_code("OI L") == "011"
+
+
+def test_the_code_and_the_secret_open_the_same_one_invitation():
+    alice = Federation("Alice", "https://alice.example")
+    invite = alice.invite()
+    peer = alice.accept(invite.peer_id, invite.code_display, name="Bob")
+    # Whichever door they came through, the durable token is the long one.
+    assert peer.token == invite.secret
+    assert not peer.confirmed, "a claim code is not a grant either"
+    # And spending one spends the other: it is one invitation.
+    with pytest.raises(ValueError):
+        alice.accept(invite.peer_id, invite.secret)
+
+
+def test_the_claim_code_expires_long_before_the_invitation_does():
+    """Forty bits sitting in a chat log all day is forty bits sitting in a
+    chat log all day. The link stays good for the full 24 hours."""
+    alice = Federation("Alice", "https://alice.example")
+    invite = alice.invite()
+    invite.created_at -= CLAIM_CODE_TTL + 60
+    with pytest.raises(ValueError) as err:
+        alice.accept(invite.peer_id, invite.code)
+    assert "expired" in str(err.value)
+    # The invitation itself is untouched, and the long secret still works.
+    assert alice.accept(invite.peer_id, invite.secret).peer_id == invite.peer_id
+
+
+def test_a_late_but_correct_code_is_not_counted_as_a_wrong_guess():
+    """Telling somebody "that is wrong" sends them hunting for a typo that is
+    not there, and spends a guess they did not make."""
+    alice = Federation("Alice", "https://alice.example")
+    invite = alice.invite()
+    invite.created_at -= CLAIM_CODE_TTL + 60
+    for _ in range(MAX_CLAIM_ATTEMPTS + 2):
+        with pytest.raises(ValueError):
+            alice.accept(invite.peer_id, invite.code)
+    assert invite.attempts == 0
+    assert invite.peer_id in alice._invites
+
+
+def test_guessing_at_a_claim_code_destroys_the_invitation():
+    """Eight characters is a number you can count to, so the cost of counting
+    has to be that the thing being counted at stops existing."""
+    alice = Federation("Alice", "https://alice.example")
+    invite = alice.invite()
+    for _ in range(MAX_CLAIM_ATTEMPTS - 1):
+        with pytest.raises(ValueError):
+            alice.accept(invite.peer_id, "AAAA-AAAA")
+    with pytest.raises(ValueError) as err:
+        alice.accept(invite.peer_id, "AAAA-AAAA")
+    assert "destroyed" in str(err.value)
+    # Burnt, so the real friend's correct code now fails too. That is the
+    # alarm: they say so, and the operator learns somebody was guessing.
+    with pytest.raises(ValueError):
+        alice.accept(invite.peer_id, invite.code)
+    assert alice.peers == {}
+
+
+def test_a_guessed_code_still_sees_absolutely_nothing():
+    """The property that makes a short code safe at all: redeeming is not a
+    grant, and mutual confirmation is what stands between the two."""
+    alice = Federation("Alice", "https://alice.example")
+    alice_shelf = ALICE_SHELF
+    invite = alice.invite()
+    intruder = alice.accept(invite.peer_id, invite.code, name="not Bob")
+    assert alice.authenticate(intruder.peer_id, intruder.token) is None
+    assert alice.project(intruder, alice_shelf) == []
+    # Even handed the widest possible policy, an unconfirmed peer sees none
+    # of it -- the confirmation gate is checked in `may_see`, not only at
+    # the door.
+    intruder.scope, intruder.access = "all", "fetch"
+    assert alice.project(intruder, alice_shelf) == []
+    # And the recovery is the same one revocation always was.
+    assert alice.revoke(intruder.peer_id)
 
 
 # -- authentication and revocation --------------------------------------------

@@ -8,14 +8,73 @@ or an API response.
 
 from __future__ import annotations
 
+import datetime
 import logging
+import sys
 from dataclasses import dataclass
 
 import requests
 
-from .libraries import DEFAULT_BACKGROUND_TIMEOUT, Game
+from .libraries import (DEFAULT_BACKGROUND_TIMEOUT, Game,
+                        classify_provenance)
 
 log = logging.getLogger(__name__)
+
+
+def _release_date(value) -> str:
+    """A provider release stamp as `YYYY-MM-DD`, or "" if it is not one.
+
+    RomM serves this in three shapes depending on which provider filled it
+    in: `metadatum.first_release_date` is milliseconds, `igdb_metadata`
+    carries the same instant in seconds, and some providers hand back a
+    plain string. Reading only one of them is why the shelf had a year for
+    some games and nothing for others.
+
+    UTC, deliberately. These are release dates, not moments -- rendering
+    them in the server's local zone would slide a midnight-UTC date a day
+    backwards for anybody west of Greenwich and put the wrong games on a
+    calendar square.
+    """
+    if isinstance(value, bool):
+        return ""
+    if isinstance(value, (int, float)) and value > 0:
+        # Seconds or milliseconds; no provider ships a 1970s-scale library
+        # so the magnitude tells them apart unambiguously.
+        stamp = value / 1000 if value > 10_000_000_000 else value
+        try:
+            return datetime.datetime.fromtimestamp(
+                stamp, datetime.timezone.utc).date().isoformat()
+        except (ValueError, OSError, OverflowError):
+            return ""
+    if isinstance(value, str) and value[:4].isdigit():
+        # Already a date, in whatever precision the provider had. A bare
+        # year is padded rather than dropped: knowing 1995 is worth more
+        # than knowing nothing, and the calendar reports its own coverage.
+        head = value[:10]
+        if len(head) == 4:
+            return f"{head}-01-01"
+        if len(head) == 10 and head[4] == "-" and head[7] == "-":
+            return head
+    return ""
+
+
+def _vocabulary(values) -> tuple[str, ...]:
+    """A metadata list, interned, with the blanks and duplicates gone.
+
+    Interned because these are a closed vocabulary repeated across a whole
+    library -- 7,776 distinct company names spread over 166,548 rows on the
+    library this was measured against. Without it every row holds its own
+    copy of "Nintendo" and the shelf cache costs tens of megabytes to say
+    the same few thousand words over and over.
+    """
+    out = []
+    for value in values or ():
+        if not isinstance(value, str):
+            continue
+        value = value.strip()
+        if value and value not in out:
+            out.append(sys.intern(value))
+    return tuple(out)
 
 
 # --------------------------------------------------------------- qBittorrent --
@@ -285,6 +344,51 @@ class Romm:
             return int(payload.get("total") or len(payload.get("items") or []))
         return len(payload)
 
+    def counts(self) -> dict:
+        """The three numbers a library has, not the one it usually reports.
+
+        `count()` answers with everything RomM holds a row for, and on a
+        library that catalogues streamed entries that sum is misleading in a
+        specific way: measured against romm.moveweight.com it is 166,548, of
+        which 72,120 are files on disk and 94,428 are rows for things that
+        live somewhere else. Presenting the sum as "games in library" makes a
+        collection look twice its size and buries the only question worth
+        asking about a catalogued entry, which is whether it is here yet.
+
+        RomM 5.x answers this without a walk -- `missing` is a server-side
+        filter, so each number is a `limit=1` query that returns a `total` and
+        no rows. Three calls on the health budget, the same budget `count()`
+        already runs on.
+        """
+        url = f"{self._config.base_url.rstrip('/')}/api/roms"
+
+        def ask(**extra) -> int:
+            response = self._get(url, {"limit": 1, **self.CHEAP_QUERY, **extra},
+                                 self.HEALTH_TIMEOUT)
+            response.raise_for_status()
+            payload = response.json()
+            if isinstance(payload, dict):
+                return int(payload.get("total")
+                           or len(payload.get("items") or []))
+            return len(payload)
+
+        total = ask()
+        on_disk = ask(missing="false")
+        catalogued = ask(missing="true")
+        if on_disk + catalogued != total:
+            # RomM 4.x has no `missing` filter, and FastAPI ignores query
+            # parameters a route does not declare -- so both "filtered" calls
+            # come back with the whole library and the split reads as
+            # "everything is on disk, and also everything is catalogued".
+            # The sum is the tell. When it does not reconcile the split is
+            # reported as unknown, because a wrong breakdown on this page is
+            # worse than no breakdown: it is the thing being fixed.
+            log.info("romm did not honour the `missing` filter (%d + %d != %d); "
+                     "reporting the library total without a split",
+                     on_disk, catalogued, total)
+            return {"total": total, "on_disk": None, "catalogued": None}
+        return {"total": total, "on_disk": on_disk, "catalogued": catalogued}
+
     # The background fetch gets a long budget on purpose. Nothing waits on it,
     # and RomM's library query takes around three minutes on a large, contended
     # library -- so a thirty-second budget could never have succeeded, which is
@@ -386,6 +490,11 @@ class Romm:
         RomM's rom payload is large and mostly irrelevant here; sending all of
         it to a browser to render a name and a cover is wasteful, so it is
         reduced server-side.
+
+        `summary` and `merged_screenshots` are on the payload and stay there.
+        The whole result is held in memory for the shelf, and a 400-character
+        blurb per row is 60MB on a 166k library to decorate a tile -- worth
+        fetching for one game on demand, not for all of them up front.
         """
         url = f"{self._config.base_url.rstrip('/')}/api/roms"
         try:
@@ -412,27 +521,26 @@ class Romm:
             # for anything unidentified, which is most of a fresh library --
             # so every read is defensive and an empty result is normal.
             meta = it.get("metadatum") if isinstance(it.get("metadatum"), dict) else {}
-            genres = tuple(str(g) for g in (meta.get("genres") or [])
-                           if isinstance(g, str))
-            regions = tuple(str(r) for r in (it.get("regions") or [])
-                            if isinstance(r, str))
-            year = 0
-            released = meta.get("first_release_date")
-            if isinstance(released, (int, float)) and released > 0:
-                # RomM stores this as a unix timestamp; seconds or ms
-                # depending on the provider that filled it in.
-                from datetime import datetime, timezone
-                stamp = released / 1000 if released > 10_000_000_000 else released
-                try:
-                    year = datetime.fromtimestamp(stamp, timezone.utc).year
-                except (ValueError, OSError, OverflowError):
-                    year = 0
-            elif isinstance(released, str) and released[:4].isdigit():
-                year = int(released[:4])
+            genres = _vocabulary(meta.get("genres"))
+            regions = _vocabulary(it.get("regions"))
+            # The whole date, and the year derived from it rather than read
+            # separately -- two parses of the same field are two chances to
+            # disagree about what year a game came out in.
+            released = _release_date(meta.get("first_release_date"))
+            year = int(released[:4]) if released else 0
             try:
-                rating = round(float(meta.get("average_rating") or 0), 1)
+                rating = float(meta.get("average_rating") or 0)
             except (TypeError, ValueError):
                 rating = 0.0
+            # RomM's average_rating is a percentage: measured across this
+            # library it runs 15.0 to 100.0 and never lands in 0-10. ROMarr
+            # shows it as "★9.6" and Discover called anything over 7.5 a
+            # hidden gem, so every rated game was a hidden gem and every
+            # poster claimed a score of 63.9 out of 10. Scaled here, at the
+            # one place that knows the provider, rather than at each of the
+            # readers. The guard leaves an already-0-10 value alone in case
+            # an older RomM stores it that way.
+            rating = round(rating / 10 if rating > 10 else rating, 1)
 
             # Local or catalogued-elsewhere, from RomM's own bookkeeping.
             # `missing_from_fs` means the row exists in the database and the
@@ -441,6 +549,14 @@ class Romm:
             # On a large install this is the majority of the shelf and the
             # single most useful axis there is: "plays right now" versus
             # "would have to be fetched first".
+            origin = "cloud" if it.get("missing_from_fs") else "local"
+            # And, for the catalogued half, WHICH catalogue. Read off the
+            # filename rather than the display name: the evidence lives in
+            # `fs_name` -- RomM copies it into `name` for anything no
+            # provider identified, which is all of them here, but a future
+            # metadata scan would rename them and take the evidence with it.
+            provenance = classify_provenance(
+                str(it.get("fs_name") or it.get("name") or ""), origin)
             out.append(Game(
                 id=str(it.get("id") or ""),
                 name=str(it.get("name") or it.get("fs_name") or "Unknown"),
@@ -451,7 +567,21 @@ class Romm:
                 regions=regions,
                 year=year,
                 rating=rating,
-                origin="cloud" if it.get("missing_from_fs") else "local",
+                released=released,
+                # RomM timestamps every row it holds, whether or not any
+                # provider ever identified the game. That makes these the
+                # only dates a ROM library reliably has: sampled across the
+                # library this was measured against, between a third and
+                # three quarters of rows carry a release date depending on
+                # where you look, and every one of them carries these two.
+                added=str(it.get("created_at") or "")[:10],
+                updated=str(it.get("updated_at") or "")[:10],
+                franchises=_vocabulary(meta.get("franchises")),
+                companies=_vocabulary(meta.get("companies")),
+                modes=_vocabulary(meta.get("game_modes")),
+                players=str(meta.get("player_count") or ""),
+                origin=origin,
+                provenance=provenance,
             ))
         return out
 

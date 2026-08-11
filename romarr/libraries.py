@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
@@ -59,10 +60,38 @@ class Game:
     regions: tuple[str, ...] = ()
     year: int = 0
     rating: float = 0.0
+    #: The release date in full, `YYYY-MM-DD`, when the server knows it.
+    #: `year` alone cannot answer "what came out on this day", which is the
+    #: only question a calendar is actually for -- and RomM carries the whole
+    #: date, so throwing away the month and day was throwing away the page.
+    #: Coarse for a real share of rows: a provider that only knows the year
+    #: stores it as January 1st, so day counts are lumpy and the UI says so.
+    released: str = ""
+    #: When the library server first saw this row, and when it last changed
+    #: it. RomM's `created_at`/`updated_at`, as `YYYY-MM-DD`. These are the
+    #: dates a ROM library genuinely has a lot of -- every row carries them,
+    #: where fewer than half carry a release date.
+    added: str = ""
+    updated: str = ""
+    #: The rest of what the server already identified. Carried for the same
+    #: reason genres are: Discover cuts the shelf on these, and asking the
+    #: server per facet would be a query per click.
+    franchises: tuple[str, ...] = ()
+    companies: tuple[str, ...] = ()
+    modes: tuple[str, ...] = ()
+    #: How many people can play, as the provider phrases it ("1", "1-4").
+    players: str = ""
     #: Where the bytes are. "local" is on disk here; a plugin-provided entry
     #: (Archive.org, Vimm's) is "cloud" -- the distinction people actually
     #: want to filter on, because one plays now and one has to be fetched.
     origin: str = "local"
+    #: WHICH catalogue a "cloud" entry came from: "flashpoint", "archive", or
+    #: "cloud" when it cannot be placed. One level finer than `origin`, and
+    #: worth carrying separately because the two catalogues behave nothing
+    #: alike -- a Flashpoint entry is a Ruffle target with no hash and no
+    #: metadata, an Archive.org entry is a real dump somebody else is hosting.
+    #: Always "local" when `origin` is, so the two never disagree.
+    provenance: str = "local"
 
 
 # Budget for the background shelf fetch. Nothing waits on it, so it is
@@ -77,9 +106,98 @@ class Game:
 DEFAULT_BACKGROUND_TIMEOUT = 300
 
 
+# ------------------------------------------------------------- provenance --
+#
+# "Cloud" was one bucket and it should never have been. A large library's
+# catalogued half is two entirely different things wearing the same badge, and
+# the operator's own question -- "where are my Archive.org games, where are my
+# Flashpoint games" -- cannot be answered while they are added together.
+#
+# There is no field on a RomM row that says which. It was looked for: RomM 5.1
+# carries `flashpoint_id` and `flashpoint_metadata` columns and they are null
+# and empty on all 94,415 catalogued rows of the library this was measured
+# against; both catalogues land on the same platform (`browser`), in the same
+# `fs_path` (`roms/flash`), with no cover, no hash and no metadata. The
+# filename is the only thing that differs -- and it differs reliably, because
+# ROMarr's own indexers are what wrote it.
+
+#: Flashpoint's launcher names every GameZip `<guid>-<ms>.zip`, and
+#: `build_fp_index.py` keeps the first eight hex of that guid as the suffix on
+#: the name RomM ends up serving: `<title>__<8 hex>.swf`.
+#:
+#: Measured against the 141,055 Flashpoint and 22,720 Archive.org names ROMarr
+#: had indexed for that library: it caught 141,055 of 141,055 Flashpoint names
+#: and mislabelled 18 Archive.org ones -- items whose own filename happens to
+#: end in eight hex digits. 99.98% agreement over 94,415 live rows.
+_FLASHPOINT_ID = re.compile(r"__[0-9a-f]{8}\.[A-Za-z0-9]+$")
+
+#: An Archive.org entry is `<item identifier>__<file inside the item>`, which
+#: is what `build_index.py` writes. Deliberately weaker than the Flashpoint
+#: rule -- it recognises a shape, not an identifier -- so it is consulted only
+#: after Flashpoint has had its say and only for entries the library server has
+#: already told us are not on disk.
+_ARCHIVE_MEMBER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._ ()-]*__[A-Za-z0-9._ ()-]+$")
+
+
+def classify_provenance(name: str, origin: str = "local") -> str:
+    """Which catalogue a shelf entry came from.
+
+    One of "local", "flashpoint", "archive" or "cloud". `origin` decides the
+    first of those and nothing overrides it: a file on disk is local whatever
+    it is called, because the library server counted the bytes and that beats
+    any guess made from a filename.
+
+    Everything else is a guess, and the point of the last bucket is that it
+    stays a guess. An entry that matches neither pattern is reported as plain
+    "cloud" rather than assigned to whichever catalogue is larger -- the
+    numbers on this page exist because somebody could not trust the ones that
+    came before them, and inventing a source to make a breakdown add up
+    tidily is exactly how that happened.
+    """
+    if str(origin or "local").lower() != "cloud":
+        return "local"
+    text = str(name or "")
+    if _FLASHPOINT_ID.search(text):
+        return "flashpoint"
+    if _ARCHIVE_MEMBER.match(text):
+        return "archive"
+    return "cloud"
+
+
+def library_counts(backend) -> dict:
+    """`{"total", "on_disk", "catalogued"}` from whichever a backend can answer.
+
+    `count()` is the whole protocol here, and on a library that catalogues
+    entries it does not hold, it answers with the two categories added
+    together. That is how one number came to mean "72,120 files you have" and
+    "94,428 things you would have to fetch" at the same time, on the nav badge
+    and on the Stats page, with nothing anywhere saying which.
+
+    A backend that can separate them implements `counts()`. One that cannot
+    reports everything as on disk, which is not a shrug: the other backends
+    index files they actually hold, so for them the two numbers really are the
+    same one. `on_disk` comes back None only when a backend tried to split and
+    could not trust the answer -- see Romm.counts.
+    """
+    split = getattr(backend, "counts", None)
+    if callable(split):
+        got = split()
+        if isinstance(got, dict) and "total" in got:
+            return got
+    total = int(backend.count())
+    return {"total": total, "on_disk": total, "catalogued": 0}
+
+
 @runtime_checkable
 class Library(Protocol):
-    """What ROMarr needs from a game library, and nothing more."""
+    """What ROMarr needs from a game library, and nothing more.
+
+    `counts()` is deliberately absent from this list even though the service
+    calls it. It is an optional refinement of `count()`, reached through
+    `library_counts` above, and requiring it here would make every existing
+    backend -- including out-of-tree drivers -- stop satisfying an isinstance
+    check they satisfied yesterday.
+    """
 
     name: str
 

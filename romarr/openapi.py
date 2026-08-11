@@ -27,20 +27,31 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "/login": ("GET", "The sign-in screen, or the first-run setup screen on "
                       "an install nobody has claimed. Served without a "
                       "credential; redirects to / once signed in."),
+    "/link": ("GET", "Where a peering invitation link lands. A constant page, "
+                     "served without a credential: the invitation is in the "
+                     "URL fragment, which never reaches the server."),
     "/api/v1/login": ("POST", "Exchange an API key or password for a session "
                               "cookie. Requires the TOTP code when two-factor "
                               "is enrolled."),
     "/api/v1/setup": ("POST", "First-run claim: set the admin password on an "
                               "install that has none. Open only while "
                               "unclaimed, and answers 409 once it is."),
-    "/api/v1/game": ("GET", "The library."),
+    "/api/v1/game": ("GET", "The library. `totals` splits it into files on "
+                            "disk here, entries catalogued but streamed from "
+                            "elsewhere, and the sum; `grand_total` is only how "
+                            "many rows are cached and browsable right now. "
+                            "Filterable by platform, genre, region, decade, "
+                            "origin and source."),
     "/api/v1/wanted/missing": ("GET", "Games wanted but not yet found."),
     "/api/v1/queue": ("GET", "Active downloads."),
     "/api/queue": ("GET", "Active downloads (legacy path)."),
     "/api/v1/history": ("GET", "What ROMarr has done."),
     "/api/v1/config": ("GET", "Settings, with every credential masked."),
     "/api/v1/system/status": ("GET", "Health of every dependency, plus play-route counts."),
-    "/api/v1/system/counts": ("GET", "Library and queue sizes."),
+    "/api/v1/system/counts": ("GET", "Library and queue sizes. `games` is "
+                                     "every row the library server holds; "
+                                     "`games_on_disk` and `games_catalogued` "
+                                     "are the two categories it adds up."),
     "/api/platforms": ("GET", "Every platform, its media, extensions, size "
                               "ceiling and how it plays on this install."),
     "/api/v1/release": ("GET", "Interactive search: scored candidates with the "
@@ -106,17 +117,32 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
                                     "{state} (e.g. failed)."),
     "/api/v1/discover/library": ("GET", "Browse the library you already "
                                         "have: ?shelf=top-rated|recent|"
-                                        "hidden-gems|by-genre. Needs no API "
+                                        "recently-added|hidden-gems|"
+                                        "multiplayer|anniversary|by-genre|"
+                                        "by-franchise|by-company, the last "
+                                        "three with ?value=. Needs no API "
                                         "key -- the metadata is your own."),
-    "/api/v1/calendar/library": ("GET", "Your library by release year; "
-                                        "?decade=1990s lists that decade."),
+    "/api/v1/calendar/library": ("GET", "A calendar over the dates your "
+                                        "library server actually holds: "
+                                        "?view=releases (anniversaries)|"
+                                        "added|updated|upcoming, ?month="
+                                        "YYYY-MM and ?day=. Reports its own "
+                                        "coverage; ?decade=1990s still lists "
+                                        "that decade."),
     "/api/v1/peer": ("GET", "Peered ROMarr instances: scope, access and "
                             "confirmation state. Tokens never appear here."),
-    "/api/v1/peer/invite": ("POST", "Mint a one-time invitation to send a "
-                                    "friend out of band."),
-    "/api/v1/peer/redeem": ("POST", "Redeem a friend's invitation."),
+    "/api/v1/peer/invite": ("POST", "Mint a one-time invitation: a link that "
+                                    "carries no secret, a short claim code "
+                                    "that does, and the older pasted blob."),
+    "/api/v1/peer/redeem": ("POST", "Redeem a friend's pasted invitation "
+                                    "blob, without calling their server."),
+    "/api/v1/peer/claim": ("POST", "Redeem a friend's invitation link with "
+                                   "the claim code they sent separately. "
+                                   "Calls their server and keeps the token."),
     "/api/v1/peer/accept": ("POST", "Called BY a peer redeeming your "
-                                    "invitation; held unconfirmed."),
+                                    "invitation, with either the long secret "
+                                    "or the short claim code; held "
+                                    "unconfirmed, and returns the token."),
     "/api/v1/peer/confirm": ("POST", "Confirm a peer that redeemed your "
                                      "invitation."),
     "/api/v1/peer/policy": ("POST", "Set one peer's scope and access."),
@@ -193,6 +219,17 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "/api/v1/library/config": ("GET", "One library's stored configuration."),
     "/api/v1/library/test": ("POST", "Test one library server."),
     "/api/v1/hub/status": ("GET", "Whether ROM Hub is installed and reachable."),
+    "/api/v1/moonlight": ("GET", "The configured Moonlight host (Wolf, "
+                                 "Sunshine or Steam Headless): whether it "
+                                 "answers, its app list if readable, which "
+                                 "platforms that app list proves, and any "
+                                 "clients waiting to pair."),
+    "/api/v1/moonlight/pin": ("POST", "Relay a pairing PIN to the Moonlight "
+                                      "host. The PIN comes from the user's "
+                                      "own Moonlight client and cannot be "
+                                      "generated here; a 200 means the host "
+                                      "accepted the submission, not that the "
+                                      "client paired."),
 }
 
 #: Served, but deliberately undescribed: internal or legacy aliases whose

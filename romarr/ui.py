@@ -21,59 +21,185 @@ download client and a database.
 
 CSS = """
 *{box-sizing:border-box;margin:0;padding:0}
+
+/* ---- the theme -----------------------------------------------------------
+   One accent, three modes. Every colour below is a token because a mode has to
+   be nothing but a block of overrides -- a literal left anywhere in the sheet
+   is a patch that stays dark when the operator asks for light, and that is how
+   half-themed apps happen.
+
+   Only three tokens are written from script: --accent, and the two that cannot
+   be derived in CSS. A colour the user picked has no guaranteed contrast, and
+   deciding whether it needs black or white on top of it, or how far to walk it
+   before it is legible as link text, is luminance maths CSS has no way to do.
+   Everything else here is derived with color-mix so a new accent costs one
+   custom-property write rather than a stylesheet. */
 :root{
-  --rail:#2a2a2a; --rail-2:#333; --bg:#1c1c1c; --panel:#262626; --line:#3a3a3a;
-  --fg:#e1e2e3; --dim:#999; --accent:#f2a33c; --accent-ink:#20130a;
-  --ok:#27c24c; --warn:#ff9f1a; --bad:#f05050; --info:#5b9bd5;
+  color-scheme:dark;
+  --bg:#12141a; --surface:#1a1d25; --surface-2:#212734; --surface-3:#2b3240;
+  --rail:#0d0f14; --rail-2:#1a1f2a;
+  --line:#282e3a; --line-soft:#1f2530;
+  --fg:#e8eaf0; --fg-2:#b4bbca; --dim:#89909f;
+  --ok:#3ecf6d; --warn:#f0a92c; --bad:#f4645f; --info:#5aa2e8;
+  --shadow-1:0 1px 2px rgba(0,0,0,.45);
+  --shadow-2:0 2px 6px rgba(0,0,0,.35),0 14px 30px -16px rgba(0,0,0,.8);
+  --shadow-3:0 30px 70px -24px rgba(0,0,0,.85);
+  --edge:inset 0 1px 0 rgba(255,255,255,.045);
+  --art:#0b0d11;
 }
+:root[data-theme="light"]{
+  color-scheme:light;
+  --bg:#eef1f6; --surface:#fff; --surface-2:#f5f7fb; --surface-3:#e7ebf2;
+  --rail:#fff; --rail-2:#eef1f7;
+  --line:#dce2ec; --line-soft:#eaeef5;
+  --fg:#161b24; --fg-2:#404859; --dim:#697083;
+  --ok:#12a150; --warn:#b8760a; --bad:#d43b37; --info:#2b6fbd;
+  --shadow-1:0 1px 2px rgba(16,24,40,.06);
+  --shadow-2:0 1px 3px rgba(16,24,40,.09),0 14px 30px -18px rgba(16,24,40,.32);
+  --shadow-3:0 34px 70px -26px rgba(16,24,40,.38);
+  --edge:inset 0 1px 0 rgba(255,255,255,.9);
+  --art:#e3e8f0;
+}
+/* Easy on the eyes: warm paper, almost no blue, and a deliberately narrow
+   contrast range. It is a light mode you can sit in after midnight -- pure
+   white at 2am is the thing being avoided, so the surfaces stay dimmer than
+   light mode and the ink stays browner than black. */
+:root[data-theme="sepia"]{
+  color-scheme:light;
+  --bg:#e6dbcb; --surface:#f3ebde; --surface-2:#ece2d2; --surface-3:#dfd2bd;
+  --rail:#e0d4c0; --rail-2:#d5c6ae;
+  --line:#d2c3ab; --line-soft:#ded0ba;
+  --fg:#3d362c; --fg-2:#5e5446; --dim:#8a7f6e;
+  --ok:#4f8f56; --warn:#a8742a; --bad:#b5544c; --info:#4c7a9e;
+  --shadow-1:0 1px 2px rgba(74,58,36,.09);
+  --shadow-2:0 1px 3px rgba(74,58,36,.10),0 12px 26px -16px rgba(74,58,36,.30);
+  --shadow-3:0 28px 60px -24px rgba(74,58,36,.36);
+  --edge:inset 0 1px 0 rgba(255,255,255,.5);
+  --art:#d9cbb4;
+}
+
+/* Derived once, here, so no rule below ever names a colour twice. Declared
+   after the modes on purpose: these read whatever the mode set, lazily. */
+:root{
+  --accent:#f2a33c; --accent-text:#f2a33c; --accent-ink:#141414;
+  --accent-soft:color-mix(in srgb,var(--accent) 15%,transparent);
+  --accent-softer:color-mix(in srgb,var(--accent) 8%,transparent);
+  --accent-line:color-mix(in srgb,var(--accent) 42%,transparent);
+  --accent-hi:color-mix(in srgb,var(--accent) 86%,#fff);
+  --ring:0 0 0 3px color-mix(in srgb,var(--accent) 26%,transparent);
+  --panel:var(--surface);
+  --r-sm:7px; --r-md:11px; --r-lg:15px; --r-pill:999px;
+  --t:.15s cubic-bezier(.4,0,.2,1);
+}
+
+html{-webkit-text-size-adjust:100%}
 body{background:var(--bg);color:var(--fg);
-  font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
-a{color:var(--accent);text-decoration:none}
+  font:14px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,
+    "Helvetica Neue",Arial,sans-serif;
+  -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+a{color:var(--accent-text);text-decoration:none}
+a:hover{text-decoration:underline;text-underline-offset:2px}
+::selection{background:var(--accent-soft);color:var(--fg)}
+:focus-visible{outline:2px solid var(--accent-text);outline-offset:2px}
+*{scrollbar-width:thin;scrollbar-color:var(--surface-3) transparent}
+::-webkit-scrollbar{width:11px;height:11px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:var(--surface-3);border-radius:var(--r-pill);
+  border:3px solid transparent;background-clip:padding-box}
+::-webkit-scrollbar-thumb:hover{background:var(--dim);background-clip:padding-box}
 
 /* ---- rail ---- */
-#rail{position:fixed;left:0;top:0;bottom:0;width:210px;background:var(--rail);
-  border-right:1px solid var(--line);overflow-y:auto;z-index:20}
+#rail{position:fixed;left:0;top:0;bottom:0;width:222px;background:var(--rail);
+  border-right:1px solid var(--line);z-index:20;
+  display:flex;flex-direction:column;overflow:hidden}
 /* No gap: the brand is one word split into two nodes so that "arr" can
    carry the accent colour, and a flex gap renders it as "ROM arr". */
-#brand{display:flex;align-items:center;gap:0;padding:16px 18px;
-  font-size:19px;font-weight:700;letter-spacing:-.02em;border-bottom:1px solid var(--line)}
-#brand span{color:var(--accent)}
-.navgroup{padding:10px 0 4px}
-.navhead{padding:6px 18px;font-size:11px;text-transform:uppercase;
-  letter-spacing:.08em;color:#777}
-.nav{display:flex;align-items:center;gap:10px;padding:9px 18px;color:var(--fg);
-  cursor:pointer;border-left:3px solid transparent;font-size:14px}
-.nav:hover{background:var(--rail-2)}
-.nav.on{background:var(--rail-2);border-left-color:var(--accent);color:var(--accent)}
-.nav .ct{margin-left:auto;font-size:11px;background:#444;color:var(--dim);
-  padding:1px 7px;border-radius:9px}
+#brand{display:flex;align-items:center;gap:0;padding:17px 18px 16px;
+  font-size:20px;font-weight:700;letter-spacing:-.025em;
+  border-bottom:1px solid var(--line-soft);flex:none;overflow:hidden;
+  white-space:nowrap}
+#brand span{color:var(--accent-text)}
+#navwrap{flex:1;overflow-y:auto;padding:6px 0 10px}
+.navgroup{padding:8px 0 2px}
+.navhead{padding:6px 20px;font-size:10.5px;font-weight:600;
+  text-transform:uppercase;letter-spacing:.1em;color:var(--dim);opacity:.8}
+.nav{display:flex;align-items:center;gap:10px;margin:1px 10px;
+  padding:8px 11px;color:var(--fg-2);cursor:pointer;font-size:13.5px;
+  border-radius:var(--r-sm);position:relative;
+  transition:background var(--t),color var(--t)}
+.nav:hover{background:var(--rail-2);color:var(--fg)}
+.nav.on{background:var(--accent-soft);color:var(--accent-text);font-weight:600}
+/* The active marker is a rounded bar rather than *arr's flat 3px border, and
+   it lives on a pseudo-element so the row can keep its own radius. */
+.nav.on::before{content:"";position:absolute;left:-6px;top:7px;bottom:7px;
+  width:3px;border-radius:var(--r-pill);background:var(--accent)}
+.nav .ct{margin-left:auto;font-size:10.5px;font-weight:600;
+  background:var(--surface-3);color:var(--dim);padding:1px 7px;
+  border-radius:var(--r-pill)}
+/* A zero is written as "" rather than "0", which left an empty pill sitting
+   in the rail claiming to be a number. */
+.nav .ct:empty{display:none}
 .nav.on .ct{background:var(--accent);color:var(--accent-ink)}
 
+/* ---- the theme control ----
+   In the rail rather than under Settings: it is a comfort control, and a
+   comfort control you have to navigate to is one you change once and then
+   live with. */
+#railfoot{flex:none;border-top:1px solid var(--line-soft);padding:12px 12px 14px;
+  background:var(--rail)}
+.thm-lbl{font-size:10.5px;font-weight:600;text-transform:uppercase;
+  letter-spacing:.1em;color:var(--dim);opacity:.8;margin:0 0 8px 2px}
+.thm-modes{display:flex;gap:3px;background:var(--surface-2);padding:3px;
+  border-radius:var(--r-sm);margin-bottom:10px}
+/* Longhand, not the `font` shorthand: `inherit` is not a family name, so
+   `font:600 11px/1.3 inherit` is invalid and the browser drops the whole
+   declaration -- a button silently keeps the UA's own font instead. */
+.thm{flex:1;padding:5px 4px;font-family:inherit;font-size:11px;
+  font-weight:600;line-height:1.3;color:var(--dim);
+  background:transparent;border:0;border-radius:5px;cursor:pointer;
+  transition:background var(--t),color var(--t)}
+.thm:hover{color:var(--fg)}
+.thm.on{background:var(--surface);color:var(--fg);box-shadow:var(--shadow-1)}
+.thm-accents{display:flex;flex-wrap:wrap;gap:6px}
+.sw{width:19px;height:19px;padding:0;border-radius:var(--r-pill);
+  border:1px solid rgba(128,128,128,.35);background:var(--sw,var(--accent));
+  cursor:pointer;position:relative;transition:transform var(--t)}
+.sw:hover{transform:scale(1.14)}
+.sw.on{box-shadow:0 0 0 2px var(--rail),0 0 0 4px var(--accent-text)}
+.sw.pick{display:grid;place-items:center;overflow:hidden;
+  background:conic-gradient(#f2635f,#f2a33c,#7bd88f,#2dd4bf,#5aa2f0,#c084fc,#f2635f)}
+.sw.pick input{position:absolute;inset:-4px;width:calc(100% + 8px);
+  height:calc(100% + 8px);opacity:0;cursor:pointer;border:0;padding:0}
+
 /* ---- main ---- */
-#main{margin-left:210px;min-height:100vh}
+#main{margin-left:222px;min-height:100vh}
 #top{position:sticky;top:0;display:flex;align-items:center;gap:14px;
-  padding:12px 22px;background:var(--rail);border-bottom:1px solid var(--line);z-index:10}
-#top h1{font-size:17px;font-weight:600;white-space:nowrap}
-#top input{flex:1;max-width:420px;padding:7px 12px;background:var(--bg);
-  color:var(--fg);border:1px solid var(--line);border-radius:4px;outline:none}
-#top input:focus{border-color:var(--accent)}
-.page{padding:22px}
+  padding:13px 26px;z-index:10;border-bottom:1px solid var(--line);
+  background:color-mix(in srgb,var(--bg) 80%,transparent);
+  -webkit-backdrop-filter:saturate(1.6) blur(12px);
+  backdrop-filter:saturate(1.6) blur(12px)}
+#top h1{font-size:17px;font-weight:650;letter-spacing:-.02em;white-space:nowrap}
+#top input{flex:1;max-width:420px;padding:8px 13px;background:var(--surface);
+  color:var(--fg);border:1px solid var(--line);border-radius:var(--r-sm);
+  outline:none;transition:border-color var(--t),box-shadow var(--t)}
+#top input:focus{border-color:var(--accent-line);box-shadow:var(--ring)}
+.page{padding:24px 26px 48px;max-width:1600px}
+
 /* ---- plugin catalogue ---------------------------------------------------
    A card grid rather than a table. A plugin is a thing you decide to trust,
    and that decision needs the description and the permissions in view at the
    same time -- a table row makes you read across five columns to assemble
    what one card says at a glance. */
-.cat-bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;
-  padding:0 0 14px;border-bottom:1px solid var(--line);margin-bottom:16px}
+.cat-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;
+  padding:0 0 14px;border-bottom:1px solid var(--line-soft);margin-bottom:16px}
 .cat-bar input{flex:1;min-width:220px;padding:9px 13px;background:var(--bg);
-  color:var(--fg);border:1px solid var(--line);border-radius:7px;outline:none;
-  transition:border-color .12s,box-shadow .12s}
-.cat-bar input:focus{border-color:var(--accent);
-  box-shadow:0 0 0 3px rgba(242,163,60,.13)}
-.chip{padding:5px 11px;border-radius:999px;border:1px solid var(--line);
+  color:var(--fg);border:1px solid var(--line);border-radius:var(--r-sm);
+  outline:none;transition:border-color var(--t),box-shadow var(--t)}
+.cat-bar input:focus{border-color:var(--accent-line);box-shadow:var(--ring)}
+.chip{padding:5px 12px;border-radius:var(--r-pill);border:1px solid var(--line);
   background:var(--bg);color:var(--dim);cursor:pointer;font-size:12px;
-  white-space:nowrap;transition:all .12s}
-.chip:hover{border-color:#555;color:var(--fg)}
+  white-space:nowrap;transition:all var(--t)}
+.chip:hover{border-color:var(--accent-line);color:var(--fg)}
 .chip.on{background:var(--accent);border-color:var(--accent);
   color:var(--accent-ink);font-weight:600}
 .chip .n{opacity:.65;margin-left:5px}
@@ -82,126 +208,431 @@ a{color:var(--accent);text-decoration:none}
    so the page header and the add-your-own panel stay put while it moves. */
 .cat-scroll{max-height:calc(100vh - 340px);min-height:220px;overflow-y:auto;
   padding-right:6px;margin-right:-6px}
-.cat-scroll::-webkit-scrollbar{width:10px}
-.cat-scroll::-webkit-scrollbar-track{background:transparent}
-.cat-scroll::-webkit-scrollbar-thumb{background:#3d3d3d;border-radius:5px;
-  border:2px solid var(--panel)}
-.cat-scroll::-webkit-scrollbar-thumb:hover{background:#4d4d4d}
 
 .pgrid{display:grid;gap:12px;
   grid-template-columns:repeat(auto-fill,minmax(320px,1fr))}
-.pcard{background:var(--bg);border:1px solid var(--line);border-radius:9px;
-  padding:14px 15px;display:flex;flex-direction:column;gap:9px;
-  transition:border-color .12s,transform .12s}
-.pcard:hover{border-color:#4a4a4a;transform:translateY(-1px)}
+.pcard{background:var(--bg);border:1px solid var(--line);
+  border-radius:var(--r-md);padding:15px 16px;display:flex;
+  flex-direction:column;gap:9px;
+  transition:border-color var(--t),transform var(--t),box-shadow var(--t)}
+.pcard:hover{border-color:var(--accent-line);transform:translateY(-2px);
+  box-shadow:var(--shadow-2)}
 .pcard.installed{border-left:3px solid var(--ok)}
-.pcard h4{font-size:14px;font-weight:600;display:flex;align-items:center;
-  gap:8px;margin:0}
+.pcard h4{font-size:14px;font-weight:650;display:flex;align-items:center;
+  gap:8px;margin:0;letter-spacing:-.01em}
 .pcard .by{color:var(--dim);font-size:11px;font-weight:400}
-.pcard .desc{color:#b4b4b4;font-size:12.5px;line-height:1.45;flex:1}
+.pcard .desc{color:var(--fg-2);font-size:12.5px;line-height:1.5;flex:1}
 .pcard .meta{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
 .pcard .foot{display:flex;gap:8px;align-items:center;
-  border-top:1px solid var(--line);padding-top:9px;margin-top:2px}
-.pcard .net{color:#7d7d7d;font-size:11px;margin-left:auto;text-align:right}
+  border-top:1px solid var(--line-soft);padding-top:10px;margin-top:2px}
+.pcard .net{color:var(--dim);font-size:11px;margin-left:auto;text-align:right}
 .dot-ok{width:7px;height:7px;border-radius:50%;background:var(--ok);
   display:inline-block;flex:none}
-.dot-off{width:7px;height:7px;border-radius:50%;background:#555;
+.dot-off{width:7px;height:7px;border-radius:50%;background:var(--surface-3);
   display:inline-block;flex:none}
 
 .panels{display:grid;gap:14px;grid-template-columns:1fr 1fr;margin-top:16px}
 @media(max-width:900px){.panels{grid-template-columns:1fr}}
-.panel-note{background:rgba(91,155,213,.09);border:1px solid rgba(91,155,213,.3);
-  border-radius:7px;padding:10px 12px;color:#a8c8e8;font-size:12px;
-  line-height:1.5;margin-top:10px}
-.panel-warn{background:rgba(240,80,80,.09);border-color:rgba(240,80,80,.3);
-  color:#e8a8a8}
+/* A callout, not a card: bordered on one edge so it reads as an aside even
+   when it is the third one on the page. */
+.panel-note{background:color-mix(in srgb,var(--info) 11%,transparent);
+  border:1px solid color-mix(in srgb,var(--info) 32%,transparent);
+  border-left:3px solid var(--info);border-radius:var(--r-sm);
+  padding:11px 13px;color:var(--fg-2);font-size:12px;line-height:1.55;
+  margin-top:10px}
+.panel-warn{background:color-mix(in srgb,var(--bad) 11%,transparent);
+  border-color:color-mix(in srgb,var(--bad) 32%,transparent);
+  border-left-color:var(--bad)}
+/* Used by Friends and Discover for an inline block of prose. It had no rule
+   at all, so it rendered as loose text in the middle of a card. */
+.panel{background:var(--bg);border:1px solid var(--line-soft);
+  border-radius:var(--r-md);padding:12px 14px;color:var(--fg-2);
+  font-size:12.5px;line-height:1.6}
 .field{display:flex;flex-direction:column;gap:5px;margin-bottom:10px}
-.field label{font-size:11px;text-transform:uppercase;letter-spacing:.06em;
-  color:var(--dim)}
-.field input,.field textarea{padding:8px 11px;background:var(--bg);
-  color:var(--fg);border:1px solid var(--line);border-radius:6px;outline:none;
-  font:13px/1.5 inherit;transition:border-color .12s}
-.field input:focus,.field textarea:focus{border-color:var(--accent)}
+.field label{font-size:10.5px;font-weight:600;text-transform:uppercase;
+  letter-spacing:.07em;color:var(--dim)}
+.field input,.field textarea{padding:9px 12px;background:var(--bg);
+  color:var(--fg);border:1px solid var(--line);border-radius:var(--r-sm);
+  outline:none;font-family:inherit;font-size:13px;line-height:1.5;
+  transition:border-color var(--t),box-shadow var(--t)}
+.field input:focus,.field textarea:focus{border-color:var(--accent-line);
+  box-shadow:var(--ring)}
 .field textarea{resize:vertical;min-height:58px}
+.field input:disabled{color:var(--dim);background:var(--surface-2);
+  cursor:not-allowed}
 .empty-cat{text-align:center;padding:48px 20px;color:var(--dim)}
 .empty-cat b{display:block;color:var(--fg);margin-bottom:6px;font-size:15px}
 .hide{display:none !important}
 
 /* ---- shared ---- */
-.btn{padding:7px 15px;background:var(--accent);color:var(--accent-ink);
-  font-weight:600;border:0;border-radius:4px;cursor:pointer;font-size:13px}
-.btn:hover{filter:brightness(1.1)}
-.btn.ghost{background:transparent;color:var(--fg);border:1px solid var(--line)}
-.btn.ghost:hover{background:var(--panel)}
+.btn{padding:8px 16px;background:var(--accent);color:var(--accent-ink);
+  font-weight:600;border:0;border-radius:var(--r-sm);cursor:pointer;
+  font-size:13px;line-height:1.35;
+  transition:filter var(--t),box-shadow var(--t),transform var(--t)}
+.btn:hover{filter:brightness(1.07);box-shadow:var(--shadow-1)}
+.btn:active{transform:translateY(1px)}
+.btn:disabled{opacity:.55;cursor:default;filter:none;transform:none}
+.btn.ghost{background:var(--surface);color:var(--fg);
+  border:1px solid var(--line);box-shadow:var(--edge)}
+.btn.ghost:hover{background:var(--surface-2);border-color:var(--accent-line);
+  filter:none}
 .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-.card{background:var(--panel);border:1px solid var(--line);border-radius:5px;
-  padding:16px;margin-bottom:14px}
-.card h3{font-size:14px;margin-bottom:12px;color:var(--fg);font-weight:600}
-.card p.help{color:var(--dim);font-size:12.5px;margin:-6px 0 12px}
+.card{background:var(--surface);border:1px solid var(--line);
+  border-radius:var(--r-lg);padding:18px 20px;margin-bottom:16px;
+  box-shadow:var(--shadow-1),var(--edge)}
+/* The accent tick. It is the one place the operator's chosen colour appears
+   on every page, which is what makes the choice feel like it took. */
+.card h3{font-size:14.5px;font-weight:650;letter-spacing:-.01em;
+  margin-bottom:13px;color:var(--fg);display:flex;align-items:center;gap:9px}
+.card h3::before{content:"";flex:none;width:3px;height:15px;border-radius:2px;
+  background:var(--accent)}
+.card p.help{color:var(--dim);font-size:12.5px;margin:-7px 0 13px}
+.help{color:var(--dim);font-size:12.5px;line-height:1.6}
 table{width:100%;border-collapse:collapse}
-th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);
+th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line-soft);
   vertical-align:top;font-size:13px}
-th{color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.05em}
-tr:hover td{background:#2b2b2b}
-.mini{padding:3px 11px;font-size:12px;border:1px solid var(--line);background:var(--panel);color:var(--fg);border-radius:6px;cursor:pointer;margin-left:6px}.mini.accent{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}.okt{color:var(--ok);font-size:12px}
-.pill{font-size:11px;padding:2px 9px;border-radius:10px;border:1px solid var(--line);
-  display:inline-block;white-space:nowrap}
-.pill.grabbed{color:var(--info);border-color:var(--info)}
-.pill.imported{color:var(--ok);border-color:var(--ok)}
-.pill.failed{color:var(--bad);border-color:var(--bad)}
-.pill.queued{color:var(--warn);border-color:var(--warn)}
-.empty{color:var(--dim);padding:26px 4px;text-align:center}
+th{color:var(--dim);font-size:10.5px;font-weight:600;text-transform:uppercase;
+  letter-spacing:.07em;background:var(--surface-2)}
+thead th:first-child{border-top-left-radius:var(--r-sm)}
+thead th:last-child{border-top-right-radius:var(--r-sm)}
+tbody tr{transition:background var(--t)}
+tbody tr:hover td{background:var(--surface-2)}
+tbody tr:last-child td{border-bottom:0}
+/* Queue and History put a table straight on the page with no card around it,
+   so the table has to carry its own chrome there. */
+#page>table{background:var(--surface);border:1px solid var(--line);
+  border-radius:var(--r-lg);box-shadow:var(--shadow-1),var(--edge);
+  overflow:hidden}
+.mini{padding:4px 12px;font-size:12px;border:1px solid var(--line);
+  background:var(--surface);color:var(--fg);border-radius:var(--r-sm);
+  cursor:pointer;margin-left:6px;transition:all var(--t)}
+.mini:hover{border-color:var(--accent-line)}
+.mini.accent{background:var(--accent);color:var(--accent-ink);
+  border-color:var(--accent)}
+.okt{color:var(--ok);font-size:12px}
+.pill{font-size:11px;padding:2px 10px;border-radius:var(--r-pill);
+  border:1px solid var(--line);background:var(--surface-2);color:var(--fg-2);
+  display:inline-block;white-space:nowrap;font-weight:500}
+.pill.grabbed{color:var(--info);border-color:color-mix(in srgb,var(--info) 45%,transparent);
+  background:color-mix(in srgb,var(--info) 13%,transparent)}
+.pill.imported{color:var(--ok);border-color:color-mix(in srgb,var(--ok) 45%,transparent);
+  background:color-mix(in srgb,var(--ok) 13%,transparent)}
+.pill.failed{color:var(--bad);border-color:color-mix(in srgb,var(--bad) 45%,transparent);
+  background:color-mix(in srgb,var(--bad) 13%,transparent)}
+.pill.queued{color:var(--warn);border-color:color-mix(in srgb,var(--warn) 45%,transparent);
+  background:color-mix(in srgb,var(--warn) 13%,transparent)}
+/* An empty page is a state, not an accident. Given a dashed enclosure it
+   reads as "there is a place for things here and it is empty" rather than as
+   a page that failed to load. */
+.empty{color:var(--dim);padding:40px 20px;text-align:center;font-size:13px;
+  background:var(--surface-2);border:1px dashed var(--line);
+  border-radius:var(--r-lg)}
 label{display:block;font-size:12.5px;color:var(--dim);margin-bottom:5px}
-input[type=text],input[type=number],select{width:100%;padding:8px 11px;
-  background:var(--bg);color:var(--fg);border:1px solid var(--line);
-  border-radius:4px;outline:none;font-size:13px}
-input:focus,select:focus{border-color:var(--accent)}
+/* `input:not([type])` is in here because most of this UI writes a bare
+   <input>, and an attribute selector does not match an attribute that is not
+   written -- which is how half the fields kept the browser default box. */
+input:not([type]),input[type=text],input[type=number],input[type=password],
+input[type=search],select,textarea{
+  width:100%;padding:9px 12px;background:var(--bg);color:var(--fg);
+  border:1px solid var(--line);border-radius:var(--r-sm);outline:none;
+  font-size:13px;font-family:inherit;
+  transition:border-color var(--t),box-shadow var(--t)}
+input:focus,select:focus,textarea:focus{border-color:var(--accent-line);
+  box-shadow:var(--ring)}
 .field{margin-bottom:14px;max-width:420px}
-.check{display:flex;align-items:center;gap:9px;margin-bottom:11px;color:var(--fg)}
-.check input{width:16px;height:16px;accent-color:var(--accent)}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:16px}
-.tile{background:var(--panel);border:1px solid var(--line);border-radius:5px;overflow:hidden}
-.tile .art{aspect-ratio:3/4;background:#1a1a1a center/cover no-repeat;display:block}
-.tile .nm{padding:9px;font-size:12.5px;line-height:1.35}
-.tile .pf{padding:0 9px 9px;font-size:11px;color:var(--dim)}
-.st{display:flex;gap:22px;flex-wrap:wrap}
-.st div{min-width:110px}
-.st b{display:block;font-size:19px;font-weight:650}
-.st span{font-size:12px;color:var(--dim)}
-.dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:7px}
-.dot.up{background:var(--ok)}.dot.down{background:var(--bad)}
-.dot.warn{background:var(--warn)}
-.tabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin-bottom:16px}
-.tab{padding:9px 16px;cursor:pointer;color:var(--dim);border-bottom:2px solid transparent;font-size:13px}
-.tab.on{color:var(--accent);border-bottom-color:var(--accent)}
-.modal{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:60;
-  display:flex;align-items:flex-start;justify-content:center;padding:60px 20px;overflow-y:auto}
-.modal .box{background:var(--panel);border:1px solid var(--line);border-radius:6px;
-  width:100%;max-width:520px;padding:20px}
-.modal h3{font-size:15px;margin-bottom:4px}
-.modal .sub{color:var(--dim);font-size:12.5px;margin-bottom:16px}
-.modal .foot{display:flex;gap:8px;margin-top:18px;align-items:center}
+.check{display:flex;align-items:center;gap:9px;margin-bottom:11px;
+  color:var(--fg);font-size:13px;cursor:pointer}
+.check input{width:16px;height:16px;accent-color:var(--accent);flex:none}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(158px,1fr));
+  gap:16px}
+.tile{background:var(--surface);border:1px solid var(--line);
+  border-radius:var(--r-md);overflow:hidden;box-shadow:var(--shadow-1);
+  transition:transform var(--t),box-shadow var(--t),border-color var(--t)}
+.tile:hover{transform:translateY(-3px);box-shadow:var(--shadow-2);
+  border-color:var(--accent-line)}
+/* background-color only: the cover comes in as an inline background-image and
+   a shorthand here would be overridden by it, taking the placeholder with it. */
+.tile .art{aspect-ratio:3/4;background-color:var(--art);background-position:center;
+  background-size:cover;background-repeat:no-repeat;display:block}
+.tile .nm{padding:10px 10px 2px;font-size:12.5px;line-height:1.35;
+  font-weight:500}
+.tile .pf{padding:2px 10px 10px;font-size:11px;color:var(--dim)}
+/* A month, seven columns wide. Squares carry a count, so an empty month is
+   visibly empty rather than indistinguishable from a month that failed to
+   load -- the failure mode the old Calendar page had permanently. */
+.cal{display:grid;grid-template-columns:repeat(7,1fr);gap:5px}
+.cal .dow{font-size:10.5px;color:var(--dim);text-align:center;padding:2px 0;
+  text-transform:uppercase;letter-spacing:.06em}
+.cal button{background:var(--bg);border:1px solid var(--line-soft);
+  border-radius:var(--r-sm);padding:6px 4px;min-height:52px;cursor:pointer;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:2px;color:var(--fg-2);font-size:12px;transition:border-color var(--t)}
+.cal button:hover{border-color:var(--accent-line)}
+.cal button.on{border-color:var(--accent);background:var(--surface);
+  color:var(--fg)}
+.cal button.none{opacity:.42;cursor:default}
+.cal button.pad{background:none;border:none;cursor:default;min-height:0}
+.cal button b{font-size:11px;font-weight:650;color:var(--accent)}
+/* Stat blocks, as tiles rather than a row of loose numbers. */
+.st{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));
+  gap:10px}
+.st div{min-width:0;background:var(--bg);border:1px solid var(--line-soft);
+  border-radius:var(--r-md);padding:12px 14px}
+.st b{display:block;font-size:22px;font-weight:650;letter-spacing:-.02em;
+  line-height:1.2}
+.st span{font-size:11.5px;color:var(--dim)}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;
+  margin-right:7px;background:var(--surface-3)}
+.dot.up{background:var(--ok);box-shadow:0 0 0 3px color-mix(in srgb,var(--ok) 22%,transparent)}
+.dot.down{background:var(--bad);box-shadow:0 0 0 3px color-mix(in srgb,var(--bad) 22%,transparent)}
+.dot.warn{background:var(--warn);box-shadow:0 0 0 3px color-mix(in srgb,var(--warn) 22%,transparent)}
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);
+  margin-bottom:18px}
+.tab{padding:9px 15px;cursor:pointer;color:var(--dim);font-size:13px;
+  font-weight:500;border-bottom:2px solid transparent;margin-bottom:-1px;
+  border-radius:var(--r-sm) var(--r-sm) 0 0;transition:all var(--t)}
+.tab:hover{color:var(--fg);background:var(--surface-2)}
+.tab.on{color:var(--accent-text);border-bottom-color:var(--accent)}
+.modal{position:fixed;inset:0;background:color-mix(in srgb,#000 55%,transparent);
+  -webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);z-index:60;
+  display:flex;align-items:flex-start;justify-content:center;
+  padding:60px 20px;overflow-y:auto;animation:fade .16s ease}
+.modal .box{background:var(--surface);border:1px solid var(--line);
+  border-radius:var(--r-lg);width:100%;max-width:520px;padding:22px 24px;
+  box-shadow:var(--shadow-3);animation:rise .2s cubic-bezier(.2,.8,.3,1)}
+.modal h3{font-size:16px;font-weight:650;letter-spacing:-.01em;margin-bottom:4px}
+.modal .sub{color:var(--dim);font-size:12.5px;margin-bottom:18px}
+.modal .foot{display:flex;gap:8px;margin-top:20px;align-items:center;
+  flex-wrap:wrap}
 .modal .foot .sp{margin-left:auto}
-.btn.danger{background:transparent;color:var(--bad);border:1px solid var(--bad)}
+@keyframes fade{from{opacity:0}}
+@keyframes rise{from{opacity:0;transform:translateY(10px) scale(.985)}}
+.btn.danger{background:transparent;color:var(--bad);
+  border:1px solid color-mix(in srgb,var(--bad) 50%,transparent)}
+.btn.danger:hover{background:color-mix(in srgb,var(--bad) 12%,transparent);
+  filter:none}
 .pick{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .pick button{padding:14px;background:var(--bg);border:1px solid var(--line);
-  color:var(--fg);border-radius:5px;cursor:pointer;text-align:left}
-.pick button:hover{border-color:var(--accent)}
-.pick small{display:block;color:var(--dim);font-size:11px;margin-top:3px}
+  color:var(--fg);border-radius:var(--r-md);cursor:pointer;text-align:left;
+  font-family:inherit;font-size:13px;font-weight:600;line-height:1.4;
+  transition:all var(--t)}
+.pick button:hover{border-color:var(--accent-line);background:var(--surface-2);
+  transform:translateY(-1px)}
+.pick small{display:block;color:var(--dim);font-size:11px;margin-top:3px;
+  font-weight:400}
 .rowact{display:flex;gap:6px;justify-content:flex-end}
-.rowact button{padding:4px 10px;font-size:12px;background:transparent;
-  color:var(--dim);border:1px solid var(--line);border-radius:4px;cursor:pointer}
-.rowact button:hover{color:var(--fg);border-color:var(--accent)}
+.rowact button{padding:4px 11px;font-size:12px;background:transparent;
+  color:var(--dim);border:1px solid var(--line);border-radius:var(--r-sm);
+  cursor:pointer;transition:all var(--t)}
+.rowact button:hover{color:var(--accent-text);border-color:var(--accent-line);
+  background:var(--accent-softer)}
 .testline{font-size:12.5px;margin-top:10px}
 .testline.ok{color:var(--ok)}.testline.bad{color:var(--bad)}
-.toast{position:fixed;right:20px;bottom:20px;background:var(--panel);
-  border:1px solid var(--accent);border-left-width:3px;border-radius:4px;
-  padding:12px 16px;max-width:380px;z-index:50;font-size:13px}
+.toast{position:fixed;right:22px;bottom:22px;background:var(--surface);
+  border:1px solid var(--line);border-left:3px solid var(--accent);
+  border-radius:var(--r-md);padding:13px 17px;max-width:380px;z-index:50;
+  font-size:13px;color:var(--fg);box-shadow:var(--shadow-2);
+  animation:toastin .22s cubic-bezier(.2,.8,.3,1)}
+@keyframes toastin{from{opacity:0;transform:translateY(10px)}}
+details summary{list-style:none}
+details summary::-webkit-details-marker{display:none}
+details summary::before{content:"\\25B8 ";color:var(--accent-text)}
+details[open] summary::before{content:"\\25BE "}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  font-size:.92em;background:var(--surface-2);padding:1px 5px;
+  border-radius:4px;color:var(--fg-2)}
+
+/* Narrow, not collapsed. Every nav entry here is a word -- there is no icon
+   set to fall back on -- so the old 56px rail hid the labels and left a
+   column of blank clickable boxes. It gives up width instead. */
 @media(max-width:820px){
-  #rail{width:56px}#rail .navhead,#rail .nav span.lbl,#brand span.txt{display:none}
-  #main{margin-left:56px}.nav{justify-content:center;padding:12px 0}
+  #rail{width:168px}
+  #main{margin-left:168px}
+  #brand{font-size:17px;padding:14px 13px 13px}
+  .navhead{padding:5px 14px}
+  .nav{padding:7px 9px;margin:1px 7px;font-size:13px;gap:6px}
+  .nav.on::before{left:-5px}
+  #top{padding:11px 14px}
+  .page{padding:16px 14px 40px}
+  #railfoot{padding:10px 9px 12px}
+  .thm{font-size:10px;padding:5px 2px}
+  .sw{width:17px;height:17px}
+  .grid{grid-template-columns:repeat(auto-fill,minmax(126px,1fr));gap:12px}
+  .pgrid{grid-template-columns:1fr}
+  .panels{grid-template-columns:1fr}
+}
+@media(max-width:540px){
+  #rail{width:138px}
+  #main{margin-left:138px}
+  #brand{font-size:15px;padding:13px 10px 12px}
+  .nav{padding:7px 8px;margin:1px 5px;font-size:12.5px}
+  .thm-modes{flex-direction:column;gap:2px}
+  .thm-accents{justify-content:center;gap:5px}
+  .page{padding:14px 12px 36px}
+  .card{padding:15px 14px}
+  th,td{padding:8px 8px}
+}
+@media(prefers-reduced-motion:reduce){
+  *,*::before,*::after{transition:none !important;animation:none !important}
 }
 """
+
+
+# The accents offered as one click. Stated once, in Python, so the swatch row
+# and the boot script's fallback cannot disagree about what "Amber" is.
+ACCENTS = [
+    ("#f2a33c", "Amber"),
+    ("#f2635f", "Coral"),
+    ("#c084fc", "Violet"),
+    ("#5aa2f0", "Azure"),
+    ("#2dd4bf", "Teal"),
+    ("#7bd88f", "Fern"),
+]
+
+# Runs in <head>, before anything paints. Reading the stored choice from the
+# body script instead would repaint the whole shell in front of the operator on
+# every single load -- the white flash every themed app gets wrong once.
+#
+# The luminance maths is here rather than in CSS because CSS cannot do it. An
+# accent the user picked has no guaranteed contrast against anything: navy on
+# the dark mode is unreadable as link text, and white-on-yellow is unreadable
+# as button text. So two colours are derived from the one that was picked --
+# --accent-text, walked along its own lightness until it clears 4.5:1 against
+# whatever the mode's background turned out to be, and --accent-ink, whichever
+# of near-black or white sits better on the accent itself. The mode background
+# is read back out of the cascade rather than restated here, because a copy of
+# it in this file is a copy that drifts the first time a mode is retuned.
+THEME_BOOT = r"""
+(function(){
+  var MODES=['dark','light','sepia'], KEY='romarr.theme', AKEY='romarr.accent',
+      FALLBACK='ACCENT_FALLBACK', root=document.documentElement;
+
+  function store(k,v){ try{ localStorage.setItem(k,v); }catch(e){} }
+  function recall(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } }
+
+  function rgb(h){
+    h=String(h||'').trim().replace('#','');
+    if(h.length===3) h=h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
+    if(!/^[0-9a-fA-F]{6}$/.test(h)) return null;
+    var n=parseInt(h,16); return [n>>16&255,n>>8&255,n&255];
+  }
+  function hex(c){ return '#'+c.map(function(v){
+    return ('0'+Math.round(Math.max(0,Math.min(255,v))).toString(16)).slice(-2);
+  }).join(''); }
+  function lum(c){
+    var a=c.map(function(v){ v/=255;
+      return v<=.03928 ? v/12.92 : Math.pow((v+.055)/1.055,2.4); });
+    return .2126*a[0]+.7152*a[1]+.0722*a[2];
+  }
+  function ratio(a,b){
+    var x=lum(a), y=lum(b);
+    return (Math.max(x,y)+.05)/(Math.min(x,y)+.05);
+  }
+  function toHsl(c){
+    var r=c[0]/255,g=c[1]/255,b=c[2]/255,
+        mx=Math.max(r,g,b),mn=Math.min(r,g,b),d=mx-mn,h=0,s=0,l=(mx+mn)/2;
+    if(d){
+      s=d/(1-Math.abs(2*l-1));
+      h = mx===r ? ((g-b)/d)%6 : mx===g ? (b-r)/d+2 : (r-g)/d+4;
+      h*=60; if(h<0) h+=360;
+    }
+    return [h,s,l];
+  }
+  function toRgb(h,s,l){
+    var c=(1-Math.abs(2*l-1))*s, x=c*(1-Math.abs((h/60)%2-1)), m=l-c/2,
+        t = h<60?[c,x,0]:h<120?[x,c,0]:h<180?[0,c,x]
+           :h<240?[0,x,c]:h<300?[x,0,c]:[c,0,x];
+    return [(t[0]+m)*255,(t[1]+m)*255,(t[2]+m)*255];
+  }
+  /* The accent as *text*: same hue, walked toward whichever end of the
+     lightness scale is away from the background until it is legible. */
+  function legible(accent,bg){
+    var c=rgb(accent), b=rgb(bg);
+    if(!c||!b) return accent;
+    if(ratio(c,b)>=4.5) return accent;
+    var hsl=toHsl(c), up=lum(b)<.5, best=accent, score=ratio(c,b);
+    for(var i=1;i<=100;i++){
+      var l=up?Math.min(1,hsl[2]+i/100):Math.max(0,hsl[2]-i/100),
+          t=toRgb(hsl[0],hsl[1],l), r=ratio(t,b);
+      if(r>score){ score=r; best=hex(t); }
+      if(r>=4.5) return hex(t);
+    }
+    return best;
+  }
+  /* And the text drawn *on* the accent: no walking, just whichever of the two
+     extremes wins, because a button label has to stay a flat legible block. */
+  function ink(accent){
+    var c=rgb(accent); if(!c) return '#141414';
+    return ratio(c,[20,20,20])>=ratio(c,[255,255,255]) ? '#141414' : '#ffffff';
+  }
+
+  function apply(mode,accent){
+    root.setAttribute('data-theme',mode);
+    root.style.setProperty('--accent',accent);
+    // Read back rather than remember: whatever the mode block just set is the
+    // background this accent actually has to survive.
+    var bg=getComputedStyle(root).getPropertyValue('--bg').trim()||'#12141a';
+    root.style.setProperty('--accent-text',legible(accent,bg));
+    root.style.setProperty('--accent-ink',ink(accent));
+    // Announced rather than pushed: this runs in <head>, so the rail's
+    // controls do not exist yet and cannot be told directly. Whoever ends up
+    // owning them subscribes, and then no caller of set() can leave the
+    // buttons showing a mode the page is not in.
+    try{ root.dispatchEvent(new CustomEvent('themechange')); }catch(e){}
+  }
+
+  var mode=recall(KEY);
+  if(MODES.indexOf(mode)<0){
+    // Nothing stored, so the operating system's answer is the best guess
+    // available. It is a guess, not a subscription -- once a choice is stored
+    // it wins, because somebody who picked light meant light.
+    mode = (window.matchMedia
+      && matchMedia('(prefers-color-scheme: light)').matches) ? 'light' : 'dark';
+  }
+  var accent=recall(AKEY);
+  if(!rgb(accent)) accent=FALLBACK;
+  apply(mode,accent);
+
+  window.ROMTHEME={
+    modes:MODES,
+    mode:function(){ return root.getAttribute('data-theme'); },
+    accent:function(){ return root.style.getPropertyValue('--accent').trim()
+                              || FALLBACK; },
+    set:function(mode,accent){
+      var m=MODES.indexOf(mode)>=0?mode:this.mode(),
+          a=rgb(accent)?accent:this.accent();
+      apply(m,a); store(KEY,m); store(AKEY,a);
+    }
+  };
+})();
+""".replace("ACCENT_FALLBACK", ACCENTS[0][0])
+
+
+def _theme_control_html() -> str:
+    """The mode switch and the accent swatches, for the rail's footer."""
+    swatches = "".join(
+        f'<button class="sw" type="button" data-accent="{value}" '
+        f'style="--sw:{value}" title="{name}" '
+        f'aria-label="{name} accent"></button>'
+        for value, name in ACCENTS
+    )
+    return (
+        '<div id="railfoot">'
+        '<div class="thm-lbl">Theme</div>'
+        '<div class="thm-modes" role="group" aria-label="Colour mode">'
+        '<button class="thm" type="button" data-theme-set="dark" '
+        'title="Dark">Dark</button>'
+        '<button class="thm" type="button" data-theme-set="light" '
+        'title="Light">Light</button>'
+        '<button class="thm" type="button" data-theme-set="sepia" '
+        'title="Easy on the eyes — warm, low contrast, less blue light">'
+        'Easy</button></div>'
+        f'<div class="thm-accents">{swatches}'
+        '<label class="sw pick" title="Any colour you like">'
+        f'<input type="color" id="accent-pick" value="{ACCENTS[0][0]}" '
+        'aria-label="Custom accent colour"></label>'
+        '</div></div>'
+    )
 
 # The nav, in *arr order. `count` names a stat the badge reads.
 NAV = [
@@ -247,6 +678,9 @@ const $=s=>document.querySelector(s);
 const j=(u,o)=>fetch(u,o).then(r=>r.json());
 const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+// Library counts here run to six figures; grouped, they are readable at a
+// glance instead of a digit-counting exercise.
+const fmt=n=>Number(n||0).toLocaleString();
 let PLATFORMS=[], SETTINGS={};
 
 function toast(msg){
@@ -434,8 +868,18 @@ RENDER.hub=async()=>{
   render(await load());
 };
 
-let LIB={platform:'',genre:'',region:'',decade:'',origin:'',sort:'',
+let LIB={platform:'',genre:'',region:'',decade:'',origin:'',source:'',sort:'',
          offset:0,limit:120};
+// What each catalogue is called on screen. Spelled out rather than shown as
+// the raw key, because "archive" and "flashpoint" mean nothing to somebody
+// who did not set the indexers up, and "cloud" has to say plainly that
+// ROMarr does not know where those came from.
+const SOURCE_LABEL={
+  local:'On disk here',
+  archive:'Archive.org (streams)',
+  flashpoint:'Flashpoint (streams)',
+  cloud:'Catalogued, source unknown'};
+const num=n=>(n===null||n===undefined)?'—':Number(n).toLocaleString();
 RENDER.library=async()=>{
   const p=$('#page');
   if(!p.querySelector('#lib-grid')) p.innerHTML='<div class="empty">Loading library…</div>';
@@ -446,6 +890,7 @@ RENDER.library=async()=>{
     +`&region=${encodeURIComponent(LIB.region)}`
     +`&decade=${encodeURIComponent(LIB.decade)}`
     +`&origin=${encodeURIComponent(LIB.origin)}`
+    +`&source=${encodeURIComponent(LIB.source)}`
     +`&sort=${encodeURIComponent(LIB.sort)}`)
     .catch(()=>({items:[],error:'unreachable'}));
 
@@ -459,15 +904,28 @@ RENDER.library=async()=>{
   }
 
   const items=d.items||[];
+  const T=d.totals||{};
   // Every platform the library server holds, from the first second --
   // even ones the background walk has not reached. When a platform is only
   // partly cached the chip says so rather than under-reporting silently.
+  //
+  // The number on a chip is the platform's whole row count, and on its own
+  // that was actively misleading: "Browser 94,415" sat beside "Nintendo DS
+  // 8,112" looking like the same claim, when not one of those 94,415 is a
+  // file on this disk. A chip whose contents are wholly or partly catalogued
+  // now shows the split and says which is which on hover.
   const chips=(d.platforms||[]).map(x=>{
     const part=x.cached!==undefined&&x.cached<x.count;
+    const cat=x.catalogued||0, disk=x.on_disk||0;
+    const mixed=cat>0;
+    const tip=[part?`${x.cached} of ${x.count} loaded so far`:'',
+               mixed?`${disk} on disk · ${cat} catalogued elsewhere`:'']
+              .filter(Boolean).join(' — ');
     return `<button class="btn ${LIB.platform===x.platform?'':'ghost'}" data-plat="${esc(x.platform)}"
       style="padding:4px 10px;font-size:12px"
-      title="${part?`${x.cached} of ${x.count} loaded so far`:''}">${esc(x.platform)}
-      <span style="opacity:.7">${part?x.cached+'/'+x.count:x.count}</span></button>`;
+      title="${esc(tip)}">${esc(x.platform)}
+      <span style="opacity:.7">${part?x.cached+'/'+x.count:x.count}</span>
+      ${mixed?`<span style="opacity:.55;font-size:11px">(${disk}&nbsp;here)</span>`:''}</button>`;
   }).join('');
   const f=d.facets||{};
   const sel=(key,label,list,fmt)=>{
@@ -480,7 +938,33 @@ RENDER.library=async()=>{
   };
   const coverage=f.identified&&d.grand_total
     ? Math.round(f.identified/d.grand_total*100) : 0;
-  const head=`<div class="row" style="flex-wrap:wrap;gap:6px;margin-bottom:10px">
+  // The headline. Three numbers where there used to be one, because the one
+  // was the other two added together and nothing said so: a shelf of 166,548
+  // reads as a collection twice the size of the 72,120 files that are
+  // actually here. The middle number is the interesting one -- it is what
+  // would have to be fetched or streamed before anybody could play it.
+  const srcRows=(f.sources||[]).filter(x=>x.value!=='local');
+  const banner=`<div class="card" style="margin-bottom:12px">
+    <div class="st">
+      <div><b>${num(T.on_disk)}</b><span>On disk here</span></div>
+      <div><b>${num(T.catalogued)}</b><span>Catalogued, streams</span></div>
+      <div><b>${num(T.total)}</b><span>Total known</span></div>
+    </div>
+    ${srcRows.length?`<p class="help" style="margin:8px 0 0">
+      Catalogued entries by source:
+      ${srcRows.map(x=>`<b>${num(x.count)}</b> ${esc(SOURCE_LABEL[x.value]||x.value)}`)
+        .join(' · ')}. Source is read from the filename each indexer writes,
+      so anything ROMarr cannot place stays “source unknown” rather than
+      being filed under a guess.</p>`:''}
+    ${T.counted_from==='cached rows'
+      ?`<p class="help" style="margin:6px 0 0">Counted from the ${num(d.cached_total)}
+        rows read so far — this library server does not report the split
+        itself${d.partial?', and the read is still running':''}.</p>`
+      :((T.total!==null&&T.total!==undefined&&d.cached_total<T.total)
+        ?`<p class="help" style="margin:6px 0 0">${num(d.cached_total)} of those
+          are loaded and browsable here${d.partial?' — still reading':''}.</p>`:'')}
+  </div>`;
+  const head=banner+`<div class="row" style="flex-wrap:wrap;gap:6px;margin-bottom:10px">
       <button class="btn ${LIB.platform?'ghost':''}" data-plat=""
         style="padding:4px 10px;font-size:12px">All
         <span style="opacity:.7">${d.grand_total}</span></button>${chips}</div>
@@ -490,13 +974,15 @@ RENDER.library=async()=>{
       ${sel('decade','Any decade',f.decades)}
       ${(f.origins||[]).length>1?sel('origin','On disk & catalogued',f.origins,
         v=>v==='local'?'On disk (plays now)':'Catalogued (needs fetching)'):''}
+      ${(f.sources||[]).length>1?sel('source','Any source',f.sources,
+        v=>SOURCE_LABEL[v]||v):''}
       <select data-lf="sort" style="padding:4px 8px;font-size:12px">
         <option value=""${LIB.sort?'':' selected'}>Platform, then name</option>
         <option value="name"${LIB.sort==='name'?' selected':''}>Name A–Z</option>
         <option value="rating"${LIB.sort==='rating'?' selected':''}>Top rated</option>
         <option value="year"${LIB.sort==='year'?' selected':''}>Newest first</option>
       </select>
-      ${(LIB.genre||LIB.region||LIB.decade||LIB.origin||LIB.sort)
+      ${(LIB.genre||LIB.region||LIB.decade||LIB.origin||LIB.source||LIB.sort)
         ?'<button class="btn ghost" id="lf-clear" style="padding:4px 10px;font-size:12px">Clear filters</button>':''}
       ${(f.genres||[]).length?`<span class="help" style="margin:0;font-size:11.5px">
         genre/year known for ${f.identified} of ${d.grand_total} (${coverage}%) —
@@ -505,7 +991,7 @@ RENDER.library=async()=>{
     <p class="help" style="margin-bottom:10px">
       Showing ${d.total?LIB.offset+1:0}–${Math.min(LIB.offset+items.length,d.total)}
       of ${d.total}${LIB.platform?` on ${esc(LIB.platform)}`:''}${q?` matching “${esc(q)}”`:''}
-      · ${d.grand_total} across ${(d.platforms||[]).length} platforms
+      · ${d.grand_total} cached across ${(d.platforms||[]).length} platforms
       ${d.partial?' · <b>still loading from the library server…</b>':''}
       ${d.error?` · <span style="color:var(--warn)">last refresh: ${esc(d.error)}</span>`:''}</p>`;
 
@@ -558,7 +1044,7 @@ function bindLibraryChips(p){
   });
   const clear=p.querySelector('#lf-clear');
   if(clear) clear.onclick=()=>{
-    LIB.genre=LIB.region=LIB.decade=LIB.origin=LIB.sort='';
+    LIB.genre=LIB.region=LIB.decade=LIB.origin=LIB.source=LIB.sort='';
     LIB.offset=0; LIB.limit=120; go('library');
   };
 }
@@ -1015,7 +1501,10 @@ RENDER.discover=async()=>{
   // and years. The storefront shelves need a metadata API key.
   const mine=DISC.mode==='library';
   const libTabs=[['top-rated','Top rated'],['recent','Newest'],
-                 ['hidden-gems','Hidden gems'],['by-genre','By genre']];
+                 ['recently-added','Just added'],['hidden-gems','Hidden gems'],
+                 ['multiplayer','Multiplayer'],['anniversary','On this day'],
+                 ['by-genre','Genre'],['by-franchise','Franchise'],
+                 ['by-company','Company']];
   const webTabs=[['popular','Popular'],['new','New releases'],['upcoming','Upcoming']];
   const tabs=mine?libTabs:webTabs;
   if(mine&&!libTabs.some(t=>t[0]===DISC.shelf)) DISC.shelf='top-rated';
@@ -1036,27 +1525,45 @@ RENDER.discover=async()=>{
 
   if(mine){
     const d=await j(`/api/v1/discover/library?shelf=${encodeURIComponent(DISC.shelf)}`
-      +`&genre=${encodeURIComponent(DISC.genre)}&limit=60`)
+      +`&value=${encodeURIComponent(DISC.genre)}&limit=60`)
       .catch(()=>({items:[]}));
-    if(DISC.shelf==='by-genre'){
-      $('#d-genres').innerHTML=(d.genres||[]).map(g=>
+    // The chip row belongs to the shelf being browsed — genres while you are
+    // browsing franchises is a row of buttons that do nothing.
+    const facet={'by-genre':['genre','a metadata scan'],
+                 'by-franchise':['franchise','a metadata scan'],
+                 'by-company':['company','a metadata scan']}[DISC.shelf];
+    if(facet){
+      $('#d-genres').innerHTML=(d.facet||[]).map(g=>
         `<button class="btn ${DISC.genre===g?'':'ghost'}" data-dgenre="${esc(g)}"
           style="padding:3px 9px;font-size:12px;margin:0 4px 4px 0">${esc(g)}</button>`).join('')
-        ||'<span class="help" style="margin:0">No genres known yet — run a metadata scan in your library server.</span>';
+        ||`<span class="help" style="margin:0">No ${facet[0]} known yet — your
+            library server fills these in when it identifies a game.</span>`;
       document.querySelectorAll('[data-dgenre]').forEach(b=>b.onclick=()=>{
         DISC.genre=b.dataset.dgenre; go('discover');});
     }
     const items=d.items||[];
     if(!items.length){
-      $('#d-out').innerHTML=`<div class="empty">${esc(d.error||'Nothing on this shelf yet.')}</div>`;
+      $('#d-out').innerHTML=`<div class="empty">${esc(d.error
+        ||(facet&&!DISC.genre?`Pick a ${facet[0]} above.`
+           :'Nothing on this shelf yet.'))}</div>`;
       return;
     }
-    $('#d-out').innerHTML=`<p class="help">${d.total} game(s) on this shelf, from your own library.</p>
+    // Whatever the shelf is sorted on is what the subtitle leads with, so a
+    // "Just added" grid is not a wall of tiles with no dates on them.
+    const sub=g=>DISC.shelf==='recently-added'?(g.added||'')
+      :DISC.shelf==='anniversary'?(g.released||'')
+      :(g.year?String(g.year):'');
+    $('#d-out').innerHTML=`<p class="help">${fmt(d.total)} game(s) on this
+        shelf, from your own library's metadata — no API key involved.</p>
       <div class="grid">${items.map(g=>`<div class="tile">
         <div class="art" style="background-image:url('${esc(g.cover_url||'')}')"></div>
         <div class="nm">${esc(g.title)}</div>
-        <div class="pf">${esc(g.platform||'')}${g.year?' · '+g.year:''}${
-          g.rating?' · ★'+g.rating:''}</div></div>`).join('')}</div>`;
+        <div class="pf">${esc(g.platform||'')}${sub(g)?' · '+esc(sub(g)):''}${
+          g.rating?' · ★'+g.rating:''}${
+          g.players&&g.players!=='1'?' · '+esc(g.players)+'p':''}</div>
+        <div class="pf" style="padding-top:0;opacity:.75">${esc(
+          (g.franchises||[]).concat(g.genres||[]).slice(0,2).join(' · '))}</div>
+        </div>`).join('')}</div>`;
     return;
   }
 
@@ -1171,31 +1678,121 @@ RENDER.peers=async()=>{
       <div id="p-shelf"></div></div>`
       :'<div class="empty">No friends yet. Invite someone, or paste an invitation they sent you.</div>'}`;
 
+  //: Two halves, shown as two halves. The link is safe to paste anywhere a
+  //: link goes because it authorises nothing; the code is the credential and
+  //: is never in it. Presenting them side by side with the reason written
+  //: down is the only thing that stops somebody pasting both into the same
+  //: message and wondering why we bothered.
   $('#p-invite').onclick=async()=>{
     const r=await j('/api/v1/peer/invite',{method:'POST',
       headers:{'content-type':'application/json'},body:'{}'});
     $('#p-out').innerHTML=`<div class="card" style="margin:0">
-      <h3>Send this to your friend</h3>
+      <h3>Send your friend two things</h3>
       <p class="help">${esc(r.note||'')}</p>
       ${r.warning?`<div class="panel panel-warn">${esc(r.warning)}</div>`:''}
-      <div class="field"><textarea rows="4" readonly
-        style="width:100%;font:12px/1.5 ui-monospace,
-        Menlo,monospace">${esc(JSON.stringify(r.invite||{}))}</textarea></div>
-      <button class="btn ghost" id="p-copy">Copy invitation</button></div>`;
-    $('#p-copy').onclick=async()=>{
-      try{await navigator.clipboard.writeText(JSON.stringify(r.invite||{}));
-        toast('Invitation copied');}catch{toast('Select and copy it');}
+      ${r.link?`<div class="field"><label>1. The link — send it anywhere</label>
+        <input type="text" id="p-link" readonly value="${esc(r.link)}"
+          style="width:100%;font:12px/1.5 ui-monospace,Menlo,monospace">
+        <p class="help" style="margin-top:6px">Carries no secret. Chat, mail,
+          a preview card in someone's group thread — none of it matters,
+          because on its own this opens nothing.</p></div>`:''}
+      <div class="field"><label>2. The claim code — send it separately</label>
+        <div id="p-code" style="font:700 26px/1.2 ui-monospace,Menlo,monospace;
+          letter-spacing:.12em;padding:12px 0">${esc(r.code||'')}</div>
+        <p class="help">This one <b>is</b> the secret. Say it out loud, text
+          it, use a different app — anything that is not the same message as
+          the link. It works once and expires in
+          <b id="p-codeleft">${Math.max(0,Math.round((r.code_expires_in||0)/60))} min</b>.</p></div>
+      <div class="row" style="gap:8px">
+        <button class="btn ghost" id="p-copy">Copy the link</button>
+        <button class="btn ghost" id="p-copycode">Copy the code</button></div>
+      <details style="margin-top:14px"><summary class="help"
+        style="cursor:pointer">Your friend's ROMarr is older than invitation
+        links</summary>
+        <p class="help">The one-piece form. It contains the long secret, so
+          send it the way you would send a password — and prefer the link and
+          code above, which exist because this was easy to mishandle.</p>
+        <textarea rows="4" readonly style="width:100%;font:12px/1.5
+          ui-monospace,Menlo,monospace">${esc(JSON.stringify(r.invite||{}))}</textarea>
+      </details></div>`;
+    const copy=async(text,said)=>{
+      try{await navigator.clipboard.writeText(text); toast(said);}
+      catch{toast('Select it and copy it');}
     };
+    $('#p-copy').onclick=()=>copy(r.link||'','Link copied');
+    $('#p-copycode').onclick=()=>copy(r.code||'','Code copied');
+    //: Counting down rather than showing a timestamp: the operator is deciding
+    //: right now whether to resend, and "4 min" answers that where "expires at
+    //: 19:42" makes them do arithmetic.
+    let left=r.code_expires_in||0;
+    const tick=setInterval(()=>{
+      const el=$('#p-codeleft');
+      if(!el){ clearInterval(tick); return; }
+      left-=10;
+      if(left<=0){
+        clearInterval(tick);
+        el.textContent='— expired';
+        const code=$('#p-code');
+        if(code) code.style.opacity='.35';
+      } else el.textContent=Math.max(1,Math.round(left/60))+' min';
+    },10000);
   };
 
-  $('#p-redeem').onclick=()=>{
+  //: Prefilled from the /link landing page, which stashes the invitation in
+  //: sessionStorage rather than the URL. Read once and cleared: an invitation
+  //: sitting in a tab's storage after it has been used is a thing to explain
+  //: later rather than a feature.
+  const claimForm=(pre)=>{
     $('#p-out').innerHTML=`<div class="card" style="margin:0">
-      <h3>Paste your friend's invitation</h3>
-      <div class="field"><textarea id="p-blob" rows="4"
-        style="width:100%;font:12px/1.5 ui-monospace,Menlo,monospace"
-        placeholder='{"peer_id":"...","secret":"..."}'></textarea></div>
-      <div id="testline"></div>
-      <button class="btn" id="p-go">Become friends</button></div>`;
+      <h3>Redeem an invitation</h3>
+      <div class="field"><label>The link your friend sent</label>
+        <input type="text" id="p-link-in" value="${esc(pre&&pre.link||'')}"
+          placeholder="https://their-server.example/link#i=…"
+          style="width:100%;font:12px/1.5 ui-monospace,Menlo,monospace"></div>
+      <div class="field"><label>The claim code they sent separately</label>
+        <input type="text" id="p-code-in" autocomplete="off" maxlength="12"
+          placeholder="K7RM-9TFQ" style="max-width:220px;
+          font:700 18px/1.2 ui-monospace,Menlo,monospace;letter-spacing:.1em">
+        <p class="help" style="margin-top:6px">Eight characters. Case, spaces
+          and the dash do not matter.</p></div>
+      <div id="p-claim-target"></div>
+      <button class="btn" id="p-claim-go">Become friends</button>
+      <details style="margin-top:14px"><summary class="help"
+        style="cursor:pointer">They sent one long block of JSON instead</summary>
+        <p class="help">An older ROMarr, or an invitation minted before this
+          version. Paste the whole block.</p>
+        <textarea id="p-blob" rows="4" style="width:100%;font:12px/1.5
+          ui-monospace,Menlo,monospace"
+          placeholder='{"peer_id":"...","secret":"..."}'></textarea>
+        <button class="btn ghost" id="p-go" style="margin-top:8px">Redeem the
+          pasted invitation</button></details></div>`;
+    if(pre&&pre.link) $('#p-code-in').focus();
+    //: The address is shown before anything is sent to it. A link is a thing
+    //: somebody else wrote, and the one fact worth reading off it is whose
+    //: server it points at.
+    const showTarget=()=>{
+      const el=$('#p-claim-target');
+      let host='';
+      try{ host=new URL($('#p-link-in').value.trim()).origin; }catch{}
+      const frag=($('#p-link-in').value.match(/[#&]u=([^&]*)/)||[])[1];
+      if(frag){ try{ host=new URL(decodeURIComponent(frag)).origin; }catch{} }
+      el.innerHTML=host?`<div class="panel" style="margin-bottom:12px">ROMarr
+        will send this code to <b>${esc(host)}</b>.</div>`:'';
+    };
+    $('#p-link-in').oninput=showTarget; showTarget();
+    $('#p-claim-go').onclick=async()=>{
+      const b=$('#p-claim-go');
+      b.disabled=true; b.textContent='Talking to their server…';
+      const r=await j('/api/v1/peer/claim',{method:'POST',
+        headers:{'content-type':'application/json'},
+        body:JSON.stringify({link:$('#p-link-in').value.trim(),
+                             code:$('#p-code-in').value.trim()})});
+      b.disabled=false; b.textContent='Become friends';
+      if(!r.ok){ toast(r.error||'That invitation was refused'); return; }
+      if(r.warning) toast(r.warning);
+      toast(r.detail||'Friend added — they confirm on their side');
+      go('peers');
+    };
     $('#p-go').onclick=async()=>{
       let blob;
       try{ blob=JSON.parse($('#p-blob').value); }
@@ -1208,6 +1805,18 @@ RENDER.peers=async()=>{
       go('peers');
     };
   };
+  $('#p-redeem').onclick=()=>claimForm(null);
+
+  let waiting=null;
+  try{ waiting=JSON.parse(sessionStorage.getItem('romarr-invite')||'null'); }
+  catch{}
+  if(waiting&&waiting.peer_id&&waiting.url){
+    try{ sessionStorage.removeItem('romarr-invite'); }catch{}
+    claimForm({link:waiting.url.replace(/\/+$/,'')+'/link#i='
+      +encodeURIComponent(waiting.peer_id)
+      +'&u='+encodeURIComponent(waiting.url)});
+    $('#p-out').scrollIntoView({block:'nearest'});
+  }
 
   document.querySelectorAll('[data-pconfirm]').forEach(b=>b.onclick=async()=>{
     await j('/api/v1/peer/confirm',{method:'POST',
@@ -1468,7 +2077,7 @@ function sharingEditor(peer){
 RENDER.ecosystem=async()=>{
   const d=await j('/api/v1/ecosystem').catch(()=>({categories:{}}));
   const cats=d.categories||{};
-  const card=p=>`<div class="pcard"${p.is_self?' style="border-color:var(--acc)"':''}>
+  const card=p=>`<div class="pcard"${p.is_self?' style="border-color:var(--accent)"':''}>
     <h4>${esc(p.name)}${p.is_self?' <span class="pill">you are here</span>':''}</h4>
     <div class="desc">${esc(p.blurb)}</div>
     <div class="rowact" style="margin-top:8px;flex-wrap:wrap;gap:6px">
@@ -1507,7 +2116,7 @@ RENDER.stats=async()=>{
       <span style="width:180px;color:var(--dim);font-size:12.5px;text-align:right">${esc(k)}</span>
       <div style="flex:1;background:var(--line);border-radius:3px;height:14px">
         <div style="width:${Math.max(4,Math.round(v/max*100))}%;height:14px;
-          background:var(--acc);border-radius:3px"></div></div>
+          background:var(--accent);border-radius:3px"></div></div>
       <b style="width:48px">${v}</b></div>`).join('');
   };
   $('#page').innerHTML=`
@@ -1517,14 +2126,29 @@ RENDER.stats=async()=>{
       pull the new image when it suits you.</p></div>`:''}
     <div class="card"><h3>This install</h3><div class="st">
       <div><b>${esc(s.version)}</b><span>Version</span></div>
-      <div><b>${s.library_games??'—'}</b><span>Games in library</span></div>
+      <div><b>${num(s.library_on_disk)}</b><span>On disk here</span></div>
+      <div><b>${num(s.library_catalogued)}</b><span>Catalogued, streams</span></div>
+      <div><b>${num(s.library_games)}</b><span>Total known</span></div>
       <div><b>${s.wanted}</b><span>Wanted</span></div>
       <div><b>${hours}h</b><span>Uptime</span></div>
       <div><b>${(s.events||{}).grabbed||0}</b><span>Grabbed, ever</span></div>
       <div><b>${(s.events||{}).imported||0}</b><span>Imported, ever</span></div>
       <div><b>${(s.events||{}).failed||0}</b><span>Failures</span></div>
       <div><b>${s.average_rating??'—'}</b><span>Avg rating (${s.rated||0} rated)</span></div>
-    </div></div>
+    </div>
+    <p class="help" style="margin:10px 0 0">“Total known” is the other two
+      added together — every row your library server holds. Only the first
+      number is bytes you have; the second is a catalogue of things that
+      would have to stream or be fetched first.</p></div>
+    ${Object.keys(s.library_sources||{}).length>1?`<div class="card">
+      <h3>Where the library comes from</h3>
+      ${bar(Object.fromEntries(Object.entries(s.library_sources)
+        .sort((a,b)=>b[1]-a[1])
+        .map(([k,v])=>[SOURCE_LABEL[k]||k,v])))}
+      <p class="help">Counted from the rows ROMarr has read. Each catalogue is
+        identified by the filename its indexer writes; anything that matches
+        neither is left as “source unknown” rather than assigned to whichever
+        catalogue is larger.</p></div>`:''}
     <div class="card"><h3>Imports by platform</h3>${bar(s.imported_by_platform)}</div>
     <div class="card"><h3>Grabs by indexer</h3>${bar(s.grabbed_by_indexer)}</div>
     <div class="card"><h3>Library audit</h3>
@@ -2084,8 +2708,17 @@ RENDER.status=async()=>{
         : `<tr><td>Stream server</td><td><span class="dot"></span>not configured</td>
            <td style="color:var(--dim)">set STREAM_SERVER_URL to play PS2, GameCube,
            Wii, Dreamcast and 3DS here</td></tr>`}
+      ${(h.moonlight||{}).configured
+        ? row(esc((h.moonlight||{}).kind_label||'Moonlight host'),
+              (h.moonlight||{}).ok,
+              (h.moonlight||{}).ok?(h.moonlight||{}).label
+                                  :((h.moonlight||{}).problem||''))
+        : `<tr><td>Moonlight host</td><td><span class="dot"></span>not configured</td>
+           <td style="color:var(--dim)">set MOONLIGHT_HOST to a Wolf, Sunshine or
+           Steam Headless machine</td></tr>`}
     </tbody></table></div>
     ${playCard(h.play_routes||{})}
+    ${moonlightCard(h.moonlight||{})}
     <div class="card"><h3>About</h3><div class="st">
       <div><b>${esc(h.version)}</b><span>Version</span></div>
       <div><b>${h.platforms}</b><span>Platforms</span></div>
@@ -2122,6 +2755,8 @@ RENDER.status=async()=>{
     <p class="help" style="margin-top:16px">Or as a frontend's own format:</p>
     <div class="row" style="flex-wrap:wrap;gap:8px" id="fe-row"></div>
     </div>`;
+
+  wireMoonlight(h.moonlight||{});
 
   const msg=(ok,text)=>{const m=$('#bk-msg');
     m.className='testline '+(ok?'ok':'bad'); m.textContent=text;};
@@ -2163,6 +2798,126 @@ RENDER.status=async()=>{
          'romarr-'+b.dataset.f+'.export'));
 };
 
+// The Moonlight host: what it is, what it proves, and the one step that is
+// still a human's.
+//
+// The card is written to be readable when the answer is "nothing", because
+// that is the common case and the interesting one. A host that answers
+// /serverinfo but whose app list ROMarr cannot read is working perfectly and
+// grants no platform anything -- if this card rendered a green dot and
+// stopped, an operator would reasonably conclude their PS2 games were now
+// playable, and they would not be.
+//
+// The pairing section never says "Pair" on its own. Moonlight's PIN is
+// generated by the client on the user's device; ROMarr can only be the box it
+// is typed into, and the copy says so before the input rather than after a
+// failure.
+const moonlightCard=m=>{
+  if(!m.configured) return `<div class="card"><h3>Game streaming host</h3>
+    <p class="help">${esc(m.hint||'')}. A Moonlight host renders a real
+    desktop emulator on the host's GPU and sends video &mdash; which is how
+    machines with no browser core get played. ROMarr reports what it can
+    verify about one and never guesses the rest.</p>
+    <p class="help">${esc(m.manual||'')}</p></div>`;
+
+  if(!m.ok) return `<div class="card"><h3>${esc(m.kind_label||'Moonlight')}</h3>
+    <p class="testline bad">No answer from ${esc(m.host||'')}:${esc(String(m.port||''))}
+    &mdash; ${esc(m.problem||'unreachable')}</p>
+    <p class="help">ROMarr probes <code>/serverinfo</code> on the Moonlight
+    port, which needs no credential and no pairing. If that does not answer,
+    the host is down, firewalled, or on another port.</p></div>`;
+
+  const slugs=Object.keys(m.platforms||{});
+  const pend=(m.pairing||{}).pending||[];
+  const canList=(m.pairing||{}).can_list_pending;
+
+  return `<div class="card"><h3>${esc(m.kind_label||'Moonlight')}</h3>
+    <div class="st">
+      <div><b>${esc(m.hostname||m.host||'?')}</b><span>Host</span></div>
+      <div><b>${esc(m.appversion||'?')}</b><span>Version</span></div>
+      <div><b>${m.busy?'In a game':'Idle'}</b><span>State</span></div>
+      <div><b>${(m.paired||[]).length}</b><span>Paired clients</span></div>
+    </div>
+
+    <h4 style="margin:18px 0 6px">What this host adds</h4>
+    ${m.apps_read
+      ? (slugs.length
+          ? `<p class="help">${slugs.length} platform${slugs.length===1?'':'s'}
+             gain a stream route here, each because a named single-machine
+             emulator is on this host's app list:</p>
+             <table><tbody>${slugs.map(s=>`<tr><td>${esc(s)}</td>
+               <td style="color:var(--dim)">${esc(m.platforms[s])}</td></tr>`).join('')}
+             </tbody></table>`
+          : `<p class="help">Its app list was read (${(m.apps||[]).length}
+             app${(m.apps||[]).length===1?'':'s'}) and <b>no platform gains a
+             route from it</b>. ROMarr only counts an app whose name is an
+             emulator for exactly one machine &mdash; PCSX2, Dolphin, flycast.
+             A RetroArch or a Steam proves nothing, because nothing in the API
+             says which cores or games are inside it.</p>`)
+      : `<p class="help"><b>Reachable, but its app list could not be read</b>,
+         so ROMarr cannot say which platforms it plays and does not guess.
+         ${esc(m.apps_problem||'')}</p>`}
+    ${(m.apps||[]).length?`<p class="help">Apps: ${
+      (m.apps||[]).map(a=>'<span class="pill">'+esc(a)+'</span>').join(' ')}</p>`:''}
+
+    <h4 style="margin:18px 0 6px">Pairing</h4>
+    <p class="help">${esc((m.pairing||{}).manual||'')}</p>
+    ${canList
+      ? (pend.length
+          ? `<p class="help">${pend.length} client${pend.length===1?'':'s'}
+             waiting:</p>`
+          : `<p class="help">No client is waiting to pair right now. Open
+             Moonlight, add <code>${esc(m.host||'')}</code>, and select it
+             &mdash; then come back here with the PIN it shows you.</p>`)
+      : `<p class="help">${esc((m.pairing||{}).detail||'')}</p>`}
+    <div class="row" style="flex-wrap:wrap;gap:8px;align-items:center">
+      ${canList&&pend.length
+        ? `<select id="ml-secret">${pend.map(p=>
+            `<option value="${esc(p.pair_secret)}">${esc(p.client_ip||p.pair_secret)}</option>`
+          ).join('')}</select>`
+        : ''}
+      <input id="ml-pin" placeholder="PIN from your Moonlight client"
+             maxlength="8" style="max-width:230px" ${canList&&!pend.length?'disabled':''}>
+      <button class="btn" id="ml-send" ${canList&&!pend.length?'disabled':''}>Send PIN to host</button>
+    </div>
+    <div id="ml-msg" class="testline"></div>
+
+    <h4 style="margin:18px 0 6px">Connecting</h4>
+    <p class="help">ROMarr cannot start the stream for you. Launching is
+    behind the same paired client certificate as the app list, on the host's
+    HTTPS port, and there is no <code>moonlight://</code> link a browser can
+    hand off &mdash; Moonlight registers no URL scheme. What does work:</p>
+    <p class="help">Add <code>${esc(m.host||'')}</code> in the Moonlight app,
+    or run <code>${esc(m.connect_hint||'')}</code> on a desktop.</p>
+    ${m.desktop_url?`<p class="help">This host also serves a browser desktop:
+      <a href="${esc(m.desktop_url)}" target="_blank" rel="noreferrer noopener"
+      >${esc(m.desktop_url)}</a></p>`:''}
+    </div>`;
+};
+
+// Wired after every status render, and defensive about the card being absent:
+// it is not drawn at all when no host is configured, and this runs regardless.
+const wireMoonlight=m=>{
+  const send=$('#ml-send'); if(!send) return;
+  send.onclick=async()=>{
+    const out=$('#ml-msg');
+    const pin=($('#ml-pin')||{}).value||'';
+    const sec=($('#ml-secret')||{}).value||'';
+    out.className='testline'; out.textContent='Sending…';
+    const r=await j('/api/v1/moonlight/pin',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({pin:pin,pair_secret:sec})}).catch(()=>({ok:false,
+        detail:'ROMarr could not reach the host'}));
+    // Never "Paired". Neither Wolf nor Sunshine reports whether the PIN was
+    // right on this call -- Sunshine returns true for a wrong PIN whenever a
+    // request is outstanding (LizardByte/Sunshine#3944) -- so the strongest
+    // honest word is "accepted", and the check is the paired-client count.
+    out.className='testline '+(r.ok?'ok':'bad');
+    out.textContent=r.detail||(r.ok?'Accepted.':'Refused.');
+    if(r.ok) setTimeout(()=>RENDER.status(),1500);
+  };
+};
+
 // How the supported platforms can actually be played, on THIS install.
 //
 // It belongs on the status page rather than in the docs because the answer
@@ -2172,7 +2927,7 @@ RENDER.status=async()=>{
 const playCard=r=>`<div class="card"><h3>How platforms play here</h3>
   <div class="st">
     <div><b>${r.local||0}</b><span>In the browser (EmulatorJS)</span></div>
-    <div><b>${r.stream||0}</b><span>Streamed (headless RetroArch)</span></div>
+    <div><b>${r.stream||0}</b><span>Streamed server-side</span></div>
     <div><b>${r.archive||0}</b><span>On Archive.org</span></div>
     <div><b>${r.download_only||0}</b><span>Download only</span></div>
   </div>
@@ -2345,27 +3100,119 @@ const metaResult=d=>{
 };
 
 // --- Calendar --------------------------------------------------------------
+// The Calendar reads YOUR library. It used to ask a metadata provider for a
+// release schedule, which meant a fully-catalogued 166k-game install rendered
+// "add a metadata provider with an API key" and nothing else, forever — while
+// the library server sat there holding a release date, an added date and an
+// updated date for every row. The provider calendar is still here, below the
+// real one, for whoever has a key.
+let CAL={view:'releases',month:'',day:''};
+
 RENDER.calendar=async()=>{
-  const d=await j('/api/v1/calendar').catch(()=>({items:[],error:'unavailable'}));
-  const items=d.items||[];
-  $('#page').innerHTML='<div class="card"><h3>Release Calendar</h3>'
-    +'<p class="help">Games out recently or due soon. The window looks both ways '
-    +'on purpose — most of what you want to acquire came out last month, not next.</p>'
+  const q=new URLSearchParams({view:CAL.view,limit:'120'});
+  if(CAL.month) q.set('month',CAL.month);
+  if(CAL.day) q.set('day',CAL.day);
+  const d=await j('/api/v1/calendar/library?'+q)
+    .catch(()=>({items:[],days:[],error:'the library could not be read'}));
+  const views=[['releases','Anniversaries'],['added','Added'],
+               ['updated','Updated'],['upcoming','Upcoming']];
+  const items=d.items||[], days=d.days||[];
+  const cov=d.coverage||{};
+  // The share of the shelf this view can place at all. A calendar drawn over
+  // 39% of a library that presents itself as the whole library is how
+  // somebody concludes they own nothing from 1993.
+  const covLine=cov.total
+    ? fmt(cov.dated)+' of '+fmt(cov.total)+' games carry a '
+      +({released:'release date',added:'date added',
+         updated:'date updated'}[cov.field]||'date')
+      +' — the rest were never identified, so they cannot be placed on a day.'
+    :'';
+  const step=n=>{
+    const [y,m]=(d.month||'').split('-').map(Number);
+    if(!y) return '';
+    const t=new Date(Date.UTC(y,m-1+n,1));
+    return t.getUTCFullYear()+'-'+String(t.getUTCMonth()+1).padStart(2,'0');
+  };
+  const busiest=days.reduce((a,x)=>Math.max(a,x.count),0);
+
+  $('#page').innerHTML='<div class="card">'
+    +'<div class="row" style="margin-bottom:10px;gap:6px;flex-wrap:wrap">'
+    +views.map(([k,l])=>'<button class="btn '+(k===d.view?'':'ghost')+'"'
+      +' data-calview="'+k+'" style="padding:4px 10px;font-size:12px">'
+      +l+'</button>').join('')
+    +'</div>'
     +(d.error?'<div class="panel-note panel-warn">'+esc(d.error)+'</div>':'')
+    +(d.note?'<p class="help">'+esc(d.note)+'</p>':'')
+    +(d.view!=='upcoming'&&d.month
+      ?'<div class="row" style="align-items:center;gap:8px;margin:4px 0 8px">'
+        +'<button class="btn ghost" data-calmonth="'+step(-1)+'">‹</button>'
+        +'<b style="font-size:14px">'+esc(d.month_name||'')+' '
+        +esc((d.month||'').slice(0,4))+'</b>'
+        +'<button class="btn ghost" data-calmonth="'+step(1)+'">›</button>'
+        +'<span style="flex:1"></span>'
+        +'<span class="help" style="margin:0">'+esc(covLine)+'</span></div>'
+      +'<div class="cal">'
+      +['Mon','Tue','Wed','Thu','Fri','Sat','Sun']
+        .map(n=>'<div class="dow">'+n+'</div>').join('')
+      +Array.from({length:d.first_weekday||0},
+                  ()=>'<button class="pad" disabled></button>').join('')
+      +days.map(x=>'<button data-calday="'+x.day+'" '
+        +(x.count?'':'disabled ')
+        +'class="'+(x.count?'':'none ')
+        +(x.day===d.selected_day?'on':'')+'">'
+        +'<span>'+x.day+'</span>'
+        +(x.count?'<b>'+fmt(x.count)+'</b>':'')+'</button>').join('')
+      +'</div>'
+      +(busiest?'':'<p class="help">Nothing in this month. Page back — a '
+        +'library imported in one batch has its dates where the imports were.</p>')
+      :'')
+    +'<h3 style="margin-top:14px">'
+    +esc(d.view==='upcoming'?'Releasing soon'
+        :d.view==='releases'?('Released on '+(d.day||''))
+        :((d.view==='added'?'Added ':'Updated ')+(d.day||'')))
+    +'</h3>'
     +(items.length
-      ?'<div class="pgrid">'+items.map((g,n)=>'<div class="pcard">'
-        +'<h4>'+esc(g.title)+'</h4>'
-        +'<div class="meta"><span class="pill">'+esc(g.released||'TBA')+'</span>'
-        +(g.upcoming?'<span class="pill" style="background:var(--info);color:#06131f">upcoming</span>':'')
-        +'</div>'
-        +'<div class="desc">'+esc((g.platforms||[]).slice(0,4).join(', '))+'</div>'
-        +'<div class="rowact" style="margin-top:6px"><button data-calreq="'+n+'">Request</button></div>'
-        +'</div>').join('')+'</div>'
-      :'<div class="empty-cat"><b>Nothing to show</b>'
-       +'Add a metadata provider with an API key under Settings → Metadata.</div>')
+      ?'<p class="help">'+fmt(d.items.length)+' from your own library.</p>'
+       +'<div class="grid">'+items.map(g=>'<div class="tile">'
+        +'<div class="art" style="background-image:url(\''+esc(g.cover_url||'')+'\')"></div>'
+        +'<div class="nm">'+esc(g.title)+'</div>'
+        +'<div class="pf">'+esc(g.platform||'')
+        +(g.year?' · '+g.year:'')+(g.rating?' · ★'+g.rating:'')
+        +'</div></div>').join('')+'</div>'
+      :'<div class="empty">'+esc(d.view==='upcoming'
+        ?'Nothing dated in the future.'
+        :'Nothing on this day.')+'</div>')
+    +'</div>'
+    +'<div class="card" style="margin-top:14px"><h3>Elsewhere</h3>'
+    +'<p class="help">A metadata provider can answer about games nobody here '
+    +'owns. It needs an API key under Settings → Metadata; everything above '
+    +'needs nothing at all.</p><div id="cal-web"><div class="empty">Checking…</div></div>'
     +'</div>';
+
+  document.querySelectorAll('[data-calview]').forEach(b=>b.onclick=()=>{
+    CAL.view=b.dataset.calview; CAL.month=''; CAL.day=''; go('calendar');});
+  document.querySelectorAll('[data-calmonth]').forEach(b=>b.onclick=()=>{
+    CAL.month=b.dataset.calmonth; CAL.day=''; go('calendar');});
+  document.querySelectorAll('[data-calday]').forEach(b=>b.onclick=()=>{
+    CAL.day=b.dataset.calday; go('calendar');});
+
+  // Second, and separately: a provider calendar shows a request button
+  // because those are games you do not have. Nothing above does — you
+  // already own everything on it.
+  const w=await j('/api/v1/calendar').catch(()=>({items:[],error:'unavailable'}));
+  const web=w.items||[];
+  $('#cal-web').innerHTML=web.length
+    ?'<div class="pgrid">'+web.map((g,n)=>'<div class="pcard">'
+      +'<h4>'+esc(g.title)+'</h4>'
+      +'<div class="meta"><span class="pill">'+esc(g.released||'TBA')+'</span>'
+      +(g.upcoming?'<span class="pill" style="background:var(--info);color:#06131f">upcoming</span>':'')
+      +'</div>'
+      +'<div class="desc">'+esc((g.platforms||[]).slice(0,4).join(', '))+'</div>'
+      +'<div class="rowact" style="margin-top:6px"><button data-calreq="'+n+'">Request</button></div>'
+      +'</div>').join('')+'</div>'
+    :'<div class="empty">'+esc(w.error||'No provider configured.')+'</div>';
   document.querySelectorAll('[data-calreq]').forEach(b=>b.onclick=()=>
-    requestGame(items[Number(b.dataset.calreq)]));
+    requestGame(web[Number(b.dataset.calreq)]));
 };
 
 // Shared by Calendar and Discover: turn a metadata title into a Wanted
@@ -2830,6 +3677,30 @@ RENDER.logs=async()=>{
   LOG_TIMER=setInterval(pull,2000);
 };
 
+/* ---------------- theme control ---------------- */
+/* The mode and the accent are already applied by the head script -- all that
+   is left here is wiring the buttons and keeping them showing the truth. */
+function paintTheme(){
+  const mode=ROMTHEME.mode(), accent=ROMTHEME.accent().toLowerCase();
+  document.querySelectorAll('[data-theme-set]').forEach(b=>
+    b.classList.toggle('on', b.dataset.themeSet===mode));
+  document.querySelectorAll('[data-accent]').forEach(b=>
+    b.classList.toggle('on', b.dataset.accent.toLowerCase()===accent));
+  const pick=$('#accent-pick'); if(pick) pick.value=accent;
+}
+function bindTheme(){
+  document.documentElement.addEventListener('themechange',paintTheme);
+  document.querySelectorAll('[data-theme-set]').forEach(b=>b.onclick=()=>
+    ROMTHEME.set(b.dataset.themeSet,null));
+  document.querySelectorAll('[data-accent]').forEach(b=>b.onclick=()=>
+    ROMTHEME.set(null,b.dataset.accent));
+  const pick=$('#accent-pick');
+  // `input` rather than `change`: the OS colour picker is a live preview, and
+  // waiting for it to be dismissed makes the whole control feel broken.
+  if(pick) pick.oninput=()=>ROMTHEME.set(null,pick.value);
+  paintTheme();
+}
+
 /* ---------------- boot ---------------- */
 async function refreshCounts(){
   const s=await j('/api/v1/system/counts').catch(()=>({}));
@@ -2839,10 +3710,18 @@ async function refreshCounts(){
     // the library is empty.
     b.textContent = v == null ? (b.dataset.ct === 'games' ? '—' : '') : (v || '');
     b.style.display = (v == null && b.dataset.ct !== 'games') ? 'none' : '';
+    // The games badge is a sum of two unlike things on any library that
+    // catalogues entries it does not hold. It stays a sum -- a badge that
+    // renumbered itself would read as data loss -- but it no longer keeps
+    // that to itself.
+    if(b.dataset.ct === 'games' && s.games_catalogued)
+      b.title = `${s.games_on_disk} on disk here · `
+              + `${s.games_catalogued} catalogued elsewhere`;
   });
 }
 (async()=>{
   document.querySelectorAll('.nav').forEach(n=>n.onclick=()=>go(n.dataset.page));
+  bindTheme();
   let searchTimer=null;
   $('#search').oninput=()=>{const p=location.hash.slice(1)||'library';
     if(p!=='library') return;
@@ -2862,8 +3741,10 @@ async function refreshCounts(){
 def page() -> str:
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <title>ROMarr</title><meta name="viewport" content="width=device-width,initial-scale=1">
-<style>{CSS}</style></head><body>
-<nav id="rail"><div id="brand">ROM<span>arr</span></div>{_nav_html()}</nav>
+<style>{CSS}</style><script>{THEME_BOOT}</script></head><body>
+<nav id="rail"><div id="brand">ROM<span>arr</span></div>
+<div id="navwrap">{_nav_html()}</div>
+{_theme_control_html()}</nav>
 <div id="main">
   <div id="top"><h1>Games</h1><input id="search" placeholder="Filter…" autocomplete="off"></div>
   <div class="page" id="page"></div>
@@ -2891,33 +3772,42 @@ def page() -> str:
 # or ROMARR_API_KEY in their template, and never sees the setup screen.
 
 LOGIN_CSS = """
+/* The stored mode and accent reach this screen too -- it is served before any
+   of the app is, so a door in the wrong colours is the first thing an operator
+   who chose light mode would see. */
 body{display:flex;align-items:center;justify-content:center;min-height:100vh;
-  padding:20px}
-.box{width:100%;max-width:380px;background:var(--panel);
-  border:1px solid var(--line);border-radius:8px;padding:28px}
-.box h1{display:flex;gap:0;font-size:24px;font-weight:700;letter-spacing:-.02em;
+  padding:20px;
+  background:radial-gradient(1100px 620px at 50% -10%,
+    var(--accent-softer),transparent 70%),var(--bg)}
+.box{width:100%;max-width:390px;background:var(--surface);
+  border:1px solid var(--line);border-radius:var(--r-lg);padding:30px;
+  box-shadow:var(--shadow-2),var(--edge)}
+.box h1{display:flex;gap:0;font-size:26px;font-weight:700;letter-spacing:-.03em;
   justify-content:center;margin-bottom:6px}
-.box h1 span{color:var(--accent)}
-.box .sub{text-align:center;color:var(--dim);font-size:13px;margin-bottom:22px}
-.box label{display:block;font-size:12px;color:var(--dim);margin:14px 0 5px;
-  text-transform:uppercase;letter-spacing:.06em}
-.box input{width:100%;padding:9px 12px;background:var(--bg);color:var(--fg);
-  border:1px solid var(--line);border-radius:4px;outline:none;font-size:14px}
-.box input:focus{border-color:var(--accent)}
-.box button{width:100%;margin-top:20px;padding:10px;background:var(--accent);
-  color:var(--accent-ink);border:0;border-radius:4px;font-size:14px;
-  font-weight:600;cursor:pointer}
-.box button:hover{filter:brightness(1.08)}
-.box button:disabled{opacity:.6;cursor:default}
-.note{margin-top:18px;padding:11px 13px;background:var(--bg);
-  border:1px solid var(--line);border-left:3px solid var(--info);
-  border-radius:4px;color:var(--dim);font-size:12px;line-height:1.6}
-.err{margin-top:16px;padding:10px 12px;border-radius:4px;font-size:13px;
-  background:#3a2020;border:1px solid var(--bad);color:#ffb4b4;display:none}
+.box h1 span{color:var(--accent-text)}
+.box .sub{text-align:center;color:var(--dim);font-size:13px;margin-bottom:24px}
+.box label{display:block;font-size:10.5px;font-weight:600;color:var(--dim);
+  margin:15px 0 6px;text-transform:uppercase;letter-spacing:.08em}
+.box input{width:100%;padding:10px 13px;background:var(--bg);color:var(--fg);
+  border:1px solid var(--line);border-radius:var(--r-sm);outline:none;
+  font-size:14px;transition:border-color var(--t),box-shadow var(--t)}
+.box input:focus{border-color:var(--accent-line);box-shadow:var(--ring)}
+.box button{width:100%;margin-top:22px;padding:11px;background:var(--accent);
+  color:var(--accent-ink);border:0;border-radius:var(--r-sm);font-size:14px;
+  font-weight:600;cursor:pointer;transition:filter var(--t),box-shadow var(--t)}
+.box button:hover{filter:brightness(1.07);box-shadow:var(--shadow-1)}
+.box button:disabled{opacity:.6;cursor:default;filter:none}
+.note{margin-top:20px;padding:12px 14px;background:var(--bg);
+  border:1px solid var(--line-soft);border-left:3px solid var(--info);
+  border-radius:var(--r-sm);color:var(--dim);font-size:12px;line-height:1.65}
+.err{margin-top:16px;padding:11px 13px;border-radius:var(--r-sm);font-size:13px;
+  background:color-mix(in srgb,var(--bad) 14%,transparent);
+  border:1px solid color-mix(in srgb,var(--bad) 45%,transparent);
+  color:var(--bad);display:none}
 .err.on{display:block}
 .alt{margin-top:16px;text-align:center;font-size:12px;color:var(--dim)}
 .alt a{cursor:pointer}
-@media(max-width:420px){.box{padding:22px 18px}}
+@media(max-width:420px){.box{padding:24px 20px}}
 """
 
 
@@ -2962,7 +3852,7 @@ def login_page(*, claimed: bool, totp: bool = False) -> str:
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <title>{title} &middot; ROMarr</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<style>{CSS}{LOGIN_CSS}</style></head><body>
+<style>{CSS}{LOGIN_CSS}</style><script>{THEME_BOOT}</script></head><body>
 <form class="box" id="f" autocomplete="on">
   <h1>ROM<span>arr</span></h1>
   <div class="sub">{title}</div>
@@ -3014,3 +3904,163 @@ f.onsubmit = async function(e) {{
   }} catch (_) {{ fail('Could not reach ROMarr.'); }}
 }};
 </script></body></html>"""
+
+
+# ------------------------------------------------------ the invitation link --
+#
+# Where a peering invitation lands, and the one page in ROMarr written for
+# somebody who does not have an account here.
+#
+# Alice sends Bob a link. Bob clicks it and his browser goes to ALICE'S server,
+# because Alice's address is the only address Alice knows. That is the whole
+# difficulty with a Plex-style link in a system with no central anything:
+# plex.tv/link works because plex.tv exists, and nothing here is allowed to. So
+# this page's job is to hand Bob back to his own ROMarr, which it does by
+# rewriting the same path and the same fragment onto the host he types once.
+#
+# The invariant that lets the page know which of the two servers it is running
+# on: `u` appears in the fragment ONLY on a link that has been rehomed. No `u`
+# means this is the inviter's server and there is nowhere to forward to. A `u`
+# means the visitor is home, and the page hands the invitation to the app.
+#
+# Nothing here is a secret. The fragment carries an invitation id and a display
+# name, and a browser never sends a fragment to any server -- so this page is
+# reached, in the log, as a bare GET /link with no query and no referrer trail.
+# The credential is the claim code, which travels by whatever channel the two
+# of them chose and is typed in on the far side.
+
+LINK_CSS = """
+.box{max-width:460px}
+.box .who{font-size:15px;font-weight:600;text-align:center;margin-bottom:4px}
+.box .id{font:12px/1.5 ui-monospace,Menlo,monospace;color:var(--dim);
+  text-align:center;word-break:break-all;margin-bottom:18px}
+.box .step{display:flex;gap:10px;align-items:flex-start;margin:14px 0;
+  font-size:13px;color:var(--dim);line-height:1.6}
+.box .step b{display:flex;align-items:center;justify-content:center;
+  flex:0 0 20px;height:20px;border-radius:50%;background:var(--surface-3);
+  color:var(--fg);font-size:11px;margin-top:1px}
+.box .copy{width:100%;margin-top:10px;padding:9px;background:transparent;
+  color:var(--fg);border:1px solid var(--line);border-radius:4px;
+  font-size:13px;cursor:pointer}
+.box code{font:12px/1.6 ui-monospace,Menlo,monospace;word-break:break-all}
+"""
+
+#: Plain, uninterpolated: this script has regular expressions and apostrophes
+#: in it, and every one of them is a chance for an f-string to eat a backslash
+#: and produce a page that renders blank with one line in the console.
+LINK_JS = r"""
+/* The fragment, which never left this browser. */
+function frag() {
+  var out = {};
+  location.hash.replace(/^#/, '').split('&').forEach(function (pair) {
+    if (!pair) return;
+    var i = pair.indexOf('=');
+    var k = i < 0 ? pair : pair.slice(0, i);
+    var v = i < 0 ? '' : pair.slice(i + 1);
+    try { out[decodeURIComponent(k)] = decodeURIComponent(v); }
+    catch (_) { out[k] = v; }
+  });
+  return out;
+}
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  });
+}
+var box = document.getElementById('box');
+var f = frag(), here = location.origin;
+
+function bad(msg) {
+  box.innerHTML = '<h1>ROM<span>arr</span></h1>'
+    + '<div class="sub">Not an invitation</div>'
+    + '<div class="note">' + esc(msg) + '</div>';
+}
+
+/* Home. The fragment was rehomed onto this host, so this IS the recipient's
+   server. Hand the invitation to the app through sessionStorage rather than
+   through the URL: the app's router owns the hash, and an invitation has no
+   business surviving into the next tab. If nobody is signed in here, the app
+   shell serves the sign-in screen and the invitation is waiting afterwards. */
+function home() {
+  try {
+    sessionStorage.setItem('romarr-invite', JSON.stringify(
+      {url: f.u, peer_id: f.i, name: f.n || ''}));
+  } catch (_) {}
+  location.replace('/#peers');
+}
+
+/* Away. This is the inviter's server. Ask for the recipient's own address and
+   rewrite the same link onto it, carrying this origin in `u` so their ROMarr
+   knows who invited them. Remembered locally, because the second invitation
+   somebody receives should not ask twice. */
+function away() {
+  var mine = '';
+  try { mine = localStorage.getItem('romarr-home') || ''; } catch (_) {}
+  var link = here + '/link#i=' + encodeURIComponent(f.i)
+    + (f.n ? '&n=' + encodeURIComponent(f.n) : '');
+  box.innerHTML = '<h1>ROM<span>arr</span></h1>'
+    + '<div class="sub">You have been invited to peer</div>'
+    + '<div class="who">' + esc(f.n || here) + '</div>'
+    + '<div class="id">' + esc(here) + '</div>'
+    + '<div class="step"><b>1</b><span>Tell ROMarr where your own server '
+    + 'lives. This page is on your friend&rsquo;s server, so it has to send '
+    + 'you home.</span></div>'
+    + '<label for="home">Your ROMarr address</label>'
+    + '<input id="home" type="url" placeholder="http://192.168.1.20:7878" '
+    + 'value="' + esc(mine) + '" autofocus>'
+    + '<button id="go">Open this invitation on my ROMarr</button>'
+    + '<div class="step"><b>2</b><span>Your ROMarr will ask for the '
+    + '<b>claim code</b> &mdash; eight characters your friend sends you '
+    + 'separately. It is deliberately not in this link, and it expires in '
+    + '15 minutes.</span></div>'
+    + '<div class="note">No ROMarr on this device? Copy the link and paste it '
+    + 'into <b>Friends &rarr; I have an invitation</b> on your own server.'
+    + '<br><br><code>' + esc(link) + '</code>'
+    + '<button class="copy" id="copy">Copy the link</button></div>';
+  document.getElementById('copy').onclick = function () {
+    var b = document.getElementById('copy');
+    navigator.clipboard.writeText(link).then(
+      function () { b.textContent = 'Copied'; },
+      function () { b.textContent = 'Select the link above and copy it'; });
+  };
+  document.getElementById('go').onclick = function () {
+    var raw = document.getElementById('home').value.trim();
+    if (!raw) return;
+    if (!/^https?:\/\//i.test(raw)) raw = 'http://' + raw;
+    raw = raw.replace(/\/+$/, '');
+    try { localStorage.setItem('romarr-home', raw); } catch (_) {}
+    location.href = raw + '/link#i=' + encodeURIComponent(f.i)
+      + (f.n ? '&n=' + encodeURIComponent(f.n) : '')
+      + '&u=' + encodeURIComponent(here);
+  };
+}
+
+if (!f.i) bad('This link carries no invitation. Copy the whole thing, '
+  + 'including the part after the # — that is where the invitation is, '
+  + 'and some chat clients cut it off.');
+else if (f.u) home();
+else away();
+"""
+
+
+def link_page() -> str:
+    """The landing page for an invitation link.
+
+    A constant. It takes no parameters, reads no invitation and returns the
+    same bytes to everybody, which is what lets it sit on the open-path list
+    without being a thing that can leak: there is nothing behind it to ask.
+
+    `referrer: no-referrer` because this page navigates to the recipient's own
+    server, and the inviter's hostname is not the recipient's server's business
+    to learn from a header.
+    """
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<title>Invitation &middot; ROMarr</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<style>{CSS}{LOGIN_CSS}{LINK_CSS}</style></head><body>
+<div class="box" id="box">
+  <h1>ROM<span>arr</span></h1>
+  <div class="sub">Checking this invitation&hellip;</div>
+</div>
+<script>{LINK_JS}</script></body></html>"""

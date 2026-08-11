@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, urlparse
 import time
 
 from .libraries import (
-    LIBRARY_TYPES, build_library, build_library_from_config,
+    LIBRARY_TYPES, build_library, build_library_from_config, library_counts,
     load_backend_plugins, merge_library_secrets, redact_library, route_library,
 )
 from .clients import QBittorrent, QbitConfig, Romm, RommConfig
@@ -77,7 +77,9 @@ from .ops import (LogRing, RateLimiter, make_backup, read_backup,
 from .platforms import PLATFORMS, resolve
 from .sso import ForwardAuth
 from .totp import Totp
-from .playability import DOWNLOAD, StreamServer, routes_for
+from .playability import (
+    DOWNLOAD, MOONLIGHT_KINDS, PAIRING_IS_MANUAL, WOLF, MoonlightHost,
+    StreamServer, StreamSources, routes_for)
 from .lists import LIST_TYPES
 
 #: List-source fields that are credentials: masked on the way out, kept on
@@ -89,6 +91,7 @@ from .scheduler import Scheduler, next_search_due
 from .selection import best_release, judge, score
 from .store import Event, Store
 from .ui import page as ui_page
+from .ui import link_page as ui_link_page
 from .ui import login_page as ui_login_page
 
 log = logging.getLogger(__name__)
@@ -350,7 +353,38 @@ class ROMarr:
         # the routes only it can offer.
         stream_url = e.get("STREAM_SERVER_URL", "")
         self.store.settings["_stream_url"] = stream_url
-        self.stream = StreamServer(stream_url) if stream_url else None
+        self.retroarch = StreamServer(stream_url) if stream_url else None
+
+        # A Moonlight host -- Wolf, Sunshine or Steam Headless -- if the
+        # operator runs one. The same idea as the stream server and a much
+        # weaker source: it renders somewhere else and sends video, but it is
+        # a desktop rather than a platform router, so it can only be *asked*
+        # what applications it has and never what those applications open.
+        # `playability.MoonlightHost` is where that limit is spelled out.
+        #
+        # Host and kind only. The credential that reads Sunshine's app list is
+        # read from the environment and never written to the store, for the
+        # same reason ROMARR_API_KEY is not: a secret from outside must not
+        # end up in a file that gets backed up.
+        moonlight_host = e.get("MOONLIGHT_HOST", "")
+        self.store.settings["_moonlight_host"] = moonlight_host
+        self.store.settings["_moonlight_kind"] = e.get("MOONLIGHT_KIND", WOLF)
+        self.moonlight = MoonlightHost(
+            moonlight_host,
+            kind=e.get("MOONLIGHT_KIND", WOLF),
+            username=e.get("MOONLIGHT_USER", ""),
+            password=e.get("MOONLIGHT_PASS", ""),
+            socket_path=e.get("WOLF_SOCKET_PATH", ""),
+            api_url=e.get("WOLF_API_URL", ""),
+            desktop_url=e.get("STEAM_HEADLESS_URL", ""),
+        ) if moonlight_host else None
+
+        # Both stream tiers behind the single slot `routes_for` takes. The
+        # RetroArch server goes first because it knows which cores it has,
+        # while the Moonlight host is inferring from application names -- so
+        # an inferred answer never displaces a known one.
+        self.stream = (StreamSources(self.retroarch, self.moonlight)
+                       if (self.retroarch or self.moonlight) else None)
 
         # Authentication, on unless deliberately turned off.
         #
@@ -458,6 +492,12 @@ class ROMarr:
         # `None` means "not known yet", which the UI shows as a dash -- an
         # honest answer, where 0 would be a claim that the library is empty.
         self._count_cache: tuple[int | None, float] = (None, 0.0)
+        #: The same number, split into the two categories it was hiding:
+        #: files on disk here versus rows the library server holds for things
+        #: that stream from somewhere else. `None` for either means the
+        #: backend could not separate them -- see libraries.library_counts.
+        self._count_split: dict = {"total": None, "on_disk": None,
+                                   "catalogued": None}
         #: label -> why the last read of that library failed, or absent.
         self._library_reasons: dict[str, str] = {}
         # The library itself is cached the same way, and for a stronger reason:
@@ -590,6 +630,15 @@ class ROMarr:
                 continue
 
             ok, total, shelf, failures = True, 0, [], []
+            # Accumulated beside the total, because the total on its own is
+            # the bug: a library that catalogues streamed entries answers
+            # `count()` with the two categories added together, and every
+            # surface then showed that sum as "games". Summed across
+            # backends, and abandoned entirely the moment one of them cannot
+            # split -- a breakdown that silently drops a library is a worse
+            # answer than no breakdown.
+            on_disk: int | None = 0
+            catalogued: int | None = 0
             # The authoritative platform list, straight from each backend.
             # Derived-from-the-cache chips are a prefix of the truth while
             # the walk runs, and a person looking for a platform the walk
@@ -626,7 +675,14 @@ class ROMarr:
             for cfg, backend in self.game_libraries:
                 label = cfg.get("name") or getattr(backend, "name", "library")
                 try:
-                    total += backend.count()
+                    split = library_counts(backend)
+                    total += int(split.get("total") or 0)
+                    here, there = split.get("on_disk"), split.get("catalogued")
+                    if here is None or there is None or on_disk is None:
+                        on_disk = catalogued = None
+                    else:
+                        on_disk += int(here)
+                        catalogued += int(there)
                 except Exception as err:
                     ok = False
                     failures.append(f"{label}: {err.__class__.__name__}")
@@ -665,11 +721,16 @@ class ROMarr:
             self._library_reasons = reasons
             if shelf or ok:
                 self._count_cache = (total, time.monotonic())
+                self._count_split = {"total": total, "on_disk": on_disk,
+                                     "catalogued": catalogued}
                 self._publish_library(shelf, "; ".join(failures),
                                       partial=False)
-                log.info("library refreshed: %d games across %d librar%s",
+                log.info("library refreshed: %d games across %d librar%s "
+                         "(%s on disk, %s catalogued elsewhere)",
                          len(shelf), len(self.game_libraries),
-                         "y" if len(self.game_libraries) == 1 else "ies")
+                         "y" if len(self.game_libraries) == 1 else "ies",
+                         "?" if on_disk is None else on_disk,
+                         "?" if catalogued is None else catalogued)
             else:
                 # Keep whatever was last fetched; a transient failure should
                 # not empty a shelf that was working a minute ago.
@@ -693,7 +754,7 @@ class ROMarr:
     def library_view(self, platform: str = "", q: str = "",
                      offset: int = 0, limit: int = 120, genre: str = "",
                      region: str = "", decade: str = "", origin: str = "",
-                     sort: str = "") -> dict:
+                     sort: str = "", source: str = "") -> dict:
         """One page of the library, organised the way RomM organises it.
 
         Platform chips, alphabetical within a platform, server-side search
@@ -736,6 +797,9 @@ class ROMarr:
         if origin:
             low = origin.lower()
             rows = [g for g in rows if (g.origin or "local").lower() == low]
+        if source:
+            low = source.lower()
+            rows = [g for g in rows if (g.provenance or "local").lower() == low]
 
         # Sorting is over the filtered set, not the page, or "top rated"
         # would mean "the best of the 120 rows you happened to be looking
@@ -751,11 +815,19 @@ class ROMarr:
         limit = max(1, min(int(limit or 120), 500))
         page = rows[offset:offset + limit]
 
+        # `grand_total` is how many rows are cached and browsable right now.
+        # `totals` is what the library actually holds, straight from the
+        # server. They differ while the walk runs and they differ forever on
+        # a library past LIBRARY_MAX, and conflating them is how the shelf
+        # came to report a different "games" number than the nav badge did on
+        # the same screen. Both are published, each labelled for what it is.
         return {"items": [asdict(g) for g in page],
                 "loading": False,
                 "partial": getattr(self, "_library_partial", False),
                 "total": len(rows),
                 "grand_total": len(games),
+                "cached_total": len(games),
+                "totals": self.library_split(),
                 "offset": offset,
                 "platforms": getattr(self, "_library_platforms", []),
                 "facets": getattr(self, "_library_facets", {}),
@@ -1598,6 +1670,7 @@ class ROMarr:
             "dat_games": sum(len(d.games) for d in self.dats.dats),
             "play_routes": self.play_route_counts(),
             "stream_url": self.store.settings.get("_stream_url", ""),
+            "moonlight": self.moonlight_status(),
             "events": len(self.store.events),
             "uptime": f"{up // 3600}h {(up % 3600) // 60}m",
         }
@@ -2173,6 +2246,42 @@ class ROMarr:
         counts["total"] = len(PLATFORMS)
         return counts
 
+    def moonlight_status(self) -> dict:
+        """The Moonlight host, or an honest account of there not being one.
+
+        Not folded into the stream-server row, because the two answer
+        different questions and conflating them would hide the interesting
+        one. A stream server that is down is broken. A Moonlight host that is
+        up but whose app list ROMarr cannot read is *working perfectly* and
+        still grants nothing -- and an operator needs to be told which of
+        those they are looking at.
+        """
+        if not self.moonlight:
+            return {
+                "configured": False,
+                "hint": ("set MOONLIGHT_HOST to a Wolf, Sunshine or Steam "
+                         "Headless machine to see it here"),
+                "kinds": list(MOONLIGHT_KINDS),
+                "manual": PAIRING_IS_MANUAL,
+            }
+        return self.moonlight.status()
+
+    def moonlight_pin(self, body: dict) -> dict:
+        """Relay a PIN a human read off their own Moonlight client.
+
+        The PIN never originates here and cannot: it is generated by the
+        client, on the user's device, and both host implementations wait on a
+        human to supply it. This endpoint exists so that the human types it
+        into ROMarr instead of hunting for Wolf's PIN page in container logs
+        or finding Sunshine's admin panel -- it saves a search, not a step.
+        """
+        if not self.moonlight:
+            return {"ok": False, "detail": "no Moonlight host is configured"}
+        return self.moonlight.submit_pin(
+            str(body.get("pin") or ""),
+            pair_secret=str(body.get("pair_secret") or ""),
+            name=str(body.get("name") or "ROMarr"))
+
     def platform_directory(self) -> list[dict]:
         """Every platform with how it plays, for the API and the UI."""
         out = []
@@ -2214,8 +2323,20 @@ class ROMarr:
         snapshot = sorted(shelf, key=lambda g: (str(g.platform).lower(),
                                                 str(g.name).lower()))
         platforms = Counter(str(g.platform) or "unknown" for g in snapshot)
+        # The same tally split the way the headline is split. A platform chip
+        # reading "Browser 94,415" invited exactly the wrong conclusion --
+        # every one of those is a row for something that is not here, and the
+        # chip looked identical to "Nintendo DS 8,112", which is 8,112 files
+        # on a disk. The split comes from the walked rows rather than the
+        # server because no library server offers a per-platform breakdown of
+        # it; that makes it a prefix while the walk runs, which is why
+        # `cached` travels alongside and the UI says so.
+        on_disk = Counter(str(g.platform) or "unknown" for g in snapshot
+                          if (g.origin or "local") != "cloud")
         cached_platforms = [
-            {"platform": name, "count": count}
+            {"platform": name, "count": count,
+             "on_disk": on_disk.get(name, 0),
+             "catalogued": count - on_disk.get(name, 0)}
             for name, count in sorted(platforms.items(),
                                       key=lambda kv: (-kv[1], kv[0]))]
         # Prefer the server's own list: it is complete from the first
@@ -2224,9 +2345,12 @@ class ROMarr:
         # the UI can show how much of each platform is browsable now.
         authoritative = getattr(self, "_server_platforms", None)
         if authoritative:
-            have = {p["platform"]: p["count"] for p in cached_platforms}
+            have = {p["platform"]: p for p in cached_platforms}
             self._library_platforms = [
-                {**row, "cached": have.get(row["platform"], 0)}
+                {**row,
+                 "cached": have.get(row["platform"], {}).get("count", 0),
+                 "on_disk": have.get(row["platform"], {}).get("on_disk", 0),
+                 "catalogued": have.get(row["platform"], {}).get("catalogued", 0)}
                 for row in authoritative]
         else:
             self._library_platforms = [{**p, "cached": p["count"]}
@@ -2238,6 +2362,11 @@ class ROMarr:
         # with them -- a genre list covering 8% of the shelf has to say so,
         # or it reads as "you own almost nothing".
         genres, regions, decades = Counter(), Counter(), Counter()
+        franchises, companies = Counter(), Counter()
+        # How much of the shelf a calendar can actually place. Counted here
+        # with everything else so the Calendar page can state its own
+        # coverage without a second pass over 166k rows.
+        released = 0
         identified = 0
         for game in snapshot:
             if game.genres or game.year:
@@ -2246,6 +2375,12 @@ class ROMarr:
                 genres[genre] += 1
             for region in game.regions:
                 regions[region] += 1
+            for franchise in game.franchises:
+                franchises[franchise] += 1
+            for company in game.companies:
+                companies[company] += 1
+            if game.released:
+                released += 1
             if game.year:
                 decades[f"{(game.year // 10) * 10}s"] += 1
         rank = lambda counter, limit: [        # noqa: E731
@@ -2255,13 +2390,27 @@ class ROMarr:
         self._library_facets = {
             "genres": rank(genres, 40),
             "regions": rank(regions, 20),
+            "franchises": rank(franchises, 40),
+            "companies": rank(companies, 40),
+            "released": released,
             "decades": sorted(
                 ({"value": name, "count": count}
                  for name, count in decades.items()),
                 key=lambda d: d["value"]),
             "origins": rank(Counter(g.origin or "local" for g in snapshot), 5),
+            # One level finer than `origins`, and the answer to the question
+            # that started this: a catalogued half of 94,428 is not one thing.
+            # Ranked rather than capped at the four known values so a backend
+            # that learns a fifth catalogue shows up here without a change.
+            "sources": rank(
+                Counter(g.provenance or "local" for g in snapshot), 8),
             "identified": identified,
         }
+        # Kept separately from the facet: the facet is a filter menu and gets
+        # truncated, where this is a headline the Library and Stats pages both
+        # read and must always be complete.
+        self._library_sources = dict(
+            Counter(g.provenance or "local" for g in snapshot))
         self._library_partial = partial
         self._library_cache = (snapshot, time.monotonic(), error)
 
@@ -2274,9 +2423,54 @@ class ROMarr:
         happened to poll first.
         """
         games = self._count_cache[0]
+        split = self.library_split()
         with self._lock:
             queued = sum(1 for i in self.queue if i.state in ("queued", "grabbed"))
-        return {"games": games, "missing": len(self.store.wanted), "queued": queued}
+        # `games` stays the sum, because that is what the badge has always
+        # meant and a nav badge that changed number overnight would read as
+        # data loss. The two categories ride alongside it so the badge can
+        # say which half is which instead of implying they are the same kind
+        # of thing.
+        return {"games": games,
+                "games_on_disk": split["on_disk"],
+                "games_catalogued": split["catalogued"],
+                "missing": len(self.store.wanted), "queued": queued}
+
+    def library_split(self) -> dict:
+        """On disk here, catalogued elsewhere, and the total of both.
+
+        The backend's own answer is preferred: it comes from the library
+        server's database and is exact from the first refresh, where the
+        walked shelf is a prefix of the truth for the minutes a large library
+        takes to read. The shelf is the fallback for a backend that cannot
+        split -- and when neither can answer, all three are None, which every
+        surface renders as a dash rather than as zero.
+
+        The three always come from the same place, and `counted_from` says
+        which. Mixing them was tried and is wrong: a server total beside a
+        cache-derived split gives three numbers that do not add up, and two
+        of them move while the walk runs. Three consistent numbers that are
+        only a prefix beat three authoritative-looking ones that disagree.
+        """
+        split = getattr(self, "_count_split", None) or {}
+        total = split.get("total")
+        if total is None:
+            total = self._count_cache[0]
+        on_disk, catalogued = split.get("on_disk"), split.get("catalogued")
+        counted_from = "library server"
+        if on_disk is None or catalogued is None:
+            games, _, _ = self._library_cache
+            if games:
+                on_disk = sum(1 for g in games
+                              if (g.origin or "local") != "cloud")
+                catalogued = len(games) - on_disk
+                total = len(games)
+                counted_from = "cached rows"
+            else:
+                counted_from = ""
+        return {"total": total, "on_disk": on_disk, "catalogued": catalogued,
+                "counted_from": counted_from,
+                "sources": dict(getattr(self, "_library_sources", {}) or {})}
 
 
     #: Shelves Discover builds out of the library you already have. This
@@ -2285,22 +2479,60 @@ class ROMarr:
     #: provider". Your own library already knows its genres, ratings and
     #: years; browsing it is worth as much as browsing a storefront, and it
     #: works with nothing configured.
-    LIBRARY_SHELVES = ("top-rated", "recent", "hidden-gems", "by-genre")
+    LIBRARY_SHELVES = ("top-rated", "recent", "recently-added", "hidden-gems",
+                       "by-genre", "by-franchise", "by-company", "multiplayer",
+                       "anniversary")
+
+    #: Which `Game` field each `by-*` shelf cuts on. One table rather than a
+    #: branch each, because the shelves differ only in the field they read
+    #: and the facet list they offer back.
+    SHELF_FACETS = {"by-genre": "genres", "by-franchise": "franchises",
+                    "by-company": "companies"}
+
+    @staticmethod
+    def _shelf_row(game) -> dict:
+        """One game as Discover renders it.
+
+        Everything here comes off the library server's own metadata. Nothing
+        is looked up elsewhere and nothing is guessed, so a field that is
+        empty means the server does not know it -- which is the normal case
+        for most of a large, half-identified library.
+        """
+        return {"id": game.id, "title": game.name, "platform": game.platform,
+                "cover_url": game.cover, "rating": game.rating,
+                "year": game.year, "released": game.released,
+                "added": game.added, "genres": list(game.genres),
+                "franchises": list(game.franchises),
+                "companies": list(game.companies[:3]),
+                "modes": list(game.modes), "players": game.players,
+                "origin": game.origin, "owned": True}
 
     def discover_library(self, shelf: str = "top-rated", genre: str = "",
-                         limit: int = 40) -> dict:
+                         value: str = "", limit: int = 40) -> dict:
         """Browse what you own, the way a storefront browses what it sells."""
         games, _, _ = self._library_cache
         if not games:
-            return {"shelf": shelf, "items": [], "genres": [],
+            return {"shelf": shelf, "items": [], "genres": [], "facet": [],
                     "error": "the library has not been read yet"}
 
+        # `genre` is the older name for the same thing and still arrives from
+        # bookmarked URLs; the shelves added since needed a name that was not
+        # a lie for a company or a franchise.
+        chosen = (value or genre or "").strip()
         rated = [g for g in games if g.rating > 0]
+        facet_field = self.SHELF_FACETS.get(shelf, "")
         if shelf == "top-rated":
             rows = sorted(rated, key=lambda g: (-g.rating, g.name.lower()))
         elif shelf == "recent":
             rows = sorted((g for g in games if g.year),
                           key=lambda g: (-g.year, g.name.lower()))
+        elif shelf == "recently-added":
+            # What the library server took in most recently, which is a
+            # different question from what came out most recently and the one
+            # people actually ask after a scan finishes.
+            rows = sorted((g for g in games if g.added),
+                          key=lambda g: (g.added, g.name.lower()),
+                          reverse=True)
         elif shelf == "hidden-gems":
             # Well-reviewed games on platforms you own few of -- the ones a
             # 166k-game shelf buries and a "top rated" list never surfaces.
@@ -2310,46 +2542,209 @@ class ROMarr:
                 (g for g in rated if g.rating >= 7.5
                  and per_platform[g.platform] < 500),
                 key=lambda g: (-g.rating, g.name.lower()))
-        elif shelf == "by-genre":
-            low = (genre or "").lower()
+        elif shelf == "multiplayer":
+            # RomM records game modes, and "what can we play together" is the
+            # question a shared library gets asked most.
             rows = sorted(
                 (g for g in games
-                 if any(x.lower() == low for x in g.genres)),
+                 if any("player" in m.lower() or "co-op" in m.lower()
+                        or "cooperative" in m.lower() or "multiplayer" in m.lower()
+                        for m in g.modes)
+                 and not (len(g.modes) == 1
+                          and g.modes[0].lower() == "single player")),
                 key=lambda g: (-g.rating, g.name.lower()))
+        elif shelf == "anniversary":
+            # Games that came out this day of the year, any year. The same
+            # data the Calendar is built on, offered here because it is the
+            # best "show me something I forgot I owned" there is.
+            import datetime
+            today = datetime.date.today().strftime("-%m-%d")
+            rows = sorted((g for g in games if g.released.endswith(today)),
+                          key=lambda g: (-g.rating, g.name.lower()))
+        elif facet_field:
+            low = chosen.lower()
+            rows = sorted(
+                (g for g in games
+                 if any(x.lower() == low for x in getattr(g, facet_field))),
+                key=lambda g: (-g.rating, g.name.lower())) if low else []
         else:
             return {"shelf": shelf, "items": [],
                     "error": f"unknown shelf; one of "
                              f"{', '.join(self.LIBRARY_SHELVES)}"}
 
         facets = getattr(self, "_library_facets", {})
+        # The facet list belongs to the shelf being browsed: offering genres
+        # while somebody browses franchises is a list of buttons that do
+        # nothing. `genres` stays alongside it because the UI and anything
+        # written against the older shape still read that key.
+        facet_key = {"genres": "genres", "franchises": "franchises",
+                     "companies": "companies"}.get(facet_field, "")
         return {
             "shelf": shelf,
-            "genre": genre,
+            "genre": chosen,
+            "value": chosen,
             "genres": [g["value"] for g in facets.get("genres", [])][:24],
+            "facet": [g["value"] for g in facets.get(facet_key, [])][:40],
             "total": len(rows),
-            "items": [{"id": g.id, "title": g.name, "platform": g.platform,
-                       "cover_url": g.cover, "rating": g.rating,
-                       "year": g.year, "genres": list(g.genres),
-                       "owned": True}
-                      for g in rows[:limit]],
+            "items": [self._shelf_row(g) for g in rows[:limit]],
         }
 
-    def library_calendar(self, decade: str = "") -> dict:
-        """Your library laid out by release year.
+    #: What the Calendar can be pointed at. Each is a date the library server
+    #: genuinely holds; there is deliberately no fifth view for "coming soon"
+    #: sourced from anywhere else.
+    CALENDAR_VIEWS = ("releases", "added", "updated", "upcoming")
 
-        The metadata Calendar needs an API key and answers about games
-        nobody here owns. This answers about yours, which is the more
-        interesting question once a library is large: what year is this
-        collection actually made of.
+    #: Which `Game` field each view reads. `releases` matches on month and day
+    #: across every year -- an anniversary -- where the other two are real
+    #: dates in a real month.
+    CALENDAR_FIELDS = {"releases": "released", "added": "added",
+                       "updated": "updated", "upcoming": "released"}
+
+    def library_calendar(self, decade: str = "", view: str = "releases",
+                         month: str = "", day: str = "",
+                         limit: int = 200) -> dict:
+        """A real calendar over the dates the library server actually holds.
+
+        This used to be a bar chart of release years, and the Calendar page
+        did not call it at all -- the page asked a metadata provider that
+        needs an API key, so a fully-populated library rendered "add a
+        metadata provider" forever. The dates were sitting in RomM the whole
+        time.
+
+        Three of them, and they answer different questions:
+
+          * `releases` -- what came out on this day of the year, in any year.
+            Anniversaries, because a ROM library is entirely back catalogue
+            and "20 years ago today" is the only forward-looking thing it can
+            honestly offer.
+          * `added` -- when the library server took each file in.
+          * `updated` -- when it last changed the row, which is when a
+            metadata scan touched it.
+
+        `upcoming` is the fourth and is usually empty on purpose. RomM has no
+        concept of an unreleased game: every row is a file on disk or a
+        catalogued entry for something that already shipped. If a row does
+        carry a future release date this shows it, and if none do it says so
+        rather than filling the page from somewhere else.
         """
+        import calendar as calmod
+        import datetime
         from collections import Counter
 
         games, _, _ = self._library_cache
         if not games:
-            return {"years": [], "items": [],
+            return {"years": [], "items": [], "days": [],
                     "error": "the library has not been read yet"}
+
+        view = view if view in self.CALENDAR_VIEWS else "releases"
+        field = self.CALENDAR_FIELDS[view]
+        today = datetime.date.today()
+
+        # One pass for the two things that have to be known before the month
+        # can be chosen. Deliberately not a list comprehension building a
+        # second 166k-element list per page view -- the shelf is already the
+        # biggest thing in the process and this runs on every click.
+        latest = ""
+        dated = 0
+        for game in games:
+            stamp = getattr(game, field)
+            if not stamp:
+                continue
+            dated += 1
+            if stamp > latest:
+                latest = stamp
+        # Said out loud on every response. A calendar drawn over the
+        # identified fraction of a library, presenting itself as the whole
+        # library, is the quiet kind of lie this project exists to avoid:
+        # somebody concludes their collection has no 1993 in it when really
+        # nothing from 1993 was ever identified.
+        coverage = {"dated": dated, "total": len(games), "field": field}
+
+        # The month being browsed. Defaults to the one with something in it
+        # rather than to today: a library imported in one batch has nothing
+        # in the current month, and an empty grid reads as a broken page.
+        if view == "releases":
+            # Anniversaries ignore the year for matching, but the grid still
+            # needs one to know how long the month is and which weekday it
+            # starts on -- so it pages through the current year.
+            head = f"{today.year:04d}-{today.month:02d}"
+        else:
+            head = latest[:7] or f"{today.year:04d}-{today.month:02d}"
+        try:
+            cursor = datetime.date.fromisoformat(
+                f"{str(month or '').strip() or head}-01")
+        except ValueError:
+            cursor = datetime.date(today.year, today.month, 1)
+        # Everything below matches against this rather than the caller's
+        # string: a malformed ?month= falls back to a real month, and a
+        # filter still reading the original would then match nothing and
+        # render a working month as empty.
+        month = f"{cursor.year:04d}-{cursor.month:02d}"
+        first_weekday, length = calmod.monthrange(cursor.year, cursor.month)
+
+        if view == "upcoming":
+            horizon = today.isoformat()
+            rows = sorted((g for g in games if g.released > horizon),
+                          key=lambda g: (g.released, g.name.lower()))
+            counts: Counter = Counter()
+        else:
+            # Matching by slice rather than by parsing a date: this walks the
+            # whole shelf and a `date.fromisoformat` per row is the
+            # difference between a page and a pause. `releases` compares only
+            # the month segment because an anniversary is any year's.
+            segment = f"{cursor.month:02d}" if view == "releases" else month
+            span = slice(5, 7) if view == "releases" else slice(0, 7)
+            # An undated row slices to "" and matches nothing, so it drops
+            # out here rather than needing a filtered copy of the shelf.
+            in_month = [g for g in games if getattr(g, field)[span] == segment]
+            counts = Counter(int(getattr(g, field)[8:10] or 0)
+                             for g in in_month)
+            counts.pop(0, None)
+            chosen = self._calendar_day(day, cursor, length, counts, today)
+            rows = sorted((g for g in in_month
+                           if getattr(g, field)[8:10] == f"{chosen:02d}"),
+                          key=lambda g: (-g.rating, g.name.lower()))
+
         years = Counter(g.year for g in games if g.year)
-        rows = []
+        out = {
+            "view": view,
+            "views": list(self.CALENDAR_VIEWS),
+            "today": today.isoformat(),
+            "month": month,
+            "month_name": calmod.month_name[cursor.month],
+            # Monday-first, matching `calendar.monthrange`, so the UI can lay
+            # a seven-column grid without recomputing the offset itself.
+            "first_weekday": first_weekday,
+            "days_in_month": length,
+            "days": [{"day": n, "count": counts.get(n, 0)}
+                     for n in range(1, length + 1)],
+            "coverage": coverage,
+            "decade": decade,
+            "years": [{"year": y, "count": c} for y, c in sorted(years.items())],
+            "decades": sorted({f"{(y // 10) * 10}s" for y in years}),
+        }
+        if view == "upcoming":
+            out["day"] = ""
+            out["items"] = [self._shelf_row(g) for g in rows[:limit]]
+            if not rows:
+                out["note"] = ("RomM holds no unreleased titles. Every row in "
+                               "a ROM library is a file, or a catalogue entry "
+                               "for a game that already shipped, so there is "
+                               "no release schedule to show -- and ROMarr "
+                               "will not invent one.")
+            return out
+        out["selected_day"] = chosen
+        # An anniversary has no year, so it is not dressed up as a date. The
+        # other two views are looking at one real month and say which.
+        out["day"] = (f"{cursor.month:02d}-{chosen:02d}" if view == "releases"
+                      else f"{month}-{chosen:02d}")
+        if view == "releases":
+            out["note"] = ("Anniversaries: what came out on this day, in any "
+                           "year. Providers that only knew the year store it "
+                           "as January 1st, so the first of each month is "
+                           "heavier than the rest.")
+        # `decade` keeps its original meaning: a decade beats the day grid,
+        # because somebody who asked for the 1990s wants the 1990s.
         if decade:
             try:
                 start = int(str(decade).rstrip("s"))
@@ -2358,16 +2753,34 @@ class ROMarr:
             if start:
                 rows = sorted(
                     (g for g in games if g.year and start <= g.year < start + 10),
-                    key=lambda g: (-g.year, -g.rating, g.name.lower()))[:200]
-        return {
-            "decade": decade,
-            "years": [{"year": y, "count": c} for y, c in sorted(years.items())],
-            "decades": sorted({f"{(y // 10) * 10}s" for y in years}),
-            "items": [{"id": g.id, "title": g.name, "platform": g.platform,
-                       "cover_url": g.cover, "year": g.year,
-                       "rating": g.rating}
-                      for g in rows],
-        }
+                    key=lambda g: (-g.year, -g.rating, g.name.lower()))
+        out["items"] = [self._shelf_row(g) for g in rows[:limit]]
+        return out
+
+    @staticmethod
+    def _calendar_day(day: str, cursor, length: int, counts, today) -> int:
+        """Which square of the month to open, given what the caller asked for.
+
+        Falls back to today, and to the busiest day in the month when today
+        has nothing on it -- landing on an empty square is how a calendar
+        with plenty in it looks empty. Measured against a real library that
+        was not hypothetical: the Updated view opened on the 11th, which was
+        blank, while the 4th of the same month held 11,155 rows.
+        """
+        wanted = str(day or "").strip()
+        if wanted:
+            # Accepts a bare day, an anniversary `MM-DD` and a full date, so
+            # a link from any of the three views works in any of them.
+            tail = wanted.split("-")[-1]
+            if tail.isdigit() and 1 <= int(tail) <= length:
+                return int(tail)
+        if ((today.year, today.month) == (cursor.year, cursor.month)
+                and counts.get(today.day)):
+            return today.day
+        if counts:
+            return max(counts.items(), key=lambda kv: (kv[1], -kv[0]))[0]
+        return today.day if (today.year, today.month) == (cursor.year,
+                                                          cursor.month) else 1
 
     def peer_shelf(self, peer) -> list[dict]:
         """The projection this peer is allowed to see, from the live cache."""
@@ -2482,12 +2895,22 @@ class ROMarr:
                              "file hashes, so netplay cannot be seeded from "
                              "it -- run an audit instead"}
         added = offset = seen = 0
-        while offset < 250_000:
+        truncated = ""
+        while offset < 500_000:
             try:
                 page, raw = client.hashes(limit=500, offset=offset)
             except Exception as err:                # noqa: BLE001 - reported
                 if not added:
                     return {"ok": False, "error": f"library read failed: {err}"}
+                # Partial is better than nothing, but a partial read that
+                # reports plain success is how 63,500 of 166,578 looked like
+                # a complete answer. Say where it stopped and why.
+                log.warning("hash seed stopped at offset %d of the library: "
+                            "%s", offset, err)
+                if progress is not None:
+                    progress["stopped_early"] = True
+                    progress["error"] = str(err)
+                truncated = str(err)
                 break
             if not raw:
                 break
@@ -2517,17 +2940,106 @@ class ROMarr:
         without = max(0, seen - added)
         return {"ok": True, "added": added, "seen": seen,
                 "total": len(self.hashes),
-                "detail": f"Read {seen:,} entries and found {added:,} with a "
+                "stopped_early": bool(truncated), "error": truncated,
+                "detail": (f"Stopped after {seen:,} entries: {truncated}. "
+                           f"{added:,} hashes were kept; run it again to "
+                           f"continue." if truncated else
+                           f"Read {seen:,} entries and found {added:,} with a "
                           f"hash. Netplay can match those. The other "
-                          f"{without:,} are catalogued entries your library "
-                          f"has never scanned off a disk, so there is nothing "
-                          f"to match them on. They are all marked unverified "
-                          f"until an audit checks them against a DAT."}
+                           f"{without:,} are catalogued entries your library "
+                           f"has never scanned off a disk, so there is "
+                           f"nothing to match them on. They are all marked "
+                           f"unverified until an audit checks them against "
+                           f"a DAT.")}
 
     def save_peers(self) -> None:
         """Persist relationships. Called after every change to one."""
         self.store.settings["_peers"] = self.federation.dump()
         self.store.save()
+
+    def claim_invitation(self, link: str, code: str) -> dict:
+        """Finish a friend's invitation from a link and a typed claim code.
+
+        `/peer/redeem` stores a relationship and stops -- the inviter never
+        hears about it, and the first thing either side notices is a shelf
+        that answers 401. That is survivable when the blob already contains
+        the durable token. It is not survivable here: a claim code is worth
+        nothing after it is spent, so the exchange has to happen now or the
+        friend is left holding eight dead characters.
+
+        So this one calls the server named in the link, hands over the code,
+        and keeps the token that comes back. The address it calls is read
+        from the link rather than typed, which is why the UI shows it before
+        this runs: a link is a thing somebody else wrote.
+        """
+        import requests as _rq
+
+        from .federation import Peer, parse_invite_link
+        try:
+            invite = parse_invite_link(link)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        if not str(code or "").strip():
+            return {"ok": False,
+                    "error": "the claim code is missing. It travels "
+                             "separately from the link on purpose -- ask your "
+                             "friend for the eight characters"}
+        # Sent so the inviter's Friends page can call back. Read fresh from
+        # settings for the same reason minting does: an operator who set a
+        # public URL five minutes ago should not have to restart to use it.
+        mine = str(self.store.settings.get("public_url")
+                   or self.federation.url or "").strip().rstrip("/")
+        try:
+            response = _rq.post(
+                invite["url"] + "/api/v1/peer/accept",
+                json={"peer_id": invite["peer_id"], "secret": str(code),
+                      "name": self.federation.name, "url": mine},
+                timeout=20)
+        except _rq.RequestException as err:
+            return {"ok": False,
+                    "error": f"could not reach {invite['url']}: {err}"}
+        body = {}
+        try:
+            body = response.json()
+        except ValueError:
+            body = {}
+        if not response.ok:
+            return {"ok": False,
+                    "error": str(body.get("error")
+                                 or f"{invite['url']} answered HTTP "
+                                    f"{response.status_code}")}
+        token = str(body.get("token") or "")
+        if not token:
+            # An older ROMarr accepts the handshake and returns no token, so
+            # the relationship would look made and authenticate as nobody
+            # forever. Refuse loudly instead of storing a peer that cannot
+            # work.
+            return {"ok": False,
+                    "error": "that server completed the handshake but sent no "
+                             "token back, so there is nothing to talk to it "
+                             "with. It is probably running a ROMarr from "
+                             "before invitation links -- ask for the older "
+                             "pasted invitation instead"}
+        peer = Peer(peer_id=invite["peer_id"],
+                    name=(str(body.get("name") or "") or invite["name"]
+                          or invite["url"]),
+                    url=str(body.get("url") or "") or invite["url"],
+                    token=token,
+                    # Confirmed here, like a redeemed blob: I typed the code
+                    # my friend gave me, which is the consent the second step
+                    # exists to establish. Their side still holds me
+                    # unconfirmed until they say so.
+                    confirmed=True)
+        self.federation.peers[peer.peer_id] = peer
+        self.save_peers()
+        out = {"ok": True, "peer_id": peer.peer_id, "name": peer.name,
+               "detail": f"Connected to {peer.name}. They confirm you on "
+                         f"their side before you can see anything."}
+        if not mine:
+            out["warning"] = ("Your ROMarr has no public URL set, so your "
+                              "friend's server has no address to call you "
+                              "back on. Set it under Settings -> General.")
+        return out
 
     class _RommDump:
         """One of a RomM friend's files, shaped like a hash-index entry.
@@ -2806,12 +3318,21 @@ class ROMarr:
         ratings = [int(m["rating"]) for m in meta if m.get("rating")]
         statuses = Counter(m["status"] for m in meta if m.get("status"))
         games, _ = self._count_cache
+        split = self.library_split()
         return {
             "version": VERSION,
             "update_available": bool(self.store.settings.get("_update_available")),
             "latest_version": self.store.settings.get("_latest_version", ""),
             "uptime_seconds": int(time.monotonic() - self._started),
             "library_games": games,
+            # "Games in library" was this page's headline number and it was
+            # the sum of two unlike things. It stays, because a stat page
+            # that renumbered itself would be its own confusion, but it no
+            # longer stands alone: these say how many of those are files
+            # here, how many are catalogue rows, and which catalogues.
+            "library_on_disk": split["on_disk"],
+            "library_catalogued": split["catalogued"],
+            "library_sources": split["sources"],
             "wanted": len(self.store.wanted),
             "events": dict(by_kind),
             "imported_by_platform": dict(imported_by_platform.most_common(15)),
@@ -3385,7 +3906,13 @@ def make_handler(service: ROMarr):
         #: from Steam and the cookie is SameSite=Strict. Its single-use,
         #: short-lived `state` -- minted by an authenticated request -- is
         #: what authorises it instead.
-        OPEN_PATHS = ("/", "/login", "/api/health", "/api/v1/login",
+        #: `/link` is where an invitation link lands. It is open because the
+        #: person opening it is somebody else's operator with no account
+        #: here -- that is the entire situation. It answers with a CONSTANT:
+        #: it takes no parameters, reads no invitation, touches no state and
+        #: returns identical bytes to every caller. The invitation id is in
+        #: the URL fragment, which never reaches this server at all.
+        OPEN_PATHS = ("/", "/login", "/link", "/api/health", "/api/v1/login",
                       "/api/v1/setup", "/api/v1/connect/steam/return",
                       # Peer-facing: authenticated by peer id + token in
                       # headers, which is a DIFFERENT credential from the
@@ -3500,6 +4027,13 @@ def make_handler(service: ROMarr):
         def _get(self):
             route = urlparse(self.path)
             query = parse_qs(route.query)
+            if route.path == "/link":
+                # Served before the sign-in check on purpose, and without
+                # consulting anything: the visitor is a stranger holding a
+                # link, and the page's whole job is to tell them what they
+                # are holding and get them onto their OWN server with it.
+                return self._send(200, ui_link_page().encode("utf-8"),
+                                  "text/html; charset=utf-8")
             if route.path in ("/", "/login"):
                 # The app shell only for somebody who is already in. Serving
                 # it to everybody is what made issue #8 so confusing: the UI
@@ -3535,6 +4069,7 @@ def make_handler(service: ROMarr):
                     region=(query.get("region") or [""])[0],
                     decade=(query.get("decade") or [""])[0],
                     origin=(query.get("origin") or [""])[0],
+                    source=(query.get("source") or [""])[0],
                     sort=(query.get("sort") or [""])[0]))
             if route.path == "/api/v1/wanted/missing":
                 return self._json(200, {"items": service.store.missing()})
@@ -3555,10 +4090,15 @@ def make_handler(service: ROMarr):
                 return self._json(200, service.discover_library(
                     shelf=(query.get("shelf") or ["top-rated"])[0],
                     genre=(query.get("genre") or [""])[0],
+                    value=(query.get("value") or [""])[0],
                     limit=int((query.get("limit") or ["40"])[0] or 40)))
             if route.path == "/api/v1/calendar/library":
                 return self._json(200, service.library_calendar(
-                    decade=(query.get("decade") or [""])[0]))
+                    decade=(query.get("decade") or [""])[0],
+                    view=(query.get("view") or ["releases"])[0],
+                    month=(query.get("month") or [""])[0],
+                    day=(query.get("day") or [""])[0],
+                    limit=int((query.get("limit") or ["200"])[0] or 200)))
             if route.path == "/api/v1/discover":
                 return self._json(200, metadata_discover(
                     service.store.list_items("metadata_providers"),
@@ -3902,6 +4442,8 @@ def make_handler(service: ROMarr):
                     game, (query.get("platform") or [""])[0]))
             if route.path == "/api/v1/hub/plugins":
                 return self._json(200, hub.plugins())
+            if route.path == "/api/v1/moonlight":
+                return self._json(200, service.moonlight_status())
             if route.path == "/api/v1/hub/status":
                 # Whether plugins are confined is the most useful thing to
                 # know before installing one, so it travels with the
@@ -4061,9 +4603,17 @@ def make_handler(service: ROMarr):
                 invite = service.federation.invite(
                     name=str(body.get("name") or service.federation.name))
                 payload = {
+                    # The link is safe to send anywhere a link goes, because
+                    # it authorises nothing. The code is the credential and
+                    # is deliberately NOT in the link.
+                    "link": invite.link(),
+                    "code": invite.code_display,
+                    "code_expires_in": invite.code_expires_in(),
                     "invite": invite.blob(),
-                    "note": "Send this to your friend out of band. It works "
-                            "once and expires in 24 hours; you confirm the "
+                    "note": "Send the link however you like -- it carries no "
+                            "secret. Send the code separately if you can: by "
+                            "voice, by text, in another app. It works once, "
+                            "expires in 15 minutes, and you still confirm the "
                             "peer here before they can see anything."}
                 if not service.federation.url:
                     # An invitation with no address is a dead end: the
@@ -4083,9 +4633,19 @@ def make_handler(service: ROMarr):
                 service.save_peers()
                 return self._json(200, {"peer_id": peer.peer_id,
                                         "name": peer.name})
+            if route.path == "/api/v1/peer/claim":
+                # The link-and-code path, from the redeeming side. Unlike
+                # /redeem this one goes over the network, because a claim
+                # code is not a token: it has to be exchanged with the
+                # server that minted it before anything is worth storing.
+                result = service.claim_invitation(
+                    str(body.get("link") or ""), str(body.get("code") or ""))
+                return self._json(200 if result.get("ok") else 400, result)
             if route.path == "/api/v1/peer/accept":
                 # Called BY a peer redeeming my invitation, so it carries
-                # the one-time secret rather than a session.
+                # the one-time secret -- or the short claim code, which is
+                # the same invitation reached by the other door -- rather
+                # than a session.
                 try:
                     peer = service.federation.accept(
                         str(body.get("peer_id") or ""),
@@ -4095,10 +4655,22 @@ def make_handler(service: ROMarr):
                 except ValueError as exc:
                     return self._json(400, {"error": str(exc)})
                 service.save_peers()
-                return self._json(200, {"peer_id": peer.peer_id,
-                                        "confirmed": peer.confirmed,
-                                        "note": "held until the operator "
-                                                "confirms it"})
+                return self._json(200, {
+                    "peer_id": peer.peer_id,
+                    # The long token, handed back to the caller that just
+                    # proved it holds this invitation. The blob path already
+                    # had it; the claim-code path arrives with eight
+                    # characters and needs the durable credential from
+                    # somewhere, and this exchange -- short code in, long
+                    # token out, once, over the wire -- is that somewhere.
+                    # It is not a leak: nobody reaches this line without a
+                    # credential for this exact invitation, and the token it
+                    # returns opens nothing until the operator confirms.
+                    "token": peer.token,
+                    "confirmed": peer.confirmed,
+                    "name": service.federation.name,
+                    "url": service.federation.url,
+                    "note": "held until the operator confirms it"})
             if route.path == "/api/v1/peer/confirm":
                 try:
                     peer = service.federation.confirm(
@@ -4416,6 +4988,8 @@ def make_handler(service: ROMarr):
                             if body.get("id") else None)
                 return self._json(200, service.test_library(
                     merge_library_secrets(dict(body), existing)))
+            if route.path == "/api/v1/moonlight/pin":
+                return self._json(200, service.moonlight_pin(body))
             if route.path == "/api/v1/downloadclient/test":
                 # Tested against the submitted form, with any untouched secret
                 # filled back in, so Test reflects what Save would store.

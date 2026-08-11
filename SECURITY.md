@@ -73,17 +73,19 @@ install; the only way off is explicit.
 - Login is rate limited. Wrong credentials return `401` without revealing
   which of password or key was wrong.
 
-Exactly five routes answer without a credential, and no others:
+Exactly ten routes answer without a credential, and no others (this count is
+asserted against the code, not maintained by hand):
 
 | Route | Why |
 |---|---|
 | `/` | Serves the sign-in or setup screen when you are not signed in, the app when you are. |
 | `/login` | The sign-in screen. It has to answer somebody holding nothing. |
+| `/link` | Where a peering invitation link lands. A **constant page** — see below. |
 | `/api/v1/login` | Exchanges a password or key for a session. |
 | `/api/v1/setup` | First-run claim. Open only while unclaimed; `409` after. |
 | `/api/health` | Container health checks have no credential to offer. |
 | `/api/v1/connect/steam/return` | Steam's OpenID redirect. It *cannot* carry the session cookie — see below. |
-| `/api/v1/peer/accept` | A peer redeeming an invitation you minted. Carries the one-time secret. |
+| `/api/v1/peer/accept` | A peer redeeming an invitation you minted. Carries the one-time secret or the claim code. |
 | `/api/v1/peer/shelf` | A peer reading what you share. Requires peer id + token. |
 | `/api/v1/peer/netplay` | A peer proposing a session. Requires peer id + token. |
 
@@ -93,15 +95,61 @@ not by a person with a browser, so requiring the operator's session cookie
 would make federation impossible. Each authenticates differently instead:
 
 - `/api/v1/peer/accept` requires the **one-time invitation secret** you
-  minted and sent out of band. It is single-use, expires in 24 hours, and
-  compared in constant time. Redeeming it does not grant access to
-  anything — the peer is held **unconfirmed** until you confirm it, so a
-  leaked invitation is recoverable rather than final.
+  minted and sent out of band, or the **short claim code** that is the other
+  half of the same invitation. Either way it is single-use and compared in
+  constant time. Redeeming it does not grant access to anything — the peer is
+  held **unconfirmed** until you confirm it, so a leaked invitation is
+  recoverable rather than final. See *Invitation links and claim codes*.
 - `/api/v1/peer/shelf` and `/api/v1/peer/netplay` require an
   `X-Peer-Id` + `X-Peer-Token` pair issued to exactly one peer, compared
   in constant time. An unconfirmed peer authenticates as nobody, and a
   confirmed peer with the default `scope: none` sees an empty shelf, so
   neither route leaks anything by existing.
+
+**`/link` is open because it is a constant.** It takes no parameters, reads
+no invitation, touches no state and returns identical bytes to every caller.
+It has to be open because the person opening it is *somebody else's* operator,
+who has no account here — that is the entire situation the page exists for.
+There is nothing behind it to ask, so there is nothing it can be made to say.
+
+### Invitation links and claim codes
+
+An invitation comes in two halves and only one of them is a secret.
+
+- **The link** — `https://your-server/link#i=<invite id>&n=<name>` — carries
+  no credential. Everything identifying it is in the **fragment**, which a
+  browser never puts on the wire: it does not reach the inviting server's
+  access log, it is not in the `Referer` header of whatever the recipient
+  clicks next, and the request a chat client makes to render a link preview
+  fetches the bare path and learns nothing. Losing this link loses nothing.
+- **The claim code** — eight characters, e.g. `K7RM-9TFQ` — is the credential,
+  and it is deliberately *not* in the link. URLs go to places credentials must
+  not: browser history, the address bar of a shared screen, sync services,
+  proxy logs, link unfurlers. So the half that authorises is the half a person
+  types, and it can travel by a second channel — voice, SMS, another app.
+
+Eight characters is about forty bits, which is small, so three things carry
+the weight instead of length:
+
+1. **The code expires in 15 minutes**, where the invitation itself lives 24
+   hours. A code that sits in a chat log all day is a credential sitting in a
+   chat log all day. Minting another is one click.
+2. **Five wrong codes destroy the invitation.** Guessing is bounded at five
+   attempts per invitation, not per address, because rate-limiting by address
+   is defeated by having more addresses.
+3. **Redeeming still grants nothing.** A correctly guessed code produces a row
+   on your Friends page marked *awaiting your confirmation*, and nothing else.
+   This is the same mutual-confirmation step that makes a leaked long secret
+   recoverable, and it is what makes a short code safe to use at all.
+
+Burning an invitation is also the alarm: the friend it was meant for finds it
+gone and tells you, which is how you learn somebody was guessing.
+
+`/api/v1/peer/accept` returns the long peer token to whoever completes the
+handshake. That caller has just proved it holds this exact single-use
+invitation, and the token it receives opens nothing until you confirm the
+peer. It is how a claim code becomes a durable credential — short code in,
+long token out, once.
 
 Revocation is one-sided and immediate: deleting a peer invalidates its
 token without that peer's cooperation, and touches no other peer's.
@@ -114,7 +162,8 @@ deliberately shown, and such a rule would have hidden the wrong half and
 served the tokens. A test asserts no peer token appears in that response.
 Invitations are deliberately *not* persisted: they expire in 24 hours, and
 keeping them across a restart would only widen the window a leaked one is
-useful for.
+useful for. That applies doubly to the wrong-guess counter, which lives on the
+invitation — a restart that resurrected an invitation would reset its budget.
 
 `/api/health` returns one bit unauthenticated — it used to return library paths
 and client URLs, which is what a health check does not need.
@@ -237,6 +286,23 @@ Stated so nobody assumes otherwise:
   group, but ROMarr does not distinguish users or keep per-user permissions.
 - **No audit log of who did what**, because there is no "who".
 - **No rate limiting on the API generally** — only on login.
+- **The Sunshine admin credential travels over an unverified TLS
+  connection.** Sunshine generates its own certificate on first run and
+  nobody signs it, so ROMarr disables certificate verification to talk to
+  `https://<host>:47990` at all. That connection is encrypted and **not
+  authenticated**: anything already on the path between ROMarr and the host
+  can impersonate it and collect `MOONLIGHT_PASS`. There is no fix available
+  from ROMarr's side — pinning would need a certificate the operator has no
+  way to supply — so treat that credential as LAN-only, and give Sunshine an
+  admin password you do not use anywhere else. Wolf has no equivalent
+  exposure: its API is a UNIX socket, and ROMarr sends it no credential.
+- **Wolf's API is a full-privilege API and ROMarr does not narrow it.** Wolf's
+  own documentation says that through it "you can pair clients to the server,
+  execute arbitrary commands, and more". Setting `WOLF_SOCKET_PATH` or
+  `WOLF_API_URL` gives ROMarr — and anything that can reach ROMarr's own
+  process — that level of access to the host. ROMarr calls four read
+  endpoints and one pairing endpoint, but nothing structurally confines it to
+  those.
 - **DAT verification is an integrity check, not a security control.** It tells
   you a file matches a known-good dump. It is not malware scanning, and an
   UNKNOWN verdict means "not in your DAT", not "dangerous".

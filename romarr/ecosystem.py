@@ -72,6 +72,31 @@ ECOSYSTEM: dict[str, list[Project]] = {
             repo="https://github.com/libretro/RetroArch",
             site="https://www.libretro.com"),
         Project(
+            "Moonlight",
+            "An open-source implementation of NVIDIA GameStream -- the "
+            "client every self-hosted game-streaming host speaks to.",
+            repo="https://github.com/moonlight-stream/moonlight-qt",
+            site="https://moonlight-stream.org"),
+        Project(
+            "Wolf",
+            "Stream virtual desktops and games running in Docker -- a "
+            "multi-user, container-native Moonlight server.",
+            repo="https://github.com/games-on-whales/wolf",
+            site="https://games-on-whales.github.io/wolf/stable/",
+            install="docker pull ghcr.io/games-on-whales/wolf:stable"),
+        Project(
+            "Sunshine",
+            "A self-hosted game stream host for Moonlight.",
+            repo="https://github.com/LizardByte/Sunshine",
+            site="https://app.lizardbyte.dev/Sunshine/",
+            install="docker pull lizardbyte/sunshine:latest"),
+        Project(
+            "Steam Headless",
+            "A Docker image for running Steam in a container with a full "
+            "desktop, streamed out over Sunshine or noVNC.",
+            repo="https://github.com/Steam-Headless/docker-steam-headless",
+            install="docker pull josh5/steam-headless:latest"),
+        Project(
             "ES-DE",
             "EmulationStation Desktop Edition -- a frontend for many emulators.",
             site="https://es-de.org"),

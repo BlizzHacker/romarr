@@ -33,7 +33,10 @@ def test_the_documented_open_paths_are_the_actual_open_paths(doc, tmp_path):
     """The list in SECURITY.md is the one readers rely on."""
     handler = make_handler(ROMarr({"ROMARR_DATA": str(tmp_path / "s.json")}))
     actual = set(handler.OPEN_PATHS)
-    assert actual == {"/", "/login", "/api/health", "/api/v1/login",
+    # `/link` was added with invitation links: the person opening one is
+    # somebody else's operator with no account here. It is on this list
+    # because it is a CONSTANT -- see the guarantee asserted just below.
+    assert actual == {"/", "/login", "/link", "/api/health", "/api/v1/login",
                       "/api/v1/setup",
                       "/api/v1/connect/steam/return",
                       "/api/v1/peer/accept", "/api/v1/peer/shelf",
@@ -41,6 +44,24 @@ def test_the_documented_open_paths_are_the_actual_open_paths(doc, tmp_path):
         "the set of unauthenticated routes changed; SECURITY.md lists them")
     for path in actual:
         assert path in doc, f"{path} answers without a credential and is undocumented"
+    # The prose counts them, and read "five" while the table listed nine for
+    # long enough that nobody noticed. A number in a security document is a
+    # claim like any other.
+    spelled = {5: "five", 6: "six", 7: "seven", 8: "eight", 9: "nine",
+               10: "ten", 11: "eleven", 12: "twelve"}[len(actual)]
+    assert f"Exactly {spelled} routes answer without a credential" in doc
+
+
+def test_the_invitation_landing_page_is_a_constant(doc):
+    """SECURITY.md's argument for `/link` being open is that there is nothing
+    behind it to ask. If it ever grows a parameter, that argument is void."""
+    from romarr.ui import link_page
+    assert link_page() == link_page()
+    import inspect
+    assert not inspect.signature(link_page).parameters, (
+        "/link is on the open-path list because it answers with a constant; "
+        "a parameter makes it something that can be asked a question")
+    assert "constant page" in doc
 
 
 def test_scrypt_parameters_match_what_is_documented(doc):

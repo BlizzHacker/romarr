@@ -34,11 +34,25 @@ report is worth the most.
 | Every page renders its actions | A browser signs in and visits all 27 pages the way a user navigates, asserting each shows its action control with no JS error | [`scripts/prove_pages.py`](../scripts/prove_pages.py), run 2026-08-11: **27/27**. Building it caught four latent late-write bugs (a fetch resolving after navigation), all fixed |
 | The ecosystem credits are real links, not fabrications | Every upstream URL confirmed against the live project before it shipped; the page renders 17 cards with working links on the production install | [`romarr/ecosystem.py`](../romarr/ecosystem.py), [`tests/test_ecosystem.py`](../tests/test_ecosystem.py); [screenshot](img/ecosystem.png) — 23 external links, ROMarr marked "you are here" |
 
+| Moonlight hosts (Wolf/Sunshine/Steam Headless) report honestly | Every endpoint and every field claimed was read from the upstream source, not guessed; 56 tests assert ROMarr's half of each conversation, and most of them assert a **refusal** — that a RetroArch or a Steam app grants no platform anything, that a reachable host with an unreadable app list grants nothing, that a PIN submission never reports "paired" | [design doc](design/streaming-hosts.md), [`tests/test_moonlight.py`](../tests/test_moonlight.py). **Fixtures only — no live host was in the loop**, see the row below |
+
 ## What is NOT proven, in the same breath
 
 This list was five entries long on the morning of 2026-08-10 and is now
 this. Each survivor names exactly what would close it.
 
+- **No live Wolf, Sunshine, Steam Headless or Moonlight client has ever
+  met this code.** Everything in the streaming-host integration is asserted
+  against fixtures built by reading upstream's own source. Unverified
+  against real hardware, most-valuable-first: Wolf's **UNIX socket
+  transport** (the only non-plain-HTTP transport here), the nginx TCP proxy
+  path, Sunshine's **self-signed TLS handshake**, `GET /serverinfo` against
+  a real host, and **every PIN relay on both implementations**. The claim
+  that Sunshine returns `true` for a *wrong* PIN is upstream's own bug
+  report ([Sunshine#3944](https://github.com/LizardByte/Sunshine/issues/3944)),
+  not our observation. One person with the hardware, running it and posting
+  what happened, closes any of these. Full list in
+  [design/streaming-hosts.md](design/streaming-hosts.md) §6.
 - **Synology Download Station and Real-Debrid** have only met protocol
   fakes: one needs Synology hardware, the other a paid account.
   [`scripts/live_proof.py`](../scripts/live_proof.py) is ready for both —
