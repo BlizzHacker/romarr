@@ -2247,16 +2247,23 @@ class ROMarr:
         if not lists:
             return {"added": 0, "message": "no lists configured"}
         added = known = unknown = failed_lists = 0
+        failures: list[dict] = []
         for cfg in lists:
             if not cfg.get("enable", True):
                 continue
             try:
                 entries = fetch_entries(cfg)
             except Exception as err:
-                # Which list failed matters; an expired URL must not read as
-                # an empty list, because empty reads as success.
-                log.warning("import list %r failed: %s", cfg.get("name"),
-                            err.__class__.__name__)
+                # Which list failed matters, and so does WHY: "2 list(s)
+                # unreadable" sends somebody hunting through logs for a
+                # sentence the connector already wrote. A ValueError here
+                # is a message written for the operator; anything else is
+                # named by type.
+                reason = (str(err) if isinstance(err, ValueError)
+                          else f"{err.__class__.__name__} talking to the store")
+                log.warning("import list %r failed: %s", cfg.get("name"), reason)
+                failures.append({"id": cfg.get("id"),
+                                 "name": cfg.get("name"), "reason": reason})
                 failed_lists += 1
                 continue
             # Epic swaps its single-use code for a refresh token during the
@@ -2289,9 +2296,13 @@ class ROMarr:
         if unknown:
             message += f", {unknown} with no resolvable platform"
         if failed_lists:
-            message += f", {failed_lists} list(s) unreadable"
+            # Name them, with the reason. The count alone is the least
+            # useful half of what is known here.
+            message += "; " + "; ".join(
+                f"{f['name']}: {f['reason']}" for f in failures)
         return {"added": added, "known": known, "unknown": unknown,
-                "failed_lists": failed_lists, "message": message}
+                "failed_lists": failed_lists, "failures": failures,
+                "message": message}
 
     def run_command(self, name: str) -> dict:
         """The Tasks page. Names match how *arr labels its commands."""
@@ -2967,6 +2978,14 @@ def make_handler(service: ROMarr):
                     return self._json(400, {
                         "error": f"unknown list type {cfg['type']!r}",
                         "known": sorted(LIST_TYPES)})
+                # Take the whole document a person pasted, not just the
+                # bare value: every token page is JSON and select-all-copy
+                # is what actually happens.
+                from .connect import extract_value
+                for secret in ("npsso", "ea_token", "epic_code",
+                               "openxbl_key", "itchio_key", "gog_username"):
+                    if cfg.get(secret) and cfg[secret] != "********":
+                        cfg[secret] = extract_value(secret, cfg[secret])
                 if not cfg.get("id"):
                     cfg.pop("id", None)
                 else:

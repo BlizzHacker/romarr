@@ -708,29 +708,52 @@ RENDER.lists=async()=>{
     const spec=(s.token_sources||{})[b.dataset.token];
     if(!spec){toast('Unknown store');return;}
     window.open(spec.open,'_blank','noopener');
-    $('#l-token').innerHTML=`<div class="card" style="margin:10px 0">
+    // A modal, not an inline panel: window.open moves the person to another
+    // tab, and when they come back a box further down the page is a box
+    // they never see. This one is in front of them and focused.
+    const m=document.createElement('div');
+    m.className='modal';
+    m.innerHTML=`<div class="box">
       <h3>Connect ${esc(spec.label)}</h3>
-      <p class="help">${esc(spec.how)}</p>
-      <div class="row">
-        <input type="password" id="tok-v" autocomplete="new-password"
-          placeholder="paste it here" style="flex:1;padding:8px 12px;
-          background:var(--bg);color:var(--fg);border:1px solid var(--line);
-          border-radius:6px">
-        <button class="btn" id="tok-save">Connect</button></div></div>`;
+      <div class="sub">A tab just opened. ${esc(spec.how)}</div>
+      <div class="field"><label>Paste it here</label>
+        <textarea id="tok-v" rows="4" autocomplete="off" spellcheck="false"
+          placeholder='paste the whole thing — {"npsso":"..."} is fine'
+          style="width:100%;resize:vertical;font:12px/1.5 ui-monospace,
+          Menlo,monospace"></textarea>
+        <div style="color:var(--dim);font-size:11.5px;margin-top:4px">
+          Paste the entire page if you like — ROMarr pulls the value out.</div>
+      </div>
+      <div id="testline"></div>
+      <div class="foot">
+        <button class="btn ghost sp" data-close>Cancel</button>
+        <button class="btn" id="tok-save">Connect</button>
+      </div></div>`;
+    document.body.append(m);
+    m.onclick=e=>{ if(e.target===m||e.target.dataset.close!==undefined) closeModal(); };
+    setTimeout(()=>m.querySelector('#tok-v')?.focus(),50);
     $('#tok-save').onclick=async()=>{
       const value=$('#tok-v').value.trim();
       if(!value){toast('Paste the value first');return;}
       const body={name:spec.label+' library',type:b.dataset.token,
                   platform:'',enable:true};
       body[spec.field]=value;
+      const line=(ok,msg)=>{
+        const el=m.querySelector('#testline');
+        el.className='testline '+(ok?'ok':'bad'); el.textContent=msg;
+      };
+      line(true,'Connecting…');
       const saved=await j('/api/v1/importlist',{method:'POST',
         headers:{'content-type':'application/json'},body:JSON.stringify(body)});
-      if(saved.error){toast(saved.error);return;}
+      if(saved.error){line(false,saved.error);return;}
       const r=await j('/api/v1/command',{method:'POST',
         headers:{'content-type':'application/json'},
         body:JSON.stringify({name:'ListSync'})});
-      toast(r.message||'Connected');
-      go('lists');
+      // The failure reason belongs here, in front of the person who just
+      // pasted, not in a toast that vanishes.
+      const failed=(r.failures||[]).find(f=>f.id===saved.id);
+      if(failed){ line(false,failed.reason); return; }
+      closeModal(); toast(r.message||'Connected'); go('lists');
     };
   });
   j('/api/v1/importlist/schema').then(s=>{

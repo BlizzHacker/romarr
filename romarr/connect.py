@@ -102,6 +102,61 @@ def steam_verify(query: dict, *, session=None) -> str:
     return match.group(1)
 
 
+#: What a person actually copies off a token page: the whole document.
+#: Every one of these pages is JSON, and telling somebody to select the
+#: characters between two quotes is a worse instruction than just accepting
+#: the paste. Maps the field ROMarr stores to the key the store calls it.
+_JSON_KEYS = {
+    "npsso": ("npsso",),
+    "ea_token": ("access_token",),
+    "epic_code": ("authorizationCode", "code"),
+    "gog_username": ("username",),
+    "openxbl_key": ("app_key", "apiKey", "key"),
+    "itchio_key": ("key", "api_key"),
+}
+
+
+def extract_value(field: str, pasted: str) -> str:
+    """The credential inside whatever the user pasted.
+
+    Accepts the bare value, the whole JSON document the page displayed, or
+    a URL with the value in its query string -- because all three are
+    things people genuinely paste, and refusing two of them turns a working
+    flow into "it doesn't work".
+    """
+    import json
+    import urllib.parse
+
+    text = str(pasted or "").strip()
+    if not text:
+        return ""
+
+    keys = _JSON_KEYS.get(field, (field,))
+
+    # The whole JSON document, which is what select-all-copy produces.
+    if text.startswith("{"):
+        try:
+            body = json.loads(text)
+        except ValueError:
+            body = {}
+        if isinstance(body, dict):
+            for key in keys:
+                if body.get(key):
+                    return str(body[key]).strip()
+
+    # A URL that carries it -- Epic's code arrives this way in the address
+    # bar when the redirect lands.
+    if text.startswith("http"):
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(text).query)
+        for key in keys:
+            if query.get(key):
+                return str(query[key][0]).strip()
+
+    # A bare value, but tolerate a stray quote or trailing comma from a
+    # partial selection.
+    return text.strip().strip('",').strip('"').strip()
+
+
 def new_state() -> str:
     """A one-shot value tying a return to the request that started it."""
     return secrets.token_urlsafe(24)
