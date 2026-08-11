@@ -478,6 +478,14 @@ class ROMarr:
         from .connect import StateStore
         self.connect_states = StateStore()
 
+        # Peering. Step one of the federation design: the trust model and
+        # the catalogue projection exist and are proven; the HTTP surface
+        # that lets two servers talk over them is the next step.
+        from .federation import Federation
+        self.federation = Federation(
+            name=e.get("ROMARR_PEER_NAME", "ROMarr"),
+            url=e.get("ROMARR_PUBLIC_URL", ""))
+
         self.logring = LogRing()
         logging.getLogger().addHandler(self.logring.handler())
 
@@ -3268,6 +3276,11 @@ def make_handler(service: ROMarr):
                 return self._json(200, {"api_key": service.auth.api_key})
             if route.path == "/api/v1/system/tasks":
                 return self._json(200, {"items": service.scheduler.status()})
+            if route.path == "/api/v1/peer":
+                return self._json(200, {
+                    "name": service.federation.name,
+                    "url": service.federation.url,
+                    "peers": service.federation.status()})
             if route.path == "/api/v1/ecosystem":
                 from .ecosystem import as_dict
                 return self._json(200, {"categories": as_dict()})

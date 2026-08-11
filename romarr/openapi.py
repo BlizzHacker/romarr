@@ -110,6 +110,8 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
                                         "key -- the metadata is your own."),
     "/api/v1/calendar/library": ("GET", "Your library by release year; "
                                         "?decade=1990s lists that decade."),
+    "/api/v1/peer": ("GET", "Peered ROMarr instances: scope, access and "
+                            "confirmation state. Tokens never appear here."),
     "/api/v1/ecosystem": ("GET", "The projects ROMarr stands on: library "
                                  "servers, players, indexers, DAT databases "
                                  "-- repo, site and install command for each."),

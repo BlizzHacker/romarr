@@ -133,6 +133,22 @@ class Romm:
     # is how an integration quietly becomes a way to delete someone's library.
     SCOPES = "roms.read platforms.read collections.read"
 
+    #: The same, plus permission to run the rescan task. Requested FIRST and
+    #: fallen back from, because the two RomM versions disagree in opposite
+    #: directions and a single answer breaks one of them:
+    #:
+    #:   * RomM 5.x enforces scopes, so without `tasks.run` every rescan is
+    #:     a bare 403 that reads as an account-permission problem.
+    #:   * RomM 4.x refuses to ISSUE a token carrying a scope the account
+    #:     does not hold -- so demanding it unconditionally 403s the login
+    #:     itself and takes the whole library down with it. Proven against a
+    #:     live 4.x install, where this exact change broke everything.
+    #:
+    #: Asking for the better token and quietly accepting the lesser one is
+    #: the only shape that serves both.
+    SCOPES_WITH_TASKS = ("roms.read platforms.read collections.read "
+                         "tasks.run")
+
     # Health and badge calls get their own short budget; see count().
     HEALTH_TIMEOUT = 5
 
@@ -159,6 +175,11 @@ class Romm:
     def __init__(self, config: RommConfig, session: requests.Session | None = None):
         self._config = config
         self._session = session or requests.Session()
+        #: RomM 4.x calls the scan task `scan`; 5.x calls it `scan_library`.
+        #: Corrected on first use from the server's own error body, then
+        #: remembered, so the version difference costs one extra request
+        #: per process rather than a broken rescan.
+        self._scan_task = "scan"
         self._token = config.api_token or ""
 
     def token(self) -> str | None:
@@ -166,20 +187,30 @@ class Romm:
             return self._token
         if not (self._config.username and self._config.password):
             return None
-        response = self._session.post(
-            f"{self._config.base_url.rstrip('/')}/api/token",
-            data={
-                "grant_type": "password",
-                "username": self._config.username,
-                "password": self._config.password,
-                "scope": self.SCOPES,
-            },
-            timeout=self._config.timeout,
-        )
-        if not response.ok:
+        response = None
+        for scope in (self.SCOPES_WITH_TASKS, self.SCOPES):
+            response = self._session.post(
+                f"{self._config.base_url.rstrip('/')}/api/token",
+                data={
+                    "grant_type": "password",
+                    "username": self._config.username,
+                    "password": self._config.password,
+                    "scope": scope,
+                },
+                timeout=self._config.timeout,
+            )
+            if response.ok:
+                if scope is self.SCOPES:
+                    log.info("romm issued a read-only token: this account "
+                             "cannot run tasks, so imports will not trigger "
+                             "a rescan and RomM picks them up on its own "
+                             "schedule instead")
+                break
+        if response is None or not response.ok:
             # Never echo the body: a failed auth response can repeat the
             # submitted credentials back at you.
-            log.warning("romm auth failed with status %s", response.status_code)
+            log.warning("romm auth failed with status %s",
+                        getattr(response, "status_code", "no response"))
             return None
         self._token = response.json().get("access_token", "")
         return self._token or None
@@ -393,13 +424,37 @@ class Romm:
             payload["platforms"] = [platform_slug]
         try:
             response = self._session.post(
-                f"{base}/api/tasks/run/scan", json=payload,
+                f"{base}/api/tasks/run/{self._scan_task}", json=payload,
                 headers=self._headers(), timeout=self._config.timeout)
         except requests.RequestException as err:
             log.warning("romm rescan failed: %s", err)
             return False
 
-        if response.status_code in (401, 403):
+        # RomM renamed this task between 4.x and 5.x -- `scan` became
+        # `scan_library`, and 5.x answers the old name with a 4xx whose body
+        # lists the real ones. Proven against a live RomM 5.1.0: the old
+        # name failed there and was reported as a PERMISSION problem, which
+        # sent the operator hunting through RomM's user settings for a
+        # setting that was never involved. Learn the name, once, and retry.
+        if not response.ok and self._scan_task in str(response.text or ""):
+            for name in ("scan_library", "scan"):
+                if name == self._scan_task:
+                    continue
+                if name not in str(response.text or ""):
+                    continue
+                log.info("romm names its scan task %r on this version", name)
+                self._scan_task = name
+                try:
+                    response = self._session.post(
+                        f"{base}/api/tasks/run/{name}", json=payload,
+                        headers=self._headers(),
+                        timeout=self._config.timeout)
+                except requests.RequestException as err:
+                    log.warning("romm rescan failed: %s", err)
+                    return False
+                break
+
+        if response.status_code in (401, 403) and                 "not found" not in str(response.text or "").lower():
             # Distinguished from a generic failure because the fix is specific
             # and otherwise invisible: the service account needs the task
             # permission in RomM. Everything else about the import worked.
@@ -410,6 +465,7 @@ class Romm:
                 response.status_code, self._config.username or "(token)")
             return False
         if not response.ok:
-            log.warning("romm rescan rejected: %s", response.status_code)
+            log.warning("romm rescan rejected: %s %s", response.status_code,
+                        str(response.text or "")[:160])
             return False
         return True
