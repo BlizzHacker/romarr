@@ -100,6 +100,10 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
                                            "titles and platform resolution."),
     "/api/v1/connection": ("GET", "Configured notification connections, "
                                   "webhook URLs masked."),
+    "/api/v1/queue/action": ("POST", "Act on one queue row by index: retry "
+                                     "re-runs the request, remove forgets it."),
+    "/api/v1/queue/clear": ("POST", "Empty the queue, or only the rows in "
+                                    "{state} (e.g. failed)."),
     "/api/v1/audit": ("GET", "Verify the existing library against your DATs, "
                              "one platform at a time: POST {platform} starts, "
                              "GET polls — verified / bad-dump / unknown "

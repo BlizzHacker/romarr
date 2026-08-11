@@ -1088,14 +1088,46 @@ RENDER.stats=async()=>{
 
 RENDER.queue=async()=>{
   const d=await j('/api/v1/queue');
-  $('#page').innerHTML=d.items.length?`<table><thead><tr><th>Game</th>
-    <th>Platform</th><th>Release</th><th>Seeders</th><th>State</th></tr></thead><tbody>
-    ${d.items.map(i=>`<tr><td>${esc(i.game)}</td><td>${esc(i.platform)}</td>
+  const failed=(d.items||[]).filter(i=>i.state==='failed').length;
+  $('#page').innerHTML=`<div class="row" style="margin-bottom:12px">
+      <button class="btn ghost" id="q-import">Import completed now</button>
+      ${failed?`<button class="btn ghost" id="q-clearfail">Clear ${failed} failed</button>`:''}
+      <span class="help" style="margin:0">${(d.items||[]).length} in flight</span>
+    </div>`+(d.items.length?`<table><thead><tr><th>Game</th>
+    <th>Platform</th><th>Release</th><th>Seeders</th><th>State</th><th></th></tr></thead><tbody>
+    ${d.items.map((i,n)=>`<tr><td>${esc(i.game)}</td><td>${esc(i.platform)}</td>
       <td>${esc(i.release||'—')}</td><td>${i.seeders||'—'}</td>
       <td><span class="pill ${esc(i.state)}">${esc(i.state)}</span>
       ${i.detail?`<div style="color:var(--dim);font-size:11.5px">${esc(i.detail)}</div>`:''}
-      </td></tr>`).join('')}</tbody></table>`
-    :'<div class="empty">Queue is empty.</div>';
+      </td><td style="text-align:right"><div class="rowact">
+        ${i.state==='failed'?`<button data-qretry="${n}">Retry</button>`:''}
+        <button data-qremove="${n}">Remove</button></div></td></tr>`).join('')}
+      </tbody></table>`
+    :'<div class="empty">Queue is empty. Requests in flight show up here.</div>');
+
+  $('#q-import').onclick=async e=>{
+    e.target.disabled=true; e.target.textContent='Importing…';
+    const r=await j('/api/v1/command',{method:'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify({name:'ImportCompleted'})});
+    toast(r.message||'Done'); go('queue'); refreshCounts();
+  };
+  const cf=$('#q-clearfail');
+  if(cf) cf.onclick=async()=>{
+    await j('/api/v1/queue/clear',{method:'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify({state:'failed'})});
+    go('queue'); refreshCounts();
+  };
+  const act=async(index,action)=>{
+    const r=await j('/api/v1/queue/action',{method:'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify({index:Number(index),action})});
+    toast(r.error||(action==='retry'?(r.ok?'Grabbed':'Still no luck'):'Removed'));
+    go('queue'); refreshCounts();
+  };
+  document.querySelectorAll('[data-qretry]').forEach(b=>b.onclick=()=>act(b.dataset.qretry,'retry'));
+  document.querySelectorAll('[data-qremove]').forEach(b=>b.onclick=()=>act(b.dataset.qremove,'remove'));
 };
 
 RENDER.history=async()=>{
@@ -1816,17 +1848,42 @@ RENDER.calendar=async()=>{
     +'on purpose — most of what you want to acquire came out last month, not next.</p>'
     +(d.error?'<div class="panel-note panel-warn">'+esc(d.error)+'</div>':'')
     +(items.length
-      ?'<div class="pgrid">'+items.map(g=>'<div class="pcard">'
+      ?'<div class="pgrid">'+items.map((g,n)=>'<div class="pcard">'
         +'<h4>'+esc(g.title)+'</h4>'
         +'<div class="meta"><span class="pill">'+esc(g.released||'TBA')+'</span>'
         +(g.upcoming?'<span class="pill" style="background:var(--info);color:#06131f">upcoming</span>':'')
         +'</div>'
         +'<div class="desc">'+esc((g.platforms||[]).slice(0,4).join(', '))+'</div>'
+        +'<div class="rowact" style="margin-top:6px"><button data-calreq="'+n+'">Request</button></div>'
         +'</div>').join('')+'</div>'
       :'<div class="empty-cat"><b>Nothing to show</b>'
        +'Add a metadata provider with an API key under Settings → Metadata.</div>')
     +'</div>';
+  document.querySelectorAll('[data-calreq]').forEach(b=>b.onclick=()=>
+    requestGame(items[Number(b.dataset.calreq)]));
 };
+
+// Shared by Calendar and Discover: turn a metadata title into a Wanted
+// request, resolving the store's platform names to a ROMarr platform.
+async function requestGame(g){
+  const names=(g.platforms||[]);
+  const match=PLATFORMS.find(p=>names.some(n=>
+    p.name.toLowerCase()===String(n).toLowerCase()||p.slug===String(n).toLowerCase()));
+  let slug=match?match.slug:'';
+  if(!slug){
+    const pick=prompt('Platform for "'+g.title+'"?\n'
+      +PLATFORMS.map(p=>p.slug).join(', '),'');
+    const m=PLATFORMS.find(p=>p.slug===(pick||'').toLowerCase()
+      ||p.name.toLowerCase()===(pick||'').toLowerCase());
+    if(!m){toast('Need a known platform');return;}
+    slug=m.slug;
+  }
+  const r=await j('/api/request',{method:'POST',
+    headers:{'content-type':'application/json'},
+    body:JSON.stringify({game:g.title,platform:slug})});
+  toast(r.ok?('Grabbed '+(r.release||g.title)):(r.error||'Added to Wanted'));
+  refreshCounts();
+}
 
 // --- Manual Import ---------------------------------------------------------
 // Radarr calls this Manual Import and it exists for the same reason: somebody

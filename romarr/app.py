@@ -1358,6 +1358,49 @@ class ROMarr:
             "items": items,
         }
 
+    def queue_action(self, index: int, action: str) -> dict:
+        """Act on one queue row: retry it, or forget it.
+
+        The queue was a read-only list -- a download could sit "failed" with
+        its reason shown and no way to do anything about it but edit the
+        state file. Retry re-runs the request through the normal path;
+        remove forgets a row that is done with (imported, or a failure you
+        have read).
+        """
+        with self._lock:
+            if not 0 <= index < len(self.queue):
+                return {"ok": False, "error": "no such queue item"}
+            item = self.queue[index]
+        if action == "remove":
+            with self._lock:
+                self.queue = [q for n, q in enumerate(self.queue)
+                              if n != index]
+            return {"ok": True, "removed": True}
+        if action == "retry":
+            # Drop the stale row first so the retry's outcome is the only
+            # one for this game, then run the same request a person would.
+            with self._lock:
+                self.queue = [q for n, q in enumerate(self.queue)
+                              if n != index]
+            return self.request(item.game, item.platform)
+        return {"ok": False, "error": f"unknown action {action!r}"}
+
+    def clear_queue(self, state: str = "") -> dict:
+        """Empty the queue, or just the rows in one state.
+
+        `clear_queue("failed")` is the common one: a sweep left twenty
+        failures whose reason you have read, and removing them one by one is
+        busywork.
+        """
+        with self._lock:
+            before = len(self.queue)
+            if state:
+                self.queue = [q for q in self.queue if q.state != state]
+            else:
+                self.queue = []
+            removed = before - len(self.queue)
+        return {"ok": True, "removed": removed}
+
     def grab_candidate(self, release_id: str) -> dict:
         """Grab one release the user picked out of a search."""
         found = None
@@ -3276,6 +3319,12 @@ def make_handler(service: ROMarr):
             if route.path == "/api/v1/audit":
                 return self._json(200, service.audit_library(
                     str(body.get("platform") or "")))
+            if route.path == "/api/v1/queue/action":
+                return self._json(200, service.queue_action(
+                    int(body.get("index", -1)), str(body.get("action") or "")))
+            if route.path == "/api/v1/queue/clear":
+                return self._json(200, service.clear_queue(
+                    str(body.get("state") or "")))
             if route.path == "/api/v1/game/meta":
                 platform = str(body.get("platform") or "")
                 game = str(body.get("game") or "")
