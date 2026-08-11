@@ -36,15 +36,39 @@ MISSING = "missing"
 
 #: Categories a DAT marks in the name. Kept as words rather than a regex per
 #: category so the reason shown to the operator is the word that matched.
+#:
+#: `translation` is its own category, split out from `hack` on purpose: a
+#: fan translation of a Japan-only game is the thing that MAKES that game
+#: playable, not a novelty to exclude. The default set still leaves it out
+#: (a translation is not the published dump), but the operator can now say
+#: "fill the gaps with translations" without also un-excluding trainers and
+#: pirate carts.
 _FLAGS = {
     "proto": ("proto", "prototype"),
     "beta": ("beta",),
     "demo": ("demo", "sample", "kiosk"),
-    "hack": ("hack", "translation", "trainer"),
+    "hack": ("hack", "trainer"),
+    "translation": ("translation", "translated"),
     "unlicensed": ("unl", "unlicensed", "pirate", "aftermarket"),
 }
 
 _PAREN = re.compile(r"[\(\[]([^\)\]]*)[\)\]]")
+
+#: The scene's translation markers, which are not plain words: `[T-En]`,
+#: `[T+Eng]`, `[T-En by Foo]`. Matched on the bracket group as a whole
+#: because the `T-` / `T+` prefix is the signal, not a standalone token.
+_TRANSLATION_MARK = re.compile(r"\bt[+-]\s*(?:en|eng|english)\b", re.IGNORECASE)
+
+
+def is_translation(name: str) -> bool:
+    """Whether a DAT/release name is an English fan translation.
+
+    Both conventions: the No-Intro `(Translation)` word and the scene's
+    `[T-En]` / `[T+Eng]` marker.
+    """
+    if _TRANSLATION_MARK.search(name or ""):
+        return True
+    return "translation" in flags_in(name)
 
 
 def flags_in(name: str) -> set[str]:
@@ -58,7 +82,25 @@ def flags_in(name: str) -> set[str]:
     for group in _PAREN.findall(name or ""):
         for part in re.split(r"[,\s]+", group.lower()):
             words.add(part.strip())
-    return {flag for flag, terms in _FLAGS.items() if words & set(terms)}
+    flags = {flag for flag, terms in _FLAGS.items() if words & set(terms)}
+    if _TRANSLATION_MARK.search(name or ""):
+        flags.add("translation")
+    return flags
+
+
+#: What to do with an English fan translation in a 1G1R set. The whole point
+#: of the split from `hack`: a Japan-only game's translation is often the
+#: only way to actually play it, so "exclude everything that is not the
+#: published dump" is the wrong default for exactly this case.
+#:
+#:   exclude   -- translations are not in the set (the safe default)
+#:   fill      -- when a title has NO dump in your preferred regions, use a
+#:                translation instead of leaving it Japanese-only
+#:   prefer    -- use a translation over the region winner whenever one exists
+#:   keep_both -- like fill, but keep the original dump too; the translation
+#:                is filed in the platform's Translations subfolder so RomM
+#:                shows it as a variant rather than a second game
+TRANSLATION_POLICIES = ("exclude", "fill", "prefer", "keep_both")
 
 
 @dataclass(frozen=True)
@@ -68,14 +110,27 @@ class Policy:
     regions: tuple[str, ...] = ("usa", "world", "europe", "japan")
     one_game_one_rom: bool = True
     #: Categories to leave out. Everything not listed is included.
+    #: `translation` is here by default and lifted when the translation
+    #: policy asks for it, so turning on "fill" does not also re-admit
+    #: trainers and pirate carts.
     exclude: frozenset[str] = frozenset({"proto", "beta", "demo", "hack",
-                                         "unlicensed"})
+                                         "translation", "unlicensed"})
     #: Only count a file as present when a DAT verified it.
     verified_only: bool = False
+    #: How translations are treated. See TRANSLATION_POLICIES.
+    translation_policy: str = "exclude"
+
+    @property
+    def uses_translations(self) -> bool:
+        return self.translation_policy in ("fill", "prefer", "keep_both")
 
     def wants(self, name: str) -> tuple[bool, str]:
         """Whether this title belongs in the set, and why not if it does not."""
         got = flags_in(name) & self.exclude
+        # A translation the policy actively uses is not "excluded" -- the
+        # planner decides per group whether to take it, below.
+        if self.uses_translations:
+            got = got - {"translation"}
         if got:
             return False, "excluded: " + ", ".join(sorted(got))
         return True, ""
@@ -95,6 +150,9 @@ class Title:
     #: Present but outside the preferred regions -- worth surfacing, because
     #: "missing" and "only available in Japanese" are different problems.
     outside_preference: bool = False
+    #: This row is an English fan translation. Acquisition files it in the
+    #: platform's Translations subfolder under the keep_both policy.
+    is_translation: bool = False
 
 
 @dataclass
@@ -126,6 +184,21 @@ def _region_rank(name: str, order: tuple[str, ...]) -> int:
     from .dat import _regions_in
     found = _regions_in(name)
     return min((order.index(r) for r in found if r in order), default=len(order))
+
+
+def _best_translation(members: list[Game], order: tuple[str, ...]) -> "Game | None":
+    """The English translation in a group most worth taking, or None.
+
+    Prefers a translation of a preferred-region base over one of an obscure
+    region, then the parent over a clone, then name -- the same shape the
+    region ranking uses, so the choice is explainable the same way.
+    """
+    translations = [g for g in members if is_translation(g.name)]
+    if not translations:
+        return None
+    return min(translations,
+               key=lambda g: (_region_rank(g.name, order),
+                              0 if not g.cloneof else 1, g.name))
 
 
 def explain(dat: Dat, winner: Game, group: list[Game],
@@ -199,12 +272,50 @@ def build_plan(dat: Dat, present: dict[str, str], policy: Policy) -> Plan:
                 winner = min(alternatives,
                              key=lambda g: (_region_rank(g.name, order),
                                             0 if not g.cloneof else 1, g.name))
+
+            # Translation policy. A group may hold an English fan translation
+            # of a title whose only real dump is Japanese; whether to reach
+            # for it -- and whether to keep the original alongside -- is the
+            # operator's call, not a guess.
+            winner_outside = _region_rank(winner.name, order) >= len(order)
+            translation = _best_translation(members, order)
+            if policy.uses_translations and translation is not None:
+                take_it = (policy.translation_policy == "prefer"
+                           or winner_outside)  # fill / keep_both: gap only
+                if take_it and policy.translation_policy == "keep_both":
+                    # Both: the original winner stays, and the translation is
+                    # a second row filed under Translations/.
+                    because, lost = explain(dat, winner, members, policy.regions)
+                    plan.titles.append(Title(
+                        name=winner.name, parent=parent,
+                        status=present.get(winner.name, MISSING),
+                        chosen_because=because, discarded=lost,
+                        outside_preference=winner_outside))
+                    plan.titles.append(Title(
+                        name=translation.name, parent=parent,
+                        status=present.get(translation.name, MISSING),
+                        chosen_because="English translation, kept as a variant",
+                        outside_preference=False, is_translation=True))
+                    continue
+                if take_it:
+                    # fill / prefer: the translation replaces the winner.
+                    plan.titles.append(Title(
+                        name=translation.name, parent=parent,
+                        status=present.get(translation.name, MISSING),
+                        chosen_because=(
+                            "English translation used because no dump exists "
+                            "in your preferred regions" if winner_outside
+                            else "English translation preferred over "
+                                 f"{winner.name}"),
+                        outside_preference=False, is_translation=True))
+                    continue
+
             because, lost = explain(dat, winner, members, policy.regions)
             plan.titles.append(Title(
                 name=winner.name, parent=parent,
                 status=present.get(winner.name, MISSING),
                 chosen_because=because, discarded=lost,
-                outside_preference=_region_rank(winner.name, order) >= len(order),
+                outside_preference=winner_outside,
             ))
         else:
             for game in sorted(members, key=lambda g: g.name):

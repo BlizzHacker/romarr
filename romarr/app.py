@@ -58,6 +58,7 @@ from .downloaders import (
 from .indexers import INDEXER_TYPES, build_indexer, redact_indexer
 from .indexers import Prowlarr, ProwlarrConfig
 from .library import import_rom, map_remote_path
+from .collections import is_translation
 from .auth import DISABLED as AUTH_DISABLED
 from .auth import MIN_PASSWORD, SESSION_COOKIE, Auth, new_api_key, parse_cookies
 from .catalogue import (Submission, check_source, facets as hub_facets,
@@ -760,6 +761,13 @@ class ROMarr:
     def library_root(self, cfg: dict) -> Path:
         """Where ROMs are filed for one library, falling back to the default."""
         return Path(cfg.get("path") or self.library)
+
+    def library_layout(self, cfg: dict) -> str:
+        """The directory shape for one library: its own setting, or the global
+        default. `flat` = <root>/<platform>/<rom>, `nested` = the same with a
+        `roms/` level, matching RomM's Structure A and B."""
+        return str((cfg or {}).get("layout")
+                   or self.store.settings.get("library_layout") or "flat")
 
     def path_hint(self, root: Path) -> str:
         """Why a library path is missing, and which fix applies.
@@ -1611,7 +1619,9 @@ class ROMarr:
 
         outcomes = import_rom(source, platform, self.library_root(target_cfg),
                               dats=self.dats,
-                              require_verified=False)
+                              require_verified=False,
+                              layout=self.library_layout(target_cfg),
+                              translation=is_translation(source.name))
 
         imported, refused = [], []
         for outcome in outcomes:
@@ -1750,11 +1760,16 @@ class ROMarr:
         # in-process and failed over HTTP for precisely this reason.
         exclude = policy_kw.get("exclude")
         if exclude is None:
-            exclude = ("proto", "beta", "demo", "hack", "unlicensed")
+            exclude = ("proto", "beta", "demo", "hack", "translation",
+                       "unlicensed")
+        translation_policy = (policy_kw.get("translation_policy")
+                              or self.store.settings.get("translation_policy")
+                              or "exclude")
         policy = Policy(
             regions=regions,
             one_game_one_rom=bool(policy_kw.get("one_game_one_rom", True)),
             exclude=frozenset(exclude),
+            translation_policy=str(translation_policy),
         )
         plan = build_plan(dat, self._present_titles(platform), policy)
         return {
@@ -1764,12 +1779,14 @@ class ROMarr:
             "counts": plan.counts(),
             "policy": {"regions": list(policy.regions),
                        "one_game_one_rom": policy.one_game_one_rom,
-                       "exclude": sorted(policy.exclude)},
+                       "exclude": sorted(policy.exclude),
+                       "translation_policy": policy.translation_policy},
             "titles": [
                 {"name": t.name, "parent": t.parent, "status": t.status,
                  "why": t.chosen_because,
                  "discarded": [{"name": n, "why": w} for n, w in t.discarded],
-                 "outside_preference": t.outside_preference}
+                 "outside_preference": t.outside_preference,
+                 "translation": t.is_translation}
                 for t in plan.titles
             ],
         }
@@ -2298,7 +2315,10 @@ class ROMarr:
             target_cfg, target_lib = target
             label = target_cfg.get("name") or getattr(target_lib, "name", "library")
 
-            outcomes = import_rom(path, platform, self.library_root(target_cfg))
+            outcomes = import_rom(
+                path, platform, self.library_root(target_cfg),
+                layout=self.library_layout(target_cfg),
+                translation=is_translation(name))
             if not outcomes:
                 self.store.record(Event(kind="failed", game=name,
                                         platform=platform.slug,
@@ -2625,6 +2645,8 @@ def make_handler(service: ROMarr):
                     one_game_one_rom=query.get("onegame", ["1"])[0] != "0",
                     regions=[r for r in query.get("regions", [""])[0].split(",")
                              if r] or None,
+                    translation_policy=query.get("translation_policy",
+                                                 [""])[0] or None,
                     exclude=[e for e in query.get("exclude", [""])[0].split(",")
                              if e] if "exclude" in query else None))
             if route.path == "/api/v1/collection":
@@ -2768,6 +2790,7 @@ def make_handler(service: ROMarr):
                     int(body.get("per_pass") or 5),
                     one_game_one_rom=bool(body.get("one_game_one_rom", True)),
                     regions=body.get("regions") or None,
+                    translation_policy=body.get("translation_policy") or None,
                     exclude=body.get("exclude")
                     if body.get("exclude") is not None else None))
             if route.path == "/api/v1/collection/step":

@@ -653,6 +653,12 @@ _COMMON_LIBRARY_FIELDS = [
     _FIELD("url", "URL", default="http://localhost:8080"),
     _FIELD("path", "Library path", help="Where ROMs are filed for THIS server, "
                                        "as ROMarr sees it"),
+    _FIELD("layout", "Folder structure", "select", "",
+           options=[["", "Use the global default"],
+                    ["flat", "Structure A — platform/rom"],
+                    ["nested", "Structure B — platform/roms/rom"]],
+           help="RomM's Structure A or B, for this server. Empty follows the "
+                "Media Management default."),
     _FIELD("is_default", "Default", "bool", False,
            help="Requests with no matching platform rule are filed here"),
     _FIELD("platforms", "Platforms", "list",

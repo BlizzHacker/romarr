@@ -83,6 +83,15 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # -- making both documented variables do nothing at all. It looked correct
     # only because the default matched the path the docs used as an example.
     "library_path": "",
+    # Directory shape ROMs are filed in, matching the library server's own
+    # setting. "flat" is <root>/<platform>/<rom> (RomM "Structure A"); "nested"
+    # is <root>/<platform>/roms/<rom> (RomM "Structure B"). Overridable per
+    # library on the Libraries page; this is the default for the primary one.
+    "library_layout": "flat",
+    # What to do with English fan translations in a 1G1R set:
+    # exclude | fill | prefer | keep_both. See collections.TRANSLATION_POLICIES.
+    # keep_both files the translation in the platform's Translations subfolder.
+    "translation_policy": "exclude",
     "rename_on_import": True,
     "overwrite_existing": False,
     # Profile: for ROMs the meaningful axis is region and revision, not

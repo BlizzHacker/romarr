@@ -946,6 +946,12 @@ function fieldHtml(f, value){
     return `<div class="field"><label>${esc(f.label)}</label>
       <input type="text" data-f="${f.name}" data-list="1"
         value="${esc(Array.isArray(v) ? v.join(', ') : (v ?? ''))}">${help}</div>`;
+  if(f.type === 'select')
+    return `<div class="field"><label>${esc(f.label)}</label>
+      <select data-f="${f.name}">${(f.options||[]).map(o=>{
+        const [ov,ot]=Array.isArray(o)?o:[o,o];
+        return `<option value="${esc(ov)}"${String(v ?? '')===String(ov)?' selected':''}>${esc(ot)}</option>`;
+      }).join('')}</select>${help}</div>`;
   const t = f.type === 'int' ? 'number' : (f.type === 'secret' ? 'password' : 'text');
   return `<div class="field"><label>${esc(f.label)}</label>
     <input type="${t}" data-f="${f.name}" value="${esc(v ?? '')}"
@@ -1072,12 +1078,33 @@ const fld=(k,label,val,type='text',extra='')=>`<div class="field"><label>${label
 const chk=(k,label,val)=>`<label class="check"><input type="checkbox" data-k="${k}"
   ${val?'checked':''}><span>${label}</span></label>`;
 
+const sel=(k,label,options,val,help='')=>`<div class="field"><label>${label}</label>
+  <select data-k="${k}">${options.map(([v,t])=>
+    `<option value="${v}"${String(val)===v?' selected':''}>${t}</option>`).join('')}</select>
+  ${help?`<div style="color:var(--dim);font-size:11.5px;margin-top:4px">${help}</div>`:''}</div>`;
+
 RENDER.media=()=>settingsPage('Media Management',
-  'Where imported ROMs are filed. This must be the same path RomM scans.',
+  'Where imported ROMs are filed. This must be the same path your library server scans.',
   fld('library_path','ROM library root',SETTINGS.library_path)
+  +sel('library_layout','Folder structure',
+     [['flat','Structure A — platform/rom'],['nested','Structure B — platform/roms/rom']],
+     SETTINGS.library_layout||'flat',
+     'Match your library server. RomM Structure A files as '
+     +'&lt;root&gt;/&lt;platform&gt;/&lt;rom&gt;; Structure B adds a roms/ level. '
+     +'Per-library overrides live on the Libraries page.')
   +chk('rename_on_import','Rename on import',SETTINGS.rename_on_import)
   +chk('overwrite_existing','Overwrite an existing file',SETTINGS.overwrite_existing)
-  +chk('rescan_after_import','Tell RomM to rescan after an import',SETTINGS.rescan_after_import));
+  +chk('rescan_after_import','Tell your library server to rescan after an import',SETTINGS.rescan_after_import)
+  +sel('translation_policy','Fan translations in 1G1R sets',
+     [['exclude','Exclude — published dumps only'],
+      ['fill','Fill gaps — use a T-En only when no preferred-region dump exists'],
+      ['prefer','Prefer — take a T-En over the region winner when one exists'],
+      ['keep_both','Keep both — original plus the T-En in a Translations subfolder']],
+     SETTINGS.translation_policy||'exclude',
+     'What Collections does with an English fan translation. The Digimon-only-'
+     +'in-Japan case: "Fill" downloads the translation instead of leaving the '
+     +'game Japanese-only; "Keep both" files it under Translations/ so your '
+     +'library shows it as a variant.'));
 
 RENDER.profiles=()=>settingsPage('Release Profile',
   'A quality profile means nothing for a cartridge dump — there is no bitrate. '
@@ -1668,6 +1695,16 @@ RENDER.collections=async()=>{
           '<label class="help" style="margin:0"><input type="checkbox" class="cex" '
           +'value="'+k+'" checked> exclude '+k+'</label>').join('')
        +'</div>'
+       +'<div class="row" style="gap:8px;margin-top:10px;align-items:center">'
+       +'<label class="help" style="margin:0">Fan translations</label>'
+       +'<select id="ctrans">'
+       +[['exclude','exclude (published dumps only)'],
+         ['fill','fill gaps (T-En only where no preferred region exists)'],
+         ['prefer','prefer (T-En over the region winner)'],
+         ['keep_both','keep both (original + T-En under Translations/)']].map(o=>
+          '<option value="'+o[0]+'"'+((SETTINGS.translation_policy||'exclude')===o[0]?' selected':'')
+          +'>'+o[1]+'</option>').join('')
+       +'</select></div>'
       :'<div class="empty-cat"><b>No DAT loaded</b>'
        +'Point DAT_PATH at a directory of No-Intro or Redump DATs. Without one '
        +'there is no list of what a complete set contains.</div>')
@@ -1725,6 +1762,7 @@ RENDER.collections=async()=>{
       +'&platform='+encodeURIComponent($('#cplat').value)
       +'&onegame='+($('#c1g1r').checked?'1':'0')
       +'&regions='+encodeURIComponent($('#cregions').value.trim())
+      +'&translation_policy='+encodeURIComponent($('#ctrans').value)
       +'&exclude='+encodeURIComponent(ex);
     const d=await j('/api/v1/collection/plan?'+q).catch(()=>({error:'plan failed'}));
     if(d.error){out.innerHTML='<div class="panel-note panel-warn">'+esc(d.error)+'</div>';return;}
@@ -1780,6 +1818,7 @@ RENDER.collections=async()=>{
           per_pass:parseInt($('#cpp').value,10)||5,
           one_game_one_rom:$('#c1g1r').checked,
           regions:($('#cregions').value.trim()||'').split(',').filter(Boolean),
+          translation_policy:$('#ctrans').value,
           exclude:ex.split(',').filter(Boolean)})});
       toast(r.error?r.error:('Queued '+(r.queued||0)+' titles'));
       e.target.disabled=false; e.target.textContent='Request missing';

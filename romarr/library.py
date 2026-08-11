@@ -294,15 +294,45 @@ def verify_set(source, members, dats) -> Match:
     return Match(UNKNOWN)
 
 
+#: The two directory layouts RomM understands, and every folder-based
+#: frontend after it. Named for what RomM calls them in its own docs so an
+#: operator can match this to the setting they already know.
+#:
+#:   flat  -- <root>/<platform>/<rom>            (RomM "Structure A")
+#:   nested -- <root>/<platform>/roms/<rom>      (RomM "Structure B")
+#:
+#: A translation, when the policy keeps it beside the original, goes one
+#: level deeper in a folder RomM treats as a variant rather than a second
+#: game. That subfolder is the same in both layouts.
+TRANSLATION_SUBDIR = "Translations"
+
+
+def platform_dir(library_root: Path, platform: "Platform | str", *,
+                 layout: str = "flat", translation: bool = False) -> Path:
+    """Where a ROM for this platform is filed, under the chosen layout."""
+    slug = getattr(platform, "slug", platform)
+    base = library_root / slug
+    if str(layout).lower() in ("nested", "romm_b", "b"):
+        base = base / "roms"
+    if translation:
+        base = base / TRANSLATION_SUBDIR
+    return base
+
+
 def import_rom(download: Path, platform: Platform, library_root: Path, *,
                overwrite: bool = False, dats=None,
-               require_verified: bool = False) -> list[ImportResult]:
+               require_verified: bool = False,
+               layout: str = "flat", translation: bool = False) -> list[ImportResult]:
     """Place every ROM from a finished download into the library.
 
     A cartridge zip may hold several games (a 3-in-1 collection, a bundle)
     and every one is imported.  A disc lands as a directory holding every
     file of the set, which is the layout the live library already uses for
     multi-track rips.
+
+    `layout` picks the directory shape (see `platform_dir`); `translation`
+    files the set in the platform's Translations subfolder, for the
+    keep-both case where a T-En patch sits beside the original dump.
     """
     if not download.exists():
         msg = (
@@ -334,7 +364,8 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
                 verification=verdict))
             continue
 
-        target_dir = library_root / platform.slug
+        target_dir = platform_dir(library_root, platform,
+                                   layout=layout, translation=translation)
 
         if not chosen.is_multi_file:
             target_dir.mkdir(parents=True, exist_ok=True)
