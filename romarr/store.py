@@ -83,6 +83,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # -- making both documented variables do nothing at all. It looked correct
     # only because the default matched the path the docs used as an example.
     "library_path": "",
+    # Where No-Intro/Redump DATs live, as ROMarr sees it. Applied through
+    # reload_dats when saved from the UI, so the setting acts rather than
+    # just sits.
+    "dat_path": "",
     # Directory shape ROMs are filed in, matching the library server's own
     # setting. "flat" is <root>/<platform>/<rom> (RomM "Structure A"); "nested"
     # is <root>/<platform>/roms/<rom> (RomM "Structure B"). Overridable per

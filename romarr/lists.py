@@ -264,8 +264,9 @@ EA_AUTH_PAGE = ("https://accounts.ea.com/connect/auth?client_id=ORIGIN_JS_SDK"
                 "&response_type=token&redirect_uri=nucleus%3Arest"
                 "&prompt=none&release_type=prod")
 EA_IDENTITY = "https://gateway.ea.com/proxy/identity/pids/me"
-EA_ENTITLEMENTS = ("https://api1.origin.com/ecommerce2/"
-                   "consolidatedentitlements/{pid}?machine_hash=1")
+#: The EA app's own aggregation API -- the living one. api1.origin.com's
+#: entitlements endpoint 404s on valid tokens as EA switches Origin off.
+EA_JUNO = "https://service-aggregation-layer.juno.ea.com/graphql"
 
 
 def _ea_entries(cfg: dict, *, session=None) -> list[ListEntry]:
@@ -294,26 +295,50 @@ def _ea_entries(cfg: dict, *, session=None) -> list[ListEntry]:
     if not pid:
         raise ValueError("EA did not return an account id for that token; "
                          "paste a fresh one from the EA token page")
-    response = http.get(
-        EA_ENTITLEMENTS.format(pid=pid),
-        headers={"authtoken": token,
-                 "Accept": "application/vnd.origin.v3+json; "
-                           "x-cache/force-write"},
+    # Origin's ecommerce2 endpoint answered a live 404 on a valid token:
+    # EA is switching Origin off. The EA app itself reads the Juno GraphQL
+    # aggregation layer, so that is what this asks -- and the response is
+    # walked for product names rather than bound to a schema, because
+    # Juno's shape has moved before and a rename must degrade to "found
+    # fewer fields", not to a crash.
+    response = http.post(
+        EA_JUNO,
+        json={"query": 'query { me { ownedGameProducts(locale: "en") '
+                       '{ items { product { name displayType } } } } }'},
+        headers={"Authorization": f"Bearer {token}",
+                 "Accept": "application/json"},
         timeout=30)
     if getattr(response, "status_code", 200) >= 400:
         raise ValueError(
-            f"EA's entitlements API refused the request "
+            f"EA's game API refused the request "
             f"(HTTP {response.status_code}). The token may have expired -- "
-            "they last a few hours -- paste a fresh one.")
-    out = []
-    for entitlement in (response.json() or {}).get("entitlements") or []:
-        name = str(entitlement.get("originDisplayName")
-                   or entitlement.get("productName")
-                   or entitlement.get("offerId") or "").strip()
-        # Base games only: EA lists every DLC and beta as an entitlement.
-        if name and str(entitlement.get("offerType") or "").upper() in (
-                "", "BASE_GAME", "BASEGAME"):
-            out.append(ListEntry(game=clean_title(name)))
+            "they last a few hours -- paste a fresh one from the EA page.")
+    body = response.json() or {}
+    if body.get("errors") and not body.get("data"):
+        raise ValueError(
+            "EA answered with an error instead of a library -- paste a "
+            "fresh token; they last a few hours.")
+
+    names: list[str] = []
+
+    def walk(node):
+        if isinstance(node, dict):
+            product = node.get("product")
+            if isinstance(product, dict) and product.get("name"):
+                names.append(str(product["name"]))
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk(body.get("data") or {})
+    out, seen = [], set()
+    for name in names:
+        cleaned = clean_title(name)
+        if cleaned and cleaned.lower() not in seen:
+            seen.add(cleaned.lower())
+            out.append(ListEntry(game=cleaned))
     return out
 
 
@@ -415,16 +440,28 @@ def _steam_public_entries(cfg: dict, http) -> list[ListEntry]:
         base = f"{STEAM_COMMUNITY}/profiles/{handle}"
     else:
         base = f"{STEAM_COMMUNITY}/id/{handle}"
-    response = http.get(f"{base}/games?tab=all&xml=1", timeout=30)
+    response = http.get(f"{base}/games?tab=all&xml=1", timeout=30,
+                        allow_redirects=False)
+    location = str(getattr(response, "headers", {}).get("Location") or "")
+    if "login" in location:
+        # Valve gated this endpoint behind sign-in in 2026 -- for EVERY
+        # profile, public or not. Blaming the user's privacy settings here
+        # sent somebody with a public profile hunting through Steam
+        # settings for a switch that was already on.
+        raise ValueError(
+            "Valve now requires sign-in to read any profile's game list, "
+            "public or not -- the keyless path is gone upstream. Get a free "
+            "API key at steamcommunity.com/dev/apikey (takes a minute), "
+            "Edit this list, and paste it in the API key field; your "
+            "SteamID is already saved.")
     response.raise_for_status()
     try:
         root = ET.fromstring(response.text)
     except ET.ParseError:
-        # A private games list answers with an HTML error page, not XML.
         raise ValueError(
-            "Steam returned no game list -- set the profile's Game Details to "
-            "Public (Steam -> Edit Profile -> Privacy Settings), or use an "
-            "API key instead")
+            "Steam answered with something that is not a game list -- set "
+            "the profile's Game Details to Public, or add a free API key "
+            "from steamcommunity.com/dev/apikey")
     out = []
     for game in root.findall(".//game/name"):
         name = (game.text or "").strip()

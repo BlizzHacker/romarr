@@ -98,6 +98,22 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "/api/v1/importlist/schema": ("GET", "The list types and their fields."),
     "/api/v1/importlist/preview": ("POST", "Parse a list without saving it: "
                                            "titles and platform resolution."),
+    "/api/v1/connection": ("GET", "Configured notification connections, "
+                                  "webhook URLs masked."),
+    "/api/v1/system/apikey": ("GET", "The API key, for the Settings page. "
+                                     "Authenticated, unlike safe_settings "
+                                     "which exists to strip credentials."),
+    "/api/v1/totp/enroll": ("POST", "Generate a TOTP secret and backup "
+                                    "codes; two-factor gates sign-in from "
+                                    "then on."),
+    "/api/v1/totp/disable": ("POST", "Turn two-factor off."),
+    "/api/v1/metadataprovider": ("GET", "Configured metadata providers, "
+                                        "credentials masked."),
+    "/api/v1/metadataprovider/schema": ("GET", "Provider types and their "
+                                               "fields, for the editor."),
+    "/api/v1/metadataprovider/test": ("POST", "Look up a known title through "
+                                              "a provider config to prove "
+                                              "the key works."),
     "/api/v1/launchers": ("GET", "Games the launchers installed on this "
                                  "machine know about — Steam, Epic, GOG "
                                  "Galaxy, Battle.net, EA. No credentials."),

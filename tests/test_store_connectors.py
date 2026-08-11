@@ -77,31 +77,33 @@ def test_epic_without_anything_is_empty():
 # -- EA ----------------------------------------------------------------------
 
 class FakeEa:
-    """EA's two dialects: tokeninfo takes the token as a query param, and
-    the Origin-era entitlements API wants an `authtoken` header with
-    Origin's own Accept string -- a Bearer there is a 401 on a perfectly
-    good token, which a live run proved."""
+    """EA today: tokeninfo takes the token as a query param, and the game
+    library comes from the Juno GraphQL layer the EA app itself uses --
+    api1.origin.com answered a live 404 on a valid token as EA switches
+    Origin off."""
 
     def __init__(self, identity_status=200):
         self.identity_status = identity_status
 
     def get(self, url, headers=None, params=None, timeout=None):
-        if "connect/tokeninfo" in url:
-            assert params["access_token"] == "TOKEN"
-            if self.identity_status >= 400:
-                return R(status=self.identity_status)
-            return R({"pid_id": "9001"})
-        assert "consolidatedentitlements/9001" in url
-        assert headers["authtoken"] == "TOKEN"
-        assert "vnd.origin.v3+json" in headers["Accept"]
-        return R({"entitlements": [
-            {"originDisplayName": "Dead Space", "offerType": "BASE_GAME"},
-            {"originDisplayName": "Dead Space DLC", "offerType": "EXPANSION"},
-            {"productName": "Mass Effect"},
-        ]})
+        assert "connect/tokeninfo" in url
+        assert params["access_token"] == "TOKEN"
+        if self.identity_status >= 400:
+            return R(status=self.identity_status)
+        return R({"pid_id": "9001"})
+
+    def post(self, url, json=None, headers=None, timeout=None):
+        assert "juno.ea.com/graphql" in url
+        assert headers["Authorization"] == "Bearer TOKEN"
+        assert "ownedGameProducts" in json["query"]
+        return R({"data": {"me": {"ownedGameProducts": {"items": [
+            {"product": {"name": "Dead Space", "displayType": "BASE_GAME"}},
+            {"product": {"name": "Mass Effect"}},
+            {"product": {"name": "Dead Space"}},   # a duplicate edition
+        ]}}}})
 
 
-def test_ea_pulls_owned_base_games_not_dlc():
+def test_ea_pulls_the_owned_library_from_juno():
     entries = fetch_entries({"type": "ea", "ea_token": "TOKEN"},
                             session=FakeEa())
     assert [e.game for e in entries] == ["Dead Space", "Mass Effect"]

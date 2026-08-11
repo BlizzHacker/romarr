@@ -1072,7 +1072,8 @@ RENDER.history=async()=>{
 /* The form is built from the server's field list, so a new client or indexer
    type needs no change here -- the same thing the *arrs do with their schema
    endpoints. */
-let SCHEMA = { downloadclient: {}, indexer: {}, library: {} };
+let SCHEMA = { downloadclient: {}, indexer: {}, library: {},
+               metadataprovider: {}, connection: {} };
 
 async function loadSchema(kind){
   if(Object.keys(SCHEMA[kind]).length) return SCHEMA[kind];
@@ -1124,6 +1125,8 @@ const KINDS = {
   downloadclient: { label: 'Download Client', page: 'clients' },
   indexer:        { label: 'Indexer',         page: 'indexers' },
   library:        { label: 'Library',         page: 'libraries' },
+  metadataprovider: { label: 'Metadata Provider', page: 'metadata' },
+  connection: { label: 'Connection', page: 'connections' },
 };
 
 /** Choose a type, then edit it. */
@@ -1203,15 +1206,20 @@ async function editItem(kind, item){
 }
 
 /* ---------------- settings ---------------- */
-function settingsPage(title, help, body){
+function settingsPage(title, help, body, after){
   $('#page').innerHTML=`<div class="card"><h3>${title}</h3>
     <p class="help">${help}</p>${body}
     <button class="btn" id="s-save">Save</button></div>`;
+  if(after) after();
   $('#s-save').onclick=async()=>{
     const patch={};
     document.querySelectorAll('[data-k]').forEach(el=>{
       patch[el.dataset.k]= el.type==='checkbox' ? el.checked
         : el.type==='number' ? Number(el.value)
+        : el.dataset.mappings ? el.value.split('\n').map(line=>{
+            const [remote,local]=line.split('=').map(x=>(x||'').trim());
+            return remote&&local?{remote,local}:null;
+          }).filter(Boolean)
         : el.dataset.list ? el.value.split(',').map(s=>s.trim()).filter(Boolean)
         : el.value;
     });
@@ -1230,9 +1238,18 @@ const sel=(k,label,options,val,help='')=>`<div class="field"><label>${label}</la
     `<option value="${v}"${String(val)===v?' selected':''}>${t}</option>`).join('')}</select>
   ${help?`<div style="color:var(--dim);font-size:11.5px;margin-top:4px">${help}</div>`:''}</div>`;
 
+const mapLines=m=>(m||[]).map(x=>(x.remote||'')+' = '+(x.local||'')).join('\n');
 RENDER.media=()=>settingsPage('Media Management',
   'Where imported ROMs are filed. This must be the same path your library server scans.',
   fld('library_path','ROM library root',SETTINGS.library_path)
+  +fld('dat_path','DAT directory',SETTINGS.dat_path||'')
+  +`<div class="field"><label>Remote path mappings</label>
+     <textarea data-k="remote_path_mappings" data-mappings="1" rows="3"
+       style="width:100%;resize:vertical;font:12px/1.5 ui-monospace,Menlo,monospace"
+       placeholder="/downloads = /mnt/downloads">${esc(mapLines(SETTINGS.remote_path_mappings))}</textarea>
+     <div style="color:var(--dim);font-size:11.5px;margin-top:4px">
+       One per line: what the download client says = what ROMarr sees.
+       Longest matching prefix wins.</div></div>`
   +sel('library_layout','Folder structure',
      [['flat','Structure A — platform/rom'],['nested','Structure B — platform/roms/rom']],
      SETTINGS.library_layout||'flat',
@@ -1423,7 +1440,41 @@ RENDER.general=()=>settingsPage('General',
   +fld('list_sync_interval_hours','List sync (hours)',
        SETTINGS.list_sync_interval_hours,'number')
   +chk('update_check','Check github.com daily for a newer ROMarr (never auto-updates)',
-       SETTINGS.update_check));
+       SETTINGS.update_check)
+  +`<h3 style="margin-top:18px">Security</h3>
+    <div class="row" style="gap:8px;align-items:center;margin:8px 0">
+      <button class="btn ghost" id="g-key" type="button">Reveal API key</button>
+      <code id="g-keyout" style="font-size:12px;color:var(--dim)"></code></div>
+    <div class="row" style="gap:8px;align-items:center;margin:8px 0">
+      <button class="btn ghost" id="g-totp" type="button">Enable two-factor (TOTP)</button>
+      <button class="btn ghost" id="g-totpoff" type="button">Disable</button>
+      <span class="help" style="margin:0">Gates sign-in; the API key is
+        already a high-entropy secret and is not gated.</span></div>
+    <pre id="g-totpout" style="display:none;font:12px/1.6 ui-monospace,Menlo,monospace;color:var(--dim);white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:10px"></pre>`,
+  ()=>{
+    $('#g-key').onclick=async()=>{
+      const d=await j('/api/v1/system/apikey').catch(()=>({}));
+      $('#g-keyout').textContent=d.api_key||'could not read it';
+    };
+    $('#g-totp').onclick=async()=>{
+      if(!confirm('Enable two-factor sign-in? You will need a TOTP app '
+        +'(Aegis, Google Authenticator…) from the next sign-in on.')) return;
+      const d=await j('/api/v1/totp/enroll',{method:'POST',
+        headers:{'content-type':'application/json'},body:'{}'}).catch(()=>({}));
+      const out=$('#g-totpout'); out.style.display='block';
+      out.textContent='Secret:  '+(d.secret||'?')
+        +'\nURI:     '+(d.uri||'?')
+        +'\n\nBackup codes (single use, save them now):\n  '
+        +((d.backup_codes||[]).join('\n  '))
+        +'\n\n'+(d.note||'');
+    };
+    $('#g-totpoff').onclick=async()=>{
+      const d=await j('/api/v1/totp/disable',{method:'POST',
+        headers:{'content-type':'application/json'},body:'{}'}).catch(()=>({}));
+      toast(d.ok?'Two-factor disabled':'Failed');
+      $('#g-totpout').style.display='none';
+    };
+  });
 
 /* ---------------- system ---------------- */
 RENDER.status=async()=>{
@@ -1607,20 +1658,24 @@ RENDER.connections=async()=>{
   const [schema,cfg]=await Promise.all([
     j('/api/v1/connection/schema').catch(()=>({types:[]})),
     j('/api/v1/config').catch(()=>({}))]);
-  const have=cfg.connections||[];
-  const types=schema.types||[];
+  const conns=await j('/api/v1/connection').catch(()=>({items:[]}));
+  const have=conns.items||[];
+  const types=schema.list||schema.types||[];
   $('#page').innerHTML='<div class="card"><h3>Connections</h3>'
     +'<p class="help">Where ROMarr tells you what it did. A grab notification '
     +'carries the reasons the release was chosen, not just its name.</p>'
     +(have.length
       ?'<table><thead><tr><th>Name</th><th>Type</th><th>Events</th><th></th></tr></thead><tbody>'
-       +have.map(c=>'<tr><td><b>'+esc(c.name||c.type)+'</b></td>'
+       +have.map((c,i)=>'<tr><td><b>'+esc(c.name||c.type)+'</b></td>'
          +'<td><span class="pill">'+esc(c.type)+'</span></td>'
          +'<td>'+esc((c.events||['all']).join(', '))+'</td>'
-         +'<td><span class="'+(c.enable===false?'dot-off':'dot-ok')+'"></span></td></tr>').join('')
+         +'<td style="text-align:right"><div class="rowact">'
+         +'<button data-cedit="'+i+'">Edit</button></div></td></tr>').join('')
        +'</tbody></table>'
-      :'<div class="empty-cat"><b>No connections yet</b>Pick a provider below.</div>')
+      :'<div class="empty-cat"><b>No connections yet</b>Add one — this is '
+       +'where the Discord webhook goes.</div>')
     +'<div class="row" style="margin-top:14px">'
+    +'<button class="btn" id="c-add">Add Connection</button>'
     +'<button class="btn ghost" id="ctest">Send a test notification</button>'
     +'<span id="ctestmsg" class="help" style="margin:0"></span></div></div>'
 
@@ -1631,6 +1686,9 @@ RENDER.connections=async()=>{
       +'<div class="meta">'+(t.fields||[]).map(f=>'<span class="pill">'+esc(f)+'</span>').join(' ')+'</div>'
       +'</div>').join('')+'</div></div>';
 
+  $('#c-add').onclick=()=>addItem('connection');
+  document.querySelectorAll('[data-cedit]').forEach(b=>b.onclick=()=>
+    editItem('connection', have[Number(b.dataset.cedit)]));
   $('#ctest').onclick=async()=>{
     const m=$('#ctestmsg'); m.textContent='Sending…';
     const r=await fetch('/api/v1/connection/test',{method:'POST',
@@ -1645,10 +1703,28 @@ RENDER.connections=async()=>{
 
 // --- Metadata --------------------------------------------------------------
 RENDER.metadata=async()=>{
+  const mine=await j('/api/v1/metadataprovider').catch(()=>({items:[]}));
   const schema=await j('/api/v1/metadata/schema').catch(()=>({providers:[]}));
   const probe=await j('/api/v1/metadata/lookup?filename='
     +encodeURIComponent('Chrono.Trigger.USA.v1.1.smc')).catch(()=>({}));
-  $('#page').innerHTML='<div class="card"><h3>Metadata</h3>'
+  $('#page').innerHTML='<div class="card"><h3>Configured providers</h3>'
+    +'<p class="help"><b>This is where the keys go.</b> Add RAWG (a free key) '
+    +'or IGDB (a Twitch client id + bearer token) and lookups, Discover and '
+    +'the Calendar light up.</p>'
+    +'<div class="row" style="margin-bottom:10px">'
+    +'<button class="btn" id="mp-add">Add Provider</button></div>'
+    +((mine.items||[]).length
+      ?'<table><thead><tr><th>Name</th><th>Type</th><th>Enabled</th><th></th></tr></thead><tbody>'
+        +mine.items.map((m,i)=>'<tr><td><b>'+esc(m.name||m.type)+'</b></td>'
+          +'<td>'+esc(m.type)+'</td>'
+          +'<td><span class="dot '+(m.enable!==false?'up':'down')+'"></span></td>'
+          +'<td style="text-align:right"><div class="rowact">'
+          +'<button data-mpedit="'+i+'">Edit</button></div></td></tr>').join('')
+        +'</tbody></table>'
+      :'<div class="empty">No provider configured yet — covers, Discover and '
+       +'the Calendar stay dark until one is.</div>')
+    +'</div>'
+    +'<div class="card"><h3>What each provider needs</h3>'
     +'<p class="help">ROMarr looks a game up by its <b>DAT-verified name</b> when it '
     +'has one, and only falls back to parsing the filename when it does not. '
     +'Every result says which was used, because a cover matched from a guess '
@@ -1671,6 +1747,9 @@ RENDER.metadata=async()=>{
       +encodeURIComponent($('#mfn').value)).catch(()=>({}));
     $('#mout').innerHTML=metaResult(d);
   };
+  $('#mp-add').onclick=()=>addItem('metadataprovider');
+  document.querySelectorAll('[data-mpedit]').forEach(b=>b.onclick=()=>
+    editItem('metadataprovider', mine.items[Number(b.dataset.mpedit)]));
 };
 
 const metaResult=d=>{

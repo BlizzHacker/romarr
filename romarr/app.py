@@ -2806,8 +2806,41 @@ def make_handler(service: ROMarr):
                     days_ahead=int(query.get("ahead", ["60"])[0] or 60)))
             if route.path == "/api/v1/blocklist":
                 return self._json(200, {"items": service.blocklist.as_items()})
+            if route.path == "/api/v1/connection":
+                secrets = {"url", "token", "password", "key"}
+                items = []
+                for cfg in service.store.list_items("connections"):
+                    items.append({k: ("********" if k in secrets and v else v)
+                                  for k, v in cfg.items()})
+                return self._json(200, {"items": items})
             if route.path == "/api/v1/connection/schema":
-                return self._json(200, {"types": [
+                # Both shapes: the provider cards read the flat list, and
+                # the generic editor reads per-type field definitions. A
+                # webhook URL IS the credential for most of these, so it is
+                # a secret field.
+                types = {}
+                for name, spec in NOTIFIERS.items():
+                    types[name] = {
+                        "label": spec["label"], "protocol": "notification",
+                        "fields": [
+                            {"name": "name", "label": "Name", "type": "text",
+                             "default": spec["label"]},
+                            {"name": "enable", "label": "Enable",
+                             "type": "bool", "default": True},
+                        ] + [
+                            {"name": f, "label": f.replace("_", " ").title(),
+                             "type": ("secret" if f in ("url", "token",
+                                                        "password", "key")
+                                      else "text"),
+                             "default": "", "help": spec["help"]}
+                            for f in spec["fields"]
+                        ] + [
+                            {"name": "events", "label": "Events", "type": "list",
+                             "help": "grab, import, upgrade, failure, "
+                                     "bad-dump, update. Empty means all."},
+                        ],
+                    }
+                return self._json(200, {"types": types, "list": [
                     {"name": name, "label": spec["label"],
                      "fields": list(spec["fields"]), "help": spec["help"]}
                     for name, spec in NOTIFIERS.items()]})
@@ -2832,6 +2865,37 @@ def make_handler(service: ROMarr):
                 return self._json(200, service.collection_status())
             if route.path == "/api/v1/openapi.json":
                 return self._json(200, openapi_spec(VERSION))
+            if route.path == "/api/v1/metadataprovider":
+                from .metadata import PROVIDERS as _MP
+                secrets = {"api_key", "token", "client_id"}
+                items = []
+                for cfg in service.store.list_items("metadata_providers"):
+                    items.append({k: ("********" if k in secrets and v else v)
+                                  for k, v in cfg.items()})
+                return self._json(200, {"items": items})
+            if route.path == "/api/v1/metadataprovider/schema":
+                # The generic editor's shape: per-type field definitions,
+                # secrets marked so they render as password inputs and are
+                # kept on edit.
+                from .metadata import PROVIDERS as _MP
+                types = {}
+                for name, spec in _MP.items():
+                    types[name] = {
+                        "label": spec["label"],
+                        "protocol": "metadata",
+                        "fields": [
+                            {"name": "name", "label": "Name", "type": "text",
+                             "default": spec["label"]},
+                            {"name": "enable", "label": "Enable",
+                             "type": "bool", "default": True},
+                        ] + [
+                            {"name": f, "label": f.replace("_", " ").title(),
+                             "type": "secret", "default": "",
+                             "help": spec.get("help", "")}
+                            for f in spec["fields"]
+                        ],
+                    }
+                return self._json(200, {"types": types})
             if route.path == "/api/v1/metadata/schema":
                 return self._json(200, {"providers": [
                     {"name": name, "label": spec["label"],
@@ -2870,6 +2934,10 @@ def make_handler(service: ROMarr):
                 return self._json(200, service.status())
             if route.path == "/api/v1/system/counts":
                 return self._json(200, service.counts())
+            if route.path == "/api/v1/system/apikey":
+                # Deliberately its own authenticated route rather than part
+                # of safe_settings, which exists to strip credentials.
+                return self._json(200, {"api_key": service.auth.api_key})
             if route.path == "/api/v1/system/tasks":
                 return self._json(200, {"items": service.scheduler.status()})
             if route.path == "/api/v1/stats":
@@ -3039,6 +3107,85 @@ def make_handler(service: ROMarr):
                     str(body.get("path") or ""),
                     str(body.get("platform") or ""),
                     force=bool(body.get("force"))))
+            if route.path == "/api/v1/metadataprovider":
+                secrets = {"api_key", "token", "client_id"}
+                cfg = dict(body or {})
+                if cfg.get("id"):
+                    old_cfg = service.store.get_item("metadata_providers",
+                                                     str(cfg["id"])) or {}
+                    for key in secrets:
+                        if cfg.get(key) in ("********", ""):
+                            cfg[key] = old_cfg.get(key, "")
+                saved = service.store.put_item("metadata_providers", cfg)
+                service.reload_metadata()
+                return self._json(200, {k: ("********" if k in secrets and v
+                                            else v)
+                                        for k, v in saved.items()})
+            if route.path == "/api/v1/totp/enroll":
+                from .totp import backup_codes, new_secret, provisioning_uri
+                secret = new_secret()
+                codes = backup_codes()
+                service.store.settings["_totp_secret"] = secret
+                service.store.settings["_totp_backup"] = codes
+                service.store.save()
+                from .totp import Totp as _Totp
+                service.auth.totp = _Totp(secret=secret, backup=codes)
+                return self._json(200, {
+                    "secret": secret,
+                    "uri": provisioning_uri(secret, account="romarr"),
+                    "backup_codes": codes,
+                    "note": "Scan the URI or enter the secret in any TOTP "
+                            "app. Codes are asked for at sign-in from now "
+                            "on; the backup codes are single-use."})
+            if route.path == "/api/v1/totp/disable":
+                service.store.settings["_totp_secret"] = ""
+                service.store.settings["_totp_backup"] = []
+                service.store.save()
+                from .totp import Totp as _Totp
+                service.auth.totp = _Totp(secret="", backup=[])
+                return self._json(200, {"ok": True, "enabled": False})
+            if route.path == "/api/v1/connection":
+                secrets = {"url", "token", "password", "key"}
+                cfg = dict(body or {})
+                if cfg.get("id"):
+                    old_cfg = service.store.get_item("connections",
+                                                     str(cfg["id"])) or {}
+                    for key in secrets:
+                        if cfg.get(key) in ("********", ""):
+                            cfg[key] = old_cfg.get(key, "")
+                if not cfg.get("events"):
+                    cfg.pop("events", None)   # absent means every event
+                saved = service.store.put_item("connections", cfg)
+                service.reload_policy()
+                return self._json(200, {k: ("********" if k in secrets and v
+                                            else v)
+                                        for k, v in saved.items()})
+            if route.path == "/api/v1/metadataprovider/test":
+                from .metadata import PROVIDERS as _MP
+                spec = _MP.get(str(body.get("type") or "").lower())
+                if spec is None:
+                    return self._json(400, {"ok": False,
+                                            "message": "unknown provider"})
+                cfg = dict(body or {})
+                if cfg.get("id"):
+                    old_cfg = service.store.get_item("metadata_providers",
+                                                     str(cfg["id"])) or {}
+                    for key in ("api_key", "token", "client_id"):
+                        if cfg.get(key) in ("********", ""):
+                            cfg[key] = old_cfg.get(key, "")
+                try:
+                    info = spec["lookup"](cfg, "Chrono Trigger")
+                except Exception as exc:
+                    return self._json(200, {
+                        "ok": False,
+                        "message": f"lookup failed: {exc.__class__.__name__}"})
+                found = bool(getattr(info, "found", False))
+                return self._json(200, {
+                    "ok": found,
+                    "message": ("found Chrono Trigger -- the key works"
+                                if found else
+                                "the provider answered but found nothing -- "
+                                "check the key")})
             if route.path == "/api/v1/game/meta":
                 platform = str(body.get("platform") or "")
                 game = str(body.get("game") or "")
@@ -3306,6 +3453,17 @@ def make_handler(service: ROMarr):
                 item_id = route.path[len("/api/v1/importlist/"):]
                 removed = service.store.delete_item("import_lists", item_id)
                 return self._json(200 if removed else 404, {"deleted": removed})
+            if route.path.startswith("/api/v1/connection/"):
+                item_id = route.path[len("/api/v1/connection/"):]
+                removed = service.store.delete_item("connections", item_id)
+                service.reload_policy()
+                return self._json(200 if removed else 404, {"deleted": removed})
+            if route.path.startswith("/api/v1/metadataprovider/"):
+                item_id = route.path[len("/api/v1/metadataprovider/"):]
+                removed = service.store.delete_item("metadata_providers",
+                                                    item_id)
+                service.reload_metadata()
+                return self._json(200 if removed else 404, {"deleted": removed})
             return self._json(404, {"error": "not found"})
 
         def _put(self):
@@ -3318,6 +3476,10 @@ def make_handler(service: ROMarr):
 
             if route.path == "/api/v1/config":
                 updated = service.store.update_settings(body)
+                if "dat_path" in body:
+                    # A stored path nothing re-reads is a setting that lies;
+                    # reload_dats both stores and applies it.
+                    service.reload_dats(str(body.get("dat_path") or ""))
                 updated = service.safe_settings()
                 # A library path is only really changed once the running
                 # service files ROMs there, not once it is stored.
