@@ -802,8 +802,9 @@ RENDER.lists=async()=>{
     };
   });
   j('/api/v1/importlist/schema').then(s=>{
+    const el=$('#l-noapi'); if(!el) return;   // page may have changed
     const rows=Object.entries(s.no_api||{});
-    $('#l-noapi').innerHTML=rows.map(([store,why])=>
+    el.innerHTML=rows.map(([store,why])=>
       `<p style="margin:6px 0"><b>${esc(store)}</b> — ${esc(why)}</p>`).join('');
   }).catch(()=>{});
   const scanBtn=$('#l-scan');
@@ -1053,8 +1054,13 @@ RENDER.stats=async()=>{
     </div><p class="help">Set from any game tile in the Library.</p></div>`;
 
   const paintAudit=a=>{
-    if(!a||!a.status||a.status==='never run'){$('#au-out').innerHTML='';return;}
-    $('#au-out').innerHTML=`<p class="help">
+    // Guard the node: this is called from a fetch .then() and a poll timer,
+    // both of which can resolve after the user has left the Stats page.
+    // Writing to a #au-out that no longer exists is the "Cannot set
+    // innerHTML of null" a late audit response used to throw.
+    const out=$('#au-out'); if(!out) return;
+    if(!a||!a.status||a.status==='never run'){out.innerHTML='';return;}
+    out.innerHTML=`<p class="help">
       <b>${esc(a.platform||'')}</b> — ${esc(a.status)} ·
       ${a.scanned||0} scanned · ${a.verified||0} verified ·
       <b style="color:${a.bad?'var(--bad)':'inherit'}">${a.bad||0} bad</b> ·
@@ -1649,11 +1655,12 @@ RENDER.status=async()=>{
     'romarr-'+$('#ex-what').value+'.'+$('#ex-fmt').value);
 
   const fe=await j('/api/v1/frontend/formats').catch(()=>({formats:[]}));
-  $('#fe-row').innerHTML=(fe.formats||[]).map(f=>
+  const feRow=$('#fe-row'); if(!feRow) return;   // navigated away mid-fetch
+  feRow.innerHTML=(fe.formats||[]).map(f=>
     '<button class="btn ghost fe-btn" data-f="'+esc(f.name||f)+'">'
     +esc(f.label||f.name||f)+'</button>').join('')
     ||'<span class="help" style="margin:0">No frontend formats available.</span>';
-  $('#fe-row').querySelectorAll('.fe-btn').forEach(b=>b.onclick=()=>
+  feRow.querySelectorAll('.fe-btn').forEach(b=>b.onclick=()=>
     save('/api/v1/frontend/export?format='+b.dataset.f,
          'romarr-'+b.dataset.f+'.export'));
 };
@@ -2040,8 +2047,9 @@ RENDER.collections=async()=>{
 
   const drawBatches=async()=>{
     const s=await j('/api/v1/collection').catch(()=>({batches:[]}));
+    const cb=$('#cbatch'); if(!cb) return;   // left the Collections page
     const b=s.batches||[];
-    $('#cbatch').innerHTML=b.length
+    cb.innerHTML=b.length
       ?'<table><thead><tr><th>Set</th><th>Progress</th><th>Done</th>'
        +'<th>Failed</th><th>Left</th><th></th></tr></thead><tbody>'
        +b.map(x=>'<tr data-id="'+esc(x.id)+'"><td>'+esc(x.dat||x.platform||x.id)+'</td>'
@@ -2059,14 +2067,14 @@ RENDER.collections=async()=>{
        +'</tbody></table>'
       :'<div class="empty">No set is being acquired.</div>';
 
-    $('#cbatch').querySelectorAll('.cstep').forEach(el=>el.onclick=async e=>{
+    cb.querySelectorAll('.cstep').forEach(el=>el.onclick=async e=>{
       const id=e.target.closest('tr').dataset.id;
       e.target.disabled=true; e.target.textContent='Running…';
       await j('/api/v1/collection/step',{method:'POST',
         headers:{'Content-Type':'application/json'},body:JSON.stringify({id})});
       drawBatches();
     });
-    $('#cbatch').querySelectorAll('.cact').forEach(el=>el.onclick=async e=>{
+    cb.querySelectorAll('.cact').forEach(el=>el.onclick=async e=>{
       const id=e.target.closest('tr').dataset.id, action=e.target.dataset.a;
       if(action==='cancel'&&!confirm('Cancel this set? Titles already requested are unaffected.')) return;
       await j('/api/v1/collection/control',{method:'POST',
