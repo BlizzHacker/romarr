@@ -193,6 +193,28 @@ def _epic_token(cfg: dict, http) -> tuple[str, str]:
         return "", ""
     response = http.post(EPIC_TOKEN, data=data, headers=headers, timeout=30)
     if getattr(response, "status_code", 200) >= 400:
+        # Epic names its refusals, and the two common ones need opposite
+        # advice -- a live run pasted two fresh codes and was told both
+        # times that the code was stale, when the account actually owed a
+        # EULA acceptance.
+        try:
+            error = response.json() or {}
+        except Exception:
+            error = {}
+        action = str((error.get("metadata") or {}).get("correctiveAction")
+                     or "")
+        if "corrective_action" in str(error.get("errorCode") or ""):
+            if action == "EULA_ACCEPTANCE":
+                raise ValueError(
+                    "Epic says this account has updated terms to accept "
+                    "(EULA), and the token API refuses everything until "
+                    "then. Sign in at epicgames.com and accept the prompt "
+                    "-- opening the Epic Games Launcher once also does it "
+                    "-- then paste a fresh code.")
+            raise ValueError(
+                f"Epic requires corrective action on this account first: "
+                f"{action or 'see epicgames.com'}. Resolve it there, then "
+                "paste a fresh code.")
         raise ValueError(
             "Epic refused that code. It is single-use and expires in "
             "minutes -- open the code page again and paste a fresh one.")

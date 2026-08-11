@@ -2274,10 +2274,17 @@ class ROMarr:
                 self.store.put_item("import_lists", cfg)
             ledger = set(cfg.get("added") or [])
             changed = False
+            # Titles with no ROM platform -- a Battle.net or PSN library is
+            # mostly modern games -- are kept on the list, visibly, rather
+            # than discarded. "133 skipped" with no way to see which 133 is
+            # how somebody concludes the connector is broken.
+            unmatched: list[str] = []
             for entry in entries:
                 platform = resolve(entry.platform or cfg.get("platform") or "")
                 if platform is None:
                     unknown += 1
+                    if entry.game not in unmatched:
+                        unmatched.append(entry.game)
                     continue
                 key = f"{platform.slug}/{entry.game.strip().lower()}"
                 if key in ledger:
@@ -2287,14 +2294,17 @@ class ROMarr:
                 changed = True
                 self.store.want(entry.game, platform.slug)
                 added += 1
-            if changed:
+            if changed or unmatched != (cfg.get("unmatched") or []):
                 cfg["added"] = sorted(ledger)
+                cfg["unmatched"] = unmatched[:500]
                 self.store.put_item("import_lists", cfg)
         message = f"added {added} to Wanted"
         if known:
             message += f", {known} already added before"
         if unknown:
-            message += f", {unknown} with no resolvable platform"
+            message += (f", {unknown} kept aside with no ROM platform "
+                        "(normal for modern store titles -- see each "
+                        "list's Edit view)")
         if failed_lists:
             # Name them, with the reason. The count alone is the least
             # useful half of what is known here.
@@ -2805,7 +2815,9 @@ def make_handler(service: ROMarr):
                     for secret in LIST_SECRETS:
                         if cfg.get(secret):
                             cfg[secret] = "********"
-                    items.append({**cfg, "added_count": len(ledger)})
+                    items.append({**cfg, "added_count": len(ledger),
+                                  "unmatched_count": len(cfg.get("unmatched")
+                                                         or [])})
                 return self._json(200, {"items": items})
             if route.path == "/api/v1/importlist/schema":
                 from .lists import NO_API_STORES

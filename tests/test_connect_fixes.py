@@ -52,3 +52,46 @@ def test_gog_opens_the_page_that_actually_shows_the_username():
     a copyable form."""
     assert TOKEN_SOURCES["gog"]["open"] == "https://embed.gog.com/userData.json"
     assert "public" in TOKEN_SOURCES["gog"]["how"]
+
+
+def test_epic_diagnoses_a_eula_block_instead_of_blaming_the_code():
+    """A live run pasted two FRESH codes and was told both times the code
+    was stale; the account actually owed a EULA acceptance."""
+    import json as _json
+    import pytest
+    from romarr.lists import fetch_entries
+
+    class EulaEpic:
+        def post(self, url, data=None, headers=None, timeout=None):
+            class R:
+                status_code = 400
+                text = ""
+
+                def json(self):
+                    return {"errorCode":
+                            "errors.com.epicgames.oauth.corrective_action_required",
+                            "metadata": {"correctiveAction": "EULA_ACCEPTANCE"}}
+
+                def raise_for_status(self):
+                    raise OSError("400")
+            return R()
+
+    with pytest.raises(ValueError) as err:
+        fetch_entries({"type": "epic", "epic_code": "FRESH"},
+                      session=EulaEpic())
+    assert "EULA" in str(err.value)
+    assert "single-use" not in str(err.value)
+
+
+def test_unmatched_titles_are_kept_visible_not_discarded(tmp_path):
+    """133 modern titles vanished with only a count. They stay on the list."""
+    from romarr.app import ROMarr
+    svc = ROMarr(env={"ROMARR_DATA": str(tmp_path / "s.json")})
+    svc.store.put_item("import_lists", {
+        "name": "modern", "type": "paste",
+        "content": "Diablo IV\nOverwatch\nSuper Metroid\tsnes"})
+    out = svc.list_sync()
+    assert out["added"] == 1
+    assert out["unknown"] == 2
+    stored = svc.store.list_items("import_lists")[0]
+    assert sorted(stored["unmatched"]) == ["Diablo IV", "Overwatch"]

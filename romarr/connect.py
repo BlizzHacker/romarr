@@ -287,7 +287,10 @@ TOKEN_SOURCES = {
         "how": 'Sign in if asked; the page then shows {"access_token":"..."}. '
                "Copy the token. EA issues no application keys, so this is "
                "the same credential Playnite uses. It is short-lived — "
-               "re-paste when a sync says it expired.",
+               "re-paste when a sync says it expired. If EA answers "
+               '"Service limitations apply" it is blocking the sign-in '
+               "itself, usually because of a VPN or unfamiliar IP — turn "
+               "the VPN off for this one sign-in and try again.",
     },
     "battlenet": {
         "label": "Battle.net",

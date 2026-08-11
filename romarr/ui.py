@@ -660,7 +660,8 @@ RENDER.lists=async()=>{
       ${d.items.map((l,i)=>`<tr><td><b>${esc(l.name||'—')}</b>${
           l.type==='url'?`<div style="color:var(--dim);font-size:11.5px">${esc(l.url||'')}</div>`:''}</td>
         <td>${esc(l.type)}</td><td>${esc(l.platform||'per line')}</td>
-        <td>${l.added_count||0}</td>
+        <td>${l.added_count||0}${l.unmatched_count
+          ?` <span class="pill" title="Titles with no ROM platform — modern store games. Open Edit to see them.">${l.unmatched_count} kept aside</span>`:''}</td>
         <td><span class="dot ${l.enable!==false?'up':'down'}"></span></td>
         <td style="text-align:right"><div class="rowact">
           <button data-ledit="${i}">Edit</button></div></td></tr>`).join('')}
@@ -857,6 +858,14 @@ function editList(item){
         style="width:100%;resize:vertical">${esc(item.content||'')}</textarea></div>
     <label class="check"><input type="checkbox" data-f="enable"
       ${item.enable!==false?'checked':''}><span>Enabled</span></label>
+    ${(item.unmatched||[]).length?`<details style="margin-top:10px">
+      <summary class="help" style="margin:0;cursor:pointer">
+        ${item.unmatched.length} title(s) kept aside — no ROM platform.
+        These are your modern store games; ROMarr acquires ROMs, so they
+        wait here rather than pretending to be cartridges.</summary>
+      <div style="color:var(--dim);font-size:12px;max-height:180px;
+        overflow:auto;margin-top:6px">${item.unmatched.map(esc).join('<br>')}
+      </div></details>`:''}
     <div id="testline"></div>
     <div class="foot">
       <button class="btn ghost" id="l-preview">Preview</button>
