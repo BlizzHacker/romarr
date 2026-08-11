@@ -528,6 +528,13 @@ def _psn_entries(cfg: dict, *, session=None) -> list[ListEntry]:
     npsso = str(cfg.get("npsso") or "").strip()
     if not npsso:
         return []
+    # Every failure below means the same thing to the operator -- the token
+    # is wrong or has aged out -- so it is worth saying that rather than
+    # letting an HTTPError bubble up as "something went wrong".
+    stale = ValueError(
+        "PlayStation refused that token. Open "
+        "ca.account.sony.com/api/v1/ssocookie while signed in and paste "
+        "what it shows; NPSSO tokens expire about every two months.")
     # Step 1: the code. Sony answers with a 302 whose Location carries it.
     response = http.get(
         f"{PSN_AUTH}/authorize",
@@ -540,8 +547,7 @@ def _psn_entries(cfg: dict, *, session=None) -> list[ListEntry]:
         allow_redirects=False, timeout=30)
     location = response.headers.get("Location") or ""
     if "code=" not in location:
-        raise ValueError("PSN refused the NPSSO token; grab a fresh one from "
-                         "ca.account.sony.com after signing in")
+        raise stale
     code = location.split("code=")[1].split("&")[0]
     # Step 2: the token.
     response = http.post(
@@ -552,10 +558,11 @@ def _psn_entries(cfg: dict, *, session=None) -> list[ListEntry]:
         headers={"Authorization": "Basic MDk1MTUxNTktNzIzNy00MzcwLTliNDAtMzgw"
                                   "NmU2N2MwODkxOnVjUGprYTV0bnRCMktxc1A="},
         timeout=30)
-    response.raise_for_status()
+    if getattr(response, "status_code", 200) >= 400:
+        raise stale
     token = (response.json() or {}).get("access_token") or ""
     if not token:
-        raise ValueError("PSN token exchange failed")
+        raise stale
     # Step 3: the shelf.
     out: list[ListEntry] = []
     offset = 0

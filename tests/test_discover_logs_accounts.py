@@ -139,7 +139,9 @@ def test_a_stale_npsso_fails_with_instructions():
 
     with pytest.raises(ValueError) as err:
         fetch_entries({"type": "psn", "npsso": "OLD"}, session=Stale())
-    assert "fresh one" in str(err.value)
+    # The message must name the page that fixes it, not just refuse.
+    assert "ssocookie" in str(err.value)
+    assert "expire" in str(err.value)
 
 
 def test_itchio_pages_through_purchases():
