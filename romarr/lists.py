@@ -33,6 +33,19 @@ from dataclasses import dataclass
 log = logging.getLogger(__name__)
 
 
+#: Symbols a storefront puts in a title and an indexer never does. Searching
+#: for "World of Warcraft®" matches nothing anywhere, so every connector
+#: that reads a store's own display name runs it through here first.
+_LEGAL_MARKS = str.maketrans("", "", "®™©")
+
+
+def clean_title(name: str) -> str:
+    """A store's display title, as an indexer would ever see it written."""
+    cleaned = str(name or "").translate(_LEGAL_MARKS)
+    # Collapse the double spaces stripping a symbol can leave behind.
+    return re.sub(r"\s{2,}", " ", cleaned).strip()
+
+
 @dataclass(frozen=True)
 class ListEntry:
     game: str
@@ -214,7 +227,7 @@ def _epic_entries(cfg: dict, *, session=None) -> list[ListEntry]:
                        or (record.get("metadata") or {}).get("title")
                        or "").strip()
             if name:
-                out.append(ListEntry(game=name))
+                out.append(ListEntry(game=clean_title(name)))
         cursor = str((body.get("responseMetadata") or {}).get("nextCursor") or "")
         pages += 1
         if not cursor:
@@ -264,7 +277,7 @@ def _ea_entries(cfg: dict, *, session=None) -> list[ListEntry]:
         # Base games only: EA lists every DLC and beta as an entitlement.
         if name and str(entitlement.get("offerType") or "").upper() in (
                 "", "BASE_GAME", "BASEGAME"):
-            out.append(ListEntry(game=name))
+            out.append(ListEntry(game=clean_title(name)))
     return out
 
 
@@ -307,12 +320,16 @@ def _battlenet_entries(cfg: dict, *, session=None) -> list[ListEntry]:
         body = response.json() or {}
 
     games = body.get("gameAccounts") or body.get("games") or []
-    out = []
+    out, seen = [], set()
     for game in games:
-        name = str((game.get("localizedGameName")
-                    or game.get("gameName")
-                    or game.get("name") or "")).strip()
-        if name:
+        name = clean_title(str((game.get("localizedGameName")
+                                or game.get("gameName")
+                                or game.get("name") or "")))
+        # Blizzard lists one row per game ACCOUNT, not per game: two WoW
+        # characters on separate accounts are two rows of the same title,
+        # and Wanted must not hold it twice.
+        if name and name.lower() not in seen:
+            seen.add(name.lower())
             out.append(ListEntry(game=name))
     return out
 
@@ -403,7 +420,8 @@ def _steam_entries(cfg: dict, *, session=None) -> list[ListEntry]:
             timeout=30)
         response.raise_for_status()
         games = ((response.json().get("response") or {}).get("games")) or []
-        return [ListEntry(game=g["name"]) for g in games if g.get("name")]
+        return [ListEntry(game=clean_title(g["name"]))
+                for g in games if g.get("name")]
 
     # Wishlist appids come without names; each name is a store lookup.
     response = http.get(
@@ -487,7 +505,7 @@ def _xbox_entries(cfg: dict, *, session=None) -> list[ListEntry]:
     titles = (response.json() or {}).get("titles") or []
     out = []
     for title in titles:
-        name = str(title.get("name") or "").strip()
+        name = clean_title(str(title.get("name") or ""))
         if name:
             out.append(ListEntry(game=name))
     return out
@@ -550,7 +568,7 @@ def _psn_entries(cfg: dict, *, session=None) -> list[ListEntry]:
         body = response.json() or {}
         titles = body.get("trophyTitles") or []
         for title in titles:
-            name = str(title.get("trophyTitleName") or "").strip()
+            name = clean_title(str(title.get("trophyTitleName") or ""))
             if name:
                 out.append(ListEntry(game=name))
         if len(titles) < 100:
@@ -581,7 +599,7 @@ def _itchio_entries(cfg: dict, *, session=None) -> list[ListEntry]:
         response.raise_for_status()
         keys = (response.json() or {}).get("owned_keys") or []
         for row in keys:
-            name = str(((row.get("game") or {}).get("title")) or "").strip()
+            name = clean_title(str(((row.get("game") or {}).get("title")) or ""))
             if name:
                 out.append(ListEntry(game=name))
         if not keys:

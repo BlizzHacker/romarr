@@ -171,10 +171,14 @@ TOKEN_SOURCES = {
     },
     "xbox": {
         "label": "Xbox",
-        "open": "https://xbl.io/console",
+        # xbl.io/console bounces a signed-out visitor to its docs, which
+        # looks like a dead button. The root page is the one with the
+        # Microsoft sign-in on it.
+        "open": "https://xbl.io/",
         "field": "openxbl_key",
-        "how": "Sign in to OpenXBL with your Microsoft account and copy the "
-               "API key it shows. OpenXBL is a third-party bridge; Microsoft "
+        "how": "Click 'Login with Xbox Live' there and approve with your "
+               "Microsoft account; the console then shows an API key to "
+               "copy. OpenXBL is a third-party bridge because Microsoft "
                "publishes no owned-games API of its own.",
     },
     "itchio": {
@@ -185,31 +189,50 @@ TOKEN_SOURCES = {
     },
     "gog": {
         "label": "GOG",
-        "open": "https://www.gog.com/account",
+        # gog.com/account is just the library page -- it never shows the
+        # username in a copyable form, which made this button useless.
+        # userData.json is what a signed-in browser gets, and the first
+        # field in it is the username.
+        "open": "https://embed.gog.com/userData.json",
         "field": "gog_username",
-        "how": "Paste your GOG username (the name in your profile URL). No "
-               "login or token needed -- set your profile's games list to "
-               "public and that is the whole credential.",
+        "how": 'Signed in to GOG, that page shows {"username":"..."} near '
+               "the start. Paste that username. Your profile's games list "
+               "must be public (gog.com/account/settings/privacy) — that "
+               "is the whole credential, there is no token.",
     },
     "epic": {
         "label": "Epic Games",
-        "open": "https://www.epicgames.com/id/api/redirect"
-                "?clientId=34a02cf8f4414e29b15921876da36f9a&responseType=code",
+        # Hitting /id/api/redirect directly answers EULA_ACCEPTANCE on an
+        # account that has not accepted the launcher terms in a browser --
+        # a hard error with no way forward from that page. Going through
+        # /id/login first shows the EULA if one is owed, then lands on the
+        # redirect and prints the code.
+        "open": "https://www.epicgames.com/id/login?redirectUrl="
+                "https%3A%2F%2Fwww.epicgames.com%2Fid%2Fapi%2Fredirect"
+                "%3FclientId%3D34a02cf8f4414e29b15921876da36f9a"
+                "%26responseType%3Dcode",
         "field": "epic_code",
-        "how": 'Signed in to Epic, that page shows {"authorizationCode":"..."}. '
-               "Copy the code. It is single-use and expires in minutes, so "
-               "paste it straight away -- ROMarr swaps it for a refresh "
-               "token and never needs one again.",
+        "how": 'Sign in there; the page ends up showing '
+               '{"authorizationCode":"..."}. Copy the code. If Epic asks you '
+               "to accept terms first, do that and it continues. The code is "
+               "single-use and expires in minutes, so paste it straight away "
+               "-- ROMarr swaps it for a refresh token and never asks again.",
     },
     "ea": {
+        # `prompt=none` means "only succeed if a session is already visible
+        # to this request", and EA answers login_required whenever the
+        # browser will not hand its session over -- which is most of the
+        # time. Dropping it lets EA show its own login and then return the
+        # token, which is what the page is for.
         "label": "EA",
         "open": "https://accounts.ea.com/connect/auth?client_id=ORIGIN_JS_SDK"
                 "&response_type=token&redirect_uri=nucleus%3Arest"
-                "&prompt=none&release_type=prod",
+                "&release_type=prod",
         "field": "ea_token",
-        "how": 'Signed in to EA, that page shows {"access_token":"..."}. '
+        "how": 'Sign in if asked; the page then shows {"access_token":"..."}. '
                "Copy the token. EA issues no application keys, so this is "
-               "the same credential Playnite uses.",
+               "the same credential Playnite uses. It is short-lived — "
+               "re-paste when a sync says it expired.",
     },
     "battlenet": {
         "label": "Battle.net",
