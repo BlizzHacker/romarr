@@ -434,13 +434,19 @@ RENDER.hub=async()=>{
   render(await load());
 };
 
-let LIB={platform:'',offset:0,limit:120};
+let LIB={platform:'',genre:'',region:'',decade:'',origin:'',sort:'',
+         offset:0,limit:120};
 RENDER.library=async()=>{
   const p=$('#page');
   if(!p.querySelector('#lib-grid')) p.innerHTML='<div class="empty">Loading library…</div>';
   const q=($('#search').value||'').trim();
   const d=await j(`/api/v1/game?platform=${encodeURIComponent(LIB.platform)}`
-    +`&q=${encodeURIComponent(q)}&offset=${LIB.offset}&limit=${LIB.limit}`)
+    +`&q=${encodeURIComponent(q)}&offset=${LIB.offset}&limit=${LIB.limit}`
+    +`&genre=${encodeURIComponent(LIB.genre)}`
+    +`&region=${encodeURIComponent(LIB.region)}`
+    +`&decade=${encodeURIComponent(LIB.decade)}`
+    +`&origin=${encodeURIComponent(LIB.origin)}`
+    +`&sort=${encodeURIComponent(LIB.sort)}`)
     .catch(()=>({items:[],error:'unreachable'}));
 
   if(d.loading){
@@ -457,10 +463,39 @@ RENDER.library=async()=>{
     `<button class="btn ${LIB.platform===x.platform?'':'ghost'}" data-plat="${esc(x.platform)}"
       style="padding:4px 10px;font-size:12px">${esc(x.platform)}
       <span style="opacity:.7">${x.count}</span></button>`).join('');
+  const f=d.facets||{};
+  const sel=(key,label,list,fmt)=>{
+    if(!list||!list.length) return '';
+    return `<select data-lf="${key}" style="padding:4px 8px;font-size:12px">
+      <option value="">${label}</option>
+      ${list.map(x=>`<option value="${esc(x.value)}"${LIB[key]===x.value?' selected':''}
+        >${esc(fmt?fmt(x.value):x.value)} (${x.count})</option>`).join('')}
+    </select>`;
+  };
+  const coverage=f.identified&&d.grand_total
+    ? Math.round(f.identified/d.grand_total*100) : 0;
   const head=`<div class="row" style="flex-wrap:wrap;gap:6px;margin-bottom:10px">
       <button class="btn ${LIB.platform?'ghost':''}" data-plat=""
         style="padding:4px 10px;font-size:12px">All
         <span style="opacity:.7">${d.grand_total}</span></button>${chips}</div>
+    <div class="row" style="flex-wrap:wrap;gap:6px;margin-bottom:10px;align-items:center">
+      ${sel('genre','Any genre',f.genres)}
+      ${sel('region','Any region',f.regions)}
+      ${sel('decade','Any decade',f.decades)}
+      ${(f.origins||[]).length>1?sel('origin','On disk & catalogued',f.origins,
+        v=>v==='local'?'On disk (plays now)':'Catalogued (needs fetching)'):''}
+      <select data-lf="sort" style="padding:4px 8px;font-size:12px">
+        <option value=""${LIB.sort?'':' selected'}>Platform, then name</option>
+        <option value="name"${LIB.sort==='name'?' selected':''}>Name A–Z</option>
+        <option value="rating"${LIB.sort==='rating'?' selected':''}>Top rated</option>
+        <option value="year"${LIB.sort==='year'?' selected':''}>Newest first</option>
+      </select>
+      ${(LIB.genre||LIB.region||LIB.decade||LIB.origin||LIB.sort)
+        ?'<button class="btn ghost" id="lf-clear" style="padding:4px 10px;font-size:12px">Clear filters</button>':''}
+      ${(f.genres||[]).length?`<span class="help" style="margin:0;font-size:11.5px">
+        genre/year known for ${f.identified} of ${d.grand_total} (${coverage}%) —
+        run a metadata scan in your library server to raise it</span>`:''}
+    </div>
     <p class="help" style="margin-bottom:10px">
       Showing ${d.total?LIB.offset+1:0}–${Math.min(LIB.offset+items.length,d.total)}
       of ${d.total}${LIB.platform?` on ${esc(LIB.platform)}`:''}${q?` matching “${esc(q)}”`:''}
@@ -511,6 +546,15 @@ function bindLibraryChips(p){
     LIB.platform=b.dataset.plat; LIB.offset=0; LIB.limit=120;
     go('library');
   });
+  p.querySelectorAll('[data-lf]').forEach(s=>s.onchange=()=>{
+    LIB[s.dataset.lf]=s.value; LIB.offset=0; LIB.limit=120;
+    go('library');
+  });
+  const clear=p.querySelector('#lf-clear');
+  if(clear) clear.onclick=()=>{
+    LIB.genre=LIB.region=LIB.decade=LIB.origin=LIB.sort='';
+    LIB.offset=0; LIB.limit=120; go('library');
+  };
 }
 
 function shelfEditor(g, meta){
@@ -958,16 +1002,60 @@ function editList(item){
   };
 }
 
+let DISC={mode:'library',shelf:'top-rated',genre:''};
 RENDER.discover=async()=>{
-  const shelf=(location.hash.split(':')[1])||'popular';
-  const tabs=[['popular','Popular'],['new','New releases'],['upcoming','Upcoming']];
-  $('#page').innerHTML=`<div class="row" style="margin-bottom:14px">
-      ${tabs.map(([k,l])=>`<button class="btn ${k===shelf?'':'ghost'}"
-        data-shelf="${k}">${l}</button>`).join('')}
-    </div><div id="d-out"><div class="empty">Browsing…</div></div>`;
+  // Two sources, and the local one is the default because it works with
+  // nothing configured: your own library already carries genres, ratings
+  // and years. The storefront shelves need a metadata API key.
+  const mine=DISC.mode==='library';
+  const libTabs=[['top-rated','Top rated'],['recent','Newest'],
+                 ['hidden-gems','Hidden gems'],['by-genre','By genre']];
+  const webTabs=[['popular','Popular'],['new','New releases'],['upcoming','Upcoming']];
+  const tabs=mine?libTabs:webTabs;
+  if(mine&&!libTabs.some(t=>t[0]===DISC.shelf)) DISC.shelf='top-rated';
+  if(!mine&&!webTabs.some(t=>t[0]===DISC.shelf)) DISC.shelf='popular';
+  $('#page').innerHTML=`<div class="row" style="margin-bottom:10px;gap:6px;flex-wrap:wrap">
+      <button class="btn ${mine?'':'ghost'}" data-mode="library">My library</button>
+      <button class="btn ${mine?'ghost':''}" data-mode="web">New releases (web)</button>
+      <span style="flex:1"></span>
+      ${tabs.map(([k,l])=>`<button class="btn ${k===DISC.shelf?'':'ghost'}"
+        data-shelf="${k}" style="padding:4px 10px;font-size:12px">${l}</button>`).join('')}
+    </div>
+    <div id="d-genres" style="margin-bottom:10px"></div>
+    <div id="d-out"><div class="empty">Browsing…</div></div>`;
+  document.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>{
+    DISC.mode=b.dataset.mode; go('discover');});
   document.querySelectorAll('[data-shelf]').forEach(b=>b.onclick=()=>{
-    location.hash='discover:'+b.dataset.shelf; go('discover');});
-  const d=await j('/api/v1/discover?shelf='+shelf).catch(()=>({items:[]}));
+    DISC.shelf=b.dataset.shelf; go('discover');});
+
+  if(mine){
+    const d=await j(`/api/v1/discover/library?shelf=${encodeURIComponent(DISC.shelf)}`
+      +`&genre=${encodeURIComponent(DISC.genre)}&limit=60`)
+      .catch(()=>({items:[]}));
+    if(DISC.shelf==='by-genre'){
+      $('#d-genres').innerHTML=(d.genres||[]).map(g=>
+        `<button class="btn ${DISC.genre===g?'':'ghost'}" data-dgenre="${esc(g)}"
+          style="padding:3px 9px;font-size:12px;margin:0 4px 4px 0">${esc(g)}</button>`).join('')
+        ||'<span class="help" style="margin:0">No genres known yet — run a metadata scan in your library server.</span>';
+      document.querySelectorAll('[data-dgenre]').forEach(b=>b.onclick=()=>{
+        DISC.genre=b.dataset.dgenre; go('discover');});
+    }
+    const items=d.items||[];
+    if(!items.length){
+      $('#d-out').innerHTML=`<div class="empty">${esc(d.error||'Nothing on this shelf yet.')}</div>`;
+      return;
+    }
+    $('#d-out').innerHTML=`<p class="help">${d.total} game(s) on this shelf, from your own library.</p>
+      <div class="grid">${items.map(g=>`<div class="tile">
+        <div class="art" style="background-image:url('${esc(g.cover_url||'')}')"></div>
+        <div class="nm">${esc(g.title)}</div>
+        <div class="pf">${esc(g.platform||'')}${g.year?' · '+g.year:''}${
+          g.rating?' · ★'+g.rating:''}</div></div>`).join('')}</div>`;
+    return;
+  }
+
+  const d=await j('/api/v1/discover?shelf='+DISC.shelf).catch(()=>({items:[]}));
+  const shelf=DISC.shelf;
   if(!d.items||!d.items.length){
     $('#d-out').innerHTML=`<div class="empty">${esc(d.error||'Nothing to show.')}</div>`;
     return;

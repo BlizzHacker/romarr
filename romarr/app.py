@@ -617,7 +617,9 @@ class ROMarr:
         self._refresh_now.clear()
 
     def library_view(self, platform: str = "", q: str = "",
-                     offset: int = 0, limit: int = 120) -> dict:
+                     offset: int = 0, limit: int = 120, genre: str = "",
+                     region: str = "", decade: str = "", origin: str = "",
+                     sort: str = "") -> dict:
         """One page of the library, organised the way RomM organises it.
 
         Platform chips, alphabetical within a platform, server-side search
@@ -645,6 +647,32 @@ class ROMarr:
         needle = str(q or "").strip().lower()
         if needle:
             rows = [g for g in rows if needle in str(g.name).lower()]
+        if genre:
+            low = genre.lower()
+            rows = [g for g in rows if any(x.lower() == low for x in g.genres)]
+        if region:
+            low = region.lower()
+            rows = [g for g in rows if any(x.lower() == low for x in g.regions)]
+        if decade:
+            try:
+                start = int(str(decade).rstrip("s"))
+                rows = [g for g in rows if g.year and start <= g.year < start + 10]
+            except ValueError:
+                pass
+        if origin:
+            low = origin.lower()
+            rows = [g for g in rows if (g.origin or "local").lower() == low]
+
+        # Sorting is over the filtered set, not the page, or "top rated"
+        # would mean "the best of the 120 rows you happened to be looking
+        # at" -- which is the kind of quiet lie this project exists to avoid.
+        if sort == "rating":
+            rows = sorted(rows, key=lambda g: (-g.rating, g.name.lower()))
+        elif sort == "year":
+            rows = sorted(rows, key=lambda g: (-g.year, g.name.lower()))
+        elif sort == "name":
+            rows = sorted(rows, key=lambda g: g.name.lower())
+
         offset = max(0, int(offset))
         limit = max(1, min(int(limit or 120), 500))
         page = rows[offset:offset + limit]
@@ -656,6 +684,7 @@ class ROMarr:
                 "grand_total": len(games),
                 "offset": offset,
                 "platforms": getattr(self, "_library_platforms", []),
+                "facets": getattr(self, "_library_facets", {}),
                 "libraries": names,
                 "library": self.game_library.name,
                 "age_seconds": int(time.monotonic() - at) if at else None,
@@ -2109,6 +2138,37 @@ class ROMarr:
             {"platform": name, "count": count}
             for name, count in sorted(platforms.items(),
                                       key=lambda kv: (-kv[1], kv[0]))]
+
+        # Every other axis worth cutting a 166k-game shelf on, counted once
+        # per publish rather than per request. Genre and year only exist for
+        # games the library server has identified, so `identified` travels
+        # with them -- a genre list covering 8% of the shelf has to say so,
+        # or it reads as "you own almost nothing".
+        genres, regions, decades = Counter(), Counter(), Counter()
+        identified = 0
+        for game in snapshot:
+            if game.genres or game.year:
+                identified += 1
+            for genre in game.genres:
+                genres[genre] += 1
+            for region in game.regions:
+                regions[region] += 1
+            if game.year:
+                decades[f"{(game.year // 10) * 10}s"] += 1
+        rank = lambda counter, limit: [        # noqa: E731
+            {"value": name, "count": count}
+            for name, count in sorted(counter.items(),
+                                      key=lambda kv: (-kv[1], kv[0]))[:limit]]
+        self._library_facets = {
+            "genres": rank(genres, 40),
+            "regions": rank(regions, 20),
+            "decades": sorted(
+                ({"value": name, "count": count}
+                 for name, count in decades.items()),
+                key=lambda d: d["value"]),
+            "origins": rank(Counter(g.origin or "local" for g in snapshot), 5),
+            "identified": identified,
+        }
         self._library_partial = partial
         self._library_cache = (snapshot, time.monotonic(), error)
 
@@ -2125,6 +2185,96 @@ class ROMarr:
             queued = sum(1 for i in self.queue if i.state in ("queued", "grabbed"))
         return {"games": games, "missing": len(self.store.wanted), "queued": queued}
 
+
+    #: Shelves Discover builds out of the library you already have. This
+    #: exists because the alternative -- RAWG or IGDB -- needs an API key
+    #: nobody has on day one, so Discover was an empty page saying "add a
+    #: provider". Your own library already knows its genres, ratings and
+    #: years; browsing it is worth as much as browsing a storefront, and it
+    #: works with nothing configured.
+    LIBRARY_SHELVES = ("top-rated", "recent", "hidden-gems", "by-genre")
+
+    def discover_library(self, shelf: str = "top-rated", genre: str = "",
+                         limit: int = 40) -> dict:
+        """Browse what you own, the way a storefront browses what it sells."""
+        games, _, _ = self._library_cache
+        if not games:
+            return {"shelf": shelf, "items": [], "genres": [],
+                    "error": "the library has not been read yet"}
+
+        rated = [g for g in games if g.rating > 0]
+        if shelf == "top-rated":
+            rows = sorted(rated, key=lambda g: (-g.rating, g.name.lower()))
+        elif shelf == "recent":
+            rows = sorted((g for g in games if g.year),
+                          key=lambda g: (-g.year, g.name.lower()))
+        elif shelf == "hidden-gems":
+            # Well-reviewed games on platforms you own few of -- the ones a
+            # 166k-game shelf buries and a "top rated" list never surfaces.
+            from collections import Counter
+            per_platform = Counter(g.platform for g in games)
+            rows = sorted(
+                (g for g in rated if g.rating >= 7.5
+                 and per_platform[g.platform] < 500),
+                key=lambda g: (-g.rating, g.name.lower()))
+        elif shelf == "by-genre":
+            low = (genre or "").lower()
+            rows = sorted(
+                (g for g in games
+                 if any(x.lower() == low for x in g.genres)),
+                key=lambda g: (-g.rating, g.name.lower()))
+        else:
+            return {"shelf": shelf, "items": [],
+                    "error": f"unknown shelf; one of "
+                             f"{', '.join(self.LIBRARY_SHELVES)}"}
+
+        facets = getattr(self, "_library_facets", {})
+        return {
+            "shelf": shelf,
+            "genre": genre,
+            "genres": [g["value"] for g in facets.get("genres", [])][:24],
+            "total": len(rows),
+            "items": [{"id": g.id, "title": g.name, "platform": g.platform,
+                       "cover_url": g.cover, "rating": g.rating,
+                       "year": g.year, "genres": list(g.genres),
+                       "owned": True}
+                      for g in rows[:limit]],
+        }
+
+    def library_calendar(self, decade: str = "") -> dict:
+        """Your library laid out by release year.
+
+        The metadata Calendar needs an API key and answers about games
+        nobody here owns. This answers about yours, which is the more
+        interesting question once a library is large: what year is this
+        collection actually made of.
+        """
+        from collections import Counter
+
+        games, _, _ = self._library_cache
+        if not games:
+            return {"years": [], "items": [],
+                    "error": "the library has not been read yet"}
+        years = Counter(g.year for g in games if g.year)
+        rows = []
+        if decade:
+            try:
+                start = int(str(decade).rstrip("s"))
+            except ValueError:
+                start = 0
+            if start:
+                rows = sorted(
+                    (g for g in games if g.year and start <= g.year < start + 10),
+                    key=lambda g: (-g.year, -g.rating, g.name.lower()))[:200]
+        return {
+            "decade": decade,
+            "years": [{"year": y, "count": c} for y, c in sorted(years.items())],
+            "decades": sorted({f"{(y // 10) * 10}s" for y in years}),
+            "items": [{"id": g.id, "title": g.name, "platform": g.platform,
+                       "cover_url": g.cover, "year": g.year,
+                       "rating": g.rating}
+                      for g in rows],
+        }
 
     def stats(self) -> dict:
         """The numbers page: what this install has actually done.
@@ -2847,7 +2997,12 @@ def make_handler(service: ROMarr):
                     platform=(query.get("platform") or [""])[0],
                     q=(query.get("q") or [""])[0],
                     offset=int((query.get("offset") or ["0"])[0] or 0),
-                    limit=int((query.get("limit") or ["120"])[0] or 120)))
+                    limit=int((query.get("limit") or ["120"])[0] or 120),
+                    genre=(query.get("genre") or [""])[0],
+                    region=(query.get("region") or [""])[0],
+                    decade=(query.get("decade") or [""])[0],
+                    origin=(query.get("origin") or [""])[0],
+                    sort=(query.get("sort") or [""])[0]))
             if route.path == "/api/v1/wanted/missing":
                 return self._json(200, {"items": service.store.missing()})
             if route.path == "/api/v1/queue":
@@ -2863,6 +3018,14 @@ def make_handler(service: ROMarr):
                     since=int((query.get("since") or ["0"])[0] or 0),
                     level=(query.get("level") or [""])[0],
                     limit=int((query.get("limit") or ["200"])[0])))
+            if route.path == "/api/v1/discover/library":
+                return self._json(200, service.discover_library(
+                    shelf=(query.get("shelf") or ["top-rated"])[0],
+                    genre=(query.get("genre") or [""])[0],
+                    limit=int((query.get("limit") or ["40"])[0] or 40)))
+            if route.path == "/api/v1/calendar/library":
+                return self._json(200, service.library_calendar(
+                    decade=(query.get("decade") or [""])[0]))
             if route.path == "/api/v1/discover":
                 return self._json(200, metadata_discover(
                     service.store.list_items("metadata_providers"),

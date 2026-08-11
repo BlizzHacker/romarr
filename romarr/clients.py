@@ -291,12 +291,51 @@ class Romm:
             cover = it.get("path_cover_small") or it.get("path_cover_large") or ""
             if cover and not cover.startswith("http"):
                 cover = f"{base}/{cover.lstrip('/')}"
+            # RomM keeps what it learned from IGDB and friends in `metadatum`,
+            # merged across whichever providers identified the game. Absent
+            # for anything unidentified, which is most of a fresh library --
+            # so every read is defensive and an empty result is normal.
+            meta = it.get("metadatum") if isinstance(it.get("metadatum"), dict) else {}
+            genres = tuple(str(g) for g in (meta.get("genres") or [])
+                           if isinstance(g, str))
+            regions = tuple(str(r) for r in (it.get("regions") or [])
+                            if isinstance(r, str))
+            year = 0
+            released = meta.get("first_release_date")
+            if isinstance(released, (int, float)) and released > 0:
+                # RomM stores this as a unix timestamp; seconds or ms
+                # depending on the provider that filled it in.
+                from datetime import datetime, timezone
+                stamp = released / 1000 if released > 10_000_000_000 else released
+                try:
+                    year = datetime.fromtimestamp(stamp, timezone.utc).year
+                except (ValueError, OSError, OverflowError):
+                    year = 0
+            elif isinstance(released, str) and released[:4].isdigit():
+                year = int(released[:4])
+            try:
+                rating = round(float(meta.get("average_rating") or 0), 1)
+            except (TypeError, ValueError):
+                rating = 0.0
+
+            # Local or catalogued-elsewhere, from RomM's own bookkeeping.
+            # `missing_from_fs` means the row exists in the database and the
+            # bytes do not exist on disk -- which is precisely what a
+            # plugin-catalogued Archive.org or Flashpoint entry looks like.
+            # On a large install this is the majority of the shelf and the
+            # single most useful axis there is: "plays right now" versus
+            # "would have to be fetched first".
             out.append(Game(
                 id=str(it.get("id") or ""),
                 name=str(it.get("name") or it.get("fs_name") or "Unknown"),
                 platform=str(it.get("platform_display_name")
                              or it.get("platform_slug") or ""),
                 cover=cover,
+                genres=genres,
+                regions=regions,
+                year=year,
+                rating=rating,
+                origin="cloud" if it.get("missing_from_fs") else "local",
             ))
         return out
 

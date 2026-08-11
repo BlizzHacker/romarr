@@ -104,6 +104,12 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
                                      "re-runs the request, remove forgets it."),
     "/api/v1/queue/clear": ("POST", "Empty the queue, or only the rows in "
                                     "{state} (e.g. failed)."),
+    "/api/v1/discover/library": ("GET", "Browse the library you already "
+                                        "have: ?shelf=top-rated|recent|"
+                                        "hidden-gems|by-genre. Needs no API "
+                                        "key -- the metadata is your own."),
+    "/api/v1/calendar/library": ("GET", "Your library by release year; "
+                                        "?decade=1990s lists that decade."),
     "/api/v1/ecosystem": ("GET", "The projects ROMarr stands on: library "
                                  "servers, players, indexers, DAT databases "
                                  "-- repo, site and install command for each."),

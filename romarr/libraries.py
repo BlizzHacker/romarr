@@ -47,6 +47,22 @@ class Game:
     # Which library server this came from. Empty when there is only one, so a
     # single-library install shows no redundant badge on every poster.
     source: str = ""
+    # What the library server already knows about this game. Carried because
+    # a shelf of 166,578 posters is unusable without axes to cut it on, and
+    # asking the server again per filter would be a query per keystroke.
+    #
+    # Every one of these is optional and frequently absent: a library is
+    # mostly UNIDENTIFIED until somebody runs a metadata scan, so the UI has
+    # to treat "no genre" as the normal case rather than an error, and say
+    # what share of the shelf it can actually filter.
+    genres: tuple[str, ...] = ()
+    regions: tuple[str, ...] = ()
+    year: int = 0
+    rating: float = 0.0
+    #: Where the bytes are. "local" is on disk here; a plugin-provided entry
+    #: (Archive.org, Vimm's) is "cloud" -- the distinction people actually
+    #: want to filter on, because one plays now and one has to be fetched.
+    origin: str = "local"
 
 
 # Budget for the background shelf fetch. Nothing waits on it, so it is
