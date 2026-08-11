@@ -683,6 +683,16 @@ class ROMarr:
                     else:
                         on_disk += int(here)
                         catalogued += int(there)
+                    # Publish as soon as the server has answered, rather than
+                    # after the shelf walk. The walk takes minutes on a large
+                    # library, and until this moved the headline numbers fell
+                    # back to the growing prefix of cached rows for all of it
+                    # -- so a restart showed 60,000 games and climbing when
+                    # the server could say 166,548 in three requests. All
+                    # three still come from the same place, which is the
+                    # property that stops them disagreeing.
+                    self._count_split = {"total": total, "on_disk": on_disk,
+                                         "catalogued": catalogued}
                 except Exception as err:
                     ok = False
                     failures.append(f"{label}: {err.__class__.__name__}")
