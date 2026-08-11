@@ -1145,8 +1145,9 @@ RENDER.peers=async()=>{
     $('#p-out').innerHTML=`<div class="card" style="margin:0">
       <h3>Send this to your friend</h3>
       <p class="help">${esc(r.note||'')}</p>
-      <textarea rows="4" readonly style="width:100%;font:12px/1.5 ui-monospace,
-        Menlo,monospace">${esc(JSON.stringify(r.invite||{}))}</textarea>
+      <div class="field"><textarea rows="4" readonly
+        style="width:100%;font:12px/1.5 ui-monospace,
+        Menlo,monospace">${esc(JSON.stringify(r.invite||{}))}</textarea></div>
       <button class="btn ghost" id="p-copy">Copy invitation</button></div>`;
     $('#p-copy').onclick=async()=>{
       try{await navigator.clipboard.writeText(JSON.stringify(r.invite||{}));
@@ -1157,8 +1158,9 @@ RENDER.peers=async()=>{
   $('#p-redeem').onclick=()=>{
     $('#p-out').innerHTML=`<div class="card" style="margin:0">
       <h3>Paste your friend's invitation</h3>
-      <textarea id="p-blob" rows="4" style="width:100%;font:12px/1.5
-        ui-monospace,Menlo,monospace" placeholder='{"peer_id":"...","secret":"..."}'></textarea>
+      <div class="field"><textarea id="p-blob" rows="4"
+        style="width:100%;font:12px/1.5 ui-monospace,Menlo,monospace"
+        placeholder='{"peer_id":"...","secret":"..."}'></textarea></div>
       <div id="testline"></div>
       <button class="btn" id="p-go">Become friends</button></div>`;
     $('#p-go').onclick=async()=>{
