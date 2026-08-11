@@ -219,6 +219,7 @@ NAV = [
                   ("connections", "Connections", None),
                   ("metadata", "Metadata", None), ("general", "General", None)]),
     ("System",   [("status", "Status", None), ("stats", "Stats", None),
+                  ("ecosystem", "Ecosystem", None),
                   ("platforms", "Platforms", None),
                   ("getstarted", "Get Started", None),
                   ("collections", "Collections", None),
@@ -261,7 +262,7 @@ function go(page){
     n.classList.toggle('on', n.dataset.page===page));
   const titles={library:'Games',add:'Add New Game',search:'Interactive Search',
     missing:'Wanted — Missing',lists:'Import Lists',stats:'Statistics',
-    discover:'Discover',
+    discover:'Discover',ecosystem:'The Ecosystem',
     queue:'Queue',history:'History',media:'Media Management',profiles:'Profiles',
     indexers:'Indexers',clients:'Download Clients',libraries:'Libraries',
     general:'General',
@@ -1003,6 +1004,37 @@ RENDER.discover=async()=>{
     b.textContent=r.ok?'Grabbed':'Wanted';
     toast(r.ok?`Grabbed ${r.release}`:(r.error||'Added to Wanted'));
     refreshCounts();
+  });
+};
+
+RENDER.ecosystem=async()=>{
+  const d=await j('/api/v1/ecosystem').catch(()=>({categories:{}}));
+  const cats=d.categories||{};
+  const card=p=>`<div class="pcard"${p.is_self?' style="border-color:var(--acc)"':''}>
+    <h4>${esc(p.name)}${p.is_self?' <span class="pill">you are here</span>':''}</h4>
+    <div class="desc">${esc(p.blurb)}</div>
+    <div class="rowact" style="margin-top:8px;flex-wrap:wrap;gap:6px">
+      ${p.repo?`<a class="btn ghost" href="${esc(p.repo)}" target="_blank"
+        rel="noopener noreferrer" style="text-decoration:none">GitHub</a>`:''}
+      ${p.site?`<a class="btn ghost" href="${esc(p.site)}" target="_blank"
+        rel="noopener noreferrer" style="text-decoration:none">Website</a>`:''}
+      ${p.install?`<button class="btn ghost" data-copy="${esc(p.install)}"
+        title="${esc(p.install)}">Copy install</button>`:''}
+    </div></div>`;
+  $('#page').innerHTML=`<div class="card"><h3>The ecosystem ROMarr stands on</h3>
+      <p class="help">ROMarr acquires ROMs and files them — nothing more. It
+        stores no library, serves no player, publishes no DAT, indexes no
+        tracker. Every one of those is somebody else's work, and without them
+        there is nothing here to automate. These are the projects that make
+        ROMarr possible; each links to its own home, and installable ones
+        carry their command. Go support them.</p></div>`
+    +Object.entries(cats).map(([name,projects])=>
+      `<div class="card"><h3>${esc(name)}</h3>
+        <div class="pgrid">${projects.map(card).join('')}</div></div>`).join('');
+  document.querySelectorAll('[data-copy]').forEach(b=>b.onclick=async()=>{
+    try{ await navigator.clipboard.writeText(b.dataset.copy);
+      toast('Copied: '+b.dataset.copy); }
+    catch{ toast(b.dataset.copy); }
   });
 };
 

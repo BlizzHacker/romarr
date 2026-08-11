@@ -693,9 +693,41 @@ saying so is the least that is owed.
 download-client registries rendered from field definitions, quality and
 release profiles, remote path mappings, and Manual Import.
 
-**No-Intro** and **[Redump](http://redump.org)**, whose DATs make
-verification possible at all. **[RomM](https://github.com/rommapp/romm)**,
-whose EmulatorJS core map is the basis of the playability routing.
+### The ecosystem ROMarr stands on
+
+ROMarr acquires ROMs and files them — nothing more. It stores no library,
+serves no player, publishes no DAT, indexes no tracker, runs no download.
+**Every one of those is somebody else's work, and without them there is
+nothing here to automate.** The same list, with an install command for each
+where one exists, is on the app's **System → Ecosystem** page — because
+respect that is also a convenience is worth more than a paragraph.
+
+**Library servers** — where your games actually live:
+[RomM](https://github.com/rommapp/romm) ([romm.app](https://romm.app)),
+[Gaseous](https://github.com/gaseous-project/gaseous-server),
+[Retrom](https://github.com/JMBeresford/retrom),
+[Gameyfin](https://github.com/gameyfin/gameyfin). RomM in particular is the
+project ROMarr was built beside, and its EmulatorJS core map is the basis of
+the playability routing.
+
+**Players** — how a library is played:
+[EmulatorJS](https://github.com/EmulatorJS/EmulatorJS)
+([emulatorjs.org](https://emulatorjs.org)),
+[RetroArch / libretro](https://www.libretro.com),
+[ES-DE](https://es-de.org), [Batocera](https://batocera.org),
+[Playnite](https://playnite.link),
+[LaunchBox](https://www.launchbox-app.com).
+
+**Acquisition** — the rest of the request pipeline:
+[GG Requestz](https://github.com/XTREEMMAK/ggrequestz) by XTREEMMAK (the
+Overseerr of games — ROMarr takes its requests),
+[Prowlarr](https://prowlarr.com), and
+[qBittorrent](https://www.qbittorrent.org).
+
+**Preservation** — what makes verification real at all:
+**[No-Intro](https://no-intro.org)** and **[Redump](http://redump.org)**,
+whose DATs are the only reason ROMarr can say a file is correct rather than
+just plausible.
 
 
 ## Licence

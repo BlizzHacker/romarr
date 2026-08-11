@@ -3067,6 +3067,9 @@ def make_handler(service: ROMarr):
                 return self._json(200, {"api_key": service.auth.api_key})
             if route.path == "/api/v1/system/tasks":
                 return self._json(200, {"items": service.scheduler.status()})
+            if route.path == "/api/v1/ecosystem":
+                from .ecosystem import as_dict
+                return self._json(200, {"categories": as_dict()})
             if route.path == "/api/v1/audit":
                 return self._json(200, dict(service._audit_state)
                                   or {"status": "never run"})
