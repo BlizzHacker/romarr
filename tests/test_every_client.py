@@ -344,7 +344,8 @@ def test_utorrent_takes_the_token_from_the_html_page():
     session = Router(utorrent_handler)
     client = UTorrent(UTorrentConfig(base_url="http://u:8080"), session=session)
     assert client.add("magnet:?xt=urn:btih:" + "a" * 40)
-    add = [c for c in session.calls if (c.get("params") or {}).get("action") == "add-url"][0]
+    add = [c for c in session.calls
+           if (c.get("params") or {}).get("action") == "add-url"][0]
     assert add["params"]["token"] == "TKN123"
 
 

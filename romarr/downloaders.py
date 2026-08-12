@@ -1800,8 +1800,8 @@ class AllDebrid(DebridClient):
             if links is None:
                 files = self._data(self._post("/magnet/files", {"id[]": ident}))
                 rows = files.get("magnets") or []
-                tree = rows[0].get("files") if rows and isinstance(rows[0], dict) else []
-                links = _alldebrid_links(tree)
+                first = rows[0] if rows and isinstance(rows[0], dict) else {}
+                links = _alldebrid_links(first.get("files"))
             else:
                 links = [row.get("link") if isinstance(row, dict) else row
                          for row in links]
@@ -1971,7 +1971,8 @@ class TorBox(DebridClient):
             return "", ""
         # TorBox names files by their full path inside the torrent; only the
         # last component is a filename, and the rest is not ours to create.
-        return os.path.basename(str(filename).replace("\\", "/")) or _basename_of(url), url
+        leaf = os.path.basename(str(filename).replace("\\", "/"))
+        return leaf or _basename_of(url), url
 
 
 class DebridLink(DebridClient):
@@ -2159,9 +2160,13 @@ class PutIo(DebridClient):
         listing = self._get("/files/list", {"parent_id": file_id}) or {}
         rows = listing.get("files")
         if not rows:
-            # Not a folder: ask for it directly.
+            # Either a single file, or a folder that is genuinely empty. Ask
+            # for the thing itself and let its own type say which -- returning
+            # an empty folder as a file produces a download that always fails.
             item = (self._get(f"/files/{file_id}") or {}).get("file") or {}
-            return [(item.get("name") or "", item["id"])] if item.get("id") else []
+            if not item.get("id") or item.get("file_type") == "FOLDER":
+                return []
+            return [(item.get("name") or "", item["id"])]
         out = []
         for item in rows:
             if not isinstance(item, dict) or not item.get("id"):
