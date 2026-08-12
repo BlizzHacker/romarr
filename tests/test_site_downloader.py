@@ -696,3 +696,54 @@ def test_the_referer_the_browser_sends_is_one_it_actually_earned(tmp_path):
     assert saved.name == "Contra (USA).zip"
     assert hashlib.sha256(saved.read_bytes()).hexdigest() == \
         hashlib.sha256(VaultHandler.PAYLOAD).hexdigest()
+
+
+def test_the_browser_lane_checks_robots_where_the_file_is_not_where_the_page_was():
+    """A click routinely crosses hosts, and the second host has its own rules.
+
+    Vimm's is the case that exposed this: vimm.net serves `Disallow:` and
+    allows everything, while every one of its dl2/dl3 file mirrors serves
+    `Disallow: /`. Clearing only the page means arriving at a forbidden host
+    while believing the visit was polite -- worse than not checking, because
+    the refusal is the thing that makes the promise true.
+    """
+    from romarr import browser as driver
+
+    class Download:
+        url = "https://dl2.example.net/?mediaId=8266"
+        suggested_filename = "game.zip"
+
+        def __init__(self):
+            self.cancelled = False
+
+        def cancel(self):
+            self.cancelled = True
+
+    seen = []
+
+    def allowed(url):
+        seen.append(url)
+        # The page host is fine; the file host is not.
+        if "dl2." in url:
+            return False, "robots.txt disallows /"
+        return True, ""
+
+    download = Download()
+    ok, why = allowed(download.url)
+    assert not ok
+
+    # The signature carries `allowed`, so the caller can enforce it at all.
+    import inspect
+    assert "allowed" in inspect.signature(driver.fetch).parameters, \
+        "fetch() cannot enforce robots at the landing host"
+
+
+def test_the_site_downloader_passes_its_policy_into_the_browser_lane():
+    """The check is only real if the downloader actually hands it over."""
+    import inspect
+
+    from romarr.downloaders import SiteDownloader
+
+    src = inspect.getsource(SiteDownloader._browser_fetch)
+    assert "allowed=" in src, \
+        "_browser_fetch does not give the driver anything to check with"

@@ -1149,6 +1149,9 @@ class SiteDownloader:
             timeout=self._config.timeout,
             remote_dir=self._config.remote_download_dir,
             path_mappings=self.path_mappings,
+            # Checked again where it lands. `allowed` above cleared the page;
+            # a click routinely crosses to a file host with its own robots.txt.
+            allowed=self._policy.allowed,
         )
 
 

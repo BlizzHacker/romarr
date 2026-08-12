@@ -282,12 +282,22 @@ def declared_user_agent(browser, token: str) -> str | None:
 
 def fetch(page_url: str, destination: Path, *, control: str = "",
           endpoint: str = "", ua_token: str = "", timeout: int = 120,
-          remote_dir: str = "", path_mappings=()) -> Path:  # noqa: C901
+          remote_dir: str = "", path_mappings=(),
+          allowed=None) -> Path:  # noqa: C901
     """Open the page, click the real control, keep what the browser downloads.
 
     `destination` is a directory. The saved file keeps the name the site gave
     it, because that name is metadata -- "Contra (USA).zip" tells the importer
     and the DAT check things a generated name does not.
+
+    `allowed(url) -> (bool, reason)` is checked a second time, against the URL
+    the download actually came from. The caller already cleared the *page*,
+    but a click routinely lands on a different host -- Vimm's vault pages
+    allow everything while every one of its dl2/dl3 file mirrors serves
+    `Disallow: /`. Checking only the page means arriving at a forbidden host
+    while believing the visit was polite, which is worse than not checking at
+    all: the refusal is what makes the promise true, and it has to be made
+    where the bytes are.
 
     Raises Unavailable when there is no browser to drive and Refused when
     there is one and the site is not ours to take from.
@@ -315,6 +325,14 @@ def fetch(page_url: str, destination: Path, *, control: str = "",
             with page.expect_download(timeout=timeout * 1000) as pending:
                 target.click()
             download = pending.value
+            if allowed is not None:
+                landed = getattr(download, "url", "") or ""
+                ok, why = allowed(landed) if landed else (True, "")
+                if not ok:
+                    download.cancel()
+                    raise Refused(
+                        f"the page was ours to open but the download comes "
+                        f"from {landed or 'another host'}, which is not: {why}")
             saved = _keep(download, destination, remote_dir, path_mappings)
             context.close()
             return saved
