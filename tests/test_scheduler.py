@@ -98,3 +98,38 @@ def test_garbage_timestamps_fail_open():
 
 def test_the_ladder_is_monotonic():
     assert list(BACKOFF_HOURS) == sorted(BACKOFF_HOURS)
+
+
+def test_a_never_run_job_is_due_on_a_freshly_booted_host(monkeypatch):
+    """The bug this pins, and why it only ever failed in CI.
+
+    `_last_started` defaulted to 0.0 and `time.monotonic()` counts from boot
+    on Linux -- so 0.0 means "when this machine started", not "long ago". On
+    a host up for 60 seconds, `monotonic() - 0.0` is 60, and every job whose
+    interval exceeded the uptime looked not due. A daily job did not run
+    until the host had been up a day. On a workstation up for weeks the same
+    code looked correct, which is why every Docker build failed while the
+    suite passed locally.
+    """
+    import romarr.scheduler as sched
+
+    # A host that booted one minute ago.
+    monkeypatch.setattr(sched.time, "monotonic", lambda: 60.0)
+
+    s = Scheduler()
+    daily = s.add("Daily", "d", lambda: 86400, lambda: "ok")
+    assert s._due(daily), "a never-run job must not wait for uptime"
+
+    # And once it has run, the interval applies normally.
+    s._run(daily)
+    assert not s._due(daily)
+
+
+def test_uptime_shorter_than_the_interval_does_not_block_the_first_run(monkeypatch):
+    import romarr.scheduler as sched
+
+    monkeypatch.setattr(sched.time, "monotonic", lambda: 5.0)
+    s = Scheduler()
+    for interval in (60, 3600, 86400):
+        job = s.add(f"J{interval}", "j", lambda i=interval: i, lambda: "ok")
+        assert s._due(job), f"interval {interval} blocked on a 5s uptime"

@@ -143,7 +143,13 @@ PLATFORMS: tuple[Platform, ...] = (
     Platform("atari2600", "Atari 2600", (".a26", ".bin"), ("2600", "vcs"),
              max_size=8 * MB),
     Platform("atari7800", "Atari 7800", (".a78",), ("7800",), max_size=8 * MB),
-    Platform("lynx", "Atari Lynx", (".lnx",), (), max_size=8 * MB),
+    # `.lnx` keeps the front of the list because the headered form is what most
+    # tooling expects to read, but `.lyx` is the form that actually arrives:
+    # all 80 Atari Lynx entries in the Vimm's Lair catalogue carry it. Naming
+    # only the headered spelling left `platform_for_file` answering None for
+    # the entire platform, and so `score` never paid a Lynx release the
+    # ROM-extension bonus that outweighs every guess made from title text.
+    Platform("lynx", "Atari Lynx", (".lnx", ".lyx"), (), max_size=8 * MB),
     Platform("turbografx16--1", "TurboGrafx-16", (".pce",), ("pc engine", "turbografx"),
              max_size=16 * MB),
     Platform("wonderswan", "WonderSwan", (".ws", ".wsc"), (), max_size=16 * MB),

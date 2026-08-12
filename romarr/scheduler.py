@@ -50,7 +50,15 @@ class Job:
     #: monotonic time of the last start, so due-ness never trusts wall-clock
     #: changes (a container whose clock steps at boot would otherwise fire
     #: everything at once, or nothing for hours).
-    _last_started: float = field(default=0.0, repr=False)
+    #:
+    #: None means never run, and that is deliberately not 0.0. `time.monotonic`
+    #: counts from boot on Linux, so 0.0 is "when this machine started" rather
+    #: than "long ago": on a freshly booted host `monotonic() - 0.0` is a few
+    #: seconds, and every job whose interval exceeds the uptime looked NOT due.
+    #: A daily job therefore did not run until the host had been up a day, and
+    #: on a long-lived workstation the same code looked correct because
+    #: monotonic was already large. That is why this only ever failed in CI.
+    _last_started: float | None = field(default=None, repr=False)
 
 
 class Scheduler:
@@ -101,6 +109,10 @@ class Scheduler:
             return False
         if seconds <= 0:
             return False
+        if job._last_started is None:
+            # Never run. Due now, whatever the interval and however long this
+            # host has been up.
+            return True
         return (time.monotonic() - job._last_started) >= seconds
 
     def _run(self, job: Job) -> None:

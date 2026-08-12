@@ -187,6 +187,18 @@ def test_extension_maps_back_to_a_platform():
     assert platform_for_file("notes.txt") is None
 
 
+def test_both_spellings_of_a_lynx_dump_reach_the_lynx():
+    """`.lyx` is not a typo for `.lnx`, it is what the catalogue actually holds.
+
+    Every one of the 80 Atari Lynx entries in the Vimm's Lair capture ends in
+    `.lyx`, so a table naming only `.lnx` answered None for the entire
+    platform -- and `score` never paid the 60-point ROM-extension bonus to a
+    Lynx release, the one signal that outweighs a title guess.
+    """
+    assert platform_for_file("Chip's Challenge (USA).lyx").slug == "lynx"
+    assert platform_for_file("Chip's Challenge (USA).lnx").slug == "lynx"
+
+
 def test_every_platform_declares_at_least_one_extension():
     from romarr.platforms import PLATFORMS
     for p in PLATFORMS:
