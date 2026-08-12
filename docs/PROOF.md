@@ -59,11 +59,75 @@ Proxmox container on the maintainer's cluster, not read.
 | The Proxmox installer works and says what it did | Run twice on a throwaway CT, creation to `/api/health` answering, reporting `ROMarr 0.8.0 is up` with the paths and log command | 2026-08-12, CT destroyed afterwards. The auth-check fallback fired as designed (`no published release; using main`) |
 | The Proxmox updater can go backwards | A build that **passes** the `auth.py` guard and then cannot start was installed deliberately (a tarball with a syntax error in `__main__.py`, served through a shimmed `curl`). The updater reported `0.8.0 -> 9.9.9-broken`, saw no answer on `/api/health`, restored the previous package, restarted it, and exited 1 | Same session: version back to `0.8.0`, service active, health 200, API key / `min_seeders=42` / claimed state all intact. Also verified the stale-module case: a file dropped into the package before an update is gone afterwards |
 
+## The browser lane, and the sites it is for
+
+Added 2026-08-12. Until this date the headless-browser backend had been
+tested against fixtures and **never deployed** — `pip install playwright` had
+never been run and no browser container existed. It is now deployed, and the
+rows below separate what a live run proved from what it could not reach.
+
+The browser container is **CT 134 `browser-proof`** on node Thiccc,
+`192.168.0.134`, 2 GB / 8 GB, running `playwright run-server` on
+`ws://…:3000` under a systemd unit.
+
+| Claim | How it is proven | Evidence |
+|---|---|---|
+| ROMarr drives a browser in another container over `ws://` | A real `playwright run-server` on CT 134 and the pip package (no browser) on the ROMarr host. `POST /api/v1/downloadclient/test` for the saved row answered `{"ok": true, "message": "Connected"}`, and the client list reports `"detail": "connected to chromium 151.0.7922.34"` | Run 2026-08-12 against ROMarr at commit `d0931bc` on LXC 182. Both sides pinned to playwright **1.62.0** — a version skew between client and run-server is the first thing to check if this ever stops connecting |
+| A real file arrives, through ROMarr's own importer | The browser client was saved through `POST /api/v1/downloadclient`, handed a job through the same `build_client()` the grab path uses, and the bytes were fetched by **`POST /api/import`** — ROMarr's own sweep, over HTTP, not a script calling Playwright | `360799main_base_E.zip` from `archive.org/download/basestation-198101/`, **3,053 bytes**, `md5 87f0d1988849b67aad826fd81dbbd3f1`, `sha1 d2605c1e1a848a5eb86b06addfe11870cb08e761`, `sha256 2ab873a8e5704d156e64b2ffd216904484b705a43955321cbfef6cdae49cf800`. The md5 and sha1 **match Archive.org's own published checksums** for that file, so the bytes are the file and not an error page. A NASA item, deliberately: no copyrighted game was downloaded to prove this |
+| Chromium is genuinely absent from the ROMarr host | With no endpoint configured, `GET /api/v1/downloadclient/browser` reports `Executable doesn't exist … chrome-headless-shell` and `available: false` | Same run. The ROMarr container has ~400 MB of RAM free; `apt-get install -s chromium` there is 236 packages / 867 MB, which is why the browser lives in its own container |
+| The robots gate refuses before it fetches | `https://archive.org/control/…` — a path that site's own `robots.txt` disallows — was queued and came back `failed / robots.txt disallows this path` with no request made | Same run, in the ledger beside the successful row |
+| The browser survives a reboot | `pct reboot 134`; the unit came back `active` with a new PID and port 3000 listening | Same session |
+| The extension captures from a live site into a real index | The **unpacked extension in real Chromium 151, headed**, opened real `vimm.net` vault pages; its service worker's own log reports `{ok: true, indexed: 1, skipped: 0}` for each | Two rows in `idx-nes.jsonl` on the proof install, carrying `"platform": "nes"`, real sizes (144384, 205824) and `media_id` 253 and 850 — the two fields the previous 23,980-row Vimm capture got wrong on every row |
+
+### Per site: what was checked, and what could not be
+
+The extension is the lane for sites a plugin cannot read. Each verdict below
+says how it was reached, because "it works" would be worthless here.
+
+| Site | Verdict | Why, and what remains |
+|---|---|---|
+| **Vimm's Lair** | **Verified live** | Every field read off `vault/265` and `vault/866` in a real browser, then captured into a real ROMarr. `robots.txt` is `Disallow:` (allow-all). Its file hosts `dl`/`dl2`/`dl3.vimm.net` each serve `Disallow: /` and **were never fetched** |
+| **Retrostic** | **Verified live, and still indexes nothing** | `robots.txt` allows; selectors confirmed on three pages reached through the site's own advertised sitemap. But `File Size:` reads **`unknown`** on every page observed, and ROMarr refuses a row whose size it does not know. The selectors are right; the site does not publish the fact |
+| **The ROM Depot** | **Needs your browser — unverified** | `GET /api/getContents` returns the whole tree as one JSON to a signed-in browser and **401** to anyone else. No login was attempted and the owner's session was not used, so the tree's **shape is unconfirmed**: the reader walks the JSON and matches key names from a candidate list rather than a fixed path. First run will show either "not the JSON document the adapter expects" (signed out) or "found N entries but none carried an id, a title and a usable link" (key names differ) |
+| **CDRomance** | **Needs your browser — unverified** | Every path including `robots.txt` answers a Cloudflare managed challenge to a plain client. **No attempt was made to defeat it.** Selectors are WordPress shapes written from structure; the platform falls back to the URL's first segment, which cannot be wrong about markup. A wrong selector shows in the popup as "platform not found" / "size not found" before anything is sent |
+| **CoolROM** | **Deliberately untouched** | Its `robots.txt` names `anthropic-ai` and `Claude-Web` with `Disallow: /`. Nothing was fetched from it, no adapter ships, and none should |
+
 ## What is NOT proven, in the same breath
 
 This list was five entries long on the morning of 2026-08-10 and is now
 this. Each survivor names exactly what would close it.
 
+- **No ROM has ever been downloaded through the browser lane.** What is
+  proven is the mechanism — a page opened, a real control clicked, the file
+  streamed back from a browser in another container and landing on ROMarr's
+  disk with the right hash. The file was a 3 KB NASA zip from Archive.org,
+  chosen because that is a site whose robots.txt permits automated fetching
+  and because proving a download client does not require downloading a game.
+  Vimm's actual download is a POST to `dl3.vimm.net`, which serves
+  `Disallow: /`, so ROMarr's own policy refuses it and the lane reports that
+  refusal rather than performing it. Whether that POST would succeed for a
+  person clicking it is not something this codebase has tested or will.
+- **Two of the four adapters have never seen the page they describe.**
+  The ROM Depot needs a session and CDRomance answers a bot challenge to
+  anything that is not a person, so their selectors are written from
+  structure. Both are marked unverified in the extension's own popup, and
+  ROMarr refuses what it cannot validate — but "sound" is not "seen", and
+  the first person to open those pages with the extension installed is the
+  one who closes this. The ROM Depot's `/api/getContents` shape in
+  particular is inferred, not observed.
+- **The browser lane's proof ran against a second ROMarr, not the production
+  one.** The production install on LXC 182 runs 0.8.0, which predates the
+  browser lane entirely; the proof instance is the same host running commit
+  `d0931bc` on its own port with its own state file. That proves the code,
+  not an upgrade of the production service, which was deliberately left
+  alone.
+- **Chrome-branded builds remain untested.** Chrome 151.0.7922.137 was
+  installed in the test container and launches, but cannot reach the network
+  there at all — `ERR_INTERNET_DISCONNECTED` on every navigation, as root and
+  as an ordinary user, while Playwright's Chromium on the same host is fine.
+  The extension is proven in Chromium 151 and in Edge; Brave, which is what
+  the setup guide is written for, is Chromium and is expected to behave
+  identically, but nobody has run it.
 - **Nothing has ever streamed a frame, and ROMarr never asks it to.**
   Wolf, Sunshine and a Moonlight client are now proven — probe, app list,
   both Wolf transports, Sunshine's TLS, and pairing completing on both — but
