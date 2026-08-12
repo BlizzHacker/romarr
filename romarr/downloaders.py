@@ -874,13 +874,15 @@ class SitePolicy:
 class SiteConfig:
     save_path: str
     mode: str = "direct"              # "direct" | "browser"
-    #: The CDP endpoint of a browser running somewhere else. Empty means
-    #: launch one here. Named base_url because that is the field every other
-    #: client in this module carries and the status row reads by that name.
+    #: A browser running somewhere else: `ws://` for a playwright run-server,
+    #: `http://` for a bare debugging port. Empty means launch one here. Named
+    #: base_url because that is the field every other client in this module
+    #: carries and the status row reads by that name.
     base_url: str = ""
-    #: Where THAT browser writes its downloads, as it sees the path. Only
-    #: meaningful with base_url set, and only when the two hosts share a
-    #: directory -- see browser._keep.
+    #: Where an `http://` browser writes its downloads, as it sees the path.
+    #: Needed only for that one shape, and only when the two hosts share a
+    #: directory -- see browser._keep, which explains why ws:// does not need
+    #: it and http:// cannot do without it.
     remote_download_dir: str = ""
     user_agent: str = SITE_USER_AGENT
     delay: float = SITE_DELAY
@@ -931,6 +933,12 @@ class SiteDownloader:
         self._forbidden: set[str] = set()
         #: What reachable() last found out, for the status page.
         self.detail = ""
+        #: The estate's remote path mappings, needed to find a file an
+        #: `http://` browser wrote on another host. Set after construction
+        #: rather than carried on the config because the table is a property
+        #: of the install, not of this client row -- the same list already
+        #: translates every other client's completed paths.
+        self.path_mappings: list | tuple = ()
 
     # -- identity ----------------------------------------------------------
 
@@ -1127,15 +1135,20 @@ class SiteDownloader:
         raise RuntimeError("the site asked us to come back later, three times")
 
     def _browser_fetch(self, url: str, target: Path) -> Path:
+        # The same clock the plain GET waits on. A browser loading a page is a
+        # request to the same small server, and honouring a crawl-delay in one
+        # mode and ignoring it in the other would be absurd.
+        self._policy.wait(url)
         driver = self._driver
         if driver is None:
             from . import browser as driver          # noqa: N813
         return driver.fetch(
             url, target,
-            cdp_url=self._config.base_url,
+            endpoint=self._config.base_url,
             ua_token=self._config.user_agent,
             timeout=self._config.timeout,
             remote_dir=self._config.remote_download_dir,
+            path_mappings=self.path_mappings,
         )
 
 

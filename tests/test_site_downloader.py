@@ -394,6 +394,19 @@ def test_robots_txt_applies_to_the_browser_lane_too(tmp_path):
     assert driver.calls == []
 
 
+def test_the_browser_lane_waits_between_requests_like_the_plain_one(tmp_path):
+    slept = []
+    driver = FakeDriver()
+    client = make(tmp_path, mode="browser", driver=driver)
+    client._policy = SitePolicy(delay=5, sleeper=slept.append,
+                                session=FakeSession())
+    client.add("https://vault.invalid/vault/1")
+    client.add("https://vault.invalid/vault/2")
+    client.completed()
+    client.completed()
+    assert slept, "the second page was fetched with no gap at all"
+
+
 def test_the_control_rides_in_the_fragment_so_it_never_reaches_the_site():
     url, control = browser.split_control(
         "https://vault.invalid/vault/42#romarr-click=css:#dl button")
@@ -559,6 +572,25 @@ def test_the_release_title_reaches_only_the_clients_that_can_take_it():
 
     assert hand_off(Old(), "u", name="Contra") == "u"
     assert hand_off(New(), "u", name="Contra") == "Contra"
+
+
+def test_a_browser_on_another_host_is_handed_the_path_mapping(tmp_path):
+    """An `http://` browser writes onto its own disk, so finding the file
+    afterwards needs the install's translation table -- which belongs to the
+    install, not to any one client row."""
+    from romarr.app import ROMarr
+
+    service = ROMarr({"ROMARR_DATA": str(tmp_path / "s.json")})
+    service.store.settings["remote_path_mappings"] = [
+        {"remote": "/browser/downloads", "local": "/mnt/shared"}]
+    service.store.put_item("download_clients", {
+        "id": "b1", "type": "browser", "name": "b", "save_path": str(tmp_path),
+        "host": "10.0.0.5", "port": 9222, "scheme": "http",
+        "remote_download_dir": "/browser/downloads"})
+    service.reload_clients()
+    lane = [c for c in service.clients if c.protocol == "browser"][0]
+    assert lane.path_mappings == [{"remote": "/browser/downloads",
+                                   "local": "/mnt/shared"}]
 
 
 def test_the_browser_capability_is_reported_on_its_own_route(tmp_path):

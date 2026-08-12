@@ -281,7 +281,7 @@ def declared_user_agent(browser, token: str) -> str | None:
 
 
 def fetch(page_url: str, destination: Path, *, control: str = "",
-          cdp_url: str = "", ua_token: str = "", timeout: int = 120,
+          endpoint: str = "", ua_token: str = "", timeout: int = 120,
           remote_dir: str = "", path_mappings=()) -> Path:  # noqa: C901
     """Open the page, click the real control, keep what the browser downloads.
 
@@ -299,7 +299,7 @@ def fetch(page_url: str, destination: Path, *, control: str = "",
     destination.mkdir(parents=True, exist_ok=True)
 
     with sync_playwright() as pw:
-        browser = _open(pw, cdp_url)
+        browser = _open(pw, endpoint)
         try:
             context = browser.new_context(
                 accept_downloads=True,

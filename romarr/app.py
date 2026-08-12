@@ -1090,6 +1090,14 @@ class ROMarr:
                 continue
             client = build_client(cfg)
             if client is not None:
+                # A client that has to READ a file another host wrote needs
+                # the translation table, and the table belongs to the install
+                # rather than to any one client row -- so it is handed over
+                # here, where both are in scope, instead of being duplicated
+                # into every configuration that might need it.
+                if hasattr(client, "path_mappings"):
+                    client.path_mappings = (
+                        self.store.settings.get("remote_path_mappings") or [])
                 clients.append(client)
         self.clients = clients
 
