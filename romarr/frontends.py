@@ -56,7 +56,11 @@ LAUNCHBOX_PLATFORMS = {
     "dc": "Sega Dreamcast",
     "psx": "Sony Playstation",
     "ps2": "Sony Playstation 2",
+    "ps3": "Sony Playstation 3",
     "psp": "Sony PSP",
+    "wiiu": "Nintendo Wii U",
+    "xbox": "Microsoft Xbox",
+    "xbox360": "Microsoft Xbox 360",
     "atari2600": "Atari 2600",
     "atari5200": "Atari 5200",
     "atari7800": "Atari 7800",
@@ -92,6 +96,17 @@ LAUNCHBOX_PLATFORMS = {
     "dos": "MS-DOS",
     "arcade": "Arcade",
     "philips-cd-i": "Philips CD-i",
+    "apple2": "Apple II",
+    "atari8bit": "Atari 800",
+    "atari-st": "Atari ST",
+    "mac": "Apple Mac OS",
+    "cpet": "Commodore PET",
+    "sinclair-zx81": "Sinclair ZX-81",
+    "sg1000": "Sega SG-1000",
+    "odyssey-2-slash-videopac-g7000": "Magnavox Odyssey 2",
+    # `palm-os` and `trs-80-mc-10` are absent on purpose: LaunchBox has no
+    # platform of its own for either, and an invented name would export tiles
+    # that its importer silently drops. They fall back to the slug.
 }
 
 #: ES-DE reads a directory per system, named by its own short slug.

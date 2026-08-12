@@ -186,6 +186,14 @@ PLATFORMS: tuple[Platform, ...] = (
              (".chd", ".iso", ".cso", ".bin", ".gz"),
              ("playstation 2", "sony playstation 2", "ps2"),
              max_size=12 * GB, media=DISC),
+    # Blu-ray, so the ceiling is a generation larger than every disc above it:
+    # the biggest title in the Vimm's Lair catalogue measures 44.8GB against a
+    # 50GB BD-DL. `.pkg` is the digital half of the same library and the only
+    # form a PSN title ever shipped in.
+    Platform("ps3", "Sony PlayStation 3",
+             (".iso", ".pkg", ".zip", ".7z"),
+             ("playstation 3", "ps3"),
+             max_size=64 * GB, media=DISC),
     Platform("psp", "Sony PlayStation Portable",
              (".cso", ".iso", ".chd", ".pbp"),
              ("playstation portable", "psp"),
@@ -206,12 +214,46 @@ PLATFORMS: tuple[Platform, ...] = (
              max_size=4 * GB, media=DISC),
     Platform("wii", "Nintendo Wii",
              (".rvz", ".wbfs", ".iso", ".wad", ".ciso", ".gcz"),
-             ("nintendo wii",), max_size=12 * GB, media=DISC,
+             # "WiiWare" is a storefront, not a machine: all 363 of Vimm's
+             # WiiWare titles are `.wad` files that Dolphin loads exactly as it
+             # loads a Wii disc, and RomM has no folder for them. It answers
+             # here so those titles route to the console that runs them --
+             # `.wad` was already declared above for the same reason.
+             ("nintendo wii", "wiiware", "wii ware"),
+             max_size=12 * GB, media=DISC,
              # See Platform.native_markers. Every Wii release that is a
              # WiiWare or Virtual Console title says so, and those are the
              # markers that exist to catch such a title being offered for a
              # *cartridge* platform. Here they are the catalogue.
              native_markers=("wad", "wiiware", "virtual console", "eshop")),
+    # 25GB single-layer disc. `.iso` leads because that is what the catalogue
+    # actually holds -- all 190 Wii U entries in the Vimm's Lair capture and
+    # every row in the live `wiiu` folder -- rather than the .wux/.wud forms
+    # the format documentation leads with.
+    Platform("wiiu", "Nintendo Wii U",
+             (".iso", ".wux", ".wud", ".wua", ".zip", ".7z"),
+             ("wii u", "nintendo wii u"),
+             max_size=32 * GB, media=DISC,
+             # Same argument as Wii above: an eShop release is the Wii U's own
+             # catalogue, not evidence of a foreign machine.
+             native_markers=("eshop",)),
+    # The two Xbox generations are separate folders in RomM and separate
+    # machines to every emulator, so they are separate here. Naming them is
+    # also what lets `selection` tell them apart: "xbox" is a foreign-platform
+    # marker and is a substring of "Xbox 360", which is the same trap that once
+    # handed a PS2 disc to a PlayStation request.
+    Platform("xbox", "Xbox", (".iso", ".zip", ".7z"),
+             ("microsoft xbox", "original xbox", "xbox original"),
+             max_size=12 * GB, media=DISC),
+    # "Xbox 360 (Digital)" is Vimm's label for the XBLA and Games-on-Demand
+    # half of the same console -- 3,406 titles that run on the same hardware
+    # and have no folder of their own in RomM. It is claimed here rather than
+    # left unresolvable, because the alternative routes it nowhere at all.
+    Platform("xbox360", "Xbox 360", (".iso", ".zip", ".7z"),
+             ("xbox360", "x360", "microsoft xbox 360", "xbox 360 digital",
+              "xbla", "xbox live arcade", "games on demand"),
+             max_size=12 * GB, media=DISC,
+             native_markers=("x360", "xbla")),
     Platform("3do", "3DO Interactive Multiplayer",
              (".chd", ".cue", ".bin", ".iso"),
              ("3do interactive", "panasonic 3do"), max_size=2 * GB, media=DISC),
@@ -281,12 +323,37 @@ PLATFORMS: tuple[Platform, ...] = (
              ("coleco",), max_size=8 * MB),
     Platform("sega32", "Sega 32X", (".32x", ".bin", ".zip"),
              ("32x", "sega 32x", "mega 32x"), max_size=32 * MB),
+    # The Master System's predecessor, and not the same machine: an SG-1000
+    # cartridge is Z80 code against different video hardware, so filing one
+    # under `sms` would import it into a folder whose core cannot run it.
+    # `.sc` is here because the live folder holds ten SC-3000 dumps -- the
+    # keyboard version of the same console, which is why RomM files them
+    # together and why the alias is claimed here rather than left dangling.
+    Platform("sg1000", "SG-1000", (".sg", ".sc", ".bin", ".zip"),
+             ("sg1000", "sega sg 1000", "sc 3000", "sega sc 3000"),
+             max_size=8 * MB),
     Platform("supergrafx", "PC Engine SuperGrafx", (".sgx", ".pce", ".zip"),
              ("super grafx",), max_size=16 * MB),
     Platform("vectrex", "Vectrex", (".vec", ".bin", ".zip"), (),
              max_size=8 * MB),
     Platform("intellivision", "Intellivision", (".int", ".rom", ".bin", ".zip"),
              ("intv",), max_size=8 * MB),
+    # RomM publishes this one as "Odyssey 2 Slash Videopac G7000" -- the slug
+    # read back out as a display name, "slash" and all. Both spellings are
+    # declared because `resolve` matches exactly and the catalogue only ever
+    # sends the ugly one.
+    #
+    # No spelling of "Videopac" is claimed, and that is not caution about a
+    # machine nobody uses. RomM's *other* folder, `videopac-g7400`, publishes
+    # the display name "Videopac G7000" and holds 110 games; this folder holds
+    # none. Claiming that name resolved 110 rows of a different machine here,
+    # which the sweep over every live display name caught. It stays
+    # unresolvable rather than resolvable and wrong.
+    Platform("odyssey-2-slash-videopac-g7000", "Odyssey 2 / Videopac G7000",
+             (".bin", ".rom", ".zip"),
+             ("odyssey 2 slash videopac g7000", "odyssey 2", "odyssey2",
+              "magnavox odyssey 2"),
+             max_size=8 * MB),
     Platform("wonderswan-color", "WonderSwan Color", (".wsc", ".zip"),
              ("wonderswan colour",), max_size=16 * MB),
     Platform("neo-geo-pocket-color", "Neo Geo Pocket Color", (".ngc", ".ngp"),
@@ -320,6 +387,12 @@ PLATFORMS: tuple[Platform, ...] = (
              ("commodore 128",), max_size=16 * MB, media=COMPUTER),
     Platform("vic-20", "Commodore VIC-20", (".prg", ".d64", ".t64", ".crt"),
              ("vic 20", "vic20"), max_size=16 * MB, media=COMPUTER),
+    # The PET predates the 64 and runs neither its software nor its disks, so
+    # it gets its own folder rather than being folded into c64. Bare "pet" is
+    # deliberately not an alias: it is a common English word and `resolve`
+    # would then answer it for anything that happened to be spelled that way.
+    Platform("cpet", "Commodore PET", (".d64", ".prg", ".t64", ".tap", ".zip"),
+             ("commodore pet", "cbm pet"), max_size=16 * MB, media=COMPUTER),
     Platform("amiga", "Commodore Amiga",
              (".adf", ".hdf", ".ipf", ".lha", ".zip"),
              ("commodore amiga",), max_size=512 * MB, media=COMPUTER),
@@ -329,6 +402,10 @@ PLATFORMS: tuple[Platform, ...] = (
              (".tzx", ".tap", ".z80", ".sna", ".zip"),
              ("zx spectrum", "spectrum", "speccy"),
              max_size=16 * MB, media=COMPUTER),
+    # RomM's display name is "Sinclair Zx81" -- its own slug title-cased. The
+    # declared name normalises to the same thing, so one entry answers both.
+    Platform("sinclair-zx81", "Sinclair ZX81", (".p", ".p81", ".81", ".t81", ".zip"),
+             ("zx81", "zx 81"), max_size=8 * MB, media=COMPUTER),
     Platform("msx", "MSX", (".rom", ".cas", ".dsk", ".mx1", ".zip"), (),
              max_size=32 * MB, media=COMPUTER),
     Platform("msx2", "MSX2", (".rom", ".dsk", ".mx2", ".zip"), (),
@@ -336,6 +413,54 @@ PLATFORMS: tuple[Platform, ...] = (
     Platform("sharp-x68000", "Sharp X68000",
              (".m3u", ".dim", ".xdf", ".d88", ".zip"),
              ("x68000", "sharp x 68000"), max_size=256 * MB, media=COMPUTER),
+    # -- home computers Archive.org holds in bulk ---------------------------
+    #
+    # Extensions here were sampled from the collections themselves rather than
+    # recalled, because the payload is what decides whether an item can be
+    # indexed at all: `build_platform_index` picks one file per item by
+    # extension and skips anything it cannot name. Every list below leads with
+    # the extension that carried 100% of a live sample.
+    #
+    # The slug is RomM's fs_slug in each case, checked against its live
+    # platform list -- `apple2` rather than `appleii`, because `appleii` and
+    # `apple2gs` are also folders there and `apple2` is the one holding the
+    # 666 rows the library already has.
+    Platform("apple2", "Apple II",
+             (".dsk", ".do", ".po", ".nib", ".woz", ".2mg", ".zip"),
+             # `appleii` is RomM's *metadata* slug for three separate folders
+             # and the name the existing index file was built under, so it has
+             # to answer here or idx-appleii.jsonl loads nowhere.
+             ("appleii", "apple ii", "apple 2"),
+             max_size=16 * MB, media=COMPUTER),
+    # The 800/XL/XE line, which is not the 2600/5200/7800 already above: those
+    # are consoles and this is the computer, and Archive.org's own emulator
+    # field says `a800`/`a800xl` for every item in the collection.
+    # `.xfd` is the same disk image as `.atr` without the 16-byte header, and
+    # a 120-item sample of the collection carries one. Declared because the
+    # indexer skips an item whose payload it cannot name, and skipping ~1% of
+    # 15,557 is a hundred-odd games lost to a missing four characters.
+    Platform("atari8bit", "Atari 8-bit",
+             (".atr", ".xfd", ".xex", ".car", ".atx", ".cas", ".bin", ".zip"),
+             ("atari 8 bit computer", "atari 800", "atari 400", "atari xl",
+              "atari xe", "atari8bit"),
+             max_size=16 * MB, media=COMPUTER),
+    Platform("atari-st", "Atari ST",
+             (".st", ".msa", ".stx", ".dim", ".ipf", ".zip"),
+             ("atari st ste", "atari ste", "atarist"),
+             max_size=64 * MB, media=COMPUTER),
+    # 68k Macintosh, and the only one here whose payload is routinely a CD
+    # image -- 55% of the collection carries one -- so the ceiling clears a
+    # disc rather than a floppy.
+    Platform("mac", "Mac", (".img", ".dsk", ".dc42", ".iso", ".zip"),
+             ("macintosh", "apple macintosh", "classic mac os"),
+             max_size=2 * GB, media=COMPUTER),
+    # Bare "trs 80" is not claimed: RomM keeps `trs-80`, `trs-80-color-computer`
+    # and `trs-80-model-100` as separate folders, and this is none of them.
+    Platform("trs-80-mc-10", "TRS-80 MC-10", (".c10", ".cas", ".zip"),
+             ("mc10", "mc 10", "tandy mc 10"), max_size=8 * MB, media=COMPUTER),
+    Platform("palm-os", "Palm OS", (".prc", ".pdb", ".pqa", ".zip"),
+             ("palm", "palmos", "palm pilot"), max_size=32 * MB, media=COMPUTER),
+
     Platform("dos", "MS-DOS", (".dosz", ".zip", ".dos", ".img", ".chd"),
              ("ms-dos", "ms dos", "pc dos"), max_size=2 * GB, media=COMPUTER,
              archive_is_the_rom=True,

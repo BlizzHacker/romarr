@@ -17,7 +17,8 @@ from romarr.platforms import CARTRIDGE, COMPUTER, DISC, MB, GB, Platform, resolv
 
 
 DISC_SLUGS = (
-    "psx", "ps2", "psp", "saturn", "segacd", "dc", "ngc", "wii", "3do",
+    "psx", "ps2", "ps3", "psp", "saturn", "segacd", "dc", "ngc", "wii",
+    "wiiu", "xbox", "xbox360", "3do",
     "philips-cd-i", "pc-fx", "turbografx-16-slash-pc-engine-cd",
     "amiga-cd32", "neo-geo-cd", "atari-jaguar-cd",
 )
@@ -66,6 +67,15 @@ def test_cartridge_ceilings_are_unchanged():
     # miniDVD is 1.5GB; UMD is 1.8GB.
     ("ngc", 2 * GB, 8 * GB),
     ("psp", 2 * GB, 8 * GB),
+    # Sixth-generation DVD, same shape as PS2. An Xbox disc is DVD-9 at
+    # 8.5GB and XGD3 on the 360 is 8.7GB; the largest measured title in the
+    # Vimm's Lair capture is 8.06GB.
+    ("xbox", 8 * GB, 16 * GB),
+    ("xbox360", 8 * GB, 16 * GB),
+    # Blu-ray. PS3 dual layer is 50GB (largest measured 44.8GB); a Wii U
+    # disc is 25GB (largest measured 22.4GB).
+    ("ps3", 48 * GB, 96 * GB),
+    ("wiiu", 24 * GB, 48 * GB),
 ])
 def test_disc_ceilings_clear_one_disc_without_admitting_a_repack(slug, floor, ceiling):
     platform = platforms.by_slug(slug)

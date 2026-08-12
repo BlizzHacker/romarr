@@ -617,10 +617,18 @@ def test_every_platform_declares_a_ceiling_matched_to_its_medium():
         "digital": 300 * GB,
     }
     big_cards = {"nds", "3ds"}
+    # Blu-ray, one medium past every disc the DISC limit was written for: a
+    # PS3 dual-layer disc is 50GB and the biggest title in the catalogue
+    # measures 44.8GB, so a 16GB ceiling would reject the platform's own
+    # games. Capped anyway, and well under the 300GB a PC repack reaches.
+    big_discs = {"ps3": 64 * GB, "wiiu": 32 * GB}
     for p in PLATFORMS:
         assert p.max_size > 0, p.slug
         if p.slug in big_cards:
             assert p.max_size <= 8 * GB, p.slug
+            continue
+        if p.slug in big_discs:
+            assert p.max_size <= big_discs[p.slug], p.slug
             continue
         assert p.max_size < limits[p.media], p.slug
 

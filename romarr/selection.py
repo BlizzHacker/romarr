@@ -38,7 +38,11 @@ FOREIGN_PLATFORM_MARKERS = {
     "playstation portable", "playstation vita",
     "nintendo 64", "super nintendo", "game boy advance", "game boy color",
     "sega saturn", "sega dreamcast", "master system", "game gear",
-    "xbox", "x360", "xbla",
+    # "xbox" is a substring of both later machines, so the spelled-out forms
+    # are needed for the same reason "playstation 2" is above: markers are
+    # tried longest-first, and without these an Xbox request treats an "Xbox
+    # 360" title as naming itself and imports a disc no Xbox can read.
+    "xbox", "xbox 360", "xbox one", "x360", "xbla",
     "gamecube", "wii", "wiiu", "wii u", "3ds", "nds", "ds",
     "android", "apk", "ios",
     "pc", "windows", "steam", "gog", "repack",
