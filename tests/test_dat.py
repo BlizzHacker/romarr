@@ -283,3 +283,68 @@ def test_hash_file_never_buffers_the_whole_file(tmp_path):
     path.write_bytes(body)
     from romarr.dat import hash_file
     assert hash_file(path, chunk=997) == hash_file(path, chunk=1024 * 1024)
+
+
+# -- ClrMamePro ---------------------------------------------------------------
+#
+# libretro-database ships the largest freely downloadable set of
+# No-Intro-derived DATs and every one is ClrMamePro, because No-Intro's own
+# XML is behind a captcha. Handing those to an XML parser produced a
+# ParseError per file and an index of nothing -- so verification answered
+# UNKNOWN for a whole 166,548-row library and looked like it was working.
+
+CMP = '''clrmamepro (
+\tname "Nintendo - Super Nintendo Entertainment System"
+\tdescription "Nintendo - SNES"
+\tversion "2026.08.01"
+)
+
+game (
+\tname "Chrono Trigger (USA)"
+\tdescription "Chrono Trigger (USA)"
+\trom ( name "Chrono Trigger (USA).sfc" size 4194304 crc 2D206BF7 md5 a2bc447961e52fd2227baed164f729dc sha1 de5b7b0b1fa3e4e0dcecb0f7f5b8ee2e93a1f92c )
+)
+
+game (
+\tname "Chrono Trigger (Japan)"
+\tcloneof "Chrono Trigger (USA)"
+\trom ( name "Chrono Trigger (Japan).sfc" size 4194304 crc 1234ABCD sha1 aa5b7b0b1fa3e4e0dcecb0f7f5b8ee2e93a1f92c )
+)
+'''
+
+
+def test_a_clrmamepro_dat_is_read_not_discarded():
+    dat = parse_dat(CMP)
+    assert dat.name == "Nintendo - Super Nintendo Entertainment System"
+    assert dat.version == "2026.08.01"
+    assert len(dat.games) == 2, "both blocks parsed"
+
+
+def test_clrmamepro_hashes_are_indexed_for_lookup():
+    dat = parse_dat(CMP)
+    name, rom = dat._by_sha1["de5b7b0b1fa3e4e0dcecb0f7f5b8ee2e93a1f92c"]
+    assert name == "Chrono Trigger (USA)"
+    assert rom.size == 4194304
+    assert rom.crc == "2d206bf7", "crc is folded to lowercase like the XML path"
+    assert dat._by_crc[("2d206bf7", 4194304)][0] == "Chrono Trigger (USA)"
+
+
+def test_clrmamepro_carries_cloneof_so_1g1r_still_works():
+    dat = parse_dat(CMP)
+    assert dat.games["Chrono Trigger (Japan)"].cloneof == "Chrono Trigger (USA)"
+    assert dat.games["Chrono Trigger (USA)"].cloneof == ""
+
+
+def test_the_format_is_sniffed_rather_than_taken_from_the_extension():
+    """Both formats are served as .dat; the name never said which."""
+    xml = ('<datafile><header><name>X</name></header>'
+           '<game name="G"><rom name="g.bin" size="1" crc="AB"/></game>'
+           '</datafile>')
+    assert parse_dat(xml).games["G"].roms[0].crc == "ab"
+    assert parse_dat(CMP).games["Chrono Trigger (USA)"].roms
+
+
+def test_a_rom_line_does_not_end_the_game_block_early():
+    """`rom ( ... )` closes on its own line; only a bare `)` ends the block."""
+    dat = parse_dat(CMP)
+    assert len(dat.games["Chrono Trigger (USA)"].roms) == 1

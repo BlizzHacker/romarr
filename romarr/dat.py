@@ -343,15 +343,99 @@ def _regions_in(name: str) -> set[str]:
     return out
 
 
+#: A ClrMamePro block header: `game (` or `machine (` at the start of a line.
+_CMP_BLOCK = re.compile(r"^\s*(game|machine|resource)\s*\(\s*$", re.M)
+#: `name "Some Game (USA)"` or `name Some_Game` -- quoted or bare.
+_CMP_FIELD = re.compile(r'(\w+)\s+(?:"([^"]*)"|(\S+))')
+
+
+def _parse_clrmamepro(body: str) -> Dat:
+    """The other DAT format, which is not XML at all.
+
+    libretro-database ships the largest freely downloadable corpus of
+    No-Intro-derived DATs, and every one of them is ClrMamePro rather than
+    Logiqx -- No-Intro's own XML is behind a captcha. Feeding those to an XML
+    parser produced a ParseError per file and an index of nothing, so
+    verification answered UNKNOWN for the whole library and looked like it
+    was working.
+    """
+    dat = Dat()
+    header = re.search(r"clrmamepro\s*\((.*?)\n\)", body or "", re.S)
+    if header:
+        fields = dict((m.group(1), m.group(2) if m.group(2) is not None
+                       else m.group(3))
+                      for m in _CMP_FIELD.finditer(header.group(1)))
+        dat.name = (fields.get("name") or "").strip()
+        dat.version = (fields.get("version") or "").strip()
+
+    for match in _CMP_BLOCK.finditer(body or ""):
+        # A block runs to the first `)` alone on a line. Nested `rom (...)`
+        # entries close on the same line, so they never end the block early.
+        end = body.find("\n)", match.end())
+        if end == -1:
+            continue
+        block = body[match.end():end]
+
+        name = ""
+        head = re.search(r'^\s*name\s+(?:"([^"]*)"|(\S+))', block, re.M)
+        if head:
+            name = (head.group(1) if head.group(1) is not None
+                    else head.group(2)).strip()
+        if not name:
+            continue
+        clone = ""
+        cl = re.search(r'^\s*cloneof\s+(?:"([^"]*)"|(\S+))', block, re.M)
+        if cl:
+            clone = (cl.group(1) if cl.group(1) is not None
+                     else cl.group(2)).strip()
+
+        roms = []
+        for line in re.finditer(r"^\s*rom\s*\((.*?)\)\s*$", block, re.M):
+            f = dict((m.group(1), m.group(2) if m.group(2) is not None
+                      else m.group(3))
+                     for m in _CMP_FIELD.finditer(line.group(1)))
+            try:
+                size = int(f.get("size") or 0)
+            except ValueError:
+                size = 0
+            rom = Rom(name=(f.get("name") or "").strip(), size=size,
+                      crc=(f.get("crc") or "").strip().lower(),
+                      md5=(f.get("md5") or "").strip().lower(),
+                      sha1=(f.get("sha1") or "").strip().lower())
+            roms.append(rom)
+            if rom.crc:
+                dat._by_crc.setdefault((rom.crc, rom.size), (name, rom))
+            if rom.sha1:
+                dat._by_sha1.setdefault(rom.sha1, (name, rom))
+            if rom.md5:
+                dat._by_md5.setdefault(rom.md5, (name, rom))
+            if rom.size:
+                dat._sizes.setdefault(rom.size, name)
+        dat.games[name] = Game(name=name, roms=tuple(roms), cloneof=clone)
+    return dat
+
+
 def parse_dat(body: str) -> Dat:
-    """A Logiqx DAT, as both No-Intro and Redump publish it."""
+    """A DAT in either format publishers actually use.
+
+    Logiqx XML is what No-Intro and Redump publish directly. ClrMamePro is
+    what most mirrors carry, including libretro-database -- so accepting only
+    the first meant the DATs an operator can actually download without
+    solving a captcha all parsed to nothing.
+    """
     import xml.etree.ElementTree as ET
+
+    text = body or ""
+    # Sniffed rather than chosen by file extension: both formats are served
+    # as `.dat`, and the extension has never said which one it is.
+    if "clrmamepro" in text[:4096] or _CMP_BLOCK.search(text[:8192]):
+        return _parse_clrmamepro(text)
 
     dat = Dat()
     try:
-        root = ET.fromstring(body or "")
+        root = ET.fromstring(text)
     except ET.ParseError:
-        log.warning("DAT is not valid XML; ignoring it")
+        log.warning("DAT is neither valid XML nor ClrMamePro; ignoring it")
         return dat
 
     header = root.find("header")
