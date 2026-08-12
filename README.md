@@ -70,8 +70,8 @@ SCORE      every release, with written reasons
   │          − hack/beta/repack, − wrong platform named, − too big to be real
   ▼
 GRAB       the winner goes to whichever client speaks its protocol
-  │          torrent → qBittorrent/Transmission/Deluge/rTorrent/Synology/Real-Debrid
-  │          usenet  → SABnzbd/NZBGet
+  │          torrent → 13 daemons, 8 debrid services, or a watched folder
+  │          usenet  → SABnzbd/NZBGet/NZBVortex, or a watched folder
   │          ROM site → a plain GET, or a real browser click where the site
   │                     has no fetchable URL
   ▼
@@ -227,7 +227,7 @@ existing ROM is never silently overwritten.
 | | |
 |---|---|
 | **Indexer** | Prowlarr, or any Torznab / Newznab indexer, or a plain torrent RSS feed |
-| **Download client** | qBittorrent / Transmission / Deluge / rTorrent / Synology DS / Real-Debrid (torrent) and/or SABnzbd / NZBGet (usenet). ROM-site plugins need neither — see [Downloading from a ROM site](#downloading-from-a-rom-site) |
+| **Download client** | 26 of them — qBittorrent, Transmission, Deluge, rTorrent, Synology DS, aria2, Flood, Freebox, Hadouken, uTorrent, porla, Vuze, BiglyBT; Real-Debrid, AllDebrid, Premiumize, TorBox, Debrid-Link, Offcloud, put.io, Linksnappy; SABnzbd, NZBGet, NZBVortex; or a torrent/usenet blackhole folder for anything not on the list. ROM-site plugins need none of them — see [Downloading from a ROM site](#downloading-from-a-rom-site) |
 | **Game library** | RomM, Gaseous, Retrom, or a directory on disk |
 | **Runtime** | Docker, Home Assistant, or Python 3.11+ |
 
@@ -797,6 +797,8 @@ asserted but no live server was in the loop.
 | qBittorrent / SABnzbd / NZBGet | **High** — live use | The clients the maintainer runs |
 | Transmission / Deluge / rTorrent | **High** — proven against live daemons | `scripts/live_proof.py`: 9/9 against real Transmission 4.1, Deluge 2.2 and rTorrent 0.9.8 — auth handshakes, adds, labels, listings |
 | Synology DS / Real-Debrid | **Medium** — tested against fakes | The two that need hardware or a paid account. Protocol conversations asserted; `scripts/live_proof.py` extends to them the day someone runs it with either. **Reports welcome.** |
+| The other 16 clients — aria2, Flood, Freebox, Hadouken, uTorrent, porla, Vuze, BiglyBT, NZBVortex, AllDebrid, Premiumize, TorBox, Debrid-Link, Offcloud, put.io, Linksnappy | **Medium** — tested against fakes | Written from each service's own API documentation and asserted call-by-call against recorded shapes: the auth handshake, the add, the completion read. No live daemon or paid account was in the loop for any of them. **Field reports wanted — an issue saying which one you run and what it did is worth more than another test.** |
+| Torrent / Usenet Blackhole | **High** — filesystem only | There is no API to get wrong. What is tested is what can be: the release name becomes the filename, a title cannot escape the folder, magnets are written as `.magnet`, and nothing is imported until it has stopped changing |
 | Scheduler, RSS sync, import lists | **Medium-high** — 40+ tests, new | Shipped 2026-08-10; live on the maintainer's install |
 | Steam / GOG / Xbox / PSN / itch.io list sources | **Medium** — tested against fakes | Credential-gated, so only an account holder can prove them live: `python scripts/account_proof.py <service>` does it in one command. **Run it, open an issue, get your name on the row.** |
 | Library backends: RomM, folder | **High** — live use | |

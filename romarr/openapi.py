@@ -256,8 +256,11 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     # have said eight the moment a ninth landed. A description that drifts is
     # the thing this file exists to prevent.
     "/api/v1/downloadclient/schema": ("GET", "Every download client type and "
-                                             "its fields, torrent, usenet, "
-                                             "debrid, direct HTTP and browser."),
+                                             "its fields: torrent and usenet "
+                                             "daemons, debrid and cloud "
+                                             "services, watched-folder "
+                                             "blackholes, direct HTTP and "
+                                             "browser."),
     "/api/v1/downloadclient/test": ("POST", "Test one client's connection."),
     "/api/v1/downloadclient/browser": ("GET", "Whether the headless-browser "
                                               "download lane can run here, "

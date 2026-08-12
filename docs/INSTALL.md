@@ -35,7 +35,7 @@ sits between three things you already run:
 | | What it does | Required? |
 |---|---|---|
 | **An indexer** — Prowlarr, or a Torznab/Newznab URL, or a torrent RSS feed | Finds releases | To search for anything. Without it ROMarr runs and finds nothing. |
-| **A download client** — qBittorrent, Transmission, Deluge, rTorrent, Synology DS or Real-Debrid for torrents; SABnzbd or NZBGet for usenet | Fetches the release | To grab anything. A release found with no client that speaks its protocol is ranked and then refused. |
+| **A download client** — any of the [26 below](#download-clients), plus a plain-HTTP and a headless-browser lane for ROM sites | Fetches the release | To grab anything. A release found with no client that speaks its protocol is ranked and then refused. |
 | **A game library** — RomM, Gaseous, Retrom, or just a directory | Receives the ROM | `folder` needs nothing but a path, so effectively no. |
 
 Everything else — DAT verification, import lists, streaming hosts, the browser
@@ -462,8 +462,48 @@ At least one is required to grab anything. All *seeded*.
 | `NZBGET_URL` / `NZBGET_USER` / `NZBGET_PASS` | unset |
 | `QBITTORRENT_CATEGORY` / `SABNZBD_CATEGORY` / `NZBGET_CATEGORY` | `romarr` |
 
-Transmission, Deluge, rTorrent, Synology Download Station and Real-Debrid are
-added from *Settings → Download Clients* rather than the environment.
+Only those three are seeded from the environment. **Every other client is
+added from *Settings → Download Clients***, which builds its form from
+`GET /api/v1/downloadclient/schema` — so the list below is what the page
+offers, and it is the whole list.
+
+**Torrent daemons** — qBittorrent, Transmission, Deluge, rTorrent, Synology
+Download Station, aria2, Flood, Freebox Download, Hadouken, uTorrent /
+BitTorrent, porla, Vuze, BiglyBT.
+
+**Debrid and cloud** — Real-Debrid, AllDebrid, Premiumize, TorBox,
+Debrid-Link, Offcloud, put.io, Linksnappy. These do not run on your hardware:
+the service fetches the release, ROMarr downloads the result into that
+client's **Save Path**, and the importer reads it from there. Only what ROMarr
+itself sent is ever touched — none of these services has a category to filter
+on, so ROMarr keeps a dotfile of its own item ids beside the downloads. Give
+each one its own Save Path if you run more than one.
+
+**Usenet** — SABnzbd, NZBGet, NZBVortex.
+
+**Blackholes** — Torrent Blackhole and Usenet Blackhole. No API and nothing to
+connect to: ROMarr writes the `.torrent` or `.nzb` into a folder your client
+watches, and reads what it finished out of another. That is how you use a
+client this list does not name. Two things to know — a magnet is written as a
+one-line `.magnet` file, which not every client reads, and nothing announces
+the end of somebody else's write, so a finished item is only imported after it
+has sat untouched for **Settle Seconds** (60 by default).
+
+Notes on three of them:
+
+- **Vuze and BiglyBT** speak the Transmission RPC through a plugin that is not
+  installed by default. Vuze itself is no longer developed; BiglyBT is the
+  fork that is.
+- **uTorrent** cannot label a torrent added by URL, so ROMarr sets the label
+  afterwards using the magnet's own infohash. A release grabbed as a
+  `.torrent` link has no hash to use and lands unlabelled.
+- **Freebox Download** needs an App Token, which is issued once after somebody
+  authorises the app on the front panel of the box. ROMarr cannot do that part.
+
+**Tixati is not offered**, and will not be: it has no API at all. Its web
+interface is HTML forms, and reading its transfer list means regex-scraping a
+page that is free to change with any release. Use the Torrent Blackhole with
+Tixati's own watch directory instead.
 
 The category does **not** have to exist in the client first — SABnzbd keeps an
 undefined one verbatim and ROMarr still matches it. Define it there anyway if

@@ -79,6 +79,19 @@ def _vocabulary(values) -> tuple[str, ...]:
 
 # --------------------------------------------------------------- qBittorrent --
 
+def _deselected(row: dict) -> bool:
+    """Whether a torrent holds bytes but has none of them selected.
+
+    `size` is what is selected and `total_size` is what the torrent holds, so
+    the two disagreeing this way is the signature of every file having been
+    marked "do not download" -- and it reads straight off the listing ROMarr
+    already fetches, without a per-torrent call to find out.
+    """
+    return (not row.get("completed")
+            and not row.get("size")
+            and bool(row.get("total_size")))
+
+
 @dataclass(frozen=True)
 class QbitConfig:
     base_url: str
@@ -155,7 +168,12 @@ class QBittorrent:
             return False
 
     def completed(self) -> list[dict]:
-        """Torrents in our category that have finished."""
+        """Torrents in our category that have finished.
+
+        A torrent qBittorrent emptied is repaired and withheld rather than
+        offered to the importer: it reports as finished with nothing on disk,
+        so passing it on produces an import of a file that was never fetched.
+        """
         if not self._authed:
             self.login()
         response = self._session.get(
@@ -164,7 +182,57 @@ class QBittorrent:
             timeout=self._config.timeout,
         )
         response.raise_for_status()
-        return response.json()
+        done = []
+        for row in response.json():
+            if _deselected(row):
+                self.reselect(row)
+            else:
+                done.append(row)
+        return done
+
+    def reselect(self, row: dict) -> bool:
+        """Set every file in one torrent back to normal priority.
+
+        qBittorrent runs its own "Excluded file names" filter as a torrent is
+        added and marks each match "do not download". The lists people paste
+        into it come from the video side of the *arr world and name every
+        archive and disc image -- `*.zip`, `*.7z`, `*.rar`, `*.iso`, `*.bin`,
+        `*.cue` -- which is junk around a film and is the entire payload here.
+        A ROM torrent can lose every one of its files to it, and then reports
+        `amount_left = 0` and sits in a seeding state at 0%: complete, to
+        anyone reading the client, and never going to fetch a byte.
+
+        There is no add-time flag to opt out of that filter, so the only way
+        back is to undo it afterwards. Done from this poll rather than from
+        `add` because a magnet has no file list until its metadata arrives,
+        which is minutes after the add call has returned.
+
+        Only a torrent with *nothing* selected is touched. A part-selected one
+        is somebody's deliberate choice and is left alone.
+        """
+        files = self._session.get(self._url("torrents/files"),
+                                  params={"hash": row.get("hash", "")},
+                                  timeout=self._config.timeout)
+        if not files.ok:
+            return False
+        listing = files.json()
+        if not listing or any(f.get("priority", 1) for f in listing):
+            return False
+        # `index` arrives with the file on any qBittorrent worth talking to,
+        # but it was added mid-life to the API and position is what it means.
+        ids = "|".join(str(f.get("index", i)) for i, f in enumerate(listing))
+        response = self._session.post(
+            self._url("torrents/filePrio"),
+            data={"hash": row.get("hash", ""), "id": ids, "priority": 1},
+            timeout=self._config.timeout,
+        )
+        if not response.ok:
+            log.warning("qbittorrent refused to re-select %s: %s",
+                        row.get("name", ""), response.status_code)
+            return False
+        log.info("re-selected %d file(s) qbittorrent had excluded from %s",
+                 len(listing), row.get("name", ""))
+        return True
 
 
 # ---------------------------------------------------------------------- RomM --
