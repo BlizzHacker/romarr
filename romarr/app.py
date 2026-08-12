@@ -3076,6 +3076,11 @@ class ROMarr:
                     added += 1
             if progress is not None:
                 progress["seen"], progress["added"] = seen, added
+                # Reported live, not only in the final result. Without this
+                # the page showed "0 verified" for the twenty minutes the
+                # walk takes while the flags were in fact being written --
+                # which reads as a broken feature rather than a running one.
+                progress["verified"] = confirmed
                 # Save as we go: a restart part-way through should keep the
                 # work already done rather than starting from nothing. It
                 # lost 30,000 hashes to a restart once, which is exactly the
