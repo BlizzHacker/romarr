@@ -1570,18 +1570,30 @@ RENDER.discover=async()=>{
   const d=await j('/api/v1/discover?shelf='+DISC.shelf).catch(()=>({items:[]}));
   const shelf=DISC.shelf;
   if(!d.items||!d.items.length){
+    // Whatever the server says is missing, verbatim. It knows which
+    // providers are configured and which credential is blank; a fixed line
+    // here naming one provider is how somebody with a working IGDB setup
+    // gets told to go and register for RAWG.
     $('#d-out').innerHTML=`<div class="empty">${esc(d.error||'Nothing to show.')}</div>`;
     return;
   }
+  const src=d.provider_label||'a metadata provider';
   const requestable=g=>(g.platforms||[]).filter(p=>
     PLATFORMS.some(x=>x.name.toLowerCase()===String(p).toLowerCase()
       ||x.slug===String(p).toLowerCase()));
-  $('#d-out').innerHTML=`<div class="grid">${d.items.map((g,i)=>{
+  // Every tile carries where it came from. These sit one button away from
+  // the library grid, which looks identical, and a shelf that lets a
+  // catalogue entry pass for a game you own is worse than an empty page.
+  $('#d-out').innerHTML=`<p class="help">${fmt(d.items.length)} title(s) from
+      ${esc(src)}'s catalogue — not rows in your library. Request adds one to
+      Wanted.</p>
+    <div class="grid">${d.items.map((g,i)=>{
     const plats=requestable(g);
     return `<div class="tile">
       <div class="art" style="background-image:url('${esc(g.cover_url||'')}')"></div>
       <div class="nm">${esc(g.title)}</div>
       <div class="pf">${esc(g.released||'')}${g.rating?' · ★'+g.rating.toFixed(1):''}</div>
+      <div class="pf" style="padding-top:0;opacity:.7">via ${esc(g.source||src)}</div>
       ${plats.length?`<div class="rowact" style="margin-top:4px">
         <button data-dreq="${i}">Request</button></div>`
         :`<div class="pf" style="opacity:.6">no retro platform</div>`}</div>`;
@@ -3184,9 +3196,9 @@ RENDER.calendar=async()=>{
         :'Nothing on this day.')+'</div>')
     +'</div>'
     +'<div class="card" style="margin-top:14px"><h3>Elsewhere</h3>'
-    +'<p class="help">A metadata provider can answer about games nobody here '
-    +'owns. It needs an API key under Settings → Metadata; everything above '
-    +'needs nothing at all.</p><div id="cal-web"><div class="empty">Checking…</div></div>'
+    +'<p class="help" id="cal-web-note">A metadata provider can answer about '
+    +'games nobody here owns — everything above needs nothing at all.</p>'
+    +'<div id="cal-web"><div class="empty">Checking…</div></div>'
     +'</div>';
 
   document.querySelectorAll('[data-calview]').forEach(b=>b.onclick=()=>{
@@ -3199,13 +3211,29 @@ RENDER.calendar=async()=>{
   // Second, and separately: a provider calendar shows a request button
   // because those are games you do not have. Nothing above does — you
   // already own everything on it.
-  const w=await j('/api/v1/calendar').catch(()=>({items:[],error:'unavailable'}));
+  //
+  // On the Upcoming view the window loses its backward half. The library
+  // half of that view can only ever say "you own nothing unreleased", which
+  // is true and is the point; pairing it with a provider list that is mostly
+  // last month's releases answers a question nobody asked.
+  //
+  // back=-1 rather than back=0, because a window that opens today opens on
+  // today's releases — forty of them on a busy day, every one of them
+  // already out, filling a shelf headed "still to come".
+  const w=await j('/api/v1/calendar'+(d.view==='upcoming'?'?back=-1':''))
+    .catch(()=>({items:[],error:'unavailable'}));
   const web=w.items||[];
+  const wsrc=w.provider_label||'a metadata provider';
+  if(web.length) $('#cal-web-note').textContent=fmt(web.length)+' title(s) from '
+    +wsrc+"'s catalogue, "+(d.view==='upcoming'?'still to come':'either side of today')
+    +' — none of these are rows in your library, which is why they have a '
+    +'Request button and nothing above does.';
   $('#cal-web').innerHTML=web.length
     ?'<div class="pgrid">'+web.map((g,n)=>'<div class="pcard">'
       +'<h4>'+esc(g.title)+'</h4>'
       +'<div class="meta"><span class="pill">'+esc(g.released||'TBA')+'</span>'
       +(g.upcoming?'<span class="pill" style="background:var(--info);color:#06131f">upcoming</span>':'')
+      +'<span class="pill">'+esc(g.source||wsrc)+'</span>'
       +'</div>'
       +'<div class="desc">'+esc((g.platforms||[]).slice(0,4).join(', '))+'</div>'
       +'<div class="rowact" style="margin-top:6px"><button data-calreq="'+n+'">Request</button></div>'

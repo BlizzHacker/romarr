@@ -73,7 +73,15 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "/api/v1/metadata/schema": ("GET", "Metadata providers and their fields."),
     "/api/v1/metadata/lookup": ("GET", "Identify a file. Reports matched_by as "
                                        "'dat' or 'filename'."),
-    "/api/v1/calendar": ("GET", "Games released recently or due soon."),
+    "/api/v1/calendar": ("GET", "Games released recently or due soon, from "
+                                "the first configured metadata provider that "
+                                "can answer a date range (RAWG or IGDB). "
+                                "?back= and ?ahead= are days either side of "
+                                "today, and ?back= goes negative: ?back=-1 "
+                                "opens the window tomorrow, which is the "
+                                "forward half. Every row carries "
+                                "owned=false -- these are catalogue entries, "
+                                "not library rows."),
     "/api/v1/connection/schema": ("GET", "The eight notification providers."),
     "/api/v1/connection/test": ("POST", "Send a test notification to every "
                                         "configured connection."),
@@ -112,7 +120,12 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "/api/v1/log/tail": ("GET", "The live process log: records after ?since=, "
                                 "filtered to ?level= and up."),
     "/api/v1/discover": ("GET", "Browse a storefront shelf: "
-                                "?shelf=popular|new|upcoming."),
+                                "?shelf=popular|new|upcoming, served by the "
+                                "first configured provider that can browse "
+                                "(RAWG or IGDB) and named in provider_label. "
+                                "Rows carry owned=false -- they come from a "
+                                "catalogue, not from your library. `error` "
+                                "says which credential is actually missing."),
     "/api/v1/stats": ("GET", "What this install has done: events, imports by "
                              "platform, grabs by indexer, shelf totals."),
     "/api/v1/game/meta": ("GET", "The shelf: status, rating and notes, for "

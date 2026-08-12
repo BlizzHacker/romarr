@@ -2859,11 +2859,20 @@ class ROMarr:
             out["day"] = ""
             out["items"] = [self._shelf_row(g) for g in rows[:limit]]
             if not rows:
+                # Unchanged in substance now that a metadata provider can
+                # answer the same question: this view is about the library,
+                # the library has nothing unreleased in it, and the provider
+                # shelf underneath is a different claim about different
+                # games. Merging the two would be the easy lie -- a page that
+                # looks like the operator has a release schedule when what
+                # they have is somebody else's catalogue.
                 out["note"] = ("RomM holds no unreleased titles. Every row in "
                                "a ROM library is a file, or a catalogue entry "
                                "for a game that already shipped, so there is "
                                "no release schedule to show -- and ROMarr "
-                               "will not invent one.")
+                               "will not invent one. Anything under Elsewhere "
+                               "came from a metadata provider's catalogue and "
+                               "is owned by nobody here.")
             return out
         out["selected_day"] = chosen
         # An anniversary has no year, so it is not dressed up as a date. The
@@ -3026,7 +3035,9 @@ class ROMarr:
                     "error": "the attached library server does not publish "
                              "file hashes, so netplay cannot be seeded from "
                              "it -- run an audit instead"}
-        added = offset = seen = 0
+        from .dat import VERIFIED
+
+        added = offset = seen = confirmed = 0
         truncated = ""
         while offset < 500_000:
             try:
@@ -3048,8 +3059,20 @@ class ROMarr:
                 break
             seen += raw
             for row in page:
+                # The library server's hash says what a file IS. Whether it
+                # is a good dump is a different claim, and only a DAT can
+                # make it -- so check here rather than leaving the whole
+                # index unverified until somebody runs an hours-long audit
+                # over a library this size. That audit still upgrades what
+                # a DAT does not cover; this just stops it being the only
+                # way to ever see a verified flag.
+                good = row["verified"]
+                if not good and self.dats is not None:
+                    good = self.dats.lookup(sha1=row["sha1"]).status == VERIFIED
+                    if good:
+                        confirmed += 1
                 if self.hashes.add(row["sha1"], row["name"], row["platform"],
-                                   row["verified"], row.get("path", "")):
+                                   good, row.get("path", "")):
                     added += 1
             if progress is not None:
                 progress["seen"], progress["added"] = seen, added
@@ -3071,7 +3094,7 @@ class ROMarr:
                  added, seen, len(self.hashes))
         without = max(0, seen - added)
         return {"ok": True, "added": added, "seen": seen,
-                "total": len(self.hashes),
+                "total": len(self.hashes), "verified": confirmed,
                 "stopped_early": bool(truncated), "error": truncated,
                 "detail": (f"Stopped after {seen:,} entries: {truncated}. "
                            f"{added:,} hashes were kept; run it again to "
@@ -3080,9 +3103,12 @@ class ROMarr:
                           f"hash. Netplay can match those. The other "
                            f"{without:,} are catalogued entries your library "
                            f"has never scanned off a disk, so there is "
-                           f"nothing to match them on. They are all marked "
-                           f"unverified until an audit checks them against "
-                           f"a DAT.")}
+                           f"nothing to match them on. "
+                           + (f"{confirmed:,} matched a No-Intro or Redump "
+                              f"dump and are marked verified."
+                              if confirmed else
+                              "None matched a DAT, so all are unverified -- "
+                              "check the DAT directory under Settings."))}
 
     def save_peers(self) -> None:
         """Persist relationships. Called after every change to one."""
@@ -4384,7 +4410,15 @@ def make_handler(service: ROMarr):
                             {"name": "enable", "label": "Enable",
                              "type": "bool", "default": True},
                         ] + [
-                            {"name": f, "label": f.replace("_", " ").title(),
+                            # `labels` where the storage key and the thing
+                            # the operator is holding have drifted apart:
+                            # IGDB's `token` is a Twitch client secret, and
+                            # a box labelled "Token" next to help text about
+                            # a secret is how somebody pastes the wrong half
+                            # of the credential.
+                            {"name": f,
+                             "label": spec.get("labels", {}).get(
+                                 f, f.replace("_", " ").title()),
                              "type": "secret", "default": "",
                              "help": spec.get("help", "")}
                             for f in spec["fields"]
@@ -4667,7 +4701,13 @@ def make_handler(service: ROMarr):
                     old_cfg = service.store.get_item("metadata_providers",
                                                      str(cfg["id"])) or {}
                     for key in secrets:
-                        if cfg.get(key) in ("********", ""):
+                        # A key that is absent counts the same as one sent
+                        # back masked. `put_item` replaces the whole entry,
+                        # so without this a caller renaming a provider wipes
+                        # the credential it was renaming -- and the provider
+                        # then reports itself as unconfigured, which is the
+                        # exact confusion this endpoint keeps producing.
+                        if cfg.get(key, "") in ("********", ""):
                             cfg[key] = old_cfg.get(key, "")
                 saved = service.store.put_item("metadata_providers", cfg)
                 service.reload_metadata()
@@ -4724,7 +4764,10 @@ def make_handler(service: ROMarr):
                     old_cfg = service.store.get_item("metadata_providers",
                                                      str(cfg["id"])) or {}
                     for key in ("api_key", "token", "client_id"):
-                        if cfg.get(key) in ("********", ""):
+                        # Absent as well as masked, so testing a saved
+                        # provider by id alone reports on the credential
+                        # that is stored rather than on an empty one.
+                        if cfg.get(key, "") in ("********", ""):
                             cfg[key] = old_cfg.get(key, "")
                 try:
                     info = spec["lookup"](cfg, "Chrono Trigger")

@@ -190,3 +190,41 @@ def test_seeding_says_how_many_entries_had_no_hash(tmp_path):
     result = svc.index_hashes_from_library()
     assert "90" in result["detail"], \
         "an operator needs to know the gap is their library, not a failure"
+
+
+def test_seeding_promotes_a_dump_the_dats_recognise(tmp_path):
+    """RomM's hash says what a file IS; only a DAT says it is a good dump.
+
+    Without this the whole index stayed unverified until somebody ran an
+    audit, which on a 166,548-row library is a job nobody runs -- so a
+    verified flag was unreachable in practice and netplay could only ever
+    answer 'unverified'.
+    """
+    from romarr.app import ROMarr
+    from romarr.dat import parse_dat
+
+    known = f"{7:040x}"
+    dat = ("clrmamepro (\n\tname \"T\"\n)\n\n"
+           "game (\n\tname \"Known Game\"\n"
+           f"\trom ( name \"k.sfc\" size 8 sha1 {known} )\n)\n")
+
+    class Lib:
+        def hashes(self, limit=500, offset=0, timeout=None):
+            if offset:
+                return [], 0
+            return ([{"sha1": known, "name": "Known Game", "platform": "snes",
+                      "verified": False, "path": "k.sfc"},
+                     {"sha1": f"{8:040x}", "name": "Unknown Game",
+                      "platform": "snes", "verified": False, "path": "u.sfc"}],
+                    2)
+
+    svc = ROMarr(env={"ROMARR_DATA": str(tmp_path / "r.json")})
+    svc.romm = svc.game_library = Lib()
+    svc.dats.dats.append(parse_dat(dat))
+
+    result = svc.index_hashes_from_library()
+
+    assert result["verified"] == 1, "only the dump the DAT knows"
+    assert svc.hashes.by_sha1(known).verified is True
+    assert svc.hashes.by_sha1(f"{8:040x}").verified is False, \
+        "a hash no DAT recognises stays unverified rather than being assumed"
