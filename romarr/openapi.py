@@ -252,7 +252,12 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "/api/v1/indexer": ("GET", "Configured indexers, with keys masked."),
     "/api/v1/indexer/test": ("POST", "Test one indexer's connection."),
     "/api/v1/downloadclient": ("GET", "Configured download clients."),
-    "/api/v1/downloadclient/schema": ("GET", "The five client types and their fields."),
+    # Counted, not stated: this said "five" while there were eight, and would
+    # have said eight the moment a ninth landed. A description that drifts is
+    # the thing this file exists to prevent.
+    "/api/v1/downloadclient/schema": ("GET", "Every download client type and "
+                                             "its fields, torrent, usenet, "
+                                             "debrid, direct HTTP and browser."),
     "/api/v1/downloadclient/test": ("POST", "Test one client's connection."),
     "/api/v1/downloadclient/browser": ("GET", "Whether the headless-browser "
                                               "download lane can run here, "
