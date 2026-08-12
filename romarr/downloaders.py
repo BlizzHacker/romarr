@@ -1362,14 +1362,20 @@ CLIENT_TYPES = {
             FIELD("enable", "Enable", "bool", True),
             FIELD("save_path", "Save Path", default="/downloads/sites"),
             FIELD("host", "Browser Host",
-                  help="Leave blank to launch Chromium on this machine. Set "
-                       "it to a host running `chromium --headless "
-                       "--remote-debugging-port=9222` to use one elsewhere."),
-            FIELD("port", "Browser Port", "int", 9222),
+                  help="Blank launches Chromium here. For a browser in "
+                       "another container, run `playwright run-server "
+                       "--host 0.0.0.0 --port 3000` on it and set Scheme to "
+                       "ws -- the driver runs there and streams the finished "
+                       "file back, so the two need no shared directory."),
+            FIELD("port", "Browser Port", "int", 3000),
+            FIELD("scheme", "Scheme", default="ws",
+                  help="ws for a playwright run-server; http for a bare "
+                       "`chromium --remote-debugging-port`, which can only "
+                       "hand the file over through a shared directory."),
             FIELD("remote_download_dir", "Browser's Download Directory",
-                  help="Only for a browser on another host, and only when "
-                       "both can see the same directory. Translated with the "
-                       "remote path mappings."),
+                  help="Only for an http endpoint, and only when both "
+                       "containers can see the same directory. Translated "
+                       "with the remote path mappings."),
             FIELD("delay", "Seconds between requests", "int", 5),
         ],
     },
@@ -1450,10 +1456,16 @@ def build_client(cfg: dict):
             password=cfg.get("password", ""), category=category))
     elif kind in ("direct", "browser"):
         # A blank host means "launch one here", so an unset host must not be
-        # assembled into `http://localhost:9222` -- that would point the
-        # driver at a machine nobody configured and fail as a connection
-        # refused rather than as the local launch that was asked for.
-        endpoint = url if (kind == "browser" and cfg.get("host")) else ""
+        # assembled into `ws://localhost:3000` -- that would point the driver
+        # at a machine nobody configured and fail as a connection refused
+        # rather than as the local launch that was asked for.
+        endpoint = ""
+        if kind == "browser" and cfg.get("host"):
+            # base_url_for only speaks http and https; the scheme decides how
+            # the finished file gets back here, so it is a field of its own
+            # rather than a guess from the port number.
+            scheme = str(cfg.get("scheme") or "ws").strip().lower()
+            endpoint = re.sub(r"^https?://", f"{scheme}://", url, count=1)
         client = SiteDownloader(SiteConfig(
             save_path=cfg.get("save_path", ""),
             mode=kind,

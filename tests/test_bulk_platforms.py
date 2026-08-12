@@ -299,3 +299,32 @@ def test_adding_platforms_did_not_move_an_existing_one():
     assert resolve("Nintendo Switch") is None
     assert resolve("Amstrad PCW") is None
     assert platforms.by_slug("wii").max_size == 12 * 1024 ** 3
+
+
+def test_platforms_written_as_words_resolve():
+    """Sites that spell platforms out are the normal case, not the odd one.
+
+    resolve() is exact-match only since it was hardened, so a spelling it
+    does not declare returns None. Webmulator writes "playstation-1", and
+    without this alias every PlayStation row on that site is silently
+    dropped -- the safe failure, but still a whole platform missing.
+    """
+    from romarr.platforms import resolve
+
+    for spelling in ("playstation-1", "playstation 1", "ps1", "psx"):
+        got = resolve(spelling)
+        assert got is not None, f"{spelling!r} does not resolve"
+        assert got.slug == "psx", f"{spelling!r} resolved to {got.slug}"
+
+
+def test_neo_geo_stays_ambiguous_rather_than_guessing():
+    """ROMarr models AES and MVS separately and nothing picks between them.
+
+    A bare "neo-geo" is genuinely ambiguous, so it must resolve to nothing
+    rather than to whichever entry happens to sort first -- a wrong platform
+    files ROMs into the wrong directory.
+    """
+    from romarr.platforms import resolve
+
+    assert resolve("neo-geo") is None
+    assert resolve("neo geo") is None

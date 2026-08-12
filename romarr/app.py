@@ -61,6 +61,11 @@ from .library import import_rom, map_remote_path
 from .collections import is_translation
 from .auth import DISABLED as AUTH_DISABLED
 from .auth import MIN_PASSWORD, SESSION_COOKIE, Auth, new_api_key, parse_cookies
+from .capture import MAX_BODY_BYTES as CAPTURE_MAX_BODY
+from .capture import Rejected as CaptureRejected
+from .capture import index_dir as capture_index_dir
+from .capture import ingest as capture_ingest
+from .capture import status as capture_status
 from .catalogue import (Submission, check_source, facets as hub_facets,
                         search as hub_search, submission_link)
 from .frontends import FORMATS as FRONTEND_FORMATS
@@ -4157,6 +4162,36 @@ def make_handler(service: ROMarr):
             except (ValueError, OSError):
                 pass
 
+        #: How much of an over-sized body is drained before the socket is
+        #: simply closed. Generous, because draining costs one buffer rather
+        #: than the whole body -- but not unbounded, or a caller declaring ten
+        #: gigabytes holds a worker for as long as it cares to send them.
+        DISCARD_CEILING = 16 << 20
+
+        def _discard(self, length: int) -> None:
+            """Throw a body away as it arrives, without ever holding it.
+
+            `_drain` reads the body in one call, which is right for the small
+            refusals it was written for and wrong for a body being refused
+            precisely *because* it is enormous: `read(length)` allocates
+            whatever the caller declared. This reads a chunk at a time and
+            keeps none of it, so the memory cost is one buffer regardless.
+            """
+            remaining = min(max(length, 0), self.DISCARD_CEILING)
+            try:
+                while remaining > 0:
+                    chunk = self.rfile.read(min(65536, remaining))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+            except (ValueError, OSError):
+                pass
+            if length > self.DISCARD_CEILING:
+                # More still coming than is worth waiting for. The reply is
+                # already on its way; the connection goes rather than the
+                # worker sitting through the rest.
+                self.close_connection = True
+
         def _authorised(self) -> bool:
             # Single sign-on first, when configured. `self.client_address` is
             # the socket peer -- the only trustworthy source. Reading it from
@@ -4514,6 +4549,14 @@ def make_handler(service: ROMarr):
                 return self._json(200, {"api_key": service.auth.api_key})
             if route.path == "/api/v1/system/tasks":
                 return self._json(200, {"items": service.scheduler.status()})
+            if route.path == "/api/v1/capture/status":
+                # What the extension's options page calls to prove its
+                # settings work. Authenticated, so a wrong key answers 401 --
+                # which is the entire value of the test. Pointing it at
+                # /api/health instead would have reported success for a key
+                # the server had rejected, because health answers strangers.
+                return self._json(200, capture_status(
+                    capture_index_dir(service._env, service.store.path)))
             if route.path == "/api/v1/peer/shelf":
                 # Peer-facing. Authenticated by peer id + token, never by
                 # the operator's session -- a peer is not a user here.
@@ -4687,11 +4730,54 @@ def make_handler(service: ROMarr):
         def _post(self):
             route = urlparse(self.path)
             length = int(self.headers.get("Content-Length") or 0)
+            # The capture body is assembled by a web page, so its size is
+            # checked before it is read rather than after. `read(length)` on a
+            # declared gigabyte allocates a gigabyte first and refuses second,
+            # which is not a refusal. Only this route is bounded here: a
+            # restore legitimately posts a large backup, and a blanket cap
+            # would break it.
+            if (route.path == "/api/v1/capture"
+                    and length > CAPTURE_MAX_BODY):
+                # Drained in chunks and thrown away rather than read whole.
+                # That is the distinction that matters: discarding as it
+                # arrives costs one buffer no matter what was declared, while
+                # `read(length)` costs whatever the caller claimed. Draining
+                # at all is `_drain`'s reasoning -- a POST has already sent its
+                # body, and replying without reading it aborts the connection
+                # so the caller never sees the refusal. Verified: skipping
+                # this gave the poster a dropped socket instead of a 413.
+                self._discard(length)
+                self.send_response(413)
+                self.send_header("Content-Type", "application/json")
+                refusal = json.dumps({
+                    "error": "capture too large",
+                    "limit_bytes": CAPTURE_MAX_BODY,
+                    "detail": "post the page in smaller batches",
+                }).encode()
+                self.send_header("Content-Length", str(len(refusal)))
+                self.end_headers()
+                return self.wfile.write(refusal)
             try:
                 body = json.loads(self.rfile.read(length) or b"{}")
             except json.JSONDecodeError:
                 return self._json(400, {"error": "invalid json"})
 
+            if route.path == "/api/v1/capture":
+                # Catalogue rows the operator's own browser saw, from a site no
+                # HTTP client can read. Authenticated by the same gate as every
+                # other route and deliberately NOT on OPEN_PATHS: the extension
+                # holds the operator's API key because the operator pasted it
+                # in, which is a credential rather than an exemption.
+                try:
+                    report = capture_ingest(
+                        body, directory=capture_index_dir(
+                            service._env, service.store.path))
+                except CaptureRejected as exc:
+                    # Malformed input is refused whole. Storing the good half
+                    # of a payload that lied about the rest would put rows in
+                    # the index that nobody could account for.
+                    return self._json(400, {"ok": False, "error": str(exc)})
+                return self._json(200, report)
             if route.path == "/api/v1/blocklist":
                 # A release is blocked by identity, so a title the indexer
                 # rewrites tomorrow is still the same block.

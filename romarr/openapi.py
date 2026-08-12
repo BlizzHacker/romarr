@@ -113,6 +113,20 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
                                          "installed from."),
     "/api/v1/hub/submit": ("POST", "Validate a catalogue submission and return "
                                    "a link. ROMarr does not post it."),
+    "/api/v1/capture": ("POST", "Catalogue rows captured by the browser "
+                                "extension from a page the operator visited, "
+                                "for sites no HTTP client can read. Validated "
+                                "as untrusted input: bounded size, a known "
+                                "source, URLs only on that source's own "
+                                "hosts, and platforms resolved rather than "
+                                "guessed. Appends to idx-<slug>.jsonl and "
+                                "reports what was indexed, already known, "
+                                "skipped and unmapped."),
+    "/api/v1/capture/status": ("GET", "Whether this install can accept a "
+                                      "capture: the sources it knows and "
+                                      "whether the index directory is "
+                                      "writable. What the extension's "
+                                      "connection test calls."),
     "/api/v1/webhook": ("POST", "Inbound game request from a front-end."),
     "/api/request": ("POST", "Request a game."),
     "/api/v1/system/tasks": ("GET", "The scheduled jobs: interval, last run, "

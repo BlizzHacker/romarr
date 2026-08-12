@@ -144,7 +144,31 @@ def split_control(url: str) -> tuple[str, str]:
     return url, ""
 
 
-def availability(cdp_url: str = "") -> tuple[bool, str]:
+def _open(pw, endpoint: str):
+    """Get hold of a browser, from whichever of the three places it lives.
+
+    The endpoint's scheme picks the shape, and the difference is not cosmetic
+    -- it decides whether the downloaded bytes can get back here at all:
+
+      * blank -- launch Chromium on this machine. Everything is local.
+      * ws:// -- a `playwright run-server` on the browser's host. The driver
+        runs THERE, owns the finished download, and streams it back over the
+        same socket. This is the shape to use for a browser in another
+        container, because it needs no shared filesystem.
+      * http:// -- a bare `chromium --headless --remote-debugging-port`.
+        Playwright's driver runs HERE and tells that Chromium to save into a
+        path on this machine; a Chromium on another host duly creates that
+        path on its own disk and the file never arrives. It works when the
+        two share a directory, and `remote_dir` is how that is declared.
+    """
+    if not endpoint:
+        return pw.chromium.launch(headless=True, args=list(LAUNCH_ARGS))
+    if endpoint.startswith(("ws://", "wss://")):
+        return pw.chromium.connect(endpoint)
+    return pw.chromium.connect_over_cdp(endpoint)
+
+
+def availability(endpoint: str = "") -> tuple[bool, str]:
     """Whether a browser can be driven from here, and why not when it cannot.
 
     Called by the status page and by `reachable()`, so it answers rather than
@@ -157,15 +181,11 @@ def availability(cdp_url: str = "") -> tuple[bool, str]:
         return False, str(err)
     try:
         with sync_playwright() as pw:
-            if cdp_url:
-                browser = pw.chromium.connect_over_cdp(cdp_url)
-                version = browser.version
-                browser.close()
-                return True, f"connected to {version}"
-            browser = pw.chromium.launch(headless=True, args=list(LAUNCH_ARGS))
+            browser = _open(pw, endpoint)
             version = browser.version
             browser.close()
-            return True, f"chromium {version}"
+            return True, (f"connected to chromium {version}" if endpoint
+                          else f"chromium {version}")
     except Exception as err:
         # Anything from "no browser binary" to "that host is not listening".
         # The class name plus the message is what tells those apart.
@@ -262,7 +282,7 @@ def declared_user_agent(browser, token: str) -> str | None:
 
 def fetch(page_url: str, destination: Path, *, control: str = "",
           cdp_url: str = "", ua_token: str = "", timeout: int = 120,
-          remote_dir: str = "", path_mappings=()) -> Path:
+          remote_dir: str = "", path_mappings=()) -> Path:  # noqa: C901
     """Open the page, click the real control, keep what the browser downloads.
 
     `destination` is a directory. The saved file keeps the name the site gave
@@ -279,10 +299,7 @@ def fetch(page_url: str, destination: Path, *, control: str = "",
     destination.mkdir(parents=True, exist_ok=True)
 
     with sync_playwright() as pw:
-        if cdp_url:
-            browser = pw.chromium.connect_over_cdp(cdp_url)
-        else:
-            browser = pw.chromium.launch(headless=True, args=list(LAUNCH_ARGS))
+        browser = _open(pw, cdp_url)
         try:
             context = browser.new_context(
                 accept_downloads=True,
@@ -308,16 +325,17 @@ def fetch(page_url: str, destination: Path, *, control: str = "",
 def _keep(download, destination: Path, remote_dir: str, path_mappings) -> Path:
     """Put the downloaded file where ROMarr can import it.
 
-    Two shapes, because the browser is not always on this machine:
+    `save_as` covers two of the three shapes in _open: a local launch, where
+    everything is on one disk, and a `ws://` Playwright server, which streams
+    the finished artifact back over its own socket.
 
-      * A browser launched here writes to a path this process can open, and
-        `save_as` is the whole story.
-      * A browser reached over CDP writes to ITS filesystem. When the two
-        share a directory -- a bind mount, a volume, an NFS export -- the
-        remote path is translated with the same mapping table the download
-        clients already use. When they do not share one, there is no way to
-        move the bytes and saying so beats a FileNotFoundError from inside
-        the driver.
+    It cannot cover the third. A bare `--remote-debugging-port` Chromium on
+    another host was told to save into a path on THIS machine, so it made
+    that path on its own disk and the file is over there. That is recoverable
+    only if the two share a directory, which is what `remote_dir` declares --
+    translated with the same mapping table the download clients already use.
+    Without one there is no way to move the bytes, and saying so beats a
+    FileNotFoundError raised from inside somebody else's driver.
     """
     name = download.suggested_filename or "download.bin"
     target = destination / name

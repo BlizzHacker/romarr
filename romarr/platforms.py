@@ -186,7 +186,12 @@ PLATFORMS: tuple[Platform, ...] = (
     # narrowed.
     Platform("psx", "Sony PlayStation",
              (".chd", ".pbp", ".cue", ".bin", ".img", ".ccd", ".iso", ".m3u"),
-             ("playstation", "sony playstation", "ps1", "psone", "psx"),
+             # "playstation 1" is how sites that write platforms as words
+             # spell it, and resolve() is exact-match only -- a near miss
+             # returns None rather than the wrong console, so the spelling
+             # has to be declared or every row on such a site is dropped.
+             ("playstation", "sony playstation", "ps1", "psone", "psx",
+              "playstation 1", "playstation-1"),
              max_size=2 * GB, media=DISC),
     Platform("ps2", "Sony PlayStation 2",
              (".chd", ".iso", ".cso", ".bin", ".gz"),

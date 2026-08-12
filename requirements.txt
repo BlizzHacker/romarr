@@ -8,3 +8,15 @@ requests>=2.31
 # Linux-only, and optional by design: an install without it still runs, logs a
 # warning, and says so on the status page.
 pyseccomp>=0.1.2; sys_platform == "linux"
+
+# NOT LISTED, deliberately: playwright.
+#
+# The Headless Browser download client drives a real Chromium for the handful
+# of ROM sites whose download is a form their own page submits. The driver is
+# ~120MB and the browser another 236 packages and 867MB on Debian, which is
+# not something to put in a 1GB container that will never open a browser.
+#
+# So it is imported lazily, exactly like pyseccomp: ROMarr starts and downloads
+# over plain HTTP without it, and the Download Clients page says browser mode is
+# not configured rather than failing somewhere obscure. Installing it is one
+# line in the README, on whichever machine is to run the browser.

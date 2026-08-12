@@ -72,6 +72,8 @@ SCORE      every release, with written reasons
 GRAB       the winner goes to whichever client speaks its protocol
   │          torrent → qBittorrent/Transmission/Deluge/rTorrent/Synology/Real-Debrid
   │          usenet  → SABnzbd/NZBGet
+  │          ROM site → a plain GET, or a real browser click where the site
+  │                     has no fetchable URL
   ▼
 IMPORT     within a minute of completion, on the clock
   │          the actual ROM picked out of the archive (zip/7z/rar, zip-slip safe)
@@ -225,7 +227,7 @@ existing ROM is never silently overwritten.
 | | |
 |---|---|
 | **Indexer** | Prowlarr, or any Torznab / Newznab indexer, or a plain torrent RSS feed |
-| **Download client** | qBittorrent / Transmission / Deluge / rTorrent / Synology DS / Real-Debrid (torrent) and/or SABnzbd / NZBGet (usenet) |
+| **Download client** | qBittorrent / Transmission / Deluge / rTorrent / Synology DS / Real-Debrid (torrent) and/or SABnzbd / NZBGet (usenet). ROM-site plugins need neither — see [Downloading from a ROM site](#downloading-from-a-rom-site) |
 | **Game library** | RomM, Gaseous, Retrom, or a directory on disk |
 | **Runtime** | Docker, Home Assistant, or Python 3.11+ |
 
@@ -641,6 +643,70 @@ Plugins are third-party and sandboxed by the host — install only ones you trus
 **API:** `GET /api/v1/hub/plugins`, `POST /api/v1/hub/plugin` (`install`, `enable`,
 `disable`, `uninstall`).
 
+### Downloading from a ROM site
+
+Sites that serve files over plain HTTP have no torrent and no NZB, so ROMarr
+fetches them itself. Two download clients on the **Download Clients** page
+cover it, and a plugin declares which one its site needs:
+
+| Client | Protocol | For |
+|---|---|---|
+| **Direct HTTP** | `direct` | The site publishes a file URL. A GET fetches it. No dependencies. Prefer this. |
+| **Headless Browser** | `browser` | The download is a form the site's own page submits, or a link its JavaScript builds. |
+
+**Why the browser mode exists, and what it is not.** A few sites have no
+fetchable URL at all — Vimm's Lair's download is a POST carrying a `mediaId`,
+and the GET-shaped URL that appears in two published catalogues returns HTTP
+400, because it was guessed rather than observed. The only honest way to fetch
+from a site like that is to be on the page: a real headless Chromium opens the
+real page and clicks the real download control, so every header that goes out,
+`Referer` included, is one the browser genuinely produced. That is automating
+a user action. It is *not* a bot-detection bypass, and it will not become one:
+
+* CAPTCHAs are not answered.
+* A Cloudflare (or any other) challenge ends the fetch, by name, with the
+  reason reported to you.
+* No stealth plugin, no fingerprint spoofing, no `navigator.webdriver`
+  patching, no forged headers, and no signing in anywhere.
+* `robots.txt` is honoured including `Crawl-delay`, one file is fetched at a
+  time, 429 and 503 are waited out, and a 403 stops that site for good.
+
+A site that can only be downloaded from by doing one of those is reported as
+**unavailable, with the reason**, and its plugin stays catalogue-only. That is
+the finished answer for such a site. `tests/test_site_downloader.py` asserts
+the absence of the evasion machinery, so the promise fails the build rather
+than eroding quietly.
+
+**Installing the browser mode.** It is deliberately not a ROMarr dependency —
+Chromium is 867MB and 236 packages on Debian, which is not something to put in
+a 1GB container that will never use it. Direct downloads work without any of
+this, and the Download Clients page says so rather than failing obscurely.
+
+```bash
+# On the machine that will run the browser:
+pip install playwright && playwright install --with-deps chromium
+```
+
+Then either leave **Browser Host** blank to launch Chromium beside ROMarr, or
+— better for a small container — run the browser somewhere else:
+
+```bash
+# On the browser's host:
+playwright run-server --host 0.0.0.0 --port 3000
+```
+
+and point ROMarr at `ws://<host>:3000`. The driver runs there, so the finished
+file streams back over the same socket and the two need no shared directory.
+(An `http://` endpoint — a bare `chromium --remote-debugging-port` — works too,
+but that Chromium saves onto its own disk, so it needs a directory both can
+see plus a remote path mapping.)
+
+**API:** `GET /api/v1/downloadclient/browser` reports whether the lane can run
+here and why not when it cannot.
+
+**Proof:** `python scripts/prove_site_download.py` fetches the same Archive.org
+file through both modes and checks the SHA-256 matches.
+
 ---
 
 ## Multiple libraries
@@ -682,6 +748,8 @@ The full list, including every way an install can fail to start, is in
 | Imported ROM never appears | Library rescan refused | RomM: grant the account task permission. Gaseous: see above |
 | ROM imports but will not play | Platform has no emulator core in the library's web player | Expected — the ROM is catalogued, not playable in-browser |
 | Hub tab empty | ROM Hub not installed | `pip install "rom-hub @ git+https://github.com/BlizzHacker/rom-hub@master"` |
+| A ROM-site release is refused with "no download client configured for direct" | The site plugin fetches over HTTP and no Direct HTTP client exists | Add one — Download Clients → Add → Direct HTTP |
+| "Browser mode is not configured" on the Download Clients page | No Chromium the browser lane can drive | Expected unless you installed one; see [Downloading from a ROM site](#downloading-from-a-rom-site). Direct downloads are unaffected |
 
 ### Remote path mapping
 
