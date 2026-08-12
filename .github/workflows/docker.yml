@@ -57,12 +57,73 @@ jobs:
           # Lowercase literal: GHCR rejects uppercase, and the repository owner
           # is spelled with capitals.
           images: ghcr.io/blizzhacker/romarr
+          # These are passed to the build as `labels:` below, which means they
+          # are applied *after* the Dockerfile's own LABEL and win. Left to its
+          # defaults this action titles the image `romarr` from the repository
+          # name and takes the description from the GitHub About field, so the
+          # Dockerfile's labels were dead and every registry showed the brand
+          # in lowercase.
+          labels: |
+            org.opencontainers.image.title=ROMarr
+            org.opencontainers.image.description=The *arr for games: request a ROM, ROMarr finds it via Prowlarr, grabs it, and files it into your game library
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=semver,pattern={{major}}
             type=sha,format=short
+
+      # The suite gates the code; nothing gated the image. A broken entrypoint,
+      # a dependency that failed to install, or a missing bsdtar would all pass
+      # every test and publish anyway -- and the first person to find out would
+      # be somebody who pulled it. So one leg is built, booted and questioned
+      # before anything is pushed. The multi-arch build below reuses this
+      # build's cache, so the cost is close to nothing.
+      - name: Build the amd64 leg for a smoke test
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: romarr:smoke
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+
+      - name: Boot the image and ask it whether it is alive
+        run: |
+          set -e
+          docker run -d --name smoke -p 6868:6868 romarr:smoke
+          for _ in $(seq 1 30); do
+            curl -fsS -o /dev/null http://127.0.0.1:6868/api/health && break
+            sleep 2
+          done
+
+          echo "--- liveness ---"
+          curl -fsS http://127.0.0.1:6868/api/health
+
+          # No credential is set anywhere in this job, deliberately. An open
+          # install is the failure mode that matters most for an image people
+          # put on their LAN, and it is checkable without one.
+          echo "--- the gate is on ---"
+          code=$(curl -s -o /dev/null -w '%{http_code}' \
+                 http://127.0.0.1:6868/api/v1/system/status)
+          test "$code" = "401" || { echo "status answered $code, not 401"; exit 1; }
+
+          # bsdtar is not optional: without it every disc-platform import fails
+          # on a format it cannot open, and nothing else in this job would
+          # notice its absence.
+          echo "--- the pieces that are easy to lose ---"
+          docker exec smoke sh -c 'command -v bsdtar >/dev/null' \
+            || { echo "bsdtar missing"; exit 1; }
+          docker exec smoke python -c "import requests, rom_hub" \
+            || { echo "a dependency did not install"; exit 1; }
+
+          echo "--- privileges were dropped ---"
+          docker logs smoke 2>&1 | grep -q "starting as 1000:1000" \
+            || { echo "entrypoint did not drop to PUID:PGID"; exit 1; }
+
+          docker rm -f smoke
 
       - name: Build and push
         uses: docker/build-push-action@v6

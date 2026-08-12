@@ -27,7 +27,15 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import re
+import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+from pathlib import Path
+from urllib.parse import unquote, urlsplit
+from urllib.robotparser import RobotFileParser
 
 import requests
 
@@ -47,6 +55,12 @@ class SABnzbd:
 
     protocol = "usenet"
     name = "SABnzbd"
+
+    #: `add` accepts the release title -- see hand_off. Declared rather than
+    #: inferred from the signature because the caller holds a client it knows
+    #: nothing else about, and handing the keyword to one that cannot take it
+    #: is a TypeError in the middle of a grab.
+    TAKES_NAME = True
 
     def __init__(self, config: SabConfig, session: requests.Session | None = None):
         self._config = config
@@ -122,6 +136,9 @@ class NZBGet:
 
     protocol = "usenet"
     name = "NZBGet"
+
+    #: See hand_off, and SABnzbd.TAKES_NAME for why it is a declaration.
+    TAKES_NAME = True
 
     def __init__(self, config: NzbgetConfig, session: requests.Session | None = None):
         self._config = config
@@ -710,6 +727,487 @@ class RealDebrid:
             return False
 
 
+# ------------------------------------------------------------ ROM sites ----
+#
+# Everything above this line hands a URL to somebody else's daemon and lets it
+# do the fetching. The ROM sites do not work that way: they serve files over
+# ordinary HTTP, there is no torrent and no NZB, and the thing that has to
+# fetch the bytes is ROMarr.
+#
+# Two modes, because the sites divide cleanly into two kinds and only one of
+# them needs anything heavy:
+#
+#   * `direct` -- the site serves a URL. A GET fetches it. Faster, cheaper,
+#     no dependencies, and the default: a plugin asks for a browser only when
+#     plain HTTP genuinely cannot answer.
+#   * `browser` -- the download is a form POST carrying a per-render token, or
+#     a link that only exists after the page's JavaScript has run. Vimm's Lair
+#     is the case that made this necessary. A real headless Chromium loads the
+#     real page and clicks the real control; see browser.py, which also
+#     documents at length what this is not allowed to become.
+#
+# A site that can only be downloaded from by solving a CAPTCHA, defeating a
+# challenge, forging a header or breaking a login is reported as unavailable,
+# with the reason, and its plugin stays catalogue-only. That is the finished
+# answer for such a site, not a gap.
+
+#: Who we say we are. No version in it, deliberately: downloaders.py cannot
+#: import app.py without a cycle, and a version constant duplicated here would
+#: be wrong the first time one of them changed. The URL is the part that
+#: matters to an operator reading their access log -- it tells them what
+#: visited and where to complain.
+SITE_USER_AGENT = "ROMarr (+https://github.com/BlizzHacker/romarr)"
+
+#: Seconds between requests to one host, when robots.txt does not ask for
+#: more. Five is slower than any human browsing and that is the point: this
+#: fetches whole ROMs from small sites run by hobbyists.
+SITE_DELAY = 5.0
+
+#: Statuses worth waiting out. 429 and 503 both mean "later", and the server
+#: usually says how much later in Retry-After.
+SITE_RETRY = (429, 503)
+
+#: The one that means stop. A 403 is a refusal, and retrying a refusal --
+#: or dressing the request up until it stops being refused -- is the
+#: behaviour this whole module exists to not have.
+SITE_FORBIDDEN = 403
+
+
+class SitePolicy:
+    """robots.txt, one request at a time, and a real gap between them.
+
+    Separate from the client because being a good guest is a property of the
+    fetching, not of the mode: the browser lane loads pages from the same
+    small servers the direct lane does, and it would be absurd for one of them
+    to honour a crawl-delay and the other to ignore it.
+
+    The clock is per host. A shared one would make two sites wait for each
+    other for no reason, and a global "one request per five seconds" is not
+    what anybody's robots.txt asked for.
+    """
+
+    #: Reading robots.txt must never cost as much as reading a ROM.
+    ROBOTS_TIMEOUT = 10
+
+    def __init__(self, *, user_agent: str = SITE_USER_AGENT,
+                 delay: float = SITE_DELAY,
+                 session: requests.Session | None = None, sleeper=None):
+        self.user_agent = user_agent
+        self.delay = float(delay)
+        self._session = session or requests.Session()
+        self._sleep = sleeper or time.sleep
+        self._robots: dict[str, object] = {}
+        self._last: dict[str, float] = {}
+
+    @staticmethod
+    def _host(url: str) -> str:
+        parts = urlsplit(url)
+        return f"{parts.scheme}://{parts.netloc}"
+
+    def _rules(self, url: str):
+        """This host's robots.txt, fetched once and kept.
+
+        A network failure or a 5xx is treated as a refusal, which is what
+        RFC 9309 asks for: a site whose robots.txt cannot be read has not
+        given permission, and guessing that it would have is exactly the
+        assumption a polite client does not get to make. A 404 is the
+        opposite -- it is a site saying it has no rules.
+        """
+        host = self._host(url)
+        if host in self._robots:
+            return self._robots[host]
+        parser = RobotFileParser()
+        try:
+            response = self._session.get(
+                f"{host}/robots.txt", timeout=self.ROBOTS_TIMEOUT,
+                headers={"User-Agent": self.user_agent})
+        except requests.RequestException as err:
+            log.warning("robots.txt for %s could not be read: %s", host,
+                        type(err).__name__)
+            self._robots[host] = None
+            return None
+        if response.status_code >= 500:
+            self._robots[host] = None
+            return None
+        if response.status_code >= 400:
+            parser.parse([])          # no rules is not the same as no answer
+        else:
+            parser.parse(response.text.splitlines())
+        self._robots[host] = parser
+        return parser
+
+    def allowed(self, url: str) -> tuple[bool, str]:
+        """Whether robots.txt permits this fetch, and why not when it does not."""
+        rules = self._rules(url)
+        if rules is None:
+            return False, ("robots.txt could not be read, so this site has "
+                           "given no permission to fetch from it")
+        if not rules.can_fetch(self.user_agent, url):
+            return False, "robots.txt disallows this path"
+        return True, ""
+
+    def wait(self, url: str) -> None:
+        """Sleep until this host's turn comes round.
+
+        The site's own crawl-delay wins when it is longer than ours; a site
+        that asks for ten seconds gets ten, not five.
+        """
+        host = self._host(url)
+        gap = self.delay
+        rules = self._robots.get(host)
+        asked = None
+        if rules is not None:
+            try:
+                asked = rules.crawl_delay(self.user_agent)
+            except Exception:
+                asked = None
+        if asked:
+            gap = max(gap, float(asked))
+        previous = self._last.get(host)
+        now = time.monotonic()
+        if previous is not None and now - previous < gap:
+            self._sleep(gap - (now - previous))
+        self._last[host] = time.monotonic()
+
+
+@dataclass(frozen=True)
+class SiteConfig:
+    save_path: str
+    mode: str = "direct"              # "direct" | "browser"
+    #: The CDP endpoint of a browser running somewhere else. Empty means
+    #: launch one here. Named base_url because that is the field every other
+    #: client in this module carries and the status row reads by that name.
+    base_url: str = ""
+    #: Where THAT browser writes its downloads, as it sees the path. Only
+    #: meaningful with base_url set, and only when the two hosts share a
+    #: directory -- see browser._keep.
+    remote_download_dir: str = ""
+    user_agent: str = SITE_USER_AGENT
+    delay: float = SITE_DELAY
+    timeout: int = 120
+    #: How many files to fetch per sweep. One, deliberately: these are small
+    #: sites, and a parallel downloader is the difference between a guest and
+    #: a problem.
+    max_active: int = 1
+
+
+class SiteDownloader:
+    """A ROM site as a download client.
+
+    Shaped like every other client here -- configured / reachable / add /
+    completed -- so nothing else in ROMarr needs to know a file arrived over
+    HTTP rather than BitTorrent.
+
+    `add` records the job and returns; `completed` does the fetching and then
+    reports what is on disk. That is the Real-Debrid shape rather than a
+    thread pool, and for the same reason: the import sweep already runs on a
+    timer, an HTTP handler must not block for the length of a ROM download,
+    and a queue that survives a restart has to be on disk anyway.
+    """
+
+    #: This client can label a job with the release title -- see hand_off.
+    #: It matters more here than anywhere else: the importer matches a
+    #: finished download to its queue row by that title, and a file named by
+    #: the site rather than by the release would never match.
+    TAKES_NAME = True
+
+    #: The ledger of what this client was asked for and what it has fetched.
+    #: Beside the downloads rather than in ROMarr's settings so that moving
+    #: the download directory moves its queue with it.
+    LEDGER = ".romarr-sites.json"
+
+    def __init__(self, config: SiteConfig, session: requests.Session | None = None,
+                 policy: SitePolicy | None = None, driver=None):
+        self._config = config
+        self._session = session or requests.Session()
+        self._policy = policy or SitePolicy(
+            user_agent=config.user_agent, delay=config.delay,
+            session=self._session)
+        # Injected by the tests; live use imports browser.py lazily so an
+        # install without the driver never pays for it.
+        self._driver = driver
+        #: Hosts that answered 403. Remembered for the life of the process so
+        #: a refusal is not re-asked once a minute for the rest of the day.
+        self._forbidden: set[str] = set()
+        #: What reachable() last found out, for the status page.
+        self.detail = ""
+
+    # -- identity ----------------------------------------------------------
+
+    @property
+    def protocol(self) -> str:
+        """The mode is the protocol.
+
+        A release from a plugin that needs a click is not the same kind of
+        thing as one that is a URL, and routing them through `pick_client`
+        keeps that distinction where every other routing decision already
+        lives. It also means a site needing a browser on an install without
+        one fails as "no download client configured for browser", which names
+        the missing piece, instead of failing inside a driver import.
+        """
+        return "browser" if self._config.mode == "browser" else "direct"
+
+    @property
+    def name(self) -> str:
+        return "Headless Browser" if self.protocol == "browser" else "Direct HTTP"
+
+    @property
+    def configured(self) -> bool:
+        return bool(self._config.save_path)
+
+    def reachable(self) -> bool:
+        if not self.configured:
+            self.detail = "no download directory set"
+            return False
+        root = Path(self._config.save_path)
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+        except OSError as err:
+            self.detail = f"download directory is not writable: {err.strerror}"
+            return False
+        if self.protocol != "browser":
+            self.detail = f"downloads land in {root}"
+            return True
+        ok, why = self._availability()
+        self.detail = why
+        return ok
+
+    def _availability(self) -> tuple[bool, str]:
+        if self._driver is not None:
+            return self._driver.availability(self._config.base_url)
+        try:
+            from . import browser
+        except ImportError as err:          # pragma: no cover -- packaging fault
+            return False, f"browser support is missing: {err}"
+        return browser.availability(self._config.base_url)
+
+    # -- the ledger --------------------------------------------------------
+
+    def _ledger_path(self) -> Path:
+        return Path(self._config.save_path) / self.LEDGER
+
+    def _read(self) -> list[dict]:
+        try:
+            rows = json.loads(self._ledger_path().read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+        return [r for r in rows if isinstance(r, dict)]
+
+    def _write(self, rows: list[dict]) -> None:
+        try:
+            path = self._ledger_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(rows, indent=1), encoding="utf-8")
+        except OSError as err:
+            log.warning("could not record the site download queue: %s", err)
+
+    # -- the client interface ----------------------------------------------
+
+    def add(self, url: str, *, save_path: str | None = None, name: str = "") -> bool:
+        """Record a job. The bytes are fetched by the next `completed` sweep.
+
+        Refusals that can be decided without touching the network are decided
+        here, so an operator finds out at grab time rather than discovering a
+        queue row that quietly never moves.
+        """
+        if not self.configured:
+            return False
+        if not str(url or "").lower().startswith(("http://", "https://")):
+            log.warning("site downloader was handed a %s link, not an HTTP one",
+                        str(url).split(":", 1)[0] or "blank")
+            return False
+        rows = self._read()
+        if any(r.get("url") == url and r.get("state") in ("pending", "done")
+               for r in rows):
+            # Already queued or already here. Both mean the caller got what
+            # it asked for, so both are a success.
+            return True
+        rows.append({
+            "url": url,
+            "name": name,
+            "save_path": save_path or self._config.save_path,
+            "state": "pending",
+            "detail": "",
+            "file": "",
+            "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        })
+        self._write(rows)
+        return True
+
+    def completed(self) -> list[dict]:
+        """Fetch what is pending, then report everything already here.
+
+        Reports rather than pops: the importer sweeps repeatedly and decides
+        for itself what it has already taken, exactly as it does with a
+        torrent that stays in qBittorrent after finishing.
+        """
+        if not self.configured:
+            return []
+        rows = self._read()
+        fetched = 0
+        for row in rows:
+            if row.get("state") != "pending":
+                continue
+            if fetched >= self._config.max_active:
+                break
+            fetched += 1
+            self._run(row)
+        if fetched:
+            self._write(rows)
+        out = []
+        for row in rows:
+            if row.get("state") != "done" or not row.get("file"):
+                continue
+            path = Path(row["file"])
+            if not path.exists():
+                continue
+            out.append({
+                "name": row.get("name") or path.name,
+                "content_path": str(path),
+                "save_path": str(path.parent),
+                "state": "done",
+            })
+        return out
+
+    def _run(self, row: dict) -> None:
+        """Fetch one job, in place, recording why if it did not work."""
+        url = row.get("url", "")
+        host = SitePolicy._host(url)
+        if host in self._forbidden:
+            row.update(state="failed",
+                       detail="this site answered 403 earlier in this session")
+            return
+        allowed, why = self._policy.allowed(url)
+        if not allowed:
+            row.update(state="failed", detail=why)
+            log.warning("refusing %s: %s", host, why)
+            return
+        target = Path(row.get("save_path") or self._config.save_path)
+        try:
+            if self.protocol == "browser":
+                saved = self._browser_fetch(url, target)
+            else:
+                saved = self._direct_fetch(url, target)
+        except Exception as err:
+            row.update(state="failed", detail=f"{type(err).__name__}: {err}")
+            log.warning("site download failed: %s", err)
+            return
+        row.update(state="done", detail="", file=str(saved))
+
+    def _direct_fetch(self, url: str, target: Path) -> Path:
+        """A plain GET, streamed to disk, with the manners turned on.
+
+        Retries only what a server asked to have retried -- 429 and 503 carry
+        Retry-After and mean "later". Everything else that is not a 200 is
+        reported as it stands; in particular a 403 stops this host for the
+        rest of the session rather than being tried again with a different
+        hat on.
+        """
+        target.mkdir(parents=True, exist_ok=True)
+        attempts = 3
+        for attempt in range(attempts):
+            self._policy.wait(url)
+            response = self._session.get(
+                url, stream=True, timeout=self._config.timeout,
+                headers={"User-Agent": self._config.user_agent})
+            status = response.status_code
+            if status == SITE_FORBIDDEN:
+                response.close()
+                self._forbidden.add(SitePolicy._host(url))
+                raise RuntimeError(
+                    "the site answered 403; ROMarr does not retry a refusal "
+                    "or disguise the request to get round one")
+            if status in SITE_RETRY and attempt < attempts - 1:
+                after = response.headers.get("Retry-After", "")
+                response.close()
+                self._policy._sleep(_retry_after(after, self._config.delay))
+                continue
+            response.raise_for_status()
+            return _stream_to(response, target, url)
+        raise RuntimeError("the site asked us to come back later, three times")
+
+    def _browser_fetch(self, url: str, target: Path) -> Path:
+        driver = self._driver
+        if driver is None:
+            from . import browser as driver          # noqa: N813
+        return driver.fetch(
+            url, target,
+            cdp_url=self._config.base_url,
+            ua_token=self._config.user_agent,
+            timeout=self._config.timeout,
+            remote_dir=self._config.remote_download_dir,
+        )
+
+
+def _retry_after(header: str, fallback: float) -> float:
+    """Seconds to wait, from a Retry-After that may be either legal form.
+
+    Capped: a server is allowed to say "an hour", and a download client that
+    then sleeps for an hour inside an import sweep looks exactly like a
+    download client that has hung.
+    """
+    try:
+        return min(float(header), 300.0)
+    except (TypeError, ValueError):
+        pass
+    try:
+        when = parsedate_to_datetime(header)
+    except (TypeError, ValueError):
+        return fallback
+    if when is None:
+        return fallback
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    return max(0.0, min((when - datetime.now(timezone.utc)).total_seconds(), 300.0))
+
+
+def _filename_for(response, url: str) -> str:
+    """The name to save under: what the server said, else what the URL says.
+
+    Content-Disposition first because that is the site telling us the file's
+    real name, and the real name carries the region and revision a DAT check
+    and the importer both read. Any directory component is dropped -- a
+    filename arriving from someone else's server is not allowed to choose a
+    path.
+    """
+    disposition = response.headers.get("Content-Disposition", "")
+    match = re.search(r'filename\*?=(?:UTF-8\'\')?"?([^";]+)"?', disposition)
+    name = ""
+    if match:
+        name = unquote(match.group(1).strip())
+    if not name:
+        name = unquote(urlsplit(url).path.rsplit("/", 1)[-1])
+    name = os.path.basename(name.replace("\\", "/")).strip()
+    return name or "download.bin"
+
+
+def _stream_to(response, target: Path, url: str) -> Path:
+    """Write the body to `target`, via a .partial so a half file never imports."""
+    destination = target / _filename_for(response, url)
+    partial = destination.with_suffix(destination.suffix + ".partial")
+    with response:
+        with open(partial, "wb") as fh:
+            for chunk in response.iter_content(chunk_size=1 << 20):
+                if chunk:
+                    fh.write(chunk)
+    partial.replace(destination)
+    return destination
+
+
+def hand_off(client, url: str, *, name: str = "") -> bool:
+    """Give a client a release, telling the ones that can use it its title.
+
+    The importer matches a finished download to its queue row by the release
+    title, so a client that can label a job with it produces imports and one
+    that cannot produces downloads nobody claims. Only some can, and handing
+    the keyword to the rest is a TypeError -- hence the declaration on the
+    class rather than a signature check here.
+    """
+    if name and getattr(client, "TAKES_NAME", False):
+        return client.add(url, name=name)
+    return client.add(url)
+
+
 def pick_client(protocol: str, clients: list) -> object | None:
     """The first configured, reachable client that speaks this protocol.
 
@@ -836,6 +1334,45 @@ CLIENT_TYPES = {
             FIELD("category", "Category", default="romarr"),
         ],
     },
+    # The two ROM-site modes. They are separate types rather than one type
+    # with a dropdown because they route differently: a plugin declares which
+    # of the two its site needs, `pick_client` reads that off the release, and
+    # a single row that could be either would make the routing depend on
+    # something nobody configured.
+    "direct": {
+        "label": "Direct HTTP",
+        "protocol": "direct",
+        "default_port": 0,
+        "fields": [
+            FIELD("name", "Name", default="Direct HTTP"),
+            FIELD("enable", "Enable", "bool", True),
+            FIELD("save_path", "Save Path", default="/downloads/sites",
+                  help="Where fetched files land; the importer reads here"),
+            FIELD("delay", "Seconds between requests", "int", 5,
+                  help="A site's own robots.txt crawl-delay wins when it "
+                       "asks for longer"),
+        ],
+    },
+    "browser": {
+        "label": "Headless Browser",
+        "protocol": "browser",
+        "default_port": 0,
+        "fields": [
+            FIELD("name", "Name", default="Headless Browser"),
+            FIELD("enable", "Enable", "bool", True),
+            FIELD("save_path", "Save Path", default="/downloads/sites"),
+            FIELD("host", "Browser Host",
+                  help="Leave blank to launch Chromium on this machine. Set "
+                       "it to a host running `chromium --headless "
+                       "--remote-debugging-port=9222` to use one elsewhere."),
+            FIELD("port", "Browser Port", "int", 9222),
+            FIELD("remote_download_dir", "Browser's Download Directory",
+                  help="Only for a browser on another host, and only when "
+                       "both can see the same directory. Translated with the "
+                       "remote path mappings."),
+            FIELD("delay", "Seconds between requests", "int", 5),
+        ],
+    },
 }
 
 SECRET_PLACEHOLDER = "********"
@@ -911,6 +1448,18 @@ def build_client(cfg: dict):
         client = NZBGet(NzbgetConfig(
             base_url=url, username=cfg.get("username", ""),
             password=cfg.get("password", ""), category=category))
+    elif kind in ("direct", "browser"):
+        # A blank host means "launch one here", so an unset host must not be
+        # assembled into `http://localhost:9222` -- that would point the
+        # driver at a machine nobody configured and fail as a connection
+        # refused rather than as the local launch that was asked for.
+        endpoint = url if (kind == "browser" and cfg.get("host")) else ""
+        client = SiteDownloader(SiteConfig(
+            save_path=cfg.get("save_path", ""),
+            mode=kind,
+            base_url=endpoint,
+            remote_download_dir=cfg.get("remote_download_dir", ""),
+            delay=float(cfg.get("delay") or SITE_DELAY)))
     else:
         return None
 

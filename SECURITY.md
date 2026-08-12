@@ -30,8 +30,10 @@ supported; there are no backports to older tags.
 **Anything at or below `v0.7.0` has no authentication at all** — its API
 answers whoever reaches the port, on a service that queues downloads and writes
 to the filesystem. If you installed from a release tarball on or before
-2026-08-02, upgrade. The Proxmox installer now refuses to deploy a build
-without `romarr/auth.py`.
+2026-08-02, upgrade. The Proxmox installer refuses to deploy a build without
+`romarr/auth.py`, and so does its updater — an update that silently replaces an
+authenticated build with an open one is worse than an install that does,
+because the operator has already decided the thing is safe to leave running.
 
 ## What ROMarr is
 
@@ -72,6 +74,19 @@ install; the only way off is explicit.
   API key: a script cannot be prompted, and a key is already high-entropy.
 - Login is rate limited. Wrong credentials return `401` without revealing
   which of password or key was wrong.
+- A state file ROMarr cannot **read** stops it starting. This is an
+  authentication property, not a housekeeping one, and it was got wrong: an
+  unreadable `romarr.json` — the normal result of a root-owned file under a
+  container running as `PUID` — used to be treated the same as a corrupt one,
+  so ROMarr started from defaults and saved over it. The API key was
+  regenerated, the history emptied, and **the install came back unclaimed**, so
+  the next person to reach the port set the password. That was a configuration
+  mistake that produced an open install, and the paragraph above was therefore
+  not true. It is now two guards: the Docker entrypoint owns `/config`
+  recursively and refuses to start if the state file is still unreadable, and
+  the application refuses to start on an unreadable state file however it was
+  launched. A file that is merely *unparseable* still falls back to defaults,
+  because nothing in it can be handed back.
 
 Exactly ten routes answer without a credential, and no others (this count is
 asserted against the code, not maintained by hand):

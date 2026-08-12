@@ -240,6 +240,18 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "/api/v1/downloadclient": ("GET", "Configured download clients."),
     "/api/v1/downloadclient/schema": ("GET", "The five client types and their fields."),
     "/api/v1/downloadclient/test": ("POST", "Test one client's connection."),
+    "/api/v1/downloadclient/browser": ("GET", "Whether the headless-browser "
+                                              "download lane can run here, "
+                                              "and the reason when it cannot. "
+                                              "The lane opens a site's real "
+                                              "page and clicks its real "
+                                              "download control, for sites "
+                                              "whose file is behind a form "
+                                              "POST or a JS-built link; it "
+                                              "refuses CAPTCHAs, bot-detection "
+                                              "challenges, header spoofing and "
+                                              "logins, and reports such sites "
+                                              "as unavailable instead."),
     "/api/v1/library": ("GET", "Configured library servers."),
     "/api/v1/library/schema": ("GET", "Library backend types and their fields."),
     "/api/v1/library/config": ("GET", "One library's stored configuration."),

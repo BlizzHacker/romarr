@@ -22,6 +22,19 @@ msg_ok "Installed Dependencies"
 
 fetch_and_deploy_gh_release "romarr" "BlizzHacker/romarr" "tarball" "latest" "/opt/romarr"
 
+# Refuse to leave an unauthenticated ROMarr on somebody's network.
+#
+# "latest" is whatever tag exists, and the published release can lag main by a
+# long way: v0.7.0 was tagged before authentication existed at all, so a
+# release-tracking installer could deploy an API open to anyone who reaches the
+# port, on a service that queues downloads and writes to the filesystem. This
+# script cannot fall back to main the way ct/romarr.sh does -- the framework
+# owns the fetch -- so it stops instead of finishing quietly.
+if [[ ! -f /opt/romarr/romarr/auth.py ]]; then
+  msg_error "The published release has no romarr/auth.py -- it predates authentication. Install from https://github.com/BlizzHacker/romarr/blob/main/proxmox/ct/romarr.sh instead, which falls back to main."
+  exit 1
+fi
+
 msg_info "Setting up ROMarr"
 cd /opt/romarr
 $STD python3 -m venv .venv
@@ -29,30 +42,40 @@ $STD /opt/romarr/.venv/bin/pip install --upgrade pip
 $STD /opt/romarr/.venv/bin/pip install -r requirements.txt
 
 # ROMarr talks to three services and stores nothing else. Every value here is
-# a placeholder on purpose: it starts and serves its UI with none of them
-# reachable, and the Settings pages say which are missing, so a first run is
-# never a blank failure.
+# blank on purpose: it starts and serves its UI with none of them reachable,
+# and the Settings pages say which are missing, so a first run is never a blank
+# failure. Blank rather than a plausible-looking 192.168.1.100 -- an address
+# that is wrong but syntactically fine reads as configured, and the operator
+# then debugs a connection instead of filling in a field.
+#
+# These are the same names ct/romarr.sh writes. The two used to disagree: this
+# file wrote the legacy ROMM_* aliases, so an operator following the README's
+# LIBRARY_* documentation edited variables their install was not reading.
 cat <<EOF >/opt/romarr/.env
-PROWLARR_URL=http://192.168.1.100:9696
+PROWLARR_URL=
 PROWLARR_API_KEY=
 
-QBITTORRENT_URL=http://192.168.1.100:8080
-QBITTORRENT_USER=admin
+QBITTORRENT_URL=
+QBITTORRENT_USER=
 QBITTORRENT_PASS=
 
-ROMM_URL=http://192.168.1.100:8080
-ROMM_USERNAME=
-ROMM_PASSWORD=
+# LIBRARY_KIND is romm, gaseous, retrom or folder. \`folder\` needs no URL and
+# no account -- only LIBRARY_PATH.
+LIBRARY_KIND=romm
+LIBRARY_URL=
+LIBRARY_USERNAME=
+LIBRARY_PASSWORD=
 
-# Where imported ROMs are filed. This must be a path RomM also scans, or the
-# import succeeds and the game never appears.
-ROMM_LIBRARY=/mnt/roms
+# Where imported ROMs are filed. This must be a path your library server also
+# scans, or the import succeeds and the game never appears.
+LIBRARY_PATH=/mnt/roms
 ROMARR_DATA=/opt/romarr/romarr.json
+ROMARR_BACKENDS_DIR=/opt/romarr/backends
 ROMARR_PORT=6868
 LOG_LEVEL=INFO
 EOF
 chmod 600 /opt/romarr/.env
-mkdir -p /mnt/roms
+mkdir -p /mnt/roms /opt/romarr/backends
 msg_ok "Set up ROMarr"
 
 msg_info "Creating Service"

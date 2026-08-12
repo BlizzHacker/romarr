@@ -34,7 +34,11 @@
   },
   "notes": [
     {
-      "text": "Edit /opt/romarr/.env after install. ROMarr needs a Prowlarr URL and API key, at least one download client, and the path to RomM's library root. It starts and serves its UI with none of them reachable, and the Settings pages say which are missing.",
+      "text": "Edit /opt/romarr/.env after install, then `systemctl restart romarr`. ROMarr needs a Prowlarr URL and API key, at least one download client, and the path to your library root. It starts and serves its UI with none of them reachable, and the Settings pages say which are missing.",
+      "type": "info"
+    },
+    {
+      "text": "The first visit to the web UI sets the password; there is no default credential and no unauthenticated mode to fall into. Back up /opt/romarr/romarr.json -- it holds the API key, the password hash and the request history.",
       "type": "info"
     },
     {
@@ -42,7 +46,7 @@
       "type": "info"
     },
     {
-      "text": "ROMM_LIBRARY must be a path RomM also scans, and the download client's completed directory must be reachable from this container. If the client runs elsewhere, set a remote path mapping under Settings, otherwise imports fail with 'download path does not exist' while the file is sitting right there.",
+      "text": "LIBRARY_PATH must be a path your library server also scans, and the download client's completed directory must be reachable from this container at the path the client reports. If the client runs elsewhere, set a remote path mapping under Settings, otherwise imports fail with 'download path does not exist' while the file is sitting right there.",
       "type": "warning"
     },
     {

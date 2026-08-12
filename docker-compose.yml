@@ -1,8 +1,22 @@
-# ROMarr. Copy this file, edit the two paths and the four URLs, and start it.
+# ROMarr.
+#
+#   curl -O https://raw.githubusercontent.com/BlizzHacker/romarr/main/docker-compose.yml
+#   ROMARR_ROMS=/mnt/roms ROMARR_DOWNLOADS=/mnt/downloads docker compose up -d
+#
+# Then open http://localhost:6868 and set a password. Everything else can be
+# configured from the UI afterwards; the values below are the shortcut.
 #
 # Prowlarr, your download client and your game library are not started here --
 # you already run them, and a compose file that spawned its own copies would
 # fight the stack it is meant to join.
+#
+# There used to be a second file, docker-compose-alt.yml, contributed by Ren
+# with the right idea in it: refuse to start rather than start misconfigured.
+# Its `${VAR:-?ERROR}` spelling did not do that -- `:-` supplies a default, so
+# it quietly set the API key to the literal string "?ERROR" -- and two files
+# that open with the same sentence gave nobody a way to choose. The idea is
+# kept here, in the one place it fails silently, with the `:?` form that
+# actually stops the run.
 
 services:
   romarr:
@@ -36,13 +50,16 @@ services:
       PROWLARR_URL: http://prowlarr:9696
       PROWLARR_API_KEY: ""
 
-      # Your game library. LIBRARY_KIND is romm, gaseous or retrom.
+      # Your game library. LIBRARY_KIND is romm, gaseous, retrom or folder.
+      # `folder` needs no URL and no account -- only LIBRARY_PATH -- and is
+      # what Batocera, ES-DE, EmuDeck and friends want.
       LIBRARY_KIND: romm
       LIBRARY_URL: http://romm:8080
       LIBRARY_USERNAME: romarr
       LIBRARY_PASSWORD: ""
       # Where finished ROMs are filed, as seen inside THIS container. It is the
-      # container path, not the host path -- see the volume below.
+      # container path, not the host path -- see the volume below. Leave it as
+      # /roms unless you also change the right-hand side of that mount.
       LIBRARY_PATH: /roms
 
       # Download client. At least one is required: a release found with no
@@ -62,7 +79,8 @@ services:
       # "romarr". The category does NOT have to exist in the client first --
       # SABnzbd keeps an undefined one verbatim and ROMarr still matches it.
       # Define it there anyway if you want its own folder or a post-processing
-      # script, or point this at a built-in like "software".
+      # script, or point this at a built-in like "software". When you do create
+      # one in SABnzbd, the indexer category ROMarr searches under is 'console'.
       # SABNZBD_CATEGORY: romarr
       # QBITTORRENT_CATEGORY: romarr
       # NZBGET_CATEGORY: romarr
@@ -79,12 +97,27 @@ services:
       LOG_LEVEL: INFO
 
     volumes:
-      # History, settings and indexer configuration. Keep this one.
+      # History, settings, indexer configuration and any installed plugins.
+      # Keep this one: delete it and every restart is a fresh install, which
+      # includes a new API key and an unclaimed password prompt.
+      #
+      # A named volume works just as well and survives `docker compose down`
+      # the same way -- add `volumes: {romarr_config:}` at the top level and
+      # use `romarr_config:/config` here. The bind mount is the default
+      # because you can read and back up ./config without asking Docker where
+      # it put anything.
       - ./config:/config
 
-      # Your library root. The left side is the host; the right side must match
-      # LIBRARY_PATH above.
-      - /path/to/roms:/roms
+      # Your library root on the HOST.
+      #
+      # There is deliberately no default. A placeholder like /path/to/roms is
+      # not inert: Docker creates missing bind-mount sources, so an unedited
+      # file used to start, report healthy, and file ROMs into a directory no
+      # library server has ever scanned -- with every status on the System
+      # page green. Of everything in this file that can be wrong, the two
+      # paths are the only ones that are wrong *silently*, so they are the
+      # only ones that stop the run.
+      - ${ROMARR_ROMS:?set ROMARR_ROMS to your library root on the host, e.g. ROMARR_ROMS=/mnt/roms}:/roms
 
       # Your download client's completed directory.
       #
@@ -95,14 +128,15 @@ services:
       # those files; it does not have to resemble the container path.
       #
       # So if the files live at /mnt/downloads/complete on the host and SABnzbd
-      # reports /downloads/complete, both sides change:
+      # reports /downloads/complete, set ROMARR_DOWNLOADS to the first and
+      # change the right-hand side to the second:
       #
-      #     - /mnt/downloads/complete:/downloads/complete
+      #     - ${ROMARR_DOWNLOADS}:/downloads/complete
       #
       # A client running on the host rather than in a container reports host
       # paths, which makes the two sides identical:
       #
-      #     - /mnt/downloads:/mnt/downloads
+      #     - ${ROMARR_DOWNLOADS}:/mnt/downloads
       #
       # Not sure what your client reports? qBittorrent shows it as "Save path"
       # in Options -> Downloads; SABnzbd as "Completed Download Folder" in
@@ -112,8 +146,15 @@ services:
       # When the paths genuinely cannot be made to match, leave this as-is and
       # add a mapping under Settings -> Media Management, which rewrites the
       # client's prefix into a local one.
-      - /path/to/downloads:/downloads
+      - ${ROMARR_DOWNLOADS:?set ROMARR_DOWNLOADS to your download client's completed directory on the host, e.g. ROMARR_DOWNLOADS=/mnt/downloads}:/downloads
 
-# Prefer an env file to editing this one? Delete the `environment:` block and
+# The two ROMARR_* names above are read by compose, not by ROMarr. Put them in
+# a `.env` file beside this one and `docker compose up -d` needs no arguments:
+#
+#     ROMARR_ROMS=/mnt/roms
+#     ROMARR_DOWNLOADS=/mnt/downloads
+#
+# Prefer to keep every setting there too? Delete the `environment:` block and
 # use `env_file: .env` -- compose turns those entries into real environment
-# variables, which is what ROMarr reads.
+# variables, which is what ROMarr reads. .env.example in this repo is a
+# complete one, with every variable documented.

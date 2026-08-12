@@ -53,7 +53,7 @@ from . import hub  # ROM Hub bridge -- the Cartridge plugin layer
 from .dat import DatIndex, parse_dat
 from .downloaders import (
     CLIENT_TYPES, NZBGet, NzbgetConfig, SABnzbd, SabConfig, build_client,
-    merge_secrets, pick_client, redact,
+    hand_off, merge_secrets, pick_client, redact,
 )
 from .indexers import INDEXER_TYPES, build_indexer, redact_indexer
 from .indexers import Prowlarr, ProwlarrConfig
@@ -1455,7 +1455,11 @@ class ROMarr:
                                     release=pick.title, detail=item.detail))
             return {"ok": False, "error": item.detail}
 
-        ok = client.add(pick.download_url)
+        # The title travels with the release for the clients that can carry
+        # it: the import sweep matches a finished download to its queue row by
+        # that title, and a file named by the site it came from would never
+        # match. See downloaders.hand_off.
+        ok = hand_off(client, pick.download_url, name=pick.title)
         item = QueueItem(game, platform_slug, pick.title, pick.seeders,
                          "grabbed" if ok else "failed",
                          "" if ok else f"{client.name} rejected the release")
@@ -1637,8 +1641,42 @@ class ROMarr:
                 "category": getattr(getattr(c, "_config"), "category", ""),
                 "configured": configured,
                 "ok": bool(configured and c.reachable()),
+                # Set by the client during reachable() when it has something
+                # to say beyond yes or no -- "the playwright driver is not
+                # installed" is the difference between a fixable setup and an
+                # inexplicable red dot.
+                "detail": getattr(c, "detail", ""),
             })
         return out
+
+    def browser_capability(self) -> dict:
+        """Whether the browser download lane can run here, and why not.
+
+        Its own report rather than a line on the status page because the
+        answer is a setup instruction, and because it is legitimately absent:
+        an install that only ever fetches plain URLs is complete, not broken.
+        Reported for the configured client when there is one, and for a bare
+        local launch when there is not, so the question can be asked before
+        anybody adds a row.
+        """
+        from . import browser as browser_lane
+
+        rows = [c for c in self.clients
+                if getattr(c, "protocol", "") == "browser"]
+        endpoint = getattr(getattr(rows[0], "_config", None), "base_url", "") if rows else ""
+        available, reason = browser_lane.availability(endpoint)
+        return {
+            "configured": bool(rows),
+            "available": available,
+            "reason": reason,
+            "endpoint": endpoint,
+            "where": "remote" if endpoint else "this host",
+            # Said out loud in the API, not only in the source: this lane
+            # automates a real click on a real page and refuses everything
+            # that would make it a bypass.
+            "refuses": ["captchas", "bot-detection challenges",
+                        "header spoofing", "logins ROMarr cannot pass"],
+        }
 
     def ggrequestz(self) -> dict:
         """Whether GG Requestz is reachable, the way Seerr reports Radarr.
@@ -4283,6 +4321,8 @@ def make_handler(service: ROMarr):
                 return self._json(200, {"items": service.download_clients()})
             if route.path == "/api/v1/downloadclient/schema":
                 return self._json(200, {"types": CLIENT_TYPES})
+            if route.path == "/api/v1/downloadclient/browser":
+                return self._json(200, service.browser_capability())
             if route.path == "/metrics":
                 # Authenticated like everything else. A metrics endpoint that
                 # is open while the rest of the app is not is a hole with a

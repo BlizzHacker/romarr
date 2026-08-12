@@ -40,7 +40,17 @@ def main() -> None:
             "Home Assistant options loaded: %s", ", ".join(sorted(ha)))
 
     from .app import serve
-    serve(port=int(os.environ.get("ROMARR_PORT", "6868")))
+    from .store import StateUnreadable
+    try:
+        serve(port=int(os.environ.get("ROMARR_PORT", "6868")))
+    except StateUnreadable as err:
+        # One line an operator can act on, not a traceback. Exit 1 so Docker
+        # marks the container failed and `restart: unless-stopped` does not
+        # hide it: a permission problem does not fix itself on the next boot,
+        # and a container that restart-loops visibly is better than one that
+        # comes up green having thrown the install's credentials away.
+        logging.getLogger(__name__).error("%s", err)
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

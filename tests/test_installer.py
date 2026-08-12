@@ -147,3 +147,61 @@ def test_the_documented_command_resolves():
     with urllib.request.urlopen(url.group(0), timeout=20) as response:
         assert response.status == 200
         assert b"ROMarr" in response.read()
+
+
+def test_the_update_refuses_a_build_without_authentication_too():
+    """The installer has checked this since v0.7.0. The updater did not.
+
+    An update that silently replaces an authenticated build with an open one is
+    worse than an install that does, because the operator has already decided
+    this thing is safe to leave running on their network.
+    """
+    body = UPDATE.read_text(encoding="utf-8")
+    assert "romarr/auth.py" in body, (
+        "update.sh installs whatever it downloaded without checking that it "
+        "can authenticate")
+
+
+def test_the_update_replaces_the_package_rather_than_merging_over_it():
+    """`cp -a` over the top leaves modules upstream deleted still importable.
+
+    Proven on a throwaway container: a file dropped into /opt/romarr/romarr
+    before an update was still there afterwards. That is how a version reports
+    itself as new while some of it is old.
+    """
+    body = UPDATE.read_text(encoding="utf-8")
+    assert 'rm -rf "${ROOT}/romarr"' in body, (
+        "the package directory is merged into, not replaced")
+
+
+def test_the_update_says_what_it_changed():
+    """"Updated" with no version either side is a report nobody can check."""
+    body = UPDATE.read_text(encoding="utf-8")
+    assert "version_at" in body, "update.sh reads no version at all"
+    assert "$BEFORE" in body and "$AFTER" in body, (
+        "update.sh does not report the version it moved you from and to")
+
+
+def test_the_update_can_go_backwards():
+    """An update that can only go forwards is a gamble, not an update."""
+    body = UPDATE.read_text(encoding="utf-8")
+    assert "rolling back" in body.lower(), "update.sh has no rollback path"
+    assert 'cp -a "${BACKUP}/romarr"' in body, (
+        "nothing puts the previous build back, so the backup is a directory "
+        "the operator has to reassemble by hand")
+
+
+def test_both_proxmox_scripts_agree_on_the_variable_names():
+    """These drifted once and it cost an operator an afternoon.
+
+    install/romarr-install.sh wrote the legacy ROMM_* aliases while ct/romarr.sh
+    wrote LIBRARY_*, so somebody following the README's documentation edited
+    variables their install was not reading.
+    """
+    community = (ROOT / "proxmox" / "install" / "romarr-install.sh").read_text(
+        encoding="utf-8")
+    for name in ("LIBRARY_KIND", "LIBRARY_URL", "LIBRARY_PATH"):
+        assert name in community, f"{name} missing from the community-scripts installer"
+    for legacy in ("ROMM_URL=", "ROMM_LIBRARY=", "ROMM_USERNAME="):
+        assert legacy not in community, (
+            f"{legacy} is the alias, not the documented name")

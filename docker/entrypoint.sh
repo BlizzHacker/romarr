@@ -33,12 +33,43 @@ fi
 # /config only. Never the library or the downloads volume: those can be
 # multiple terabytes on a NAS, and a recursive chown at every boot would take
 # hours and rewrite ownership the operator chose on purpose.
+#
+# Recursive within /config, though, and that part is not cosmetic. The chown
+# used to cover only the directory, which left a root-owned romarr.json --
+# from an install that once ran without PUID, or a backup restored with cp as
+# root -- unreadable to ${PUID} while the directory around it stayed writable.
+# ROMarr's answer to a state file it cannot read was to start from defaults and
+# then save over it: the API key was regenerated, the history emptied, and the
+# install came back *unclaimed*, so the next person to reach the port set the
+# password. /config holds a JSON file and any installed plugins, so the cost of
+# doing this properly is milliseconds.
 mkdir -p /config
-chown "${PUID}:${PGID}" /config
+if ! chown -R "${PUID}:${PGID}" /config 2>/dev/null; then
+    echo "ROMarr: cannot change ownership of /config to ${PUID}:${PGID}." >&2
+    echo "A read-only mount, or a filesystem that does not carry uids (some" >&2
+    echo "SMB/CIFS shares). Mount /config from a directory this container can" >&2
+    echo "own, or run the container with --user so no chown is attempted." >&2
+    exit 1
+fi
 
-if [ ! -w /config ]; then
+# Tested as the user that will actually run, not as root. Root passes `test -w`
+# on almost anything, so this check used to be incapable of failing for the
+# reason it names.
+if ! su-exec "${PUID}:${PGID}" test -w /config; then
     echo "ROMarr: /config is not writable by ${PUID}:${PGID} -- history and" >&2
     echo "settings cannot be saved. Check the ownership of the host directory." >&2
+    exit 1
+fi
+
+# ROMARR_DATA may point outside /config, in which case nothing above has
+# touched it and this is the only thing standing between an unreadable state
+# file and a silently reset install.
+STATE="${ROMARR_DATA:-/config/romarr.json}"
+if [ -e "$STATE" ] && ! su-exec "${PUID}:${PGID}" test -r "$STATE"; then
+    echo "ROMarr: ${STATE} exists but ${PUID}:${PGID} cannot read it." >&2
+    echo "That file holds the API key, the password hash and the history." >&2
+    echo "Fix its ownership on the host -- chown -R ${PUID}:${PGID} on the" >&2
+    echo "directory you mounted -- rather than deleting it." >&2
     exit 1
 fi
 

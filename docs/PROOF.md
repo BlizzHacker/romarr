@@ -43,6 +43,22 @@ report is worth the most.
 | Moonlight hosts (Wolf/Sunshine) report honestly | **Proven against live servers**: a real Wolf (`stable`) and a real Sunshine (`2026.516.143833`) stood up on the maintainer's cluster, driven through the same `MoonlightHost` the Settings page builds. 60 tests still assert every refusal — that a RetroArch or a Steam app grants no platform anything, that a reachable host with an unreadable app list grants nothing, that a PIN submission never reports "paired" | [`scripts/moonlight_proof.py`](../scripts/moonlight_proof.py), run 2026-08-11: **39/39** — `/serverinfo` on both, Wolf's **UNIX socket** and its nginx proxy, Sunshine's self-signed TLS, and eleven real app titles refused while `PCSX2` granted PS2. [design doc](design/streaming-hosts.md) §6–§7, [`tests/test_moonlight.py`](../tests/test_moonlight.py) |
 | Moonlight pairing: ROMarr relays a real PIN and a real client pairs | **Proven end to end on both hosts** with the official moonlight-qt 6.1.0. Wolf listed the waiting client, ROMarr rebuilt its PIN-page URL and relayed the PIN; Sunshine was told the PIN with no way to list waiters, as documented | Same run: Wolf logged `Succesfully paired` and its client list went 1 → 2; Sunshine's `named_certs` went 0 → 1 with the name `ROMarr` that `submit_pin` sends. The wrong-PIN bug ([Sunshine#3944](https://github.com/LizardByte/Sunshine/issues/3944)) was **reproduced**, not cited: `{"status": true}` for a wrong PIN, and nothing paired |
 
+## The install paths
+
+Added 2026-08-12. Each row was run against a live Docker host and a throwaway
+Proxmox container on the maintainer's cluster, not read.
+
+| Claim | How it is proven | Evidence |
+|---|---|---|
+| The published image pulls, boots, and answers | `ghcr.io/blizzhacker/romarr:latest` pulled on a real Docker host, started, healthy, `/api/health` 200 and `/api/v1/system/status` 401 unauthenticated / 200 with a key | Run 2026-08-12 on Docker 29.1.1. The multi-arch manifest carries all three platforms; the armv7 leg is in ["what is NOT proven"](#what-is-not-proven-in-the-same-breath) below |
+| The documented commands are the ones that were run | Every command in [INSTALL.md](INSTALL.md) executed verbatim — only the published port differs so it does not fight the RomM stack on that host — including the compose fail-fast error, the first-run claim, the API-key lookup, the backup, the upgrade and the rollback | The compose refusal message in the docs is the string compose actually printed. `POST /api/v1/setup` returned 200 then 409. A pin to `sha-6dc32c7` and back to `latest` both came up healthy with the state file intact |
+| An unreadable state file cannot silently reset an install | The failure was reproduced first: a root-owned `romarr.json` under `PUID=1000` came back with a **new API key, zero history, defaults for every setting, and an unauthenticated `POST /api/v1/setup` answering 200**. Both guards then verified against a rebuilt image | `docker/entrypoint.sh`, `romarr/store.py`, [`tests/test_docker_install.py`](../tests/test_docker_install.py), `test_a_state_file_that_cannot_be_read_stops_the_service` in [`tests/test_store.py`](../tests/test_store.py). Four cases run: clean start, root-owned state (now preserved), non-root container with unreadable state (exit 1, file untouched), corrupt JSON (still starts) |
+| `${VAR:-?ERROR}` was not the validation it was documented as | `docker compose config` resolves it to the literal string `?ERROR`. The file whose stated purpose was env-var validation was setting the Prowlarr API key to that string and connecting with it | Measured with `docker compose config` on the same host; the correct `${VAR:?msg}` form was then verified to stop the run with the message the docs quote |
+| A placeholder bind-mount path is not inert | The shipped compose file, unedited, started and reported **healthy** while creating `/path/to/roms` and `/path/to/downloads` on the host and filing into them | Same run. That is why the two paths now have no default |
+| The container healthcheck catches a wedged process | `SIGSTOP` on the container's main process moved it to `unhealthy` after three consecutive failures, ~100s. It does **not** cause a restart — see below | `docker inspect .State.Health`: exit codes `-1 1 -1` then `unhealthy fails=3` |
+| The Proxmox installer works and says what it did | Run twice on a throwaway CT, creation to `/api/health` answering, reporting `ROMarr 0.8.0 is up` with the paths and log command | 2026-08-12, CT destroyed afterwards. The auth-check fallback fired as designed (`no published release; using main`) |
+| The Proxmox updater can go backwards | A build that **passes** the `auth.py` guard and then cannot start was installed deliberately (a tarball with a syntax error in `__main__.py`, served through a shimmed `curl`). The updater reported `0.8.0 -> 9.9.9-broken`, saw no answer on `/api/health`, restored the previous package, restarted it, and exited 1 | Same session: version back to `0.8.0`, service active, health 200, API key / `min_seeders=42` / claimed state all intact. Also verified the stale-module case: a file dropped into the package before an update is gone afterwards |
+
 ## What is NOT proven, in the same breath
 
 This list was five entries long on the morning of 2026-08-10 and is now
@@ -99,6 +115,24 @@ this. Each survivor names exactly what would close it.
 - **armv7 Docker** ships without ROM Hub plugins (no pydantic musl wheel)
   — by design, stated at build time, and not going to change until
   pydantic ships the wheel.
+- **The armv7 image has never been booted.** It is built on every push and
+  the published artefact was unpacked and inspected — `python3.13` and
+  `bsdtar` are genuine 32-bit ARM EABI5 binaries and `rom_hub` is absent as
+  documented — but nothing has ever run it, and unpacking an image is not
+  starting one. The maintainer has no 32-bit ARM hardware and installing
+  binfmt handlers to emulate one would have modified a production Proxmox
+  node. `docker run` on a Raspberry Pi 2/3 in 32-bit mode, followed by
+  `curl localhost:6868/api/health`, closes this row in one command.
+- **The Home Assistant add-on has not been installed from the add-on store.**
+  The image is the same one Docker users run and the options-to-environment
+  translation is tested directly
+  ([`tests/test_ha_options.py`](../tests/test_ha_options.py)), but nobody has
+  added the repository to a real Home Assistant and clicked Install.
+- **The community-scripts installer**
+  (`proxmox/install/romarr-install.sh`) has never been executed. It only runs
+  inside their framework, which resolves helpers from their repository, so it
+  cannot be run until ROMarr is accepted there. `proxmox/ct/romarr.sh` is the
+  one that is tested and the one the README documents.
 
 Turning any of these into a row of the first table is the most valuable
 contribution this project can receive today.

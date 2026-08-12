@@ -343,3 +343,60 @@ def test_peer_tokens_never_reach_the_config_endpoint(tmp_path):
     body = json.dumps(svc.safe_settings())
     assert "_peers" not in svc.safe_settings()
     assert token not in body, "a peer token reached a page a browser reads"
+
+
+def test_a_state_file_that_cannot_be_read_stops_the_service(tmp_path,
+                                                            monkeypatch):
+    """Unreadable is not corrupt, and the two used to share a handler.
+
+    A root-owned romarr.json under a container running as PUID is intact and
+    belongs to somebody else. Starting from defaults there does not recover
+    anything -- the next save replaces the API key, the password hash and the
+    whole history, and the install comes back *unclaimed*, so whoever reaches
+    the port next sets the password. Measured on a real container before this
+    guard existed: an install with a known key came back with a fresh one,
+    zero history, and an open `POST /api/v1/setup`.
+    """
+    import pathlib
+
+    from romarr.store import StateUnreadable
+
+    path = tmp_path / "romarr.json"
+    path.write_text(json.dumps({"settings": {"_api_key": "must-survive"}}),
+                    encoding="utf-8")
+
+    # Patched rather than chmod'd: the suite runs on Windows too, where mode
+    # bits do not produce this failure.
+    real = pathlib.Path.read_text
+
+    def denied(self, *args, **kwargs):
+        if self == path:
+            raise PermissionError(13, "Permission denied")
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(pathlib.Path, "read_text", denied)
+
+    try:
+        Store(path)
+    except StateUnreadable as err:
+        assert "cannot be read" in str(err)
+        assert "unclaimed" in str(err), "the message has to say what is at stake"
+    else:
+        raise AssertionError("an unreadable state file was silently discarded")
+
+    monkeypatch.undo()
+    assert json.loads(path.read_text(encoding="utf-8"))["settings"]["_api_key"] \
+        == "must-survive", "the file we refused to read was written over anyway"
+
+
+def test_a_state_file_that_cannot_be_parsed_still_starts(tmp_path):
+    """The opposite case, kept as it was.
+
+    Truncated JSON has nothing left to preserve -- no version of that file can
+    be handed back -- so defaults are the only usable answer and refusing to
+    start would just be an outage.
+    """
+    path = tmp_path / "romarr.json"
+    path.write_text("{ this is not json", encoding="utf-8")
+    s = Store(path)
+    assert s.settings["min_seeders"] == DEFAULT_SETTINGS["min_seeders"]

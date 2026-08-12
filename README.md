@@ -42,6 +42,7 @@ full claim-by-claim evidence file.*
 - [The tour](#the-tour) — every feature, what it is for, and what it looks like
 - [Requirements](#requirements)
 - [Installation](#installation) — [Docker](#docker) · [Docker Compose](#docker-compose) · [Proxmox LXC](#proxmox-lxc) · [Home Assistant](#home-assistant) · [Source](#from-source)
+  - **[The full install guide](docs/INSTALL.md)** — every variable, backup, upgrade, rollback, troubleshooting
 - [Signing in](#signing-in)
 - [Configuration](#configuration)
 - [Usage](#usage)
@@ -232,21 +233,33 @@ existing ROM is never silently overwritten.
 
 ## Installation
 
+**[docs/INSTALL.md](docs/INSTALL.md) is the full guide** — every install path,
+every environment variable with its default and what a wrong value does, where
+your data lives, backup, upgrade, rollback, and a troubleshooting section built
+from failures that actually happened. What follows is the short version.
+
 ### Docker
 
+Enough to see the UI. No library or downloads volume on purpose — nothing can
+land in the wrong place while you are still deciding where things go.
+
 ```bash
-docker run -d --name romarr -p 6868:6868 \
-  -e PUID=1000 -e PGID=1000 \
-  -e PROWLARR_URL=http://prowlarr:9696 -e PROWLARR_API_KEY=... \
-  -e LIBRARY_URL=http://romm:8080 -e LIBRARY_USERNAME=romarr -e LIBRARY_PASSWORD=... \
-  -e QBITTORRENT_URL=http://qbittorrent:8080 \
-  -v ./config:/config \
-  -v /path/to/roms:/roms \
-  -v /path/to/downloads:/downloads \
+docker run -d --name romarr \
+  --restart unless-stopped \
+  -p 6868:6868 \
+  -e PUID=1000 -e PGID=1000 -e TZ=Etc/UTC \
+  -v /srv/romarr/config:/config \
   ghcr.io/blizzhacker/romarr:latest
 ```
 
-Open `http://localhost:6868`.
+Open `http://localhost:6868` and set a password.
+
+`--restart unless-stopped` is not decoration: without it ROMarr does not come
+back after a host reboot, and the first sign is a week of missed scheduled
+searches. Use an **absolute** path for `/config` — Docker Engine below 23
+rejects a relative bind source as an invalid volume name.
+
+To actually import anything, use compose.
 
 > **Upgrading from 0.6.x?** The default port changed from **7878 to 6868**.
 > 7878 is Radarr's port, and running both is the normal case rather than the
@@ -258,24 +271,41 @@ Open `http://localhost:6868`.
 > update your port mapping to `6868:6868`, or set `ROMARR_PORT=7878` to keep
 > the old one.
 
-Images are published for `linux/amd64`, `linux/arm64` and `linux/arm/v7`.
+Images are published for `linux/amd64`, `linux/arm64` and `linux/arm/v7`. The
+armv7 leg is built in CI and has never been booted by the maintainer — see
+[INSTALL.md](docs/INSTALL.md#which-tag-to-use).
 
 ### Docker Compose
 
-A [`docker-compose.yml`](docker-compose.yml) with every setting commented ships in
-the repo:
+The recommended install. A [`docker-compose.yml`](docker-compose.yml) with every
+setting commented ships in the repo:
 
 ```bash
+mkdir -p /srv/romarr && cd /srv/romarr
 curl -O https://raw.githubusercontent.com/BlizzHacker/romarr/main/docker-compose.yml
-# edit the environment block
+printf 'ROMARR_ROMS=/mnt/roms\nROMARR_DOWNLOADS=/mnt/downloads\n' > .env
 docker compose up -d
 ```
+
+Those two paths have no defaults and compose refuses to start without them.
+That is deliberate: Docker creates a missing bind-mount source, so a
+placeholder like `/path/to/roms` produced a container that started, reported
+healthy, and filed ROMs into a directory no library server had ever scanned —
+with every indicator green. Everything else in the file can be wrong and the
+Settings page will say so; those two could only be wrong silently.
 
 ### Proxmox LXC
 
 ```bash
 bash -c "$(curl -fsSL https://raw.githubusercontent.com/BlizzHacker/romarr/main/proxmox/ct/romarr.sh)"
 ```
+
+It waits for `/api/health` to answer before claiming success, refuses to deploy
+a build without `romarr/auth.py`, and prints the version it installed. Update
+later with
+[`proxmox/ct/update.sh`](proxmox/ct/update.sh), which reports the version it
+moved you from and to and puts the old build back if the new one will not
+start.
 
 ### Home Assistant
 
@@ -298,12 +328,20 @@ python -m romarr
 
 | Volume | Notes |
 |---|---|
-| `/config` | Settings and history. Settings saved in the UI take precedence over environment variables from then on. |
+| `/config` | Settings, history, the API key and the password hash — `romarr.json` here **is** the install. Back it up. |
 | `/roms` | Your library root. Must be the same tree your library server scans. |
 | `/downloads` | **The container-side path must match what your download client reports.** qBittorrent: Options → Downloads → "Save path". SABnzbd: Config → Folders → "Completed Download Folder". If they cannot match, set a mapping under Settings → Media Management. |
 
 `PUID`/`PGID` set the ownership of imported ROMs — use the same ids as your library
-application. Only `/config` is chowned.
+application. Only `/config` is chowned, recursively; the library and downloads
+volumes are never touched.
+
+> **The one rule that catches everyone.** Environment variables seed the
+> configuration on the *first* run. After that the Settings page is the
+> authority and the environment is ignored — so editing `QBITTORRENT_URL` in
+> compose and restarting changes nothing, with no error and no warning. Change
+> it on the Settings page instead.
+> [Why, and which variables are exempt.](docs/INSTALL.md#the-rule-that-catches-everyone)
 
 ---
 
@@ -632,11 +670,15 @@ rescan is refused with a 403.
 
 ## Troubleshooting
 
+The full list, including every way an install can fail to start, is in
+**[docs/INSTALL.md](docs/INSTALL.md#troubleshooting)**. The ones people hit most:
+
 | Symptom | Cause | Fix |
 |---|---|---|
 | "Download path does not exist" | The client reports a path ROMarr cannot see | Match the container-side download path, or set a mapping under Settings → Media Management |
 | Results found then refused | No download client for that protocol | Add a client for torrent and/or usenet — the Download Clients page names the gap |
-| `LIBRARY_PATH` change has no effect | A path saved in the UI outranks the environment | Change it on the Settings page |
+| Any environment change has no effect | The environment seeds on first run only; the Settings page is the authority after that | Change it on the Settings page |
+| Container exits 1 with "romarr.json exists but cannot be read" | The state file is owned by a user the container does not run as | `chown -R` your PUID:PGID on the directory mounted at `/config` — do not delete the file |
 | Imported ROM never appears | Library rescan refused | RomM: grant the account task permission. Gaseous: see above |
 | ROM imports but will not play | Platform has no emulator core in the library's web player | Expected — the ROM is catalogued, not playable in-browser |
 | Hub tab empty | ROM Hub not installed | `pip install "rom-hub @ git+https://github.com/BlizzHacker/rom-hub@master"` |

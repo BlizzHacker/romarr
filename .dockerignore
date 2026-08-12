@@ -1,20 +1,40 @@
+# The Dockerfile copies romarr/ and docker/entrypoint.sh and nothing else, so
+# what is listed here changes build speed rather than image size -- docs/ alone
+# is ~6MB of screenshots that would be uploaded to the daemon on every build.
 .git
 .github
 .gitignore
+.gitattributes
 .venv
 venv
 __pycache__
 **/__pycache__
 *.pyc
 .pytest_cache
+.coderabbit.yaml
 .env
+.env.example
 romarr.json
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+broken-downloads-*.json
 *.bak
 proxmox
-tests
+homeassistant
 contrib
+docs
+scripts
+tests
+build_*.py
+test*.py
+bios-after-scan.py
+archive-gate.sh
+repository.yaml
+pytest.ini
 docker-compose.yml
 README.md
+SECURITY.md
 LICENSE
 Dockerfile
 .dockerignore

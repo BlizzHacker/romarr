@@ -2491,6 +2491,11 @@ RENDER.profiles=()=>settingsPage('Release Profile',
 
 RENDER.clients=async()=>{
   const d=await j('/api/v1/downloadclient');
+  // Reported separately because "not installed" is a legitimate state here,
+  // not a fault: an install that only fetches plain URLs is finished. Without
+  // this line a site plugin needing a click fails with nothing on screen
+  // saying the browser lane was never set up.
+  const br=await j('/api/v1/downloadclient/browser').catch(()=>null);
   const state=c=>!c.configured?'<span class="dot"></span>not configured'
     :c.ok?'<span class="dot up"></span>connected'
     :'<span class="dot down"></span>unreachable';
@@ -2507,9 +2512,21 @@ RENDER.clients=async()=>{
     ${gaps.length?`<p class="help" style="color:var(--warn)">
       No client configured for: <b>${gaps.join(', ')}</b>.
       Those results will be found and then refused.</p>`:''}
+    ${br?`<p class="help">ROM sites are fetched over plain HTTP by the
+      <b>Direct HTTP</b> client. A handful put the file behind a form the
+      site's own page submits &mdash; those need the <b>Headless Browser</b>
+      client, which loads the real page and clicks the real control.
+      ${br.available
+        ?`<span style="color:var(--ok)">Browser mode is available (${esc(br.reason)}, ${esc(br.where)}).</span>`
+        :`<span style="color:var(--warn)">Browser mode is not configured:
+           ${esc(br.reason)}.</span> Direct downloads are unaffected.`}
+      A site that can only be downloaded from by answering a CAPTCHA or a
+      bot-detection challenge is reported as unavailable rather than worked
+      around.</p>`:''}
     ${d.items.length?`<table><thead><tr><th>Client</th><th>Protocol</th><th>Address</th>
       <th>Category</th><th>Status</th><th></th></tr></thead><tbody>
-      ${d.items.map((c,i)=>`<tr><td>${esc(c.name)}</td>
+      ${d.items.map((c,i)=>`<tr><td>${esc(c.name)}
+        ${c.detail?`<div class="help" style="margin:2px 0 0">${esc(c.detail)}</div>`:''}</td>
         <td><span class="pill">${esc(c.protocol)}</span></td>
         <td style="color:var(--dim)">${esc(c.url||'—')}</td>
         <td>${esc(c.category||'—')}</td>

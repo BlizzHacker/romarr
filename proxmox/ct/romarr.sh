@@ -65,15 +65,20 @@ fi
 
 # --- storage ---------------------------------------------------------------
 
+# `$3 == "active"` matters: pvesm lists storages that are configured but not
+# currently online, and picking one of those fails several steps later inside
+# `pct create`, where the error names the storage rather than this choice.
 if [[ -z "$STORAGE" ]]; then
-  STORAGE=$(pvesm status -content rootdir 2>/dev/null | awk 'NR==2 {print $1}')
+  STORAGE=$(pvesm status -content rootdir 2>/dev/null \
+            | awk 'NR>1 && $3 == "active" {print $1; exit}')
   [[ -n "$STORAGE" ]] || die \
-    "No storage accepting container root filesystems. Set STORAGE=<name>."
+    "No active storage accepting container root filesystems. Set STORAGE=<name>."
 fi
 
-TEMPLATE_STORE=$(pvesm status -content vztmpl 2>/dev/null | awk 'NR==2 {print $1}')
+TEMPLATE_STORE=$(pvesm status -content vztmpl 2>/dev/null \
+                 | awk 'NR>1 && $3 == "active" {print $1; exit}')
 [[ -n "$TEMPLATE_STORE" ]] || die \
-  "No storage accepting container templates (content type 'vztmpl')."
+  "No active storage accepting container templates (content type 'vztmpl')."
 
 # --- template --------------------------------------------------------------
 
@@ -129,6 +134,11 @@ info "Installing dependencies (this takes a minute)"
 pct exec "$CTID" -- bash -c "
   set -e
   export DEBIAN_FRONTEND=noninteractive
+  # pct exec hands the caller's LANG to a container that has generated no
+  # locales, so apt and perl answer with twenty lines of warning that read
+  # like a failure. C.UTF-8 always exists and is not one of the ones being
+  # complained about.
+  export LANG=C.UTF-8 LC_ALL=C.UTF-8
   apt-get update -qq
   # libarchive-tools provides bsdtar, which reads the .7z and .rar archives the
   # disc platforms ship as. Without it every PlayStation, PS2 and Wii import
@@ -145,10 +155,18 @@ info "Fetching $APP"
 pct exec "$CTID" -- bash -c "
   set -e
   mkdir -p /opt/romarr
-  url=\$(curl -fsSL https://api.github.com/repos/${REPO}/releases/latest 2>/dev/null \
-        | grep -o '\"tarball_url\": *\"[^\"]*\"' | head -1 | cut -d'\"' -f4 || true)
+  answer=\$(curl -fsSL https://api.github.com/repos/${REPO}/releases/latest 2>/dev/null || true)
+  url=\$(echo \"\$answer\" | grep -o '\"tarball_url\": *\"[^\"]*\"' | head -1 | cut -d'\"' -f4 || true)
   if [ -z \"\$url\" ]; then
-    echo 'no published release; using main'
+    # Say which of the two it was. The release API is unauthenticated here and
+    # GitHub rate-limits it at 60/hour per IP, so a host that has been busy
+    # gets an answer indistinguishable from 'this repo has no releases' -- and
+    # 'no published release' would then be a lie printed with confidence.
+    if echo \"\$answer\" | grep -qi 'rate limit'; then
+      echo 'GitHub rate-limited the release lookup; using main'
+    else
+      echo 'no published release; using main'
+    fi
     url=https://github.com/${REPO}/archive/refs/heads/main.tar.gz
   fi
   curl -fsSL \"\$url\" -o /tmp/romarr.tar.gz
@@ -267,9 +285,20 @@ if [[ "$UP" -ne 1 ]]; then
    Look at:  pct exec ${CTID} -- journalctl -u romarr -n 50 --no-pager"
 fi
 
+# Say which version is now running. "Installed" without a version is a report
+# nobody can check against a changelog, and this installer deliberately falls
+# back from the latest release to main, so which of the two you got matters.
+VERSION=$(pct exec "$CTID" -- sed -n 's/^VERSION = "\(.*\)"/\1/p' \
+  /opt/romarr/romarr/app.py 2>/dev/null | head -1)
+
 echo
-msg "${APP} is up"
+msg "${APP} ${VERSION:-(version unreadable)} is up"
 echo -e " ${GN}➜${CL} http://${IP}:${APP_PORT}"
 echo -e " ${YW}The first visit asks you to set a password.${CL}"
+echo
+echo -e " Installed at:  /opt/romarr        Settings:  /opt/romarr/.env"
+echo -e " State:         /opt/romarr/romarr.json   ${YW}(back this up -- it holds the API key and password)${CL}"
+echo -e " ROMs:          ${ROM_PATH}"
+echo -e " Logs:          pct exec ${CTID} -- journalctl -u romarr -f"
 echo
 echo -e " Update later:  pct exec ${CTID} -- bash -c \"\$(curl -fsSL https://raw.githubusercontent.com/${REPO}/main/proxmox/ct/update.sh)\""

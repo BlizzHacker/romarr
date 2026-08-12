@@ -33,6 +33,14 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 
+class StateUnreadable(RuntimeError):
+    """The state file is there and we are not allowed to read it.
+
+    Its own class rather than a bare RuntimeError so the entry point can tell
+    this apart from a crash and print the fix instead of a traceback.
+    """
+
+
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -185,10 +193,32 @@ class Store:
         if not self.path.exists():
             return
         try:
-            raw = json.loads(self.path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as err:
+            text = self.path.read_text(encoding="utf-8")
+        except OSError as err:
+            # Unreadable and unparseable used to share this handler, and they
+            # are not the same failure. A file we cannot read is one that is
+            # intact and belongs to somebody else -- typically a root-owned
+            # romarr.json under a container running as PUID. Starting from
+            # defaults recovers nothing there; it destroys. The next save
+            # replaces the API key, the password hash and the whole history,
+            # and the install comes back unclaimed, so whoever reaches the port
+            # next gets to set the password. Refusing to start costs an outage
+            # and loses nothing.
+            raise StateUnreadable(
+                f"{self.path} exists but cannot be read ({err}). This file "
+                "holds the API key, the password hash and the request "
+                "history; starting from defaults would overwrite it and leave "
+                "the install unclaimed. Fix the ownership or permissions -- in "
+                "Docker, PUID/PGID must own /config and everything inside it "
+                "-- and start ROMarr again."
+            ) from err
+        try:
+            raw = json.loads(text)
+        except json.JSONDecodeError as err:
             # A corrupt file must not stop the service from starting; the
-            # defaults are always a usable configuration.
+            # defaults are always a usable configuration. Unlike the case
+            # above there is nothing here to preserve -- the bytes no longer
+            # parse, so no version of this file can be handed back.
             log.warning("could not read %s (%s); starting from defaults", self.path, err)
             return
         with self._lock:

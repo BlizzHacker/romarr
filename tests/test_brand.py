@@ -41,11 +41,13 @@ REPO = pathlib.Path(__file__).resolve().parents[1]
 # able to name the wrong spellings in order to forbid them.
 SHIPPED = [
     "README.md",
+    "docs/INSTALL.md",
     "docker-compose.yml",
-    "docker-compose-alt.yml",
     ".env.example",
     "Dockerfile",
     "docker/entrypoint.sh",
+    "proxmox/ct/romarr.sh",
+    "proxmox/ct/update.sh",
 ]
 
 
