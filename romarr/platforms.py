@@ -113,8 +113,14 @@ PLATFORMS: tuple[Platform, ...] = (
     Platform("nes", "Nintendo Entertainment System", (".nes", ".fds", ".unf"),
              ("nintendo", "nintendo entertainment system"),
              max_size=8 * MB),
+    # Aliases carry the machine's full formal name from here down. `resolve`
+    # matches exactly, so a name that is not written here is one it will not
+    # answer -- and RomM publishes the long forms, not the short ones. Each of
+    # these is a display name read off the live library, not an invention:
+    # 1,848 rows arrive as "Super Nintendo Entertainment System".
     Platform("snes", "Super Nintendo", (".smc", ".sfc", ".swc", ".fig"),
-             ("super nintendo", "sfc", "super nes"),
+             ("super nintendo", "sfc", "super nes",
+              "super nintendo entertainment system"),
              max_size=24 * MB),
     Platform("gb", "Game Boy", (".gb",), ("gameboy", "game boy"),
              max_size=8 * MB),
@@ -126,11 +132,14 @@ PLATFORMS: tuple[Platform, ...] = (
              ("nintendo 64", "n 64"), max_size=256 * MB),
     Platform("genesis-slash-megadrive", "Sega Genesis / Mega Drive",
              (".md", ".gen", ".smd", ".bin"),
-             ("genesis", "mega drive", "megadrive", "sega genesis"),
+             ("genesis", "mega drive", "megadrive", "sega genesis",
+              "sega mega drive/genesis"),
              max_size=32 * MB),
-    Platform("sms", "Sega Master System", (".sms",), ("master system",),
+    Platform("sms", "Sega Master System", (".sms",),
+             ("master system", "sega master system/mark iii"),
              max_size=8 * MB),
-    Platform("gamegear", "Game Gear", (".gg",), ("game gear",), max_size=8 * MB),
+    Platform("gamegear", "Game Gear", (".gg",), ("game gear", "sega game gear"),
+             max_size=8 * MB),
     Platform("atari2600", "Atari 2600", (".a26", ".bin"), ("2600", "vcs"),
              max_size=8 * MB),
     Platform("atari7800", "Atari 7800", (".a78",), ("7800",), max_size=8 * MB),
@@ -146,10 +155,16 @@ PLATFORMS: tuple[Platform, ...] = (
     # Excluded before for the same reason discs were, and just as wrongly: a
     # DS cartridge is 512MB at the very most and EmulatorJS runs `melonds` for
     # it out of the box.
+    # The mid-generation revisions are folded in deliberately, not by accident
+    # of matching: `.dsi` is already in the extension list above and melonDS
+    # runs those carts, so RomM's separate `nintendo-dsi` and `new-nintendo-3ds`
+    # folders belong to these two platforms rather than to nothing. Declared
+    # because `resolve` matches exactly -- an undeclared revision is a name it
+    # will not answer.
     Platform("nds", "Nintendo DS", (".nds", ".dsi", ".ids"),
-             ("nintendo ds", "ds"), max_size=512 * MB),
+             ("nintendo ds", "ds", "nintendo dsi", "dsi"), max_size=512 * MB),
     Platform("3ds", "Nintendo 3DS", (".3ds", ".cci", ".cxi", ".cia"),
-             ("nintendo 3ds", "3ds"), max_size=8 * GB),
+             ("nintendo 3ds", "3ds", "new nintendo 3ds"), max_size=8 * GB),
 
     # -- optical media ------------------------------------------------------
     #
@@ -212,7 +227,18 @@ PLATFORMS: tuple[Platform, ...] = (
     Platform("turbografx-16-slash-pc-engine-cd", "TurboGrafx-CD / PC Engine CD",
              (".chd", ".cue", ".bin", ".iso"),
              ("turbografx cd", "turbografx-cd", "pc engine cd", "pcecd",
-              "super cd-rom"),
+              "super cd-rom",
+              # RomM's display name, and it names the CD machine -- which is
+              # what the old earliest-alias ranking got backwards, handing it
+              # to the cartridge TurboGrafx because "turbografx" came first in
+              # the string. The name is claimed here and only here.
+              #
+              # It is also not enough on its own: the live library has THREE
+              # folders under this one display name (`turbografx16--1`,
+              # `pcenginecd` and this slug, 1,262 rows between them). No
+              # resolution of the name can separate them, which is the whole
+              # argument for callers passing RomM's `platform_slug`.
+              "turbografx-16/pc engine cd"),
              max_size=2 * GB, media=DISC),
     Platform("amiga-cd32", "Amiga CD32",
              (".chd", ".cue", ".bin", ".iso"),
@@ -268,9 +294,13 @@ PLATFORMS: tuple[Platform, ...] = (
     # Regional twins of platforms already here. They are separate RomM folders
     # with their own catalogues -- 968 fds, 127 sfam, 106 famicom -- so a
     # request for one must not be filed under the other.
+    # "Family Computer" is the name RomM publishes for both of these -- the
+    # literal translation, not the transliteration ROMarr names them by.
     Platform("fds", "Famicom Disk System", (".fds", ".zip"),
-             ("famicom disk system", "disk system"), max_size=8 * MB),
-    Platform("famicom", "Famicom", (".nes", ".zip"), (), max_size=8 * MB),
+             ("famicom disk system", "disk system",
+              "family computer disk system"), max_size=8 * MB),
+    Platform("famicom", "Famicom", (".nes", ".zip"), ("family computer",),
+             max_size=8 * MB),
     Platform("sfam", "Super Famicom", (".sfc", ".smc", ".zip"), (),
              max_size=24 * MB),
 
@@ -281,7 +311,11 @@ PLATFORMS: tuple[Platform, ...] = (
     # X68000 entries).
     Platform("c64", "Commodore 64",
              (".d64", ".t64", ".d81", ".tap", ".prg", ".crt", ".zip"),
-             ("commodore 64", "c 64"), max_size=16 * MB, media=COMPUTER),
+             # The last of these is RomM's display name for the 688-row C64
+             # folder. It resolved to nothing at all before, because no alias
+             # here spells the machine the way the catalogue does.
+             ("commodore 64", "c 64", "commodore c64/128/max"),
+             max_size=16 * MB, media=COMPUTER),
     Platform("c128", "Commodore 128", (".d64", ".d81", ".t64", ".prg"),
              ("commodore 128",), max_size=16 * MB, media=COMPUTER),
     Platform("vic-20", "Commodore VIC-20", (".prg", ".d64", ".t64", ".crt"),
@@ -328,6 +362,30 @@ PLATFORMS: tuple[Platform, ...] = (
 _BY_SLUG = {p.slug: p for p in PLATFORMS}
 
 
+# Punctuation is noise in a platform name and every source spells it
+# differently: RomM publishes "Turbografx-16/PC Engine CD", a request form
+# sends "TurboGrafx 16 / PC Engine CD", a slug writes it out with "slash".
+# Folding punctuation to spaces lets one declared alias answer all three
+# without any of them having to guess at the others' spelling.
+_PUNCTUATION = re.compile(r"[^a-z0-9]+")
+
+
+def _normalise(text: str) -> str:
+    return _PUNCTUATION.sub(" ", text.strip().lower()).strip()
+
+
+#: Every name a platform answers to, normalised, mapped to that platform.
+#:
+#: First declaration wins, which only matters if two platforms claim one name
+#: -- and that is a silent misfiling, so
+#: `test_no_two_platforms_answer_to_the_same_name` fails the suite instead of
+#: letting declaration order decide it.
+_BY_LABEL: dict[str, Platform] = {}
+for _platform in PLATFORMS:
+    for _label in (_platform.slug, _platform.name, *_platform.aliases):
+        _BY_LABEL.setdefault(_normalise(_label), _platform)
+
+
 def all_extensions() -> set[str]:
     """Every extension any supported platform recognises."""
     return {ext for p in PLATFORMS for ext in p.extensions}
@@ -338,66 +396,53 @@ def by_slug(slug: str) -> Platform | None:
 
 
 def resolve(text: str) -> Platform | None:
-    """Find the platform a free-text name refers to.
+    """Find the platform a name refers to, or nothing.
 
-    Matches the slug, the display name, or any alias. See the ranking note
-    below for why position beats length.
+    Matches the slug, the display name, or a declared alias -- exactly, once
+    case and punctuation are folded away. Nothing else. A name this does not
+    know resolves to nothing, and that is the feature rather than the gap.
+
+    This used to hunt for any alias *inside* the text and rank the hits by
+    where they started. Both halves were wrong, and measured against the live
+    library they answered 4,173 rows about the wrong machine:
+
+      * A bare substring has no word boundaries. "ds" sits inside "Edsac" and
+        "pc" inside "Amstrad PCW", so those resolved to the Nintendo DS and to
+        Windows -- 753 rows on the Amstrad alone. `selection._mentions` has
+        guarded against precisely this since the scorer was written, for
+        precisely these two words. `resolve` never got the same treatment, and
+        `resolve` is the one that decides which directory a file lands in.
+
+      * A prefix match with words left over is not a match. "Nintendo Switch"
+        begins with "nintendo", which is an NES alias, so 2,874 Switch rows
+        were answered about a Famicom; "PlayStation Vita" begins with
+        "playstation", so 34 more were answered about a PS1. The old
+        `_leaves_a_model_number` caught the digit form of this ("PlayStation
+        5") and could never catch the word form, because no rule separates
+        "Vita" from "Entertainment System" -- one names a different machine,
+        the other finishes the name of this one. Only a declaration can tell
+        those apart, which is why the compound names are spelled out in the
+        table above.
+
+    Ranking by position then made the last case worse instead of better.
+    "Turbografx-16/PC Engine CD" has "CD" in it, and earliest-alias-wins
+    picked the cartridge machine because "turbografx" comes before "pc engine
+    cd" in the string.
+
+    Refusing to answer is the safe failure here, and callers are built for it:
+    `Service.request` returns "unknown platform: ...", and the webhook path
+    records a failed event somebody can go and fix. A wrong answer instead
+    files a download into another console's folder and says nothing at all.
     """
     if not text:
         return None
+    # Before normalisation, because a slug is the authoritative form and
+    # `genesis-slash-megadrive` must not have to survive a round trip through
+    # punctuation folding to be recognised as itself.
     needle = text.strip().lower()
-
     if needle in _BY_SLUG:
         return _BY_SLUG[needle]
-
-    # Ranked by where the alias starts, then by how much of the name it covers.
-    #
-    # Position matters more than length, and this is not a nicety: "super
-    # nintendo entertainment system" contains BOTH "super nintendo" (SNES) and
-    # "nintendo entertainment system" (NES). Longest-match alone picks NES and
-    # every SNES request silently becomes an NES request. The qualifier comes
-    # first in English, so the earliest match is the specific one.
-    candidates: list[tuple[int, int, Platform]] = []
-    for platform in PLATFORMS:
-        for label in (platform.name.lower(), *platform.aliases):
-            if label == needle:
-                return platform
-            start = needle.find(label)
-            if start >= 0 and not _leaves_a_model_number(needle, start + len(label)):
-                candidates.append((start, -len(label), platform))
-
-    if not candidates:
-        return None
-    candidates.sort()
-    return candidates[0][2]
-
-
-# A model number left over after a partial alias match, e.g. the "5" in
-# "playstation 5" once "playstation" has matched.
-_MODEL_NUMBER = re.compile(r"\s*\d")
-
-
-def _leaves_a_model_number(needle: str, end: int) -> bool:
-    """Whether a partial match leaves a digit that names a different machine.
-
-    Console families number their successors, so a partial match on the family
-    name is the *most* dangerous kind: "playstation" is inside "playstation 2",
-    "playstation 3", "playstation 4" and "playstation 5" alike, and the
-    position-ranked match that correctly picks SNES out of "super nintendo
-    entertainment system" happily answers a PlayStation 5 request with a
-    PlayStation 1 folder.
-
-    An exact alias is unaffected -- `resolve` returns those before it gets
-    here, which is how "playstation 2" still reaches the PS2 row. What this
-    rejects is only the case where an alias matched a prefix and the part it
-    did not match begins with a number. That is never a decoration; it is the
-    generation.
-
-    Trailing words are deliberately still allowed. "super nintendo
-    entertainment system" has to keep working, and no console family
-    distinguishes its generations by a trailing word alone.
-    """
-    return _MODEL_NUMBER.match(needle, end) is not None
+    return _BY_LABEL.get(_normalise(needle))
 
 
 def platform_for_file(filename: str) -> Platform | None:

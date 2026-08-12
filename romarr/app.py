@@ -78,8 +78,8 @@ from .platforms import PLATFORMS, resolve
 from .sso import ForwardAuth
 from .totp import Totp
 from .playability import (
-    DOWNLOAD, MOONLIGHT_KINDS, PAIRING_IS_MANUAL, WOLF, MoonlightHost,
-    StreamServer, StreamSources, routes_for)
+    DOWNLOAD, MOONLIGHT_KINDS, PAIRING_IS_MANUAL, PLAYERS, WOLF, MoonlightHost,
+    PlayerPolicy, StreamServer, StreamSources, routes_for, routes_for_file)
 from .lists import LIST_TYPES
 
 #: List-source fields that are credentials: masked on the way out, kept on
@@ -385,6 +385,18 @@ class ROMarr:
         # an inferred answer never displaces a known one.
         self.stream = (StreamSources(self.retroarch, self.moonlight)
                        if (self.retroarch or self.moonlight) else None)
+
+        # Which browser players this install offers, and in what order. All
+        # four unless the operator says otherwise -- see PlayerPolicy for why
+        # an unset variable means "all" and `none` means none.
+        #
+        # Turning one off is a real decision rather than a preference: an
+        # install whose library server runs with DISABLE_RUFFLE_RS set turns
+        # Ruffle off here so ROMarr stops promising a button that will not be
+        # there, and an install that would rather its users did not leave for
+        # Archive.org turns Emularity off.
+        self.players = PlayerPolicy.from_env(e)
+        self.store.settings["_players"] = ",".join(self.players.order)
 
         # Authentication, on unless deliberately turned off.
         #
@@ -2244,16 +2256,23 @@ class ROMarr:
         surprising is one where something is misconfigured.
         """
         counts: dict[str, int] = {}
+        by_player: dict[str, int] = {}
         download_only = 0
         for platform in PLATFORMS:
-            routes = routes_for(platform, stream=self.stream)
+            routes = routes_for(platform, stream=self.stream,
+                                players=self.players)
             if not routes.plays_without_downloading:
                 download_only += 1
-            for kind in routes.kinds:
+            for kind in set(routes.kinds):
                 if kind != DOWNLOAD:
                     counts[kind] = counts.get(kind, 0) + 1
+            # Counted per platform rather than per route so a platform two
+            # players can open is one for each and not two of anything.
+            for player in set(routes.players):
+                by_player[player] = by_player.get(player, 0) + 1
         counts["download_only"] = download_only
         counts["total"] = len(PLATFORMS)
+        counts["players"] = by_player
         return counts
 
     def moonlight_status(self) -> dict:
@@ -2296,7 +2315,8 @@ class ROMarr:
         """Every platform with how it plays, for the API and the UI."""
         out = []
         for platform in PLATFORMS:
-            routes = routes_for(platform, stream=self.stream)
+            routes = routes_for(platform, stream=self.stream,
+                                players=self.players)
             out.append({
                 "slug": platform.slug,
                 "name": platform.name,
@@ -2304,10 +2324,59 @@ class ROMarr:
                 "extensions": list(platform.extensions),
                 "max_size_mb": platform.max_size // (1024 * 1024),
                 "play_routes": list(routes.kinds),
+                "players": list(routes.players),
                 "plays": routes.plays_without_downloading,
                 "how": routes.summary(),
             })
         return out
+
+    def player_directory(self) -> dict:
+        """Every browser player, on or off, with what it will and will not run.
+
+        Served whole rather than filtered to the enabled ones. The disabled
+        entries are the useful ones: an operator looking at a library of Flash
+        that will not play needs to see Ruffle listed and switched off, not an
+        absence.
+        """
+        return {
+            "players": self.players.as_dict(),
+            "order": list(self.players.order),
+            "setting": "ROMARR_PLAYERS",
+            "known": sorted(PLAYERS),
+            # What each one can reach across the shelf ROMarr has walked. A
+            # capability with no number next to it is a claim; this is the
+            # measurement.
+            "library": (getattr(self, "_library_facets", None)
+                        or {}).get("players", {}),
+        }
+
+    def play_for(self, name: str, platform: str = "",
+                 present: bool | None = None) -> dict:
+        """How one file plays: every route, every player, and every refusal.
+
+        `name` may be a filename or a bare extension, because both arrive --
+        RomM reports `fs_extension` without a dot and a person pastes a
+        filename. `present` defaults to True; pass False for a row the library
+        server holds without the bytes, which is the majority of a large
+        catalogued library and the case with the most misleading default.
+        """
+        routes = routes_for_file(name, platform,
+                                 present=True if present is None else present,
+                                 stream=self.stream, players=self.players)
+        return {
+            "file": name,
+            "platform": routes.platform,
+            "present": True if present is None else bool(present),
+            "plays": routes.plays_without_downloading,
+            "absent": routes.absent,
+            "routes": [{"kind": r.kind, "player": r.player, "detail": r.detail}
+                       for r in routes.routes],
+            "alternatives": [{"kind": r.kind, "player": r.player,
+                              "detail": r.detail}
+                             for r in routes.alternatives],
+            "how": routes.summary(),
+            "stream_unreachable": routes.stream_unreachable,
+        }
 
     # How often the count and library are refreshed in the background.
     COUNT_TTL = 300
@@ -2318,6 +2387,58 @@ class ROMarr:
     # 512MB install carries comfortably. This replaced a 200-row page that
     # made big libraries render as "about the first 100 games".
     LIBRARY_MAX = 250_000
+
+    def _player_tally(self, snapshot: list) -> dict:
+        """How many rows each browser player can actually open, right now.
+
+        The number the whole players model exists to produce, and the reason
+        it is computed here rather than on request: it is one pass over the
+        same 166k rows the facets are already walking, and answering it per
+        page view would be a second pass per view.
+
+        Memoised on (platform, extension, present) because a library of
+        166,548 rows has fewer than three hundred distinct combinations of
+        those, and `routes_for_file` is pure. Without it this loop is seconds;
+        with it, it is noise.
+
+        The stream server is deliberately not consulted. This counts *browser
+        players*, and folding a stream route in would make a number about what
+        a browser can do depend on whether a LAN service answered.
+        """
+        from collections import Counter
+
+        counts: Counter = Counter()
+        seen: dict[tuple, tuple] = {}
+        absent = playable = 0
+        for game in snapshot:
+            # The slug, not the display name. See `Game.platform_slug` for
+            # the three platforms where the difference is a wrong answer
+            # rather than a cosmetic one.
+            key = (str(game.platform_slug or game.platform or ""),
+                   str(game.extension or ""),
+                   (game.origin or "local") != "cloud")
+            answer = seen.get(key)
+            if answer is None:
+                got = routes_for_file(key[1], key[0], present=key[2],
+                                      players=self.players)
+                answer = (tuple(sorted(set(got.players))),
+                          bool(got.absent),
+                          got.plays_without_downloading)
+                seen[key] = answer
+            players, is_absent, plays = answer
+            for player in players:
+                counts[player] += 1
+            absent += is_absent
+            playable += plays
+        return {
+            "by_player": dict(counts),
+            # Named rather than derived, because "94,428 of these have no file
+            # here" is the single most useful sentence about this library and
+            # it must not be something a reader has to subtract to find.
+            "no_file": absent,
+            "plays_in_browser": playable,
+            "rows": len(snapshot),
+        }
 
     def _publish_library(self, shelf: list, error: str, *,
                          partial: bool) -> None:
@@ -2415,6 +2536,7 @@ class ROMarr:
             "sources": rank(
                 Counter(g.provenance or "local" for g in snapshot), 8),
             "identified": identified,
+            "players": self._player_tally(snapshot),
         }
         # Kept separately from the facet: the facet is a filter menu and gets
         # truncated, where this is a headline the Library and Stats pages both
@@ -4442,6 +4564,20 @@ def make_handler(service: ROMarr):
                 return self._json(200, service.health())
             if route.path == "/api/platforms":
                 return self._json(200, service.platform_directory())
+            if route.path == "/api/v1/players":
+                return self._json(200, service.player_directory())
+            if route.path == "/api/v1/play":
+                # `file` is the only required parameter, and a bare extension
+                # is a legitimate value for it -- that is the shape a library
+                # server reports. `missing=1` asks the question that matters
+                # on a catalogued library: the row exists, the bytes do not.
+                name = (query.get("file") or [""])[0].strip()
+                if not name:
+                    return self._json(400, {"error": "file is required"})
+                missing = (query.get("missing") or [""])[0].strip().lower()
+                return self._json(200, service.play_for(
+                    name, (query.get("platform") or [""])[0],
+                    present=missing not in ("1", "true", "yes")))
             if route.path == "/api/queue":
                 return self._json(200, [asdict(i) for i in service.queue])
             if route.path == "/api/v1/release":

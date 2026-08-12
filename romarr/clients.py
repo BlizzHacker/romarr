@@ -557,6 +557,14 @@ class Romm:
             # metadata scan would rename them and take the evidence with it.
             provenance = classify_provenance(
                 str(it.get("fs_name") or it.get("name") or ""), origin)
+            # Which player can open this row. RomM publishes `fs_extension`
+            # dotless (`swf`, `chd`), and it is present on catalogued rows too
+            # -- the row knows what the file would be even when the file is
+            # not here, which is what makes "Ruffle would play this once
+            # ROMarr fetches it" a sentence ROMarr can say.
+            extension = str(it.get("fs_extension") or "").strip().lower()
+            if extension and not extension.startswith("."):
+                extension = f".{extension}"
             out.append(Game(
                 id=str(it.get("id") or ""),
                 name=str(it.get("name") or it.get("fs_name") or "Unknown"),
@@ -582,6 +590,8 @@ class Romm:
                 players=str(meta.get("player_count") or ""),
                 origin=origin,
                 provenance=provenance,
+                extension=extension,
+                platform_slug=str(it.get("platform_slug") or ""),
             ))
         return out
 

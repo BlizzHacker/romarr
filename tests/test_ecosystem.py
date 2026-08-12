@@ -27,10 +27,22 @@ def test_romarr_marks_itself_and_only_itself():
     assert selves[0].name == "ROMarr"
 
 
+#: Every package manager an entry here is allowed to install from.
+#:
+#: `docker` alone until the browser players arrived: js-dos and Nostalgist.js
+#: are npm libraries and have no image to pull, and dropping their install
+#: line to satisfy the old shape would have made the page less useful to
+#: protect a test. Widened rather than removed -- the point of the check is
+#: that the field holds a command somebody can paste, not prose about how to
+#: get the thing.
+INSTALLERS = ("docker", "npm", "pip", "apt", "brew")
+
+
 def test_install_commands_are_commands_not_prose():
     for p in all_projects():
         if p.install:
-            assert " " in p.install and "docker" in p.install or \
+            first = p.install.split(" ")[0]
+            assert (" " in p.install and first in INSTALLERS) or \
                 p.install.startswith("http"), \
                 f"{p.name} install looks wrong: {p.install!r}"
 

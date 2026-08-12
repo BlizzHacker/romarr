@@ -6,6 +6,10 @@ full pass: **2026-08-10**, against the maintainer's production install
 commit `a56a72f`. Regenerate the screenshots any time with
 [docs/screenshots.py](screenshots.py) pointed at your own install.
 
+Since that pass, the streaming-host rows were closed separately on
+**2026-08-11** against a live Wolf and a live Sunshine built for the purpose
+— see [design/streaming-hosts.md](design/streaming-hosts.md) §7 for the rig.
+
 "Tested against fakes" below means the protocol conversation is asserted in
 CI but no live server was in the loop — those rows are exactly where a field
 report is worth the most.
@@ -32,27 +36,51 @@ report is worth the most.
 | Local launcher connect (Steam/Epic/GOG/Battle.net/EA) | **Proven on real hardware**: the scanner found a live Epic library and a Blizzard install on the maintainer's PC, then pushed them to the production server over the network | 17 tests in [`tests/test_launchers.py`](../tests/test_launchers.py); `scripts/connect_launchers.py` run 2026-08-10 against 192.168.0.182 — "Local launchers" appears in the [Lists screenshot](img/lists.png). Correctly found **nothing** for an empty EA folder and a Steam library on an unplugged drive, which matters more than the positives: a scanner that invents games is worse than none |
 | The screenshots are real | Taken by script against the production instance, same session as this file's date | [`docs/screenshots.py`](screenshots.py) — point it at your install and diff |
 | Every page renders its actions | A browser signs in and visits all 27 pages the way a user navigates, asserting each shows its action control with no JS error | [`scripts/prove_pages.py`](../scripts/prove_pages.py), run 2026-08-11: **27/27**. Building it caught four latent late-write bugs (a fetch resolving after navigation), all fixed |
+| Per-file player capability: EmulatorJS / Ruffle / js-dos / Emularity | Every capability is upstream's own declaration, not ours: core extensions from each core's `supported_extensions` in `libretro/libretro-super`, EmulatorJS's archive handling from `data/src/compression.js`, Ruffle's coverage percentages from ruffle.rs/compatibility, its projector gap from [ruffle#11539](https://github.com/ruffle-rs/ruffle/issues/11539), Emularity's engine list from its own README, RomM's Ruffle gate from `isRuffleEmulationSupported`. Then **measured against the live library**: all 166,548 rows walked through `routes_for_file` | [`tests/test_players.py`](../tests/test_players.py) (50 tests, most of them refusals); the walk, 2026-08-11 against the production RomM 5.1.0: 72,120 rows with files, 94,428 with none, **49,890 playable by EmulatorJS today**, 17,125 by Archive.org, **0 by Ruffle** — because every one of the 94,415 `.swf` rows is a catalogue entry with no bytes behind it |
+| "No file on the library server" is said, not guessed | `missing_from_fs` comes from RomM's own bookkeeping and its content endpoint 404s; the model emits **no** download route for such a row rather than naming one that fails | `test_a_row_with_no_file_plays_on_nothing_and_says_why` and `test_missing_and_unsupported_are_different_answers` in [`tests/test_players.py`](../tests/test_players.py); the live split is `Romm.counts()`, 166,548 = 72,120 + 94,428 |
 | The ecosystem credits are real links, not fabrications | Every upstream URL confirmed against the live project before it shipped; the page renders 17 cards with working links on the production install | [`romarr/ecosystem.py`](../romarr/ecosystem.py), [`tests/test_ecosystem.py`](../tests/test_ecosystem.py); [screenshot](img/ecosystem.png) — 23 external links, ROMarr marked "you are here" |
 
-| Moonlight hosts (Wolf/Sunshine/Steam Headless) report honestly | Every endpoint and every field claimed was read from the upstream source, not guessed; 56 tests assert ROMarr's half of each conversation, and most of them assert a **refusal** — that a RetroArch or a Steam app grants no platform anything, that a reachable host with an unreadable app list grants nothing, that a PIN submission never reports "paired" | [design doc](design/streaming-hosts.md), [`tests/test_moonlight.py`](../tests/test_moonlight.py). **Fixtures only — no live host was in the loop**, see the row below |
+| Moonlight hosts (Wolf/Sunshine) report honestly | **Proven against live servers**: a real Wolf (`stable`) and a real Sunshine (`2026.516.143833`) stood up on the maintainer's cluster, driven through the same `MoonlightHost` the Settings page builds. 60 tests still assert every refusal — that a RetroArch or a Steam app grants no platform anything, that a reachable host with an unreadable app list grants nothing, that a PIN submission never reports "paired" | [`scripts/moonlight_proof.py`](../scripts/moonlight_proof.py), run 2026-08-11: **39/39** — `/serverinfo` on both, Wolf's **UNIX socket** and its nginx proxy, Sunshine's self-signed TLS, and eleven real app titles refused while `PCSX2` granted PS2. [design doc](design/streaming-hosts.md) §6–§7, [`tests/test_moonlight.py`](../tests/test_moonlight.py) |
+| Moonlight pairing: ROMarr relays a real PIN and a real client pairs | **Proven end to end on both hosts** with the official moonlight-qt 6.1.0. Wolf listed the waiting client, ROMarr rebuilt its PIN-page URL and relayed the PIN; Sunshine was told the PIN with no way to list waiters, as documented | Same run: Wolf logged `Succesfully paired` and its client list went 1 → 2; Sunshine's `named_certs` went 0 → 1 with the name `ROMarr` that `submit_pin` sends. The wrong-PIN bug ([Sunshine#3944](https://github.com/LizardByte/Sunshine/issues/3944)) was **reproduced**, not cited: `{"status": true}` for a wrong PIN, and nothing paired |
 
 ## What is NOT proven, in the same breath
 
 This list was five entries long on the morning of 2026-08-10 and is now
 this. Each survivor names exactly what would close it.
 
-- **No live Wolf, Sunshine, Steam Headless or Moonlight client has ever
-  met this code.** Everything in the streaming-host integration is asserted
-  against fixtures built by reading upstream's own source. Unverified
-  against real hardware, most-valuable-first: Wolf's **UNIX socket
-  transport** (the only non-plain-HTTP transport here), the nginx TCP proxy
-  path, Sunshine's **self-signed TLS handshake**, `GET /serverinfo` against
-  a real host, and **every PIN relay on both implementations**. The claim
-  that Sunshine returns `true` for a *wrong* PIN is upstream's own bug
-  report ([Sunshine#3944](https://github.com/LizardByte/Sunshine/issues/3944)),
-  not our observation. One person with the hardware, running it and posting
-  what happened, closes any of these. Full list in
+- **Nothing has ever streamed a frame, and ROMarr never asks it to.**
+  Wolf, Sunshine and a Moonlight client are now proven — probe, app list,
+  both Wolf transports, Sunshine's TLS, and pairing completing on both — but
+  `/launch` sits behind a paired *client* certificate and is deliberately
+  not built. A client pairing is not a session starting. What remains is a
+  human confirming they can actually play something on a host ROMarr routed
+  them to.
+- **Steam Headless has still never been run.** It is modelled as a Sunshine
+  with a web desktop attached, read from its compose files. Sunshine's half
+  is now proven; the reduction is not. Running the container and pointing
+  `MOONLIGHT_KIND=steam-headless` at it closes the row.
+- **The live proof covers one Wolf profile, no GPU, and one session.**
+  `_wolf_apps` unions app titles across profiles; the host had one. Wolf ran
+  on software encoders throughout. Nothing here says how either host behaves
+  after a month of uptime or with many paired clients. Re-run
+  [`scripts/moonlight_proof.py`](../scripts/moonlight_proof.py) on your own
+  hardware and post the output — full detail in
   [design/streaming-hosts.md](design/streaming-hosts.md) §6.
+- **No file has ever been handed to js-dos or to a self-hosted Emularity by
+  this code.** Both are modelled from their own documentation and neither has
+  been stood up: js-dos 8.4.1 takes a `.jsdos` or `.zip` bundle and Emularity
+  names MAME, EM-DOSBOX and SAE, and ROMarr has never watched either open a
+  file out of a library. It reports them as capabilities and prints a link
+  only when told a URL, which is the honest shape for something unproven —
+  one person setting either up and posting what happened closes this. The DOS
+  shelf on the maintainer's install cannot close it: 148 of its 163 rows carry
+  the extension `.dos`, which **no** browser player declares, so ROMarr
+  reports them as unplayable and that has not been checked against what those
+  rows actually are on disk.
+- **Ruffle has never been asked to play anything here**, because all 94,415
+  `.swf` rows on the maintainer's library are catalogue entries with no file.
+  The Ruffle side of the model is asserted against fixtures and against
+  RomM's own source; the first person with SWFs actually on disk proves it.
 - **Synology Download Station and Real-Debrid** have only met protocol
   fakes: one needs Synology hardware, the other a paid account.
   [`scripts/live_proof.py`](../scripts/live_proof.py) is ready for both —

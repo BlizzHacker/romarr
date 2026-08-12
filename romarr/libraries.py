@@ -92,6 +92,30 @@ class Game:
     #: metadata, an Archive.org entry is a real dump somebody else is hosting.
     #: Always "local" when `origin` is, so the two never disagree.
     provenance: str = "local"
+    #: The file's extension, lowercase and with the dot -- `.swf`, `.chd`.
+    #:
+    #: Carried because the platform does not decide which player can open a
+    #: row and the extension mostly does: a `.swf` is Ruffle's, a `.zip` under
+    #: `dos` is any of three players', a `.chd` under `arcade` is nobody's.
+    #: RomM publishes it as `fs_extension` on every row, with no dot; the
+    #: backends normalise it here so `playability.routes_for_file` gets one
+    #: shape whichever server the row came from. Empty when the backend does
+    #: not say, which is not the same as a file with no extension -- the
+    #: player model treats both as "no extension to go on" and answers the
+    #: platform question instead of pretending to answer the file one.
+    extension: str = ""
+    #: The library server's own slug for the platform, where `platform` is its
+    #: display name.
+    #:
+    #: Both, because they are not interchangeable and the display name is the
+    #: one that misleads. Resolving RomM's display names rather than its slugs
+    #: sends "Nintendo Switch" to `nes`, "PlayStation Vita" to `psx` and
+    #: "Turbografx-16/PC Engine CD" to the *cartridge* TurboGrafx -- 4,185
+    #: rows answered about the wrong machine on the library this was measured
+    #: against, and the last of those is the kind of wrong that looks right.
+    #: The slug is unambiguous, so anything asking "what plays this" uses it
+    #: and falls back to the display name only when a backend has no slug.
+    platform_slug: str = ""
 
 
 # Budget for the background shelf fetch. Nothing waits on it, so it is
@@ -733,6 +757,9 @@ class FolderLibrary:
                     id=str(path),
                     name=path.stem,
                     platform=path.parent.name if path.parent != self._root else "",
+                    # Free here, where every other backend has to be asked
+                    # for it: the walk is over real files.
+                    extension=path.suffix.lower(),
                 ))
         except OSError as err:
             log.warning("folder library read failed: %s", err.__class__.__name__)

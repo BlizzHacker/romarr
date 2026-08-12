@@ -438,6 +438,72 @@ def test_wolfs_app_list_is_read_from_its_title_field():
     assert host._wolf_apps() == ["PCSX2", "Steam"]
 
 
+def test_wolf_apps_include_the_ones_only_a_profile_lists():
+    """Observed on a live Wolf, and the reason `_wolf_apps` makes two calls.
+
+    Its stock config declares no top-level apps at all: `GET /api/v1/apps`
+    answered with `Wolf UI` and `Test ball`, while Firefox, RetroArch, Steam
+    and everything an operator would actually add sat under
+    `[[profiles.apps]]`. Reading `/apps` alone meant a PCSX2 installed the
+    only way Wolf's own config offers granted PS2 nothing.
+    """
+    host = MoonlightHost("h", kind=WOLF)
+    host._wolf_get = lambda path: {
+        "/apps": {"success": True,
+                  "apps": [{"title": "Wolf UI"}, {"title": "Test ball"}]},
+        "/profiles": {"success": True, "profiles": [
+            {"id": "user", "apps": [{"title": "RetroArch"},
+                                    {"title": "PCSX2"},
+                                    {"title": "Wolf UI"}]}]},
+    }[path]
+
+    titles = host._wolf_apps()
+    assert titles == ["Wolf UI", "Test ball", "RetroArch", "PCSX2"]
+    assert playability.platforms_from_apps(titles) == {"ps2": "PCSX2"}
+
+
+def test_a_wolf_with_no_profiles_endpoint_keeps_the_apps_it_did_get():
+    """A Wolf too old to have profiles is still a Wolf, and losing the app
+    list it *did* answer with would turn a partial read into no read at all."""
+    host = MoonlightHost("h", kind=WOLF)
+
+    def one_or_the_other(path):
+        if path == "/profiles":
+            raise RuntimeError("HTTP 404: not found")
+        return {"apps": [{"title": "PCSX2"}]}
+
+    host._wolf_get = one_or_the_other
+    assert host._wolf_apps() == ["PCSX2"]
+
+
+def test_a_hosts_own_error_sentence_survives_to_the_operator():
+    """Both hosts say something useful and then bury it in JSON: Sunshine
+    answers a malformed PIN with "PIN must be between 0000 and 9999" and Wolf
+    a stale secret with "Invalid pair secret". Both were observed live, and
+    both end up in `submit_pin`'s detail, which the UI shows verbatim."""
+    assert playability._error_sentence(
+        400, '{"error":"PIN must be between 0000 and 9999","status":false}'
+    ) == "HTTP 400: PIN must be between 0000 and 9999"
+    assert playability._error_sentence(
+        500, '{"success":false,"error":"Invalid pair secret"}'
+    ) == "HTTP 500: Invalid pair secret"
+    # A body that is not JSON, or JSON without an error, still has to say
+    # something rather than becoming an empty sentence.
+    assert "gateway" in playability._error_sentence(502, "bad gateway")
+
+
+def test_sunshines_false_is_reported_as_the_one_thing_it_means():
+    """`false` means no client is waiting, and only that. A malformed PIN
+    never reaches `nvhttp::pin` -- confighttp rejects it first with a 400,
+    observed live -- so offering both as possibilities sent operators to
+    re-read a PIN that was never the problem."""
+    host = live(MoonlightHost("h", kind=SUNSHINE), apps=[])
+    host._sunshine_call = lambda *a: {"status": False}
+    detail = host.submit_pin("1234")["detail"].lower()
+    assert "no moonlight client is waiting" in detail
+    assert "four digits" not in detail
+
+
 def test_sunshines_app_list_is_read_from_its_name_field():
     host = MoonlightHost("h", kind=SUNSHINE)
     host._sunshine_get = lambda path: {

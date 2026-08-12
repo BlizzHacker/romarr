@@ -67,6 +67,37 @@ ECOSYSTEM: dict[str, list[Project]] = {
             repo="https://github.com/EmulatorJS/EmulatorJS",
             site="https://emulatorjs.org"),
         Project(
+            "Ruffle",
+            "A Flash Player emulator written in Rust -- the reason a "
+            "`.swf` still opens in a browser at all.",
+            repo="https://github.com/ruffle-rs/ruffle",
+            site="https://ruffle.rs"),
+        Project(
+            "Emularity",
+            "Easily embed emulators -- the loader behind Archive.org's "
+            "software library, wrapping MAME, EM-DOSBOX and the Scripted "
+            "Amiga Emulator.",
+            repo="https://github.com/db48x/emularity",
+            site="https://archive.org/details/softwarelibrary"),
+        Project(
+            "js-dos",
+            "The simplest API to run DOS/Win 9x programs in browser or node.",
+            repo="https://github.com/caiiiycuk/js-dos",
+            site="https://js-dos.com",
+            install="npm install js-dos"),
+        Project(
+            "v86",
+            "x86 PC emulator and x86-to-wasm JIT, running in the browser.",
+            repo="https://github.com/copy/v86",
+            site="https://copy.sh/v86/"),
+        Project(
+            "Nostalgist.js",
+            "A JavaScript library used for running emulators of retro "
+            "consoles inside browsers.",
+            repo="https://github.com/arianrhodsandlot/nostalgist",
+            site="https://nostalgist.js.org",
+            install="npm install nostalgist"),
+        Project(
             "RetroArch / libretro",
             "The reference frontend and the cores nearly everything runs on.",
             repo="https://github.com/libretro/RetroArch",

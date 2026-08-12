@@ -138,6 +138,25 @@ def test_every_alias_resolves_to_the_platform_that_declares_it():
                 f"{platform.slug} alias {alias!r} resolves to {got.slug}")
 
 
+def test_no_two_platforms_answer_to_the_same_name():
+    """The same guard as above, one level down at the normalised form.
+
+    `resolve` folds case and punctuation before matching, so two labels that
+    look distinct in the table can collide once folded -- "pc (windows)" and
+    "pc windows" already do, harmlessly, because one platform declares both.
+    A collision across *two* platforms is not harmless: `_BY_LABEL` keeps the
+    first declaration, which hands every request for that name to whichever
+    machine happens to sit higher up the table, silently.
+    """
+    owner: dict[str, str] = {}
+    for platform in platforms.PLATFORMS:
+        for label in (platform.slug, platform.name, *platform.aliases):
+            key = platforms._normalise(label)
+            claimed = owner.setdefault(key, platform.slug)
+            assert claimed == platform.slug, (
+                f"{key!r} is claimed by both {claimed} and {platform.slug}")
+
+
 def test_media_is_one_of_the_four_known_values():
     # "digital" is the fourth medium: modern PC, where there is no physical
     # dump and a 100GB installer is a normal size.

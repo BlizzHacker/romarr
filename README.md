@@ -386,6 +386,8 @@ request actually came through it.
 | `MOONLIGHT_USER` / `MOONLIGHT_PASS` | no | Sunshine/Steam Headless admin credentials, so ROMarr can read the app list and relay a pairing PIN. Never written to the state file |
 | `WOLF_SOCKET_PATH` / `WOLF_API_URL` | no | Wolf's API is a UNIX socket. Give ROMarr a mounted `wolf.sock`, or the URL of the nginx proxy Wolf's own docs describe |
 | `STEAM_HEADLESS_URL` | no | The container's noVNC/neko desktop, surfaced as a link |
+| `ROMARR_PLAYERS` | no | Which browser players to offer, best first: `emulatorjs,ruffle,jsdos,emularity`. All four when unset; `none` turns every browser route off |
+| `ROMARR_JSDOS_URL` / `ROMARR_EMULARITY_URL` | no | Where your own js-dos and Emularity live. Without one, ROMarr reports that the player *would* run a file and names the setting that would let it link there |
 | `ROMARR_DATA` | no | Path to the state file |
 | `PUID` / `PGID` / `TZ` | Docker | Process user, group, timezone |
 
@@ -450,8 +452,42 @@ are four routes and the last one is not a failure:
 |---|---|
 | **EmulatorJS** | In the browser, from your library server. Covers nine optical systems on a stock RomM: PlayStation, PSP, Saturn, Sega CD, 3DO, CD-i, PC-FX, TurboGrafx-CD and Amiga CD32. |
 | **Stream** | Something else renders and sends video. Two kinds answer here. A headless RetroArch server, which is how PS2, GameCube, Wii, Dreamcast, 3DS and Neo Geo CD play — set `STREAM_SERVER_URL`. Or a **Moonlight host** (Wolf, Sunshine, Steam Headless) — set `MOONLIGHT_HOST`. |
-| **Archive.org** | Their in-page emulator. Real for cartridge and home-computer systems; Archive.org does **not** emulate disc systems, so ROMarr does not claim it for them. |
-| **Download** | Always. |
+| **Archive.org** | Their in-page emulator, which is Emularity. Real for cartridge and home-computer systems; Archive.org does **not** emulate disc systems, so ROMarr does not claim it for them. |
+| **Download** | Always — for a file that is actually here. |
+
+### Which player, per file
+
+"In the browser" is four different programs, and which of them can open a row
+is decided by the **file**, not the platform. `GET /api/v1/players` lists them
+and `GET /api/v1/play?file=…&platform=…` answers for one file.
+
+| Player | Runs | Does not run |
+|---|---|---|
+| **EmulatorJS** | libretro cores — the 40-odd machines above. Unpacks `.zip`, `.7z` and `.rar` itself, by magic bytes. | Flash. GameCube, Wii, Dreamcast, PS2 — no core exists. `dosbox_pure`, `ppsspp` and `azahar` need `SharedArrayBuffer`, so the library server must send COOP + COEP or the player draws a frame and never starts. |
+| **Ruffle** | `.swf` — ActionScript 1, 2 and 3. Their own numbers: AVM 1 at 99% of the language and 82% of the API, AVM 2 at 90% and 82%. | Flash **projector `.exe`** files — a projector is an executable with the movie inside a player stub, and Ruffle has no projector reader ([#11539](https://github.com/ruffle-rs/ruffle/issues/11539), open). Nor Shockwave, Unity Web Player, Silverlight or Java applets, all of which live in the same archives. |
+| **js-dos** | DOS and Windows 9x on DOSBox / DOSBox-X, from a `.jsdos` or `.zip` bundle. | Anything that is not a PC. You host it — set `ROMARR_JSDOS_URL`. |
+| **Emularity** | Archive.org's loader: MAME, EM-DOSBOX, Scripted Amiga Emulator. It is also how Flash plays on a `/details/` page, via Ruffle. | Disc systems — Archive.org's own `emulator` field returns 0 items for PlayStation, Saturn and 3DO. |
+
+All four are on by default and any of them can be turned off with
+`ROMARR_PLAYERS`, best first. Turn **Ruffle** off if your RomM runs with
+`DISABLE_RUFFLE_RS`, so ROMarr stops promising a button that will not be
+there. Turn **Emularity** off if you would rather nobody was sent off your
+install to play something. Where more than one player can open a file, ROMarr
+offers them in your order and names the reason for each; where one *could* and
+is not configured, it says which setting fixes that rather than saying nothing.
+
+### "No file on the library server" is not "unsupported"
+
+A library server can hold a row for a game it does not have the bytes for —
+RomM calls it `missing_from_fs`, and on the maintainer's install that is
+**94,428 of 166,548 rows**. Asking for the content of one returns 404.
+
+Nothing plays those. Nothing streams them. Nothing *downloads* them either,
+which is why reporting them as "download only" was worse than saying nothing:
+it named a route that 404s. ROMarr says the file is not here, says what would
+play it once ROMarr has fetched it, and keeps the Archive.org route where it
+applies — because that is somebody else's copy, and it is the reason a
+catalogued row was catalogued in the first place.
 
 **A Moonlight host is a desktop, not a platform router, and ROMarr says so.**
 Wolf, Sunshine and Steam Headless all answer `/serverinfo` with no credential,

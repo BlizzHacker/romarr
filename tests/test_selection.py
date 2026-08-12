@@ -50,6 +50,137 @@ def test_unknown_platform_is_none_not_a_guess():
     assert resolve("") is None
 
 
+# --- RomM display names ---------------------------------------------------
+#
+# Every name below is one RomM actually serves, checked against the live
+# library (romm.moveweight.com, RomM 5.1.0, 166,548 rows) on 2026-08-11. They
+# are here because substring matching answered six of them with the wrong
+# machine and two with nothing at all -- roughly 4,200 rows resolving to a
+# console they are not.
+#
+# The wrong answers are the dangerous half. A row that resolves to nothing is
+# visibly unhandled; a Switch row confidently answered "NES" gets an NES size
+# ceiling, NES extensions and an NES import route, and every one of those is
+# wrong in a way nothing downstream can detect.
+
+def test_a_machine_we_do_not_model_resolves_to_nothing():
+    """A shorter alias must not swallow the longer name that contains it.
+
+    "Nintendo Switch" contains "nintendo" (an NES alias) and "PlayStation
+    Vita" contains "playstation" (a PSX alias). Neither machine is modelled
+    here, so the only correct answer is None -- 2,874 Switch rows and 34 Vita
+    rows were answering as NES and PS1.
+    """
+    assert resolve("Nintendo Switch") is None
+    assert resolve("PlayStation Vita") is None
+
+
+def test_the_64dd_is_not_a_nintendo_64():
+    """The disk drive is its own machine with its own dumps.
+
+    "Nintendo 64DD" contains "nintendo 64" exactly, so partial matching
+    answered n64 for all 15 of its rows. The trailing "dd" is not decoration.
+    """
+    assert resolve("Nintendo 64DD") is None
+
+
+def test_the_ds_family_reaches_its_own_folders():
+    """The DSi and the New 3DS resolve, and by name rather than by luck.
+
+    Both happened to land right only because a longer label shared the start
+    offset of "nintendo". RomM's slug forms remove the space, and with it the
+    coincidence: "nintendo-dsi" and "new-nintendo-3ds" both answered NES.
+    """
+    for text in ("Nintendo DSi", "nintendo-dsi"):
+        assert resolve(text).slug == "nds", text
+    for text in ("New Nintendo 3DS", "new-nintendo-3ds"):
+        assert resolve(text).slug == "3ds", text
+
+
+def test_the_cd_addon_is_not_the_cartridge_machine():
+    """"Turbografx-16/PC Engine CD" is the CD system, and only the CD system.
+
+    The cartridge platform's name is a prefix of it, so position-ranked
+    matching answered `turbografx16--1` for 1,262 CD rows -- a disc medium
+    filed as a cartridge, with a 16MB ceiling and a `.pce` extension list that
+    no CD image can satisfy.
+    """
+    assert resolve("Turbografx-16/PC Engine CD").slug == \
+        "turbografx-16-slash-pc-engine-cd"
+    # The cartridge machine still resolves under its own name.
+    assert resolve("TurboGrafx-16").slug == "turbografx16--1"
+
+
+def test_a_slash_joined_display_name_resolves_to_the_machine_it_names():
+    """RomM joins the names one machine went by with a slash.
+
+    "Commodore C64/128/MAX" is a C64, spelled the way RomM spells it. Matching
+    the whole string against "commodore 64" found nothing and 688 rows
+    resolved to None.
+    """
+    assert resolve("Commodore C64/128/MAX").slug == "c64"
+
+
+def test_the_famicom_answers_to_its_english_name():
+    """"Family Computer" is what the Famicom was called on its own box.
+
+    It shares no substring with "famicom", so 106 rows resolved to nothing.
+    """
+    assert resolve("Family Computer").slug == "famicom"
+
+
+def test_a_platform_name_buried_inside_a_word_is_not_a_match():
+    """Substring matching had no word boundaries, and that is where it broke.
+
+    "pc" sits inside "Amstrad PCW" and "ds" inside "Edsac", so those answered
+    Windows and Nintendo DS. The Amstrad alone was 753 rows -- the second
+    largest wrong answer in the library after the Switch.
+
+    `selection._mentions` has rejected these two substrings by name since the
+    scorer was written ("ds" is inside "worlds", "pc" is inside "pcb"). The
+    resolver never got the same guard, and unlike the scorer it decides which
+    directory a file is written to.
+    """
+    for text in ("Amstrad PCW", "Edsac  1", "TADS", "SDS Sigma 7"):
+        assert resolve(text) is None, text
+
+
+def test_a_whole_word_match_with_a_qualifier_left_over_is_not_a_match():
+    """Every one of these begins with a name we model and ends somewhere else.
+
+    The old rule only rejected a leftover that began with a digit, so
+    "PlayStation 5" was caught and "PlayStation VR" was not. A leftover word
+    is the same statement as a leftover number: it names a different machine.
+    """
+    for text in ("PC Booter", "PC-6001", "NEC PC-6000 Series", "Windows Phone",
+                 "Windows Mobile", "Atari VCS", "Coleco Adam", "Plex Arcade",
+                 "Telstar Arcade", "ZX Spectrum Next", "Intellivision Amico",
+                 "Nintendo Playstation", "PlayStation VR", "PlayStation Now"):
+        assert resolve(text) is None, text
+
+
+def test_the_compound_display_names_keep_reaching_their_machines():
+    """The other half of the bill: exact matching must not lose what worked.
+
+    Substring matching answered these correctly by accident of prefix, and
+    they are 5,000-odd rows between them. Exact matching only reaches them
+    because each is now declared, which is the trade this change makes --
+    coverage comes from the table, never from a guess.
+    """
+    assert resolve("Sega Mega Drive/Genesis").slug == "genesis-slash-megadrive"
+    assert resolve("Sega Master System/Mark III").slug == "sms"
+    assert resolve("Sega Game Gear").slug == "gamegear"
+    assert resolve("Family Computer Disk System").slug == "fds"
+    assert resolve("Super Nintendo Entertainment System").slug == "snes"
+
+
+def test_punctuation_and_case_do_not_change_the_answer():
+    """RomM, a request form and a slug spell the same machine three ways."""
+    for text in ("Sega Mega Drive/Genesis", "SEGA MEGA DRIVE / GENESIS",
+                 "sega mega drive genesis"):
+        assert resolve(text).slug == "genesis-slash-megadrive", text
+
+
 def test_extension_maps_back_to_a_platform():
     assert platform_for_file("Zelda.smc").slug == "snes"
     assert platform_for_file("Mario.GBA").slug == "gba"

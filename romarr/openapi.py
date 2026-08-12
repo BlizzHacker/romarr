@@ -53,7 +53,20 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
                                      "`games_on_disk` and `games_catalogued` "
                                      "are the two categories it adds up."),
     "/api/platforms": ("GET", "Every platform, its media, extensions, size "
-                              "ceiling and how it plays on this install."),
+                              "ceiling and how it plays on this install, "
+                              "including which browser players can open it."),
+    "/api/v1/players": ("GET", "The browser players — EmulatorJS, Ruffle, "
+                               "js-dos, Emularity — each with what it runs, "
+                               "what it does not, whether this install has it "
+                               "enabled, and how many library rows it can "
+                               "open. Set with ROMARR_PLAYERS."),
+    "/api/v1/play": ("GET", "How one file plays: ?file= a filename or a bare "
+                            "extension, ?platform=, and ?missing=1 for a row "
+                            "the library server catalogues without holding "
+                            "the bytes. Returns the routes on offer, the "
+                            "players that would offer one and why they do "
+                            "not, and — for a missing file — that there is "
+                            "nothing to play or download."),
     "/api/v1/release": ("GET", "Interactive search: scored candidates with the "
                                "reason for each score."),
     "/api/v1/indexer/schema": ("GET", "The nine indexer types and their fields."),
