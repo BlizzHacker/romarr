@@ -122,6 +122,10 @@ SOURCES: dict[str, tuple[str, tuple[str, ...]]] = {
     "retrostic": ("Retrostic", ("retrostic.com",)),
     "theromdepot": ("The ROM Depot", ("theromdepot.com",)),
     "cdromance": ("CDRomance", ("cdromance.org", "cdromance.com")),
+    "coolrom": ("CoolROM", ("coolrom.com", "coolrom.com.au")),
+    "romulation": ("RomuLation", ("romulation.org",)),
+    "emuparadise": ("EmuParadise", ("emuparadise.me",)),
+    "webmulator": ("Webmulator", ("webmulator.com",)),
 }
 
 #: One writer at a time per process. The append itself is atomic, so this

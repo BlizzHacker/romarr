@@ -277,6 +277,11 @@ def test_the_status_report_says_whether_a_capture_could_actually_land(tmp_path):
     assert not list((tmp_path / "idx").iterdir())
 
 
+def test_browser_assisted_plugin_sources_are_accepted_by_the_server():
+    assert {"coolrom", "romulation", "emuparadise", "webmulator"} <= set(
+        capture.SOURCES)
+
+
 def test_every_declared_source_has_at_least_one_host():
     """A source with no hosts would accept a URL pointing anywhere."""
     for source, (label, hosts) in capture.SOURCES.items():
