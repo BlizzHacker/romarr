@@ -162,6 +162,16 @@ def test_the_runtime_image_opens_alpines_versioned_seccomp_library():
         "the filter-load proof must run on the native smoke leg, not QEMU")
 
 
+def test_the_image_proves_rom_hubs_catalogue_is_not_empty():
+    """Importable ROM Hub is not useful when its wheel omitted plugins.json."""
+    workflow = (ROOT / ".github" / "workflows" / "docker.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "from rom_hub.catalog_sources import load_all" in workflow
+    assert "assert c.entries" in workflow
+    assert "ROM Hub installed without its plugin catalogue" in workflow
+
+
 def test_the_install_guide_exists_and_the_readme_sends_people_to_it():
     assert INSTALL.is_file()
     assert "docs/INSTALL.md" in README.read_text(encoding="utf-8"), (
