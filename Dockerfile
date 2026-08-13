@@ -34,6 +34,8 @@ RUN if [ "$TARGETARCH" != "arm" ]; then \
 
 FROM python:3.13-alpine
 
+ARG TARGETARCH
+
 # su-exec drops privileges in the entrypoint; it takes numeric ids, so no
 # shadow package and no user has to exist in the image. tzdata makes TZ work.
 #
@@ -46,6 +48,27 @@ FROM python:3.13-alpine
 RUN apk add --no-cache su-exec tzdata libarchive-tools libseccomp
 
 COPY --from=builder /install /usr/local
+
+# pyseccomp asks ctypes.util.find_library("seccomp") before opening the C
+# library. On Alpine that helper relies on linker/compiler discovery tools
+# which belong in the builder, so it returns None even though the runtime
+# package correctly installed /usr/lib/libseccomp.so.2. Give this binding the
+# normal Alpine SONAME as its fallback. The assertion deliberately breaks the
+# build if a future pyseccomp changes the line instead of silently publishing
+# another unconstrained image.
+RUN python -c "import pathlib,sysconfig; p=pathlib.Path(sysconfig.get_path('purelib'))/'pyseccomp.py'; s=p.read_text(); old='_libseccomp_path = ctypes.util.find_library(\"seccomp\")'; assert s.count(old)==1; p.write_text(s.replace(old, old+' or \"/usr/lib/libseccomp.so.2\"'))"
+
+# Importing the packages is not enough: the broken image imported ROM Hub and
+# only failed when the Plugins page asked pyseccomp to find its C library. Load
+# a real restrictive filter during the build so that exact failure cannot be
+# published again.
+# The CI smoke image is native amd64. The multi-arch publish that follows runs
+# arm64 under QEMU, where seccomp_load is canceled by the emulator (errno 125)
+# even though the same filter loads on native Docker. Prove the actual image on
+# the native leg and do not mistake QEMU's build environment for arm64 runtime.
+RUN if [ "$TARGETARCH" = "amd64" ]; then \
+      python -c "import rom_hub, pyseccomp; from rom_hub.sandbox import install; install()"; \
+    fi
 
 WORKDIR /app
 COPY romarr/ /app/romarr/
