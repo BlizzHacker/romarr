@@ -77,6 +77,18 @@ def test_sandbox_state_reports_rather_than_raising(monkeypatch):
     assert isinstance(ok, bool) and isinstance(why, str) and why
 
 
+def test_a_probe_error_says_what_runtime_piece_is_missing(monkeypatch):
+    """A bare ``RuntimeError`` gave an Unraid operator nothing to fix."""
+    import rom_hub.sandbox
+
+    monkeypatch.setattr(rom_hub.sandbox, "probe",
+                        lambda: (_ for _ in ()).throw(
+                            RuntimeError("Unable to find libseccomp")))
+    ok, why = hub.sandbox_state()
+    assert ok is False
+    assert "RuntimeError: Unable to find libseccomp" in why
+
+
 def test_credentials_are_still_withheld_either_way(monkeypatch):
     """Confinement and the environment allowlist are separate boundaries, and
     turning one on must not quietly relax the other."""

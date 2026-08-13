@@ -116,7 +116,7 @@ jobs:
           echo "--- the pieces that are easy to lose ---"
           docker exec smoke sh -c 'command -v bsdtar >/dev/null' \
             || { echo "bsdtar missing"; exit 1; }
-          docker exec smoke python -c "import requests, rom_hub" \
+          docker exec smoke python -c "import requests, rom_hub; from rom_hub.sandbox import install; install()" \
             || { echo "a dependency did not install"; exit 1; }
 
           echo "--- privileges were dropped ---"

@@ -147,6 +147,19 @@ def test_the_healthcheck_asks_the_port_romarr_was_told_to_use():
     assert "ROMARR_PORT" in body.split("HEALTHCHECK", 1)[1]
 
 
+def test_the_runtime_image_opens_alpines_versioned_seccomp_library():
+    """Alpine has libseccomp.so.2 but ctypes looks for libseccomp.so.
+
+    The package was installed and the image still raised ``Unable to find
+    libseccomp``. The loader fallback is the difference between ROM Hub being
+    present and its plugins actually being confined.
+    """
+    body = DOCKERFILE.read_text(encoding="utf-8")
+    assert r'or \"/usr/lib/libseccomp.so.2\"' in body
+    assert "from rom_hub.sandbox import install; install()" in body, (
+        "the image does not prove that its seccomp filter can actually load")
+
+
 def test_the_install_guide_exists_and_the_readme_sends_people_to_it():
     assert INSTALL.is_file()
     assert "docs/INSTALL.md" in README.read_text(encoding="utf-8"), (

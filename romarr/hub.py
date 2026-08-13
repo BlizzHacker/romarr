@@ -172,7 +172,9 @@ def sandbox_state() -> tuple[bool, str]:
     try:
         return probe()
     except Exception as err:  # noqa: BLE001
-        return False, f"sandbox probe failed: {err.__class__.__name__}"
+        detail = str(err).strip()
+        suffix = f": {detail}" if detail else ""
+        return False, f"sandbox probe failed: {err.__class__.__name__}{suffix}"
 
 
 def _plugin_env() -> dict:
