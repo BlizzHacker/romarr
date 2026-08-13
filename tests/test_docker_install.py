@@ -158,6 +158,8 @@ def test_the_runtime_image_opens_alpines_versioned_seccomp_library():
     assert r'or \"/usr/lib/libseccomp.so.2\"' in body
     assert "from rom_hub.sandbox import install; install()" in body, (
         "the image does not prove that its seccomp filter can actually load")
+    assert '[ "$TARGETARCH" = "amd64" ]' in body, (
+        "the filter-load proof must run on the native smoke leg, not QEMU")
 
 
 def test_the_install_guide_exists_and_the_readme_sends_people_to_it():

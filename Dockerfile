@@ -62,7 +62,11 @@ RUN python -c "import pathlib,sysconfig; p=pathlib.Path(sysconfig.get_path('pure
 # only failed when the Plugins page asked pyseccomp to find its C library. Load
 # a real restrictive filter during the build so that exact failure cannot be
 # published again.
-RUN if [ "$TARGETARCH" != "arm" ]; then \
+# The CI smoke image is native amd64. The multi-arch publish that follows runs
+# arm64 under QEMU, where seccomp_load is canceled by the emulator (errno 125)
+# even though the same filter loads on native Docker. Prove the actual image on
+# the native leg and do not mistake QEMU's build environment for arm64 runtime.
+RUN if [ "$TARGETARCH" = "amd64" ]; then \
       python -c "import rom_hub, pyseccomp; from rom_hub.sandbox import install; install()"; \
     fi
 
