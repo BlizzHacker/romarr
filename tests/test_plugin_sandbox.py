@@ -79,11 +79,16 @@ def test_sandbox_state_reports_rather_than_raising(monkeypatch):
 
 def test_a_probe_error_says_what_runtime_piece_is_missing(monkeypatch):
     """A bare ``RuntimeError`` gave an Unraid operator nothing to fix."""
-    import rom_hub.sandbox
+    import sys
+    import types
 
-    monkeypatch.setattr(rom_hub.sandbox, "probe",
-                        lambda: (_ for _ in ()).throw(
-                            RuntimeError("Unable to find libseccomp")))
+    package = types.ModuleType("rom_hub")
+    package.__path__ = []
+    sandbox = types.ModuleType("rom_hub.sandbox")
+    sandbox.probe = lambda: (_ for _ in ()).throw(
+        RuntimeError("Unable to find libseccomp"))
+    monkeypatch.setitem(sys.modules, "rom_hub", package)
+    monkeypatch.setitem(sys.modules, "rom_hub.sandbox", sandbox)
     ok, why = hub.sandbox_state()
     assert ok is False
     assert "RuntimeError: Unable to find libseccomp" in why
