@@ -137,14 +137,39 @@ class QBittorrent:
             log.warning("qbittorrent login rejected (status %s)", response.status_code)
         return self._authed
 
+    def _get(self, path: str, **kwargs):
+        """GET once more after qBittorrent expires the WebUI session.
+
+        qBittorrent's SID has a finite lifetime, while ROMarr keeps this
+        client for the life of the process.  Without the retry, the first
+        expired SID turns every health check and import poll into a permanent
+        401/403 until ROMarr is restarted.
+        """
+        response = self._session.get(self._url(path), **kwargs)
+        if response.status_code not in (401, 403) or not self._config.username:
+            return response
+        self._authed = False
+        if not self.login():
+            return response
+        return self._session.get(self._url(path), **kwargs)
+
+    def _post(self, path: str, **kwargs):
+        """POST once more after refreshing an expired WebUI session."""
+        response = self._session.post(self._url(path), **kwargs)
+        if response.status_code not in (401, 403) or not self._config.username:
+            return response
+        self._authed = False
+        if not self.login():
+            return response
+        return self._session.post(self._url(path), **kwargs)
+
     def add(self, magnet_or_url: str, *, save_path: str | None = None) -> bool:
         if not self._authed:
             self.login()
         data = {"urls": magnet_or_url, "category": self._config.category}
         if save_path:
             data["savepath"] = save_path
-        response = self._session.post(self._url("torrents/add"), data=data,
-                                      timeout=self._config.timeout)
+        response = self._post("torrents/add", data=data, timeout=self._config.timeout)
         if not response.ok:
             log.warning("qbittorrent add failed: %s", response.status_code)
             return False
@@ -159,9 +184,9 @@ class QBittorrent:
         if not self._config.base_url:
             return False
         try:
-            if not self._authed:
-                self.login()
-            r = self._session.get(self._url("app/version"), timeout=self._config.timeout)
+            if not self._authed and not self.login():
+                return False
+            r = self._get("app/version", timeout=self._config.timeout)
             return r.ok
         except requests.RequestException as err:
             log.warning("qbittorrent unreachable: %s", err)
@@ -176,8 +201,8 @@ class QBittorrent:
         """
         if not self._authed:
             self.login()
-        response = self._session.get(
-            self._url("torrents/info"),
+        response = self._get(
+            "torrents/info",
             params={"category": self._config.category, "filter": "completed"},
             timeout=self._config.timeout,
         )
@@ -210,9 +235,9 @@ class QBittorrent:
         Only a torrent with *nothing* selected is touched. A part-selected one
         is somebody's deliberate choice and is left alone.
         """
-        files = self._session.get(self._url("torrents/files"),
-                                  params={"hash": row.get("hash", "")},
-                                  timeout=self._config.timeout)
+        files = self._get("torrents/files",
+                          params={"hash": row.get("hash", "")},
+                          timeout=self._config.timeout)
         if not files.ok:
             return False
         listing = files.json()
@@ -221,8 +246,8 @@ class QBittorrent:
         # `index` arrives with the file on any qBittorrent worth talking to,
         # but it was added mid-life to the API and position is what it means.
         ids = "|".join(str(f.get("index", i)) for i, f in enumerate(listing))
-        response = self._session.post(
-            self._url("torrents/filePrio"),
+        response = self._post(
+            "torrents/filePrio",
             data={"hash": row.get("hash", ""), "id": ids, "priority": 1},
             timeout=self._config.timeout,
         )
