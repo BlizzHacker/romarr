@@ -59,3 +59,12 @@ def test_a_list_field_round_trips_through_the_form():
     html = page()
     assert "f.type === 'list'" in html
     assert "el.dataset.list ? el.value.split(',')" in html
+
+
+def test_plugin_install_errors_are_displayed_in_the_hub():
+    """A failed install used to refresh the catalogue and erase the API error."""
+    html = page()
+    assert "let q='', cap='', inst='', actionError=''" in html
+    assert "if(!r.ok||result.ok!==true)" in html
+    assert "actionError=result.error||result.reason" in html
+    assert "esc(actionError)" in html

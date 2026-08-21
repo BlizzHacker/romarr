@@ -735,7 +735,7 @@ RENDER.hub=async()=>{
 
   // State lives here rather than in the DOM: a filter that has to be read
   // back out of the markup drifts from what is actually displayed.
-  let q='', cap='', inst='';
+  let q='', cap='', inst='', actionError='';
 
   const load=async()=>{
     const qs=new URLSearchParams();
@@ -779,6 +779,7 @@ RENDER.hub=async()=>{
       +'<span class="chip'+(inst==='0'?' on':'')+'" data-inst="0">Available</span>'
       +chips+'</div>'
       +(d.error?'<div class="panel-note panel-warn">'+esc(d.error)+'</div>':'')
+      +(actionError?'<div class="panel-note panel-warn">'+esc(actionError)+'</div>':'')
       +'<div class="cat-scroll">'
       +(items.length?'<div class="pgrid">'+items.map(card).join('')+'</div>'
         :'<div class="empty-cat"><b>Nothing matches</b>'
@@ -827,10 +828,22 @@ RENDER.hub=async()=>{
       inst = inst===c.dataset.inst ? '' : c.dataset.inst; render(await load());});
 
     p.querySelectorAll('button[data-act]').forEach(b=>b.onclick=async()=>{
-      b.disabled=true; b.textContent='Working…';
-      await fetch('/api/v1/hub/plugin',{method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({slug:b.dataset.slug,action:b.dataset.act})});
+      const slug=b.dataset.slug, action=b.dataset.act;
+      b.disabled=true; b.textContent='Working…'; actionError='';
+      try{
+        const r=await fetch('/api/v1/hub/plugin',{method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({slug,action})});
+        let result={};
+        try{result=await r.json();}catch(_){result={};}
+        if(!r.ok||result.ok!==true){
+          actionError=result.error||result.reason
+            ||('Could not '+action+' '+slug+' (HTTP '+r.status+').');
+        }
+      }catch(e){
+        actionError='Could not '+action+' '+slug+': '
+          +(e&&e.message?e.message:'ROMarr did not answer.');
+      }
       render(await load());
     });
 
