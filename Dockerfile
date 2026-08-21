@@ -45,7 +45,9 @@ ARG TARGETARCH
 # on a format it cannot open. Alpine's busybox `tar` is not a substitute and
 # is deliberately not accepted -- see romarr/library.py::_bsdtar.
 # libseccomp is the runtime half of the sandbox pyseccomp was built against.
-RUN apk add --no-cache su-exec tzdata libarchive-tools libseccomp
+# ROM Hub installs catalogue plugins from pinned repository refs, so git is a
+# runtime dependency rather than builder cargo.
+RUN apk add --no-cache su-exec tzdata libarchive-tools libseccomp git
 
 COPY --from=builder /install /usr/local
 
