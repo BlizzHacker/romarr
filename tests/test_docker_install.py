@@ -172,6 +172,21 @@ def test_the_image_proves_rom_hubs_catalogue_is_not_empty():
     assert "ROM Hub installed without its plugin catalogue" in workflow
 
 
+def test_the_runtime_image_can_clone_a_bundled_plugin():
+    """The registry installer shells out to git; importing ROM Hub is not enough."""
+    body = DOCKERFILE.read_text(encoding="utf-8")
+    runtime = body.rsplit("\nFROM ", 1)[-1]
+    assert re.search(r"apk add --no-cache[^\n]*\bgit\b", runtime), (
+        "git is missing from the runtime image, so every registry install fails")
+
+    workflow = (ROOT / ".github" / "workflows" / "docker.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "command -v git" in workflow
+    assert "rom-hub plugin install archive-org" in workflow, (
+        "the image proves the catalogue exists but never proves a pinned plugin installs")
+
+
 def test_the_install_guide_exists_and_the_readme_sends_people_to_it():
     assert INSTALL.is_file()
     assert "docs/INSTALL.md" in README.read_text(encoding="utf-8"), (

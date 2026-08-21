@@ -116,10 +116,14 @@ jobs:
           echo "--- the pieces that are easy to lose ---"
           docker exec smoke sh -c 'command -v bsdtar >/dev/null' \
             || { echo "bsdtar missing"; exit 1; }
+          docker exec smoke sh -c 'command -v git >/dev/null' \
+            || { echo "git missing; catalogue plugins cannot install"; exit 1; }
           docker exec smoke python -c "import requests, rom_hub; from rom_hub.sandbox import install; install()" \
             || { echo "a dependency did not install"; exit 1; }
           docker exec smoke python -c "from pathlib import Path; from rom_hub.catalog_sources import load_all; c=load_all(Path('/tmp/hub-smoke')); print(f'{len(c.entries)} bundled plugins'); assert c.entries" \
             || { echo "ROM Hub installed without its plugin catalogue"; exit 1; }
+          docker exec smoke sh -c 'ROM_HUB_HOME=/tmp/hub-install rom-hub plugin install archive-org' \
+            || { echo "bundled Archive.org plugin did not install"; exit 1; }
 
           echo "--- privileges were dropped ---"
           docker logs smoke 2>&1 | grep -q "starting as 1000:1000" \

@@ -72,3 +72,12 @@ def test_the_system_page_explains_and_builds_the_ggrequestz_webhook():
     assert "base.oninput" in html
     assert "copy.disabled=true" in html
     assert "request.auto_approve" in html
+
+
+def test_plugin_install_errors_are_displayed_in_the_hub():
+    """A failed install used to refresh the catalogue and erase the API error."""
+    html = page()
+    assert "let q='', cap='', inst='', actionError=''" in html
+    assert "if(!r.ok||result.ok!==true)" in html
+    assert "actionError=result.error||result.reason" in html
+    assert "esc(actionError)" in html
