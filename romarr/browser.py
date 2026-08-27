@@ -381,5 +381,8 @@ def _keep(download, destination: Path, remote_dir: str, path_mappings) -> Path:
             "check the remote path mapping for the browser's download "
             "directory"
         )
-    shutil.copy2(str(local), str(target))
+    # Do not propagate a remote browser container's private permission bits
+    # into ROMarr's shared downloads directory.  The destination follows
+    # ROMarr's umask; the browser-owned source is never modified.
+    shutil.copyfile(str(local), str(target))
     return target

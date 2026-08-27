@@ -132,6 +132,31 @@ def test_the_entrypoint_owns_the_whole_of_config_not_just_the_directory():
         "unreadable inside a writable directory")
 
 
+def test_media_permissions_are_configurable_without_rewriting_downloads():
+    body = ENTRYPOINT.read_text(encoding="utf-8")
+    assert 'UMASK="${UMASK:-002}"' in body
+    assert 'umask "$UMASK"' in body
+    assert 'chown -R "${PUID}:${PGID}" /config' in body
+    assert not re.search(r"(?:chown|chmod)[^\n]*(?:/downloads|/roms|\$LIBRARY_PATH)", body), (
+        "entrypoint must not rewrite ownership or modes on media bind mounts")
+
+    compose = _directives(COMPOSE)
+    assert re.search(r'^\s*UMASK:\s*["\']002["\']\s*$', compose, re.M)
+    guide = INSTALL.read_text(encoding="utf-8")
+    assert "files with\nmode `0664`" in guide
+    assert "directories with mode `0775`" in guide
+
+
+def test_the_live_image_proves_a_download_bind_mount_is_unchanged():
+    workflow = (ROOT / ".github" / "workflows" / "docker.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "before=$(stat -c '%u:%g:%a'" in workflow
+    assert "after=$(stat -c '%u:%g:%a'" in workflow
+    assert 'test "$after" = "$before"' in workflow
+    assert "server process did not inherit UMASK=002" in workflow
+
+
 def test_the_entrypoint_refuses_rather_than_letting_state_be_overwritten():
     body = ENTRYPOINT.read_text(encoding="utf-8")
     assert "ROMARR_DATA" in body, (

@@ -222,7 +222,12 @@ class _PathSource(_Source):
 
     def copy(self, name, destination):
         source = self.path if self.path.is_file() else self.path / name
-        shutil.copy2(source, destination)
+        # The source belongs to the download client.  Copy its bytes, not its
+        # permission bits: propagating a client's private 0700/0600 mode made
+        # the imported library file unreadable to the shared media group.
+        # A new destination therefore follows the process umask, while the
+        # source inode, owner, group and mode remain untouched.
+        shutil.copyfile(source, destination)
 
 
 class MissingArchiveTool(Exception):

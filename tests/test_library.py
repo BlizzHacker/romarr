@@ -1,4 +1,6 @@
 import logging
+import os
+import stat
 import zipfile
 from pathlib import Path
 
@@ -77,6 +79,25 @@ def test_imports_a_bare_rom_file(tmp_path):
     result = import_rom(rom, SNES, library)
     assert result.ok
     assert result.destination == library / "snes" / "Zelda (USA).smc"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX permission semantics")
+def test_bare_import_keeps_source_permissions_and_uses_the_process_umask(tmp_path):
+    """A downloader's private 0700 mode must not leak into the shared library."""
+    library = tmp_path / "library"
+    rom = tmp_path / "Private (USA).smc"
+    rom.write_bytes(b"rom")
+    rom.chmod(0o700)
+
+    previous = os.umask(0o002)
+    try:
+        result = import_rom(rom, SNES, library)
+    finally:
+        os.umask(previous)
+
+    assert result.ok
+    assert stat.S_IMODE(rom.stat().st_mode) == 0o700
+    assert stat.S_IMODE(result.destination.stat().st_mode) == 0o664
 
 
 def test_imports_from_a_directory_download(tmp_path):

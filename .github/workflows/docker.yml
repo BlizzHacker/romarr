@@ -93,7 +93,17 @@ jobs:
       - name: Boot the image and ask it whether it is alive
         run: |
           set -e
-          docker run -d --name smoke -p 6868:6868 romarr:smoke
+          mkdir -p "$RUNNER_TEMP/romarr-config" "$RUNNER_TEMP/romarr-roms" \
+                   "$RUNNER_TEMP/romarr-downloads"
+          printf 'download fixture' > "$RUNNER_TEMP/romarr-downloads/source.rar"
+          chmod 0775 "$RUNNER_TEMP/romarr-downloads/source.rar"
+          before=$(stat -c '%u:%g:%a' "$RUNNER_TEMP/romarr-downloads/source.rar")
+          docker run -d --name smoke -p 6868:6868 \
+            -e PUID=1000 -e PGID=1000 -e UMASK=002 \
+            -v "$RUNNER_TEMP/romarr-config:/config" \
+            -v "$RUNNER_TEMP/romarr-roms:/roms" \
+            -v "$RUNNER_TEMP/romarr-downloads:/downloads" \
+            romarr:smoke
           for _ in $(seq 1 30); do
             curl -fsS -o /dev/null http://127.0.0.1:6868/api/health && break
             sleep 2
@@ -126,8 +136,15 @@ jobs:
             || { echo "bundled Archive.org plugin did not install"; exit 1; }
 
           echo "--- privileges were dropped ---"
-          docker logs smoke 2>&1 | grep -q "starting as 1000:1000" \
+          docker logs smoke 2>&1 | grep -q "starting as 1000:1000 with umask 002" \
             || { echo "entrypoint did not drop to PUID:PGID"; exit 1; }
+
+          echo "--- mounted downloads were not rewritten ---"
+          after=$(stat -c '%u:%g:%a' "$RUNNER_TEMP/romarr-downloads/source.rar")
+          test "$after" = "$before" \
+            || { echo "source permissions changed: $before -> $after"; exit 1; }
+          test "$(awk '/^Umask:/ {print $2}' /proc/$(docker inspect -f '{{.State.Pid}}' smoke)/status)" = "0002" \
+            || { echo "server process did not inherit UMASK=002"; exit 1; }
 
           docker rm -f smoke
 

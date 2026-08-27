@@ -67,7 +67,7 @@ wrong place while you are still deciding.
 docker run -d --name romarr \
   --restart unless-stopped \
   -p 6868:6868 \
-  -e PUID=1000 -e PGID=1000 -e TZ=Etc/UTC \
+  -e PUID=1000 -e PGID=1000 -e UMASK=002 -e TZ=Etc/UTC \
   -v /srv/romarr/config:/config \
   ghcr.io/blizzhacker/romarr:latest
 ```
@@ -162,16 +162,29 @@ Management*:
 Longest matching prefix wins, and the log records both the path the client
 reported and what ROMarr resolved it to.
 
-### PUID / PGID
+### PUID / PGID / UMASK
 
 ROMarr writes ROM files that another application has to read. Set these to the
 same user your library server runs as (`id -u` / `id -g`), or those files land
 owned by root and your library either cannot read them or has to run as root
 too.
 
+Use the host's **numeric** IDs. For example, if `id media` reports UID `1028`
+and GID `1009`, set `PUID=1028` and `PGID=1009`; setting `PGID=1010` makes new
+ROMarr files group `1010`. `UMASK=002` is the default, producing files with
+mode `0664` and directories with mode `0775` so that group can use them. A
+stricter value such as `022` is supported.
+
 Only `/config` is chowned. The library and downloads volumes are never touched:
 they can be multiple terabytes on a NAS, a recursive chown at every boot would
 take hours, and the ownership there is one you chose on purpose.
+
+Because a bind mount exposes the same inode on both sides, an existing download
+must retain the same numeric owner, group and mode before and after ROMarr
+starts. The image smoke test verifies that invariant. User-namespace or NAS
+ID mapping can display different IDs inside a container; in that case align the
+Docker/Unraid mapping as well as `PUID`/`PGID`. ROMarr does not try to repair a
+download by changing it.
 
 If you run the container with `--user`, rootless Docker, Podman userns, or
 Kubernetes `runAsUser`, PUID/PGID are ignored and logged as ignored — there is
@@ -406,7 +419,7 @@ environment at any time:
 `ROMARR_AUTH` and the SSO set, `ROMARR_SSL_CERT` / `ROMARR_SSL_KEY`,
 `ROMARR_PLAYERS`, `ROMARR_JSDOS_URL`, `ROMARR_EMULARITY_URL`, `LOG_LEVEL`,
 `DAT_PATH`, the `MOONLIGHT_*` and `WOLF_*` set, `STREAM_SERVER_URL`,
-`GGREQUESTZ_URL`, `PUID`, `PGID`, `TZ`.
+`GGREQUESTZ_URL`, `PUID`, `PGID`, `UMASK`, `TZ`.
 
 ROMarr does tell you about this in the one case where it can be certain: if
 the stored library path does not exist but the one in the environment does, the
@@ -452,6 +465,7 @@ Every variable ROMarr reads. "Seeded" means first-run only — see
 | `ROMARR_DATA` | `/opt/romarr/romarr.json` (`/config/romarr.json` in Docker) | Points at a new file → a fresh, unclaimed install with a new API key. Points at an unreadable file → **ROMarr refuses to start** and says so, rather than overwriting it. |
 | `LOG_LEVEL` | `INFO` | `DEBUG` for the full request trace. |
 | `PUID` / `PGID` | `1000` / `1000` | Imported ROMs are owned by the wrong user; your library server may not be able to read them. Docker only. |
+| `UMASK` | `002` | New files are not group-writable. Three or four octal digits; Docker only. Existing downloads are never rewritten. |
 | `TZ` | `Etc/UTC` | Timestamps and schedule times are in the wrong zone. |
 | `ROMARR_BACKENDS_DIR` | unset | Drop-in library backends. Operator-owned; the Proxmox updater never replaces it. |
 | `ROM_HUB_HOME` | `/opt/romarr/.rom-hub` (`/config/rom-hub` in Docker) | Installed plugins live here. Inside the container filesystem rather than a volume means they are lost on every `docker compose pull`. |
