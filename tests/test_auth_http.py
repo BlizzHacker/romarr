@@ -149,7 +149,7 @@ def test_the_query_key_never_enters_the_access_log(server, caplog):
     caplog.set_level(logging.INFO, logger="romarr.app")
 
     code, _, _ = get(
-        base + "/api/v1/webhook/ggrequestz?source=ggr&apikey=testkey&retry=1",
+        base + "/api/v1/webhook/ggrequestz?source=ggr&api%6Bey=testkey&retry=1",
         method="POST",
         body={"type": "game_request", "data": {
             "game_title": "Contra", "platforms": ["NES"]}},
@@ -157,7 +157,7 @@ def test_the_query_key_never_enters_the_access_log(server, caplog):
 
     assert code == 202
     assert "testkey" not in caplog.text
-    assert "apikey=[REDACTED]" in caplog.text
+    assert "api%6Bey=[REDACTED]" in caplog.text
     assert "source=ggr" in caplog.text and "retry=1" in caplog.text
 
 

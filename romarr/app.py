@@ -41,7 +41,7 @@ from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote_plus, urlparse
 
 import time
 
@@ -112,7 +112,17 @@ DEFAULT_CATEGORY = "romarr"
 
 def redact_query_credentials(value: str) -> str:
     """Hide URL credentials while preserving a useful HTTP log line."""
-    return re.sub(r"(?i)([?&]apikey=)[^&\s\"]*", r"\1[REDACTED]", str(value))
+    def redact(match: re.Match) -> str:
+        marker, name, _ = match.groups()
+        if unquote_plus(name).casefold() == "apikey":
+            return f"{marker}{name}=[REDACTED]"
+        return match.group(0)
+
+    # Decode the parameter *name* for the decision, because parse_qs does too:
+    # `api%6bey=` authenticates and therefore has to be redacted just as the
+    # ordinary spelling is. Leave every non-credential parameter byte-for-byte
+    # intact so the access log remains useful.
+    return re.sub(r"([?&])([^=&\s\"]+)=([^&\s\"]*)", redact, str(value))
 
 
 def category_for(env: dict[str, str], client: str) -> str:
