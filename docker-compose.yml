@@ -85,7 +85,10 @@ services:
       # QBITTORRENT_CATEGORY: romarr
       # NZBGET_CATEGORY: romarr
 
-      # Optional request front-end, shown on the System page.
+      # Optional request front-end, shown and pinged on the System page. This
+      # is NOT the request-delivery setting. In GG Requestz's own container set
+      # REQUEST_WEBHOOK_URL to the value built on ROMarr's System page, e.g.:
+      # http://romarr:6868/api/v1/webhook/ggrequestz?apikey=<ROMARR_API_KEY>
       # GGREQUESTZ_URL: http://ggrequestz:3000
 
       # Optional headless RetroArch stream server. ROMarr only ever reads from

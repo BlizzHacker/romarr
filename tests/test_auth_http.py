@@ -93,6 +93,54 @@ def test_writing_needs_a_key(server):
         assert code == 401, f"{method} {path} answered {code}"
 
 
+def test_ggrequestz_can_deliver_with_the_query_key(server):
+    """GG Requestz can configure a URL but cannot add an authentication header."""
+    base, service = server
+    received = []
+    called = threading.Event()
+
+    def request(game, platform):
+        received.append((game, platform))
+        called.set()
+
+    service.request = request
+    payload = {
+        "type": "game_request",
+        "title": "New Game Request: Chrono Trigger",
+        "data": {
+            "request_id": 42,
+            "game_title": "Chrono Trigger",
+            "platforms": ["Super Nintendo"],
+            "request_type": "game",
+        },
+    }
+    code, body, _ = get(
+        base + "/api/v1/webhook/ggrequestz?apikey=testkey",
+        method="POST", body=payload,
+    )
+
+    assert code == 202
+    assert json.loads(body)["accepted"] is True
+    assert called.wait(2)
+    assert received == [("Chrono Trigger", "snes")]
+
+
+def test_ggrequestz_is_told_when_romarr_rejects_the_event(server):
+    """The sender only checks HTTP status, so {ok:false} with 200 is a false success."""
+    base, _ = server
+    code, body, _ = get(
+        base + "/api/v1/webhook/ggrequestz?apikey=testkey",
+        method="POST",
+        body={"type": "game_request", "data": {
+            "game_title": "Halo", "platforms": ["Sega Nomad"]}},
+    )
+
+    assert code == 422
+    result = json.loads(body)
+    assert result["ok"] is False
+    assert "Sega Nomad" in result["error"]
+
+
 def test_a_401_says_how_to_authenticate(server):
     base, _ = server
     _, body, _ = get(base + "/api/v1/game")

@@ -610,6 +610,34 @@ Download URLs are never returned to a client: Prowlarr's `downloadUrl` carries i
 API key, so releases are grabbed by the id issued with the search and the URL is
 resolved server-side.
 
+### GG Requestz
+
+GG Requestz pushes approved requests to ROMarr. It is not a `rom-hub webhook`
+command inside the ROMarr container. Open **System → GG Requestz requests** to
+build the exact setting, or configure this in the **GG Requestz container**:
+
+```env
+REQUEST_WEBHOOK_URL=http://romarr:6868/api/v1/webhook/ggrequestz?apikey=<ROMARR_API_KEY>
+```
+
+`http://romarr:6868` works when both containers share a Docker network. On
+Unraid or separate networks, replace it with ROMarr's LAN or HTTPS URL as seen
+from inside GG Requestz. Restart GG Requestz after changing its environment.
+
+`GGREQUESTZ_URL` goes the other direction: it only lets ROMarr show and ping the
+GG Requestz page. A green status there proves the page is reachable; it does
+not prove the outbound webhook is configured.
+
+GG Requestz 1.5 and newer dispatches when a request becomes **approved**, not
+when a pending request is first submitted. Enable `request.auto_approve` or
+approve the request manually. ROMarr answers an accepted request with HTTP 202;
+an invalid event or unknown platform receives HTTP 422 so GG Requestz records a
+real delivery failure instead of treating the request as sent.
+
+The finished webhook URL contains ROMarr's API key. Treat it like a password,
+keep it on a trusted Docker network or HTTPS, and do not paste it into public
+logs.
+
 ---
 
 ## Plugins

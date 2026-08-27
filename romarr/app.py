@@ -1197,6 +1197,7 @@ class ROMarr:
         """
         parsed = self.parse_request_webhook(body)
         if parsed is None:
+            log.warning("GG Requestz webhook rejected: not a game request")
             return {"ok": False, "error": "not a game request"}
         game, platform_name = parsed
 
@@ -1207,9 +1208,12 @@ class ROMarr:
             self.store.record(Event(kind="failed", game=game,
                                     platform=platform_name or "unknown",
                                     detail=f"unknown platform: {platform_name!r}"))
+            log.warning("GG Requestz webhook rejected: unknown platform %r "
+                        "for %r", platform_name, game)
             return {"ok": False, "error": f"unknown platform: {platform_name!r}",
                     "game": game}
 
+        log.info("GG Requestz webhook accepted: %r for %s", game, platform.slug)
         threading.Thread(target=self.request, args=(game, platform.slug),
                          daemon=True).start()
         return {"ok": True, "accepted": True, "game": game, "platform": platform.slug}
@@ -5327,7 +5331,14 @@ def make_handler(service: ROMarr):
                 existing = service.store.get_item("indexers", body.get("id"))                     if body.get("id") else None
                 return self._json(200, service.test_indexer(merge_secrets(dict(body), existing)))
             if route.path in ("/api/v1/webhook", "/api/v1/webhook/ggrequestz"):
-                return self._json(200, service.handle_request_webhook(body))
+                result = service.handle_request_webhook(body)
+                # GG Requestz treats every 2xx response as delivered and does
+                # not inspect the JSON body. Returning 200 with {ok:false}
+                # therefore made an unmapped platform disappear silently.
+                # 202 is truthful for the asynchronous happy path; 422 makes
+                # the sender log a rejected event and gives the operator a
+                # reason in our response and logs.
+                return self._json(202 if result.get("ok") else 422, result)
             if route.path == "/api/v1/command":
                 name = (body.get("name") or "").strip()
                 if not name:
