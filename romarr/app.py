@@ -35,6 +35,7 @@ import json
 import logging
 import os
 import pathlib
+import re
 import threading
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
@@ -107,6 +108,11 @@ VERSION = "0.8.0"
 # from everything else in a shared client -- the same reason Radarr and Sonarr
 # each use a category of their own.
 DEFAULT_CATEGORY = "romarr"
+
+
+def redact_query_credentials(value: str) -> str:
+    """Hide URL credentials while preserving a useful HTTP log line."""
+    return re.sub(r"(?i)([?&]apikey=)[^&\s\"]*", r"\1[REDACTED]", str(value))
 
 
 def category_for(env: dict[str, str], client: str) -> str:
@@ -4105,7 +4111,8 @@ def make_handler(service: ROMarr):
             try:
                 return handler()
             except Exception as exc:
-                log.exception("%s %s failed", self.command, self.path)
+                log.exception("%s %s failed", self.command,
+                              redact_query_credentials(self.path))
                 return self._json(500, {"error": f"{type(exc).__name__}: {exc}"})
 
         #: Paths that answer without a credential, and nothing else.
@@ -5416,7 +5423,12 @@ def make_handler(service: ROMarr):
             return self._json(404, {"error": "not found"})
 
         def log_message(self, fmt, *args):
-            log.info("%s %s", self.address_string(), fmt % args)
+            # BaseHTTPRequestHandler logs the complete request target. The
+            # GG Requestz credential has to live in that target because the
+            # sender cannot attach an authentication header, so redact it
+            # before it can reach either stdout or the in-app log ring.
+            message = redact_query_credentials(fmt % args)
+            log.info("%s %s", self.address_string(), message)
 
     return Handler
 

@@ -68,4 +68,7 @@ def test_the_system_page_explains_and_builds_the_ggrequestz_webhook():
     assert "REQUEST_WEBHOOK_URL=" in html
     assert "new URL('/api/v1/webhook/ggrequestz'" in html
     assert "target.searchParams.set('apikey',d.api_key)" in html
+    assert "base.value=''" in html
+    assert "base.oninput" in html
+    assert "copy.disabled=true" in html
     assert "request.auto_approve" in html

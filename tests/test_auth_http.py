@@ -8,6 +8,7 @@ and unwired is exactly as open as no gate at all.
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import urllib.error
 import urllib.request
@@ -139,6 +140,25 @@ def test_ggrequestz_is_told_when_romarr_rejects_the_event(server):
     result = json.loads(body)
     assert result["ok"] is False
     assert "Sega Nomad" in result["error"]
+
+
+def test_the_query_key_never_enters_the_access_log(server, caplog):
+    """The only auth GG Requestz can send is in a URL, which HTTP servers log."""
+    base, service = server
+    service.request = lambda *_: None
+    caplog.set_level(logging.INFO, logger="romarr.app")
+
+    code, _, _ = get(
+        base + "/api/v1/webhook/ggrequestz?source=ggr&apikey=testkey&retry=1",
+        method="POST",
+        body={"type": "game_request", "data": {
+            "game_title": "Contra", "platforms": ["NES"]}},
+    )
+
+    assert code == 202
+    assert "testkey" not in caplog.text
+    assert "apikey=[REDACTED]" in caplog.text
+    assert "source=ggr" in caplog.text and "retry=1" in caplog.text
 
 
 def test_a_401_says_how_to_authenticate(server):

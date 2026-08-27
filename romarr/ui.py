@@ -2864,10 +2864,17 @@ const ggrequestzCard=g=>`<div class="card"><h3>GG Requestz requests</h3>
 const wireGGRequestz=()=>{
   const base=$('#ggr-base'), build=$('#ggr-build'), copy=$('#ggr-copy');
   const value=$('#ggr-value'); if(!base||!build||!copy||!value) return;
-  base.value=location.origin;
+  // Do not assume the browser-facing origin works from another container.
+  // `localhost` here would mean the GG Requestz container itself there.
+  base.value='';
+  base.oninput=()=>{
+    value.textContent=''; value.style.display='none'; copy.disabled=true;
+  };
   build.onclick=async()=>{
     build.disabled=true;
     try{
+      if(!base.value.trim()) throw new Error(
+        'Enter the ROMarr URL reachable from inside GG Requestz');
       const d=await j('/api/v1/system/apikey');
       if(!d.api_key) throw new Error('ROMarr did not return an API key');
       const target=new URL('/api/v1/webhook/ggrequestz',base.value.trim());
