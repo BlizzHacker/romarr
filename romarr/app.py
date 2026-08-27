@@ -35,12 +35,13 @@ import json
 import logging
 import os
 import pathlib
+import re
 import threading
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote_plus, urlparse
 
 import time
 
@@ -107,6 +108,21 @@ VERSION = "0.8.0"
 # from everything else in a shared client -- the same reason Radarr and Sonarr
 # each use a category of their own.
 DEFAULT_CATEGORY = "romarr"
+
+
+def redact_query_credentials(value: str) -> str:
+    """Hide URL credentials while preserving a useful HTTP log line."""
+    def redact(match: re.Match) -> str:
+        marker, name, _ = match.groups()
+        if unquote_plus(name).casefold() == "apikey":
+            return f"{marker}{name}=[REDACTED]"
+        return match.group(0)
+
+    # Decode the parameter *name* for the decision, because parse_qs does too:
+    # `api%6bey=` authenticates and therefore has to be redacted just as the
+    # ordinary spelling is. Leave every non-credential parameter byte-for-byte
+    # intact so the access log remains useful.
+    return re.sub(r"([?&])([^=&\s\"]+)=([^&\s\"]*)", redact, str(value))
 
 
 def category_for(env: dict[str, str], client: str) -> str:
@@ -1197,6 +1213,7 @@ class ROMarr:
         """
         parsed = self.parse_request_webhook(body)
         if parsed is None:
+            log.warning("GG Requestz webhook rejected: not a game request")
             return {"ok": False, "error": "not a game request"}
         game, platform_name = parsed
 
@@ -1207,9 +1224,12 @@ class ROMarr:
             self.store.record(Event(kind="failed", game=game,
                                     platform=platform_name or "unknown",
                                     detail=f"unknown platform: {platform_name!r}"))
+            log.warning("GG Requestz webhook rejected: unknown platform %r "
+                        "for %r", platform_name, game)
             return {"ok": False, "error": f"unknown platform: {platform_name!r}",
                     "game": game}
 
+        log.info("GG Requestz webhook accepted: %r for %s", game, platform.slug)
         threading.Thread(target=self.request, args=(game, platform.slug),
                          daemon=True).start()
         return {"ok": True, "accepted": True, "game": game, "platform": platform.slug}
@@ -4101,7 +4121,8 @@ def make_handler(service: ROMarr):
             try:
                 return handler()
             except Exception as exc:
-                log.exception("%s %s failed", self.command, self.path)
+                log.exception("%s %s failed", self.command,
+                              redact_query_credentials(self.path))
                 return self._json(500, {"error": f"{type(exc).__name__}: {exc}"})
 
         #: Paths that answer without a credential, and nothing else.
@@ -5327,7 +5348,14 @@ def make_handler(service: ROMarr):
                 existing = service.store.get_item("indexers", body.get("id"))                     if body.get("id") else None
                 return self._json(200, service.test_indexer(merge_secrets(dict(body), existing)))
             if route.path in ("/api/v1/webhook", "/api/v1/webhook/ggrequestz"):
-                return self._json(200, service.handle_request_webhook(body))
+                result = service.handle_request_webhook(body)
+                # GG Requestz treats every 2xx response as delivered and does
+                # not inspect the JSON body. Returning 200 with {ok:false}
+                # therefore made an unmapped platform disappear silently.
+                # 202 is truthful for the asynchronous happy path; 422 makes
+                # the sender log a rejected event and gives the operator a
+                # reason in our response and logs.
+                return self._json(202 if result.get("ok") else 422, result)
             if route.path == "/api/v1/command":
                 name = (body.get("name") or "").strip()
                 if not name:
@@ -5405,7 +5433,12 @@ def make_handler(service: ROMarr):
             return self._json(404, {"error": "not found"})
 
         def log_message(self, fmt, *args):
-            log.info("%s %s", self.address_string(), fmt % args)
+            # BaseHTTPRequestHandler logs the complete request target. The
+            # GG Requestz credential has to live in that target because the
+            # sender cannot attach an authentication header, so redact it
+            # before it can reach either stdout or the in-app log ring.
+            message = redact_query_credentials(fmt % args)
+            log.info("%s %s", self.address_string(), message)
 
     return Handler
 

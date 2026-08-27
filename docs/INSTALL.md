@@ -412,6 +412,31 @@ ROMarr does tell you about this in the one case where it can be certain: if
 the stored library path does not exist but the one in the environment does, the
 status page says so and names the Settings page as the fix.
 
+### Connect GG Requestz
+
+Request delivery is configured on the **GG Requestz side**. ROMarr's
+`GGREQUESTZ_URL` only adds and checks the link shown on the System page; it does
+not tell GG Requestz where to send anything. Open **System → GG Requestz
+requests** in ROMarr to build the value, then add it to the GG Requestz
+container and restart that container:
+
+```env
+REQUEST_WEBHOOK_URL=http://romarr:6868/api/v1/webhook/ggrequestz?apikey=<ROMARR_API_KEY>
+```
+
+The hostname `romarr` works only when the containers share a Docker network.
+For Unraid or separate stacks, use the LAN address and published port, such as
+`http://192.168.1.20:6868`. The URL must work from inside the GG Requestz
+container, not merely from a browser.
+
+GG Requestz 1.5+ sends the event only after the request is approved. Turn on
+`request.auto_approve` if requests should flow immediately, or approve each one
+in GG Requestz. The receiver is ROMarr itself; the `rom-hub webhook` commands
+described for a standalone ROM Hub are not installed or needed in this image.
+
+The query parameter is a credential because GG Requestz cannot attach an API
+key header. Keep it private and use a trusted Docker network or HTTPS.
+
 ---
 
 ## Configuration reference

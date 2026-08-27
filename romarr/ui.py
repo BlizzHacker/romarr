@@ -2729,9 +2729,11 @@ RENDER.status=async()=>{
                   : (l.path_exists ? l.path : (l.path_hint||l.path)))).join('')
         : row('RomM',h.romm,h.romm_url)
           +row('ROM library',h.library,h.library?h.library_path:(h.library_path_hint||h.library_path))}
-      ${g.configured?row('GG Requestz',g.ok,g.url)
-        :`<tr><td>GG Requestz</td><td><span class="dot"></span>not configured</td>
-          <td style="color:var(--dim)">set GGREQUESTZ_URL to show the link</td></tr>`}
+      ${g.configured?row('GG Requestz page',g.ok,
+          g.url+' (reachability only; request delivery is configured below)')
+        :`<tr><td>GG Requestz page</td><td><span class="dot"></span>not configured</td>
+          <td style="color:var(--dim)">GGREQUESTZ_URL only adds and checks the
+          front-end link; it does not deliver requests</td></tr>`}
       ${h.stream_url
         ? row('Stream server',(h.play_routes||{}).stream>0,h.stream_url)
         : `<tr><td>Stream server</td><td><span class="dot"></span>not configured</td>
@@ -2746,6 +2748,7 @@ RENDER.status=async()=>{
            <td style="color:var(--dim)">set MOONLIGHT_HOST to a Wolf, Sunshine or
            Steam Headless machine</td></tr>`}
     </tbody></table></div>
+    ${ggrequestzCard(g)}
     ${playCard(h.play_routes||{})}
     ${moonlightCard(h.moonlight||{})}
     <div class="card"><h3>About</h3><div class="st">
@@ -2785,6 +2788,7 @@ RENDER.status=async()=>{
     <div class="row" style="flex-wrap:wrap;gap:8px" id="fe-row"></div>
     </div>`;
 
+  wireGGRequestz();
   wireMoonlight(h.moonlight||{});
 
   const msg=(ok,text)=>{const m=$('#bk-msg');
@@ -2825,6 +2829,67 @@ RENDER.status=async()=>{
   feRow.querySelectorAll('.fe-btn').forEach(b=>b.onclick=()=>
     save('/api/v1/frontend/export?format='+b.dataset.f,
          'romarr-'+b.dataset.f+'.export'));
+};
+
+// GG Requestz pushes to ROMarr; the reachability probe above is deliberately
+// labelled as the opposite direction. The API key is revealed only after a
+// deliberate click, just like Settings -> General, because the finished URL
+// is itself a credential and should not sit in the page by default.
+const ggrequestzCard=g=>`<div class="card"><h3>GG Requestz requests</h3>
+  <p class="help"><b>Configure this in GG Requestz, not ROM Hub.</b>
+  Set <code>REQUEST_WEBHOOK_URL</code> in the GG Requestz container to ROMarr's
+  authenticated receiver. <code>GGREQUESTZ_URL</code> in ROMarr only creates
+  the page link and reachability check above.</p>
+  <label>ROMarr URL as the GG Requestz container reaches it</label>
+  <input id="ggr-base" placeholder="http://romarr:6868">
+  <p class="help">On the same Docker network this is normally
+  <code>http://romarr:6868</code>. On Unraid or separate networks, use ROMarr's
+  LAN or HTTPS URL. The value must be reachable from inside GG Requestz.</p>
+  <div class="row" style="flex-wrap:wrap;gap:8px;align-items:center">
+    <button class="btn" id="ggr-build" type="button">Reveal setup value</button>
+    <button class="btn ghost" id="ggr-copy" type="button" disabled>Copy</button>
+  </div>
+  <pre id="ggr-value" style="display:none;font:12px/1.6 ui-monospace,Menlo,monospace;
+    color:var(--dim);white-space:pre-wrap;overflow-wrap:anywhere;background:var(--bg);
+    border:1px solid var(--line);border-radius:6px;padding:10px"></pre>
+  <p class="help">Restart GG Requestz after changing its environment. In GG
+  Requestz 1.5+, the webhook fires when a request becomes <b>approved</b>;
+  enable <code>request.auto_approve</code> or approve it manually. A successful
+  delivery now receives HTTP 202. Rejected payloads receive HTTP 422 and are
+  named in both applications' logs.</p>
+  <p class="help">Treat the finished URL like a password: it contains ROMarr's
+  API key. Keep it on a trusted Docker network or HTTPS and do not paste it in
+  public logs.</p></div>`;
+
+const wireGGRequestz=()=>{
+  const base=$('#ggr-base'), build=$('#ggr-build'), copy=$('#ggr-copy');
+  const value=$('#ggr-value'); if(!base||!build||!copy||!value) return;
+  // Do not assume the browser-facing origin works from another container.
+  // `localhost` here would mean the GG Requestz container itself there.
+  base.value='';
+  base.oninput=()=>{
+    value.textContent=''; value.style.display='none'; copy.disabled=true;
+  };
+  build.onclick=async()=>{
+    build.disabled=true;
+    try{
+      if(!base.value.trim()) throw new Error(
+        'Enter the ROMarr URL reachable from inside GG Requestz');
+      const d=await j('/api/v1/system/apikey');
+      if(!d.api_key) throw new Error('ROMarr did not return an API key');
+      const target=new URL('/api/v1/webhook/ggrequestz',base.value.trim());
+      target.searchParams.set('apikey',d.api_key);
+      value.textContent='REQUEST_WEBHOOK_URL='+target.href;
+      value.style.display='block'; copy.disabled=false;
+    }catch(e){
+      value.textContent='Could not build the URL: '+(e.message||e);
+      value.style.display='block'; copy.disabled=true;
+    }finally{build.disabled=false;}
+  };
+  copy.onclick=async()=>{
+    try{await navigator.clipboard.writeText(value.textContent); toast('Copied');}
+    catch(_){toast('Copy failed — select the value manually');}
+  };
 };
 
 // The Moonlight host: what it is, what it proves, and the one step that is
