@@ -249,7 +249,7 @@ land in the wrong place while you are still deciding where things go.
 docker run -d --name romarr \
   --restart unless-stopped \
   -p 6868:6868 \
-  -e PUID=1000 -e PGID=1000 -e TZ=Etc/UTC \
+  -e PUID=1000 -e PGID=1000 -e UMASK=002 -e TZ=Etc/UTC \
   -v /srv/romarr/config:/config \
   ghcr.io/blizzhacker/romarr:latest
 ```
@@ -334,9 +334,10 @@ python -m romarr
 | `/roms` | Your library root. Must be the same tree your library server scans. |
 | `/downloads` | **The container-side path must match what your download client reports.** qBittorrent: Options → Downloads → "Save path". SABnzbd: Config → Folders → "Completed Download Folder". If they cannot match, set a mapping under Settings → Media Management. |
 
-`PUID`/`PGID` set the ownership of imported ROMs — use the same ids as your library
-application. Only `/config` is chowned, recursively; the library and downloads
-volumes are never touched.
+`PUID`/`PGID` set the ownership of imported ROMs — use the same numeric IDs as
+your library application. `UMASK=002` makes new files group-writable. Only
+`/config` is chowned, recursively; existing library and download files are
+never chmod'd or chown'd.
 
 > **The one rule that catches everyone.** Environment variables seed the
 > configuration on the *first* run. After that the Settings page is the
@@ -429,7 +430,7 @@ request actually came through it.
 | `ROMARR_PLAYERS` | no | Which browser players to offer, best first: `emulatorjs,ruffle,jsdos,emularity`. All four when unset; `none` turns every browser route off |
 | `ROMARR_JSDOS_URL` / `ROMARR_EMULARITY_URL` | no | Where your own js-dos and Emularity live. Without one, ROMarr reports that the player *would* run a file and names the setting that would let it link there |
 | `ROMARR_DATA` | no | Path to the state file |
-| `PUID` / `PGID` / `TZ` | Docker | Process user, group, timezone |
+| `PUID` / `PGID` / `UMASK` / `TZ` | Docker | Process user, group, new-file permission mask, timezone |
 
 ¹ Not required for `LIBRARY_KIND=folder`, which needs only `LIBRARY_PATH`.
 

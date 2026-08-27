@@ -30,6 +30,9 @@ services:
       # or `id -u` / `id -g` for your media user.
       PUID: 1000
       PGID: 1000
+      # New ROMarr files: 0664, directories: 0775. Existing downloads are
+      # never chmod'd or chown'd by ROMarr.
+      UMASK: "002"
       TZ: Etc/UTC
 
       # Authentication. ROMarr requires a credential by default; leave this

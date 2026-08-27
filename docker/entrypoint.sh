@@ -10,6 +10,20 @@ set -e
 
 PUID="${PUID:-1000}"
 PGID="${PGID:-1000}"
+UMASK="${UMASK:-002}"
+
+# Media stacks normally share files through a group.  Keep newly-created
+# files group-writable (0664) and directories traversable (0775) by default,
+# while allowing operators to choose a stricter mask.  This affects only new
+# files created by ROMarr; it never rewrites a mounted download's mode.
+case "$UMASK" in
+    [0-7][0-7][0-7]|[0-7][0-7][0-7][0-7]) ;;
+    *)
+        echo "ROMarr: UMASK must be three or four octal digits (for example 002)." >&2
+        exit 1
+        ;;
+esac
+umask "$UMASK"
 
 # Where ROMs are filed, defaulted here rather than in the Dockerfile.
 #
@@ -26,7 +40,7 @@ if [ "$(id -u)" != "0" ]; then
     # Already unprivileged: `docker run --user`, rootless Docker, Kubernetes
     # runAsUser, or a Podman userns. There is nothing to drop to and no
     # authority to chown with, so respect the decision and start.
-    echo "ROMarr: running as uid $(id -u), PUID/PGID ignored"
+    echo "ROMarr: running as uid $(id -u), PUID/PGID ignored; umask ${UMASK}"
     exec "$@"
 fi
 
@@ -73,5 +87,5 @@ if [ -e "$STATE" ] && ! su-exec "${PUID}:${PGID}" test -r "$STATE"; then
     exit 1
 fi
 
-echo "ROMarr: starting as ${PUID}:${PGID}"
+echo "ROMarr: starting as ${PUID}:${PGID} with umask ${UMASK}"
 exec su-exec "${PUID}:${PGID}" "$@"
