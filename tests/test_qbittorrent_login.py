@@ -91,3 +91,76 @@ def test_a_rejected_login_is_not_recorded_as_authenticated():
     qbit, _ = client(_Response(200, "Fails."))
     qbit.login()
     assert getattr(qbit, "_authed", False) is False
+
+
+class _ExpiredSession:
+    """A live SID expires, then a fresh login makes the same call work."""
+
+    def __init__(self, login_response=None):
+        self.login_response = login_response or _Response(200, "Ok.")
+        self.gets = 0
+        self.posts = 0
+
+    def get(self, url, **kwargs):
+        self.gets += 1
+        return _Response(403, "Forbidden") if self.gets == 1 else _Response(200, "v5.1.4")
+
+    def post(self, url, **kwargs):
+        self.posts += 1
+        return self.login_response
+
+
+def test_an_expired_session_is_reauthenticated_without_restarting_romarr():
+    session = _ExpiredSession()
+    qbit = QBittorrent(
+        QbitConfig(base_url="http://qbit:8090", username="admin", password="pw"),
+        session=session,
+    )
+    qbit._authed = True  # the cached SID was valid when ROMarr started
+
+    assert qbit.reachable() is True
+    assert session.posts == 1
+    assert session.gets == 2
+
+
+def test_a_rejected_session_refresh_stays_unhealthy():
+    session = _ExpiredSession(_Response(200, "Fails."))
+    qbit = QBittorrent(
+        QbitConfig(base_url="http://qbit:8090", username="admin", password="wrong"),
+        session=session,
+    )
+    qbit._authed = True
+
+    assert qbit.reachable() is False
+    assert session.posts == 1
+    assert session.gets == 1
+
+
+class _ExpiredWriteSession:
+    def __init__(self):
+        self.paths = []
+        self.add_attempts = 0
+
+    def post(self, url, **kwargs):
+        self.paths.append(url)
+        if url.endswith("/auth/login"):
+            return _Response(200, "Ok.")
+        self.add_attempts += 1
+        if self.add_attempts == 1:
+            return _Response(403, "Forbidden")
+        return _Response(200, "Ok.")
+
+
+def test_an_add_is_retried_after_refreshing_an_expired_session():
+    session = _ExpiredWriteSession()
+    qbit = QBittorrent(
+        QbitConfig(base_url="http://qbit:8090", username="admin", password="pw"),
+        session=session,
+    )
+    qbit._authed = True
+
+    assert qbit.add("magnet:?xt=urn:btih:example") is True
+    assert session.add_attempts == 2
+    assert [path.rsplit('/api/v2/', 1)[-1] for path in session.paths] == [
+        "torrents/add", "auth/login", "torrents/add"
+    ]
