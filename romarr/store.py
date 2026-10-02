@@ -127,8 +127,9 @@ class QueueItem:
     # Set once this row's release has been blocklisted, so the sweep that
     # retires dead downloads never does it twice.
     blocklisted: bool = False
-    # SeerrNG's request identity, when ROMarr was dispatched by SeerrNG.
-    # Empty for internally-originated requests (UI, /api/request, frontends).
+    # External platform request identity, when ROMarr was dispatched by
+    # an external platform (Cartridge or a custom frontend).
+    # Empty for internally-originated requests (UI, /api/request).
     external_request_id: str = ""
     # Absolute, import-verified destinations carried across a restart.
     # A request can be satisfied from any one row, so the list is not
@@ -140,8 +141,8 @@ class QueueItem:
 class SeerrRequest:
     """A durable, resumable integration request.
 
-    SeerrNG (or any peer speaking the integration contract) submits a
-    request by its own ``externalRequestId``. ROMarr persists the row,
+    An external platform (Cartridge or a custom frontend) submits a
+    request by its own identifier. ROMarr persists the row,
     drives the normal search/dispatch pipeline, and reports status back
     through ``GET /api/v1/integration/requests/{id}``. The row outlives
     restarts, so a server that dies mid-handoff can recover and tell the
@@ -605,7 +606,7 @@ class Store:
     # -- Integration request identity ------------------------------------
     #
     # The integration surface (``/api/v1/integration/requests/*``) is the
-    # contract external request systems — SeerrNG today — speak. Each
+    # contract external request systems speak. Each
     # request has a durable row in ``romarr.json`` keyed by the peer's
     # ``externalRequestId`` so a restart does not lose the binding, and the
     # store methods below are the single place that mutates it. The HTTP

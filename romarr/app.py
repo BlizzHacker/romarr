@@ -1447,10 +1447,10 @@ class ROMarr:
         """Request a game. If external_request_id is set, the row is tracked.
 
         The same search, scoring, and handoff pipeline answers an internal
-        request and an external one (Cartridge / SeerrNG). The ``id`` the
+        request and an external one (Cartridge). The ``id`` the
         request was issued with is threaded into the ``QueueItem`` so
-        ``mark_seerr_request`` + ``recover_seerr_dispatches`` can reconcile
-        state across a restart. Returns ``ok`` on handoff, or error string.
+        state can be reconciled across a restart. Returns ``ok`` on
+        handoff, or error string.
         """
         platform = resolve(platform_name)
         if platform is None:
@@ -4390,8 +4390,8 @@ class ROMarr:
                 if self.store.settings.get("rescan_after_import", True):
                     target_lib.rescan(platform.slug)
                 # The absolute destinations this release was imported to.
-                # SeerrNG polls for them (the ``assets`` endpoint) and
-                # Cartridge streams them back to the player.
+                # Cartridge streams them back to the player; external
+                # platforms poll the assets endpoint.
                 if queue_item is not None:
                     imported_paths = [str(o.destination) for o in outcomes if o.ok]
                     if imported_paths:
@@ -5629,7 +5629,7 @@ def make_handler(service: ROMarr):
                 if not game or not platform:
                     return self._json(400, {"error": "game and platform are required"})
                 return self._json(200, service.request(game, platform))
-            # SeerrNG integration: the request asset API the plugin polls.
+            # Integration API: the request asset API external platforms poll.
             # POST: accept a request from an external game platform and start
             # the same search + grab pipeline the native button uses.
             # The response carries a stable request id the caller tracks.
