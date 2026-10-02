@@ -135,7 +135,7 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "/api/request": ("POST", "Request a game."),
     "/api/v1/integration/info": ("GET", "Integration service info: name, version, capabilities."),
     "/api/v1/integration/requests": ("POST", "Accept a game request from an external platform "
-        "(Cartridge, SeerrNG, etc.). Starts the same search + grab pipeline; "
+        "(Cartridge). Starts the same search + grab pipeline; "
         "returns a stable request_id to poll. GET lists all tracked requests."),
     "/api/v1/integration/requests/current": ("GET", "The most recently updated integration request — "
         "id, name, platform, status, assets, error."),
