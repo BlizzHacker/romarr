@@ -104,7 +104,7 @@ from .ui import login_page as ui_login_page
 
 log = logging.getLogger(__name__)
 
-VERSION = "0.9.0"
+VERSION = "1.0.0"
 
 # What ROMarr labels its own downloads with, so its jobs are distinguishable
 # from everything else in a shared client -- the same reason Radarr and Sonarr
@@ -1443,7 +1443,15 @@ class ROMarr:
                     merged.append(release)
         return merged
 
-    def request(self, game: str, platform_name: str) -> dict:
+    def request(self, game: str, platform_name: str, external_request_id: str = "") -> dict:
+        """Request a game. If external_request_id is set, the row is tracked.
+
+        The same search, scoring, and handoff pipeline answers an internal
+        request and an external one (Cartridge / SeerrNG). The ``id`` the
+        request was issued with is threaded into the ``QueueItem`` so
+        ``mark_seerr_request`` + ``recover_seerr_dispatches`` can reconcile
+        state across a restart. Returns ``ok`` on handoff, or error string.
+        """
         platform = resolve(platform_name)
         if platform is None:
             return {"ok": False, "error": f"unknown platform: {platform_name!r}"}
@@ -1453,12 +1461,16 @@ class ROMarr:
                            profile=self.profile, blocklist=self.blocklist)
         if pick is None:
             item = QueueItem(game, platform.slug, "", 0, "failed",
-                             f"no usable release among {len(releases)} result(s)")
+                             f"no usable release among {len(releases)} result(s)",
+                             external_request_id=external_request_id)
             self.store.enqueue(item)
             self.store.want(game, platform.slug)
             self.store.note_failure(game, platform.slug, item.detail)
             self.store.record(Event(kind="failed", game=game, platform=platform.slug,
                                     detail=item.detail))
+            if external_request_id:
+                self.store.update_seerr_request(external_request_id,
+                                                error=item.detail, status="failed")
             return {"ok": False, "error": item.detail}
 
         if not pick.download_url:
@@ -1470,17 +1482,23 @@ class ROMarr:
                              release_id=release_id(pick),
                              indexer=getattr(pick, "indexer", ""),
                              size=getattr(pick, "size", 0),
-                             release_fault=True)
+                             release_fault=True,
+                             external_request_id=external_request_id)
             self.store.enqueue(item)
             self.store.want(game, platform.slug)
             self.store.note_failure(game, platform.slug, item.detail)
             self.store.record(Event(kind="failed", game=game, platform=platform.slug,
                                     release=pick.title, detail=item.detail))
+            if external_request_id:
+                self.store.update_seerr_request(external_request_id,
+                                                error=item.detail, status="failed")
             return {"ok": False, "error": item.detail}
 
-        return self.grab(pick, game, platform.slug)
+        return self.grab(pick, game, platform.slug,
+                          external_request_id=external_request_id)
 
-    def grab(self, pick, game: str, platform_slug: str, *, manual: bool = False) -> dict:
+    def grab(self, pick, game: str, platform_slug: str, *, manual: bool = False,
+             external_request_id: str = "") -> dict:
         """Hand one release to a download client and record what happened.
 
         Shared by the automatic path and the Search page, deliberately: a
@@ -1497,18 +1515,25 @@ class ROMarr:
                              f"no download client configured for {pick.protocol}",
                              release_id=release_id(pick),
                              indexer=getattr(pick, "indexer", ""),
-                             size=getattr(pick, "size", 0))
+                             size=getattr(pick, "size", 0),
+                             external_request_id=external_request_id)
             self.store.enqueue(item)
             self.store.want(game, platform_slug)
             self.store.note_failure(game, platform_slug, item.detail)
             self.store.record(Event(kind="failed", game=game, platform=platform_slug,
                                     release=pick.title, detail=item.detail))
+            if external_request_id:
+                self.store.update_seerr_request(external_request_id,
+                                                error=item.detail, status="failed")
             return {"ok": False, "error": item.detail}
 
         # The title travels with the release for the clients that can carry
         # it: the import sweep matches a finished download to its queue row by
         # that title, and a file named by the site it came from would never
         # match. See downloaders.hand_off.
+        if external_request_id:
+            self.store.mark_seerr_dispatching(external_request_id,
+                                               f"{client.name} {pick.protocol} handoff")
         ok = hand_off(client, pick.download_url, name=pick.title)
         item = QueueItem(game, platform_slug, pick.title, pick.seeders,
                          "grabbed" if ok else "failed",
@@ -1516,9 +1541,13 @@ class ROMarr:
                          release_id=release_id(pick),
                          indexer=getattr(pick, "indexer", ""),
                          size=getattr(pick, "size", 0),
-                         release_fault=not ok)
+                         release_fault=not ok,
+                         external_request_id=external_request_id)
         self.store.enqueue(item)
         if ok:
+            if external_request_id:
+                self.store.update_seerr_request(external_request_id,
+                                                status="downloading")
             self.store.record(Event(kind="grabbed", game=game, platform=platform_slug,
                                     release=pick.title, seeders=pick.seeders,
                                     size=getattr(pick, "size", 0),
@@ -1537,6 +1566,9 @@ class ROMarr:
             self.store.note_failure(game, platform_slug, item.detail)
             self.store.record(Event(kind="failed", game=game, platform=platform_slug,
                                     release=pick.title, detail=item.detail))
+            if external_request_id:
+                self.store.update_seerr_request(external_request_id,
+                                                {"error": item.detail}, status="failed")
         return {"ok": ok, "release": pick.title, "seeders": pick.seeders}
 
     # -- interactive search -------------------------------------------------
@@ -4357,6 +4389,18 @@ class ROMarr:
             if any_ok:
                 if self.store.settings.get("rescan_after_import", True):
                     target_lib.rescan(platform.slug)
+                # The absolute destinations this release was imported to.
+                # SeerrNG polls for them (the ``assets`` endpoint) and
+                # Cartridge streams them back to the player.
+                if queue_item is not None:
+                    imported_paths = [str(o.destination) for o in outcomes if o.ok]
+                    if imported_paths:
+                        queue_item.imported_paths = imported_paths
+                        if queue_item.external_request_id:
+                            self.store.update_seerr_request(
+                                queue_item.external_request_id,
+                                assets=imported_paths,
+                                status="available")
                 for w in list(self.store.wanted):
                     if w.platform == platform.slug and w.game.lower() in name.lower():
                         self.store.fulfil(w.game, w.platform)
@@ -5585,6 +5629,69 @@ def make_handler(service: ROMarr):
                 if not game or not platform:
                     return self._json(400, {"error": "game and platform are required"})
                 return self._json(200, service.request(game, platform))
+            # SeerrNG integration: the request asset API the plugin polls.
+            # POST: accept a request from an external game platform and start
+            # the same search + grab pipeline the native button uses.
+            # The response carries a stable request id the caller tracks.
+            # GET: poll status -- requested, searching, download, imported,
+            # available. Assets list the imported file paths for the player.
+            if route.path == "/api/v1/integration/requests" and route.method == "POST":
+                game = (body.get("name") or "").strip()
+                platform = (body.get("platform") or "").strip()
+                if not game or not platform:
+                    return self._json(400, {"error": "name and platform are required"})
+                result = service.request(game, platform)
+                ext_id = (result.get("id") or "")[:16]
+                if not ext_id:
+                    return self._json(500, {"error": "missing request id"})
+                # Seed the integration row so the GET handler can reconcile it.
+                service.store.update_seerr_request(ext_id,
+                    name=game, platform=platform,
+                    status=result.get("status", "requested"))
+                return self._json(202, {
+                    "request_id": ext_id,
+                    "name": game,
+                    "platform": platform,
+                    "status": result.get("status", "requested"),
+                    "assets": []
+                })
+            if route.path == "/api/v1/integration/requests" and route.method == "GET":
+                # List all tracked integration requests
+                rows = []
+                for item in service.store.queue:
+                    if item.external_request_id:
+                        row = service.store.get_seerr_request(item.external_request_id)
+                        if row:
+                            rows.append({
+                                "request_id": item.external_request_id,
+                                "name": row.get("name", item.game),
+                                "platform": row.get("platform", item.platform),
+                                "status": row.get("status", "requested"),
+                                "assets": row.get("assets", []),
+                                "error": row.get("error", ""),
+                            })
+                return self._json(200, {"requests": rows})
+            # Single-request status endpoint (polls by id)
+            if route.path == "/api/v1/integration/requests/current":
+                current = service.store.latest_seerr_request()
+                if current is None:
+                    return self._json(404, {"error": "no tracked requests"})
+                return self._json(200, {
+                    "request_id": current.external_request_id,
+                    "name": current.name,
+                    "platform": current.platform,
+                    "status": current.status,
+                    "assets": current.assets,
+                    "error": current.error,
+                })
+            if route.path == "/api/v1/integration/info":
+                return self._json(200, {
+                    "name": "Cartridge (ROMarr)",
+                    "version": VERSION,
+                    "description": "ROMarr is a complete Cartridge implementation for game libraries",
+                    "supports_resume": True,
+                    "supports_multi_platform": True,
+                })
             if route.path == "/api/v1/release/grab":
                 release_id = (body.get("id") or "").strip()
                 if not release_id:
@@ -5763,6 +5870,14 @@ def make_handler(service: ROMarr):
 
 def serve(port: int = 6868, env: dict[str, str] | None = None):
     service = ROMarr(env)
+    # Reconcile integration rows that were mid-dispatch when the server
+    # died: if the external platform still wants them, reset to searching
+    # and re-dispatch; if it doesn't, mark them cancelled.
+    try:
+        service.store.recover_seerr_dispatches()
+    except Exception:
+        log.exception("integration recovery skipped (non-fatal)")
+
     httpd = ThreadingHTTPServer(("0.0.0.0", port), make_handler(service))
 
     # Native HTTPS, for installs with no reverse proxy in front. Both

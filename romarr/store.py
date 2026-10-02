@@ -127,6 +127,55 @@ class QueueItem:
     # Set once this row's release has been blocklisted, so the sweep that
     # retires dead downloads never does it twice.
     blocklisted: bool = False
+    # SeerrNG's request identity, when ROMarr was dispatched by SeerrNG.
+    # Empty for internally-originated requests (UI, /api/request, frontends).
+    external_request_id: str = ""
+    # Absolute, import-verified destinations carried across a restart.
+    # A request can be satisfied from any one row, so the list is not
+    # necessarily 1:1 with game files; an import-failed row leaves it empty.
+    imported_paths: list[str] = field(default_factory=list)
+
+
+@dataclass
+class SeerrRequest:
+    """A durable, resumable integration request.
+
+    SeerrNG (or any peer speaking the integration contract) submits a
+    request by its own ``externalRequestId``. ROMarr persists the row,
+    drives the normal search/dispatch pipeline, and reports status back
+    through ``GET /api/v1/integration/requests/{id}``. The row outlives
+    restarts, so a server that dies mid-handoff can recover and tell the
+    peer "your download was already queued, here is the status" instead of
+    silently dropping it.
+
+    ``status`` is one of:
+      ``searching``    -- accepted, dispatch pipeline running.
+      ``dispatching``  -- queue row created; cancel is racy (see
+                           ``mark_seerr_dispatching``).
+      ``downloading``  -- the download client reports the release active.
+      ``available``    -- imported and verified under the library root.
+      ``failed``       -- the dispatch pipeline reported an error.
+      ``cancelled``    -- the peer cancelled it; not retryable.
+
+    ``error`` carries the last human-readable failure, if any. ``retry``
+    is offered only from a ``failed`` state, with a single confirmation
+    gate (see ``confirmNoExistingDownload``) when the error is the
+    handoff-restart case. ``cancel`` is always offered while the row is
+    still actionable (searching / dispatching / downloading).
+    """
+
+    external_request_id: str
+    platform: str
+    game: str = ""
+    name: str = ""
+    catalog_provider: str = ""
+    catalog_id: int = 0
+    platform_id: int = 0
+    status: str = "accepted"
+    error: str = ""
+    assets: list[str] = field(default_factory=list)
+    created_at: str = field(default_factory=now_iso)
+    updated_at: str = field(default_factory=now_iso)
 
 
 # Defaults are spelled out here rather than scattered through the UI so a fresh
@@ -552,6 +601,277 @@ class Store:
             out = dict(self.settings)
         self.save()
         return out
+
+    # -- Integration request identity ------------------------------------
+    #
+    # The integration surface (``/api/v1/integration/requests/*``) is the
+    # contract external request systems — SeerrNG today — speak. Each
+    # request has a durable row in ``romarr.json`` keyed by the peer's
+    # ``externalRequestId`` so a restart does not lose the binding, and the
+    # store methods below are the single place that mutates it. The HTTP
+    # layer reads and reports; it never writes status.
+
+    MAX_INTEGRATION_REQUESTS = 500
+    _INTEGRATION_TERMINAL = {"available", "failed", "cancelled"}
+
+    def _row_for_integration(self, external_request_id: str) -> "SeerrRequest | None":
+        with self._lock:
+            for item in self.settings.get("integration_requests", []):
+                if item.get("id") == external_request_id:
+                    return item
+        return None
+
+    def get_seerr_request(self, external_request_id: str) -> "SeerrRequest | None":
+        """Return the current ``SeerrRequest`` for ``external_request_id``.
+
+        Rows are stored as dicts (they live inside a settings list so they
+        round-trip through JSON); reconstitute on read so the HTTP layer
+        sees a real dataclass with attribute access.
+        """
+        row = self._row_for_integration(external_request_id)
+        if row is None:
+            return None
+        return SeerrRequest(
+            external_request_id=row["id"],
+            game=row.get("game", ""),
+            name=row.get("name", row.get("game", "")),
+            platform=row.get("platform", ""),
+            catalog_provider=row.get("catalog_provider", ""),
+            catalog_id=int(row.get("catalog_id", 0) or 0),
+            platform_id=int(row.get("platform_id", 0) or 0),
+            status=row.get("status", "accepted"),
+            error=row.get("error", ""),
+            assets=list(row.get("assets") or []),
+            created_at=row.get("created_at", ""),
+            updated_at=row.get("updated_at", ""),
+        )
+
+    def put_seerr_request(self, row: "SeerrRequest") -> "SeerrRequest":
+        """Insert or replace a row by ``external_request_id``.
+
+        Bounded by ``MAX_INTEGRATION_REQUESTS``; when the ceiling is hit,
+        the oldest terminal row (available / failed / cancelled) is the one
+        that gives, in FIFO order, so a long-running peer's in-flight
+        requests survive the eviction pass. The row is persisted before the
+        lock is released.
+        """
+        from datetime import datetime, timezone
+        with self._lock:
+            items = self.settings.setdefault("integration_requests", [])
+            target = next(
+                (item["id"] for item in items if item.get("id") == row.external_request_id),
+                None,
+            )
+            stored = {
+                "id": row.external_request_id,
+                "game": row.game,
+                "name": row.name or row.game,
+                "platform": row.platform,
+                "catalog_provider": row.catalog_provider,
+                "catalog_id": int(row.catalog_id or 0),
+                "platform_id": int(row.platform_id or 0),
+                "status": row.status,
+                "error": row.error,
+                "assets": list(row.assets),
+                "created_at": row.created_at or now_iso(),
+                "updated_at": row.updated_at or now_iso(),
+            }
+            if target is None:
+                items.append(stored)
+                while (len(items) > self.MAX_INTEGRATION_REQUESTS
+                       and any(i["status"] in self._INTEGRATION_TERMINAL
+                               for i in items)):
+                    for item in items:
+                        if (item["status"] in self._INTEGRATION_TERMINAL
+                                and len(items) > self.MAX_INTEGRATION_REQUESTS):
+                            items.remove(item)
+                            break
+            else:
+                for i, item in enumerate(items):
+                    if item.get("id") == target:
+                        items[i] = stored
+                        break
+        self.save()
+        return row
+
+    def update_seerr_request(self, external_request_id: str, *, status: str,
+                              error: str = "",
+                              assets: list[str] | None = None,
+                              name: str = "",
+                              game: str = "",
+                              platform: str = "",
+                              only_if_not_cancelled: bool = False) -> "SeerrRequest | None":
+        """Update the row's status/error in place; persist before releasing lock.
+
+        ``only_if_not_cancelled`` lets a dispatch pipeline that is racing a
+        peer's cancel lose gracefully: the pipeline writes its progress, the
+        cancel wins, and a subsequent status write that *would* flip a
+        cancelled row back to ``searching`` is a no-op.
+        """
+        with self._lock:
+            items = self.settings.setdefault("integration_requests", [])
+            for item in items:
+                if item.get("id") != external_request_id:
+                    continue
+                if only_if_not_cancelled and item.get("status") == "cancelled":
+                    return self.get_seerr_request(external_request_id)
+                item["status"] = status
+                item["error"] = error
+                if assets is not None:
+                    item["assets"] = assets
+                if name:
+                    item["name"] = name
+                    item["game"] = item.get("game") or name
+                if game:
+                    item["game"] = game
+                if platform:
+                    item["platform"] = platform
+                item["updated_at"] = now_iso()
+                break
+        self.save()
+        return self.get_seerr_request(external_request_id)
+
+    def mark_seerr_dispatching(self, external_request_id: str) -> bool:
+        """Claim the handoff slot so the peer's cancel cannot race the add.
+
+        Returns ``True`` iff the pipeline is allowed to proceed. The row is
+        flipped to ``dispatching`` under the lock; a peer that cancels
+        *during* the pipeline's queue add will see the row in
+        ``dispatching`` state and receive an ``"active"`` result from
+        ``cancel_seerr_request`` rather than a success, so the peer knows
+        to retry once the release settles.
+        """
+        with self._lock:
+            items = self.settings.setdefault("integration_requests", [])
+            for item in items:
+                if item.get("id") != external_request_id:
+                    continue
+                if item.get("status") == "cancelled":
+                    return False
+                item["status"] = "dispatching"
+                item["error"] = ""
+                item["updated_at"] = now_iso()
+                break
+            else:
+                return False
+        self.save()
+        return True
+
+    def cancel_seerr_request(
+        self, external_request_id: str, confirm_no_existing_download: bool = False
+    ) -> str:
+        """Cancel before dispatch, or require queue confirmation after recovery.
+
+        Returns one of:
+
+        * ``"cancelled"``  -- row was cancelled (now or previously); no download.
+        * ``"missing"``    -- no row for this id; the peer should re-submit.
+        * ``"available"``  -- the row's import is already verified in the library;
+                             a cancel from the peer is too late, nothing to do.
+        * ``"active"``     -- the row's release is still being searched /
+                             imported; cancel is not offered while it is live.
+        * ``"confirmation"`` -- the row is paused at a handoff-restart error
+                             (the server died between queue add and client add)
+                             and the peer has not yet confirmed there is no
+                             pending download in the client. The HTTP layer
+                             must re-call with ``confirm_no_existing_download``
+                             once the operator has checked.
+        """
+        with self._lock:
+            items = self.settings.setdefault("integration_requests", [])
+            for item in items:
+                if item.get("id") != external_request_id:
+                    continue
+                status = item.get("status", "")
+                error = item.get("error", "")
+                if status == "cancelled":
+                    return "cancelled"
+                if status == "available":
+                    return "available"
+                if (error.startswith("The server restarted during download handoff.")
+                        and not confirm_no_existing_download):
+                    return "confirmation"
+                queue = [q for q in self.queue if q.external_request_id == external_request_id]
+                if any(q.state == "imported" for q in queue):
+                    return "available"
+                if status in ("dispatching", "downloading") or any(
+                        q.state in ("queued", "grabbed") for q in queue):
+                    return "active"
+                item["status"] = "cancelled"
+                item["error"] = ""
+                item["updated_at"] = now_iso()
+                break
+            else:
+                return "missing"
+        self.save()
+        return "cancelled"
+
+    def recover_seerr_dispatches(self) -> None:
+        """Reconcile rows that were ``dispatching`` when the server died.
+
+        The dispatch pipeline writes the queue row and flips status; if the
+        process is killed in that window the row is stuck at ``dispatching``.
+        On startup, look up each such row's queue state and move it to the
+        truth that already happened:
+
+        * latest ``grabbed``     -> ``downloading`` (the client had it).
+        * latest ``imported``    -> ``available`` (the import verified).
+        * latest ``failed``      -> ``failed`` with the import detail.
+        * no row / no signal     -> ``failed`` with the handoff-restart
+                                     error so the peer can confirm and retry.
+
+        Called once at startup, before the request handler begins serving.
+        """
+        changed = False
+        with self._lock:
+            items = self.settings.get("integration_requests", [])
+            for item in items:
+                if item.get("status") != "dispatching":
+                    continue
+                rows = [q for q in self.queue
+                        if q.external_request_id == item.get("id")]
+                latest = rows[-1] if rows else None
+                if latest and latest.state == "grabbed":
+                    item["status"], item["error"] = "downloading", ""
+                elif latest and latest.state == "imported":
+                    item["status"], item["error"] = "available", ""
+                elif latest and latest.state in ("failed", "import-failed"):
+                    item["status"] = "failed"
+                    item["error"] = latest.detail or "ROMarr could not complete the request."
+                else:
+                    item["status"] = "failed"
+                    item["error"] = (
+                        "The server restarted during download handoff. "
+                        "Check the download client's queue and history before retrying.")
+                item["updated_at"] = now_iso()
+                changed = True
+        if changed:
+            self.save()
+
+    def latest_seerr_request(self) -> "SeerrRequest | None":
+        """Return the most recently updated integration row, or ``None``.
+
+        Used by the ``/api/v1/integration/requests/current`` endpoint so the
+        external platform can poll a single, most-fresh status in one call
+        without having to enumerate the full queue.
+        """
+        rows = self.settings.get("integration_requests", [])
+        if not isinstance(rows, list) or not rows:
+            return None
+        latest: dict = rows[0]
+        for row in rows[1:]:
+            if row.get("updated_at", "") > latest.get("updated_at", ""):
+                latest = row
+        return SeerrRequest(
+            external_request_id=str(latest.get("id", "")),
+            name=str(latest.get("name", "")),
+            platform=str(latest.get("platform", "")),
+            status=str(latest.get("status", "requested")),
+            assets=list(latest.get("assets") or []),
+            error=str(latest.get("error", "")),
+            created_at=str(latest.get("created_at", "")),
+            updated_at=str(latest.get("updated_at", "")),
+        )
 
 
 def to_jsonable(value: Any) -> Any:

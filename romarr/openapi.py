@@ -133,6 +133,12 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
                                       "connection test calls."),
     "/api/v1/webhook": ("POST", "Inbound game request from a front-end."),
     "/api/request": ("POST", "Request a game."),
+    "/api/v1/integration/info": ("GET", "Integration service info: name, version, capabilities."),
+    "/api/v1/integration/requests": ("POST", "Accept a game request from an external platform "
+        "(Cartridge, SeerrNG, etc.). Starts the same search + grab pipeline; "
+        "returns a stable request_id to poll. GET lists all tracked requests."),
+    "/api/v1/integration/requests/current": ("GET", "The most recently updated integration request — "
+        "id, name, platform, status, assets, error."),
     "/api/v1/system/tasks": ("GET", "The scheduled jobs: interval, last run, "
                                     "last result."),
     "/api/v1/log/tail": ("GET", "The live process log: records after ?since=, "
