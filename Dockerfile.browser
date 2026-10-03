@@ -1,0 +1,64 @@
+# ROMarr, browser edition -- the same app on Debian, with the Playwright client.
+#
+# Why this exists: the default image is Alpine (musl), and Playwright ships only
+# glibc wheels, so `pip install playwright` inside it can never succeed ("no
+# matching distribution"; issue #35). The Headless Browser download client
+# needs that package in the ROMarr process even when the browser itself runs
+# elsewhere, so a musl image cannot use it at all.
+#
+# This image carries ONLY the Python client. It deliberately has no Chromium:
+# point Settings -> Download Clients -> Browser Host at a `playwright run-server`
+# (for example the official mcr.microsoft.com/playwright image), or run
+# `playwright install --with-deps chromium` yourself if you want one in here.
+# Tag: ghcr.io/blizzhacker/romarr:browser  (and :<version>-browser)
+
+FROM python:3.13-slim
+
+ARG TARGETARCH
+# Must match the playwright run-server you point at (client/server skew is the
+# first thing to check if the connection stops working). See docs/PROOF.md.
+ARG PLAYWRIGHT_VERSION=1.62.0
+
+# gosu is su-exec's Debian twin and takes the same "uid:gid cmd" arguments, so
+# the shared entrypoint runs unchanged under the su-exec name.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+        gosu tzdata libarchive-tools libseccomp2 git ca-certificates \
+ && ln -s "$(command -v gosu)" /usr/local/bin/su-exec \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt \
+ && pip install --no-cache-dir "playwright==${PLAYWRIGHT_VERSION}" \
+ && if [ "$TARGETARCH" != "arm" ]; then \
+      pip install --no-cache-dir \
+        "rom-hub @ https://github.com/BlizzHacker/rom-hub/archive/8e46348783546ee03b00e2c933155ba60d29619d.tar.gz"; \
+    fi
+
+WORKDIR /app
+COPY romarr/ /app/romarr/
+COPY docker/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh && mkdir -p /config /roms
+
+ENV ROMARR_DATA=/config/romarr.json \
+    ROM_HUB_HOME=/config/rom-hub \
+    ROMARR_PORT=6868 \
+    PUID=1000 \
+    PGID=1000 \
+    UMASK=002 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+VOLUME /config
+EXPOSE 6868
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD python -c "import os,urllib.request;urllib.request.urlopen('http://127.0.0.1:'+os.environ.get('ROMARR_PORT','6868')+'/api/health',timeout=4)"
+
+LABEL org.opencontainers.image.title="ROMarr (browser edition)" \
+      org.opencontainers.image.description="ROMarr on Debian with the Playwright client, for the Headless Browser download client" \
+      org.opencontainers.image.source="https://github.com/BlizzHacker/romarr" \
+      org.opencontainers.image.licenses="MIT"
+
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["python", "-m", "romarr"]

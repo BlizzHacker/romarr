@@ -60,7 +60,7 @@ from .downloaders import (
 )
 from .indexers import INDEXER_TYPES, build_indexer, redact_indexer
 from .indexers import Prowlarr, ProwlarrConfig
-from .library import import_rom, map_remote_path
+from .library import import_rom, map_remote_path, platform_dir
 from .collections import is_translation
 from .auth import DISABLED as AUTH_DISABLED
 from .auth import MIN_PASSWORD, SESSION_COOKIE, Auth, new_api_key, parse_cookies
@@ -74,6 +74,7 @@ from .catalogue import (Submission, check_source, facets as hub_facets,
 from .frontends import FORMATS as FRONTEND_FORMATS
 from .metadata import PROVIDERS as METADATA_PROVIDERS
 from .notify import (NOTIFIERS, Message, Notifier, failed, grabbed, imported,
+                     FIELD_HELP, FIELD_LABELS, send_test,
                      update_available)
 from .profiles import Blocklist, ReleaseProfile, release_id
 from .upgrade import is_upgrade, merge_tags, scan as scan_directory
@@ -2336,7 +2337,8 @@ class ROMarr:
         listed = False
         if platform_slug:
             for cfg, _ in self.game_libraries:
-                folder = self.library_root(cfg) / platform_slug
+                folder = platform_dir(self.library_root(cfg), platform_slug,
+                                      layout=self.library_layout(cfg))
                 try:
                     entries = list(folder.iterdir())
                 except OSError:
@@ -4783,11 +4785,13 @@ def make_handler(service: ROMarr):
                             {"name": "enable", "label": "Enable",
                              "type": "bool", "default": True},
                         ] + [
-                            {"name": f, "label": f.replace("_", " ").title(),
+                            {"name": f, "label": FIELD_LABELS.get(f, f.replace("_", " ").title()),
                              "type": ("secret" if f in ("url", "token",
                                                         "password", "key")
                                       else "text"),
-                             "default": "", "help": spec["help"]}
+                             "default": "",
+                             "help": (spec["help"] if f == "url" else
+                                      FIELD_HELP.get(f, ""))}
                             for f in spec["fields"]
                         ] + [
                             {"name": "events", "label": "Events", "type": "list",
@@ -5572,6 +5576,24 @@ def make_handler(service: ROMarr):
                                                           "required or wrong"})
                 token = service.auth.issue_session()
                 return self._send_session(token, {"ok": True})
+            if route.path == "/api/v1/connection/test" and body.get("type"):
+                # The editor's Test button posts the form it is showing, which
+                # may not be saved yet. Answer for that connection -- not for
+                # whatever happens to be stored -- or a brand-new webhook can
+                # never be tested before it is saved.
+                spec = NOTIFIERS.get(str(body.get("type")).lower())
+                if spec is None:
+                    return self._json(200, {"ok": False,
+                                            "message": "unknown connection type"})
+                cfg = dict(body)
+                if cfg.get("id"):
+                    old_cfg = service.store.get_item("connections",
+                                                     str(cfg["id"])) or {}
+                    for key in ("url", "token", "password", "key"):
+                        if cfg.get(key, "") in ("********", ""):
+                            cfg[key] = old_cfg.get(key, "")
+                ok, detail = send_test(cfg)
+                return self._json(200, {"ok": ok, "message": detail})
             if route.path == "/api/v1/connection/test":
                 got = service.notify(Message(
                     "grab", "ROMarr test notification",

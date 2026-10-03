@@ -29,6 +29,7 @@ import json
 import logging
 import urllib.error
 import urllib.parse
+import threading
 import urllib.request
 from dataclasses import dataclass, field
 
@@ -45,6 +46,10 @@ ON_UPDATE = "update"
 EVENTS = (ON_GRAB, ON_IMPORT, ON_UPGRADE, ON_FAILURE, ON_BAD_DUMP, ON_UPDATE)
 
 TIMEOUT = 15
+
+#: Why the most recent delivery on this thread failed, for the Test button.
+#: The providers return a bare bool; the reason is the part a person needs.
+_last = threading.local()
 
 
 @dataclass
@@ -69,16 +74,24 @@ class Message:
 
 def _post(url: str, *, data: bytes | None = None, headers: dict | None = None,
           method: str = "POST") -> bool:
-    request = urllib.request.Request(url, data=data, method=method)
+    _last.reason = ""
+    try:
+        request = urllib.request.Request(url, data=data, method=method)
+    except ValueError as exc:
+        _last.reason = f"not a usable URL ({exc})"
+        log.warning("notification not sent: %s", _last.reason)
+        return False
     for name, value in (headers or {}).items():
         request.add_header(name, value)
     try:
         with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
             return 200 <= response.status < 300
     except urllib.error.HTTPError as exc:
+        _last.reason = f"the endpoint answered HTTP {exc.code}"
         log.warning("notification to %s rejected: HTTP %s",
                     _safe(url), exc.code)
     except Exception as exc:                    # a down endpoint is routine
+        _last.reason = f"could not reach the endpoint ({exc.__class__.__name__})"
         log.warning("notification to %s failed: %s", _safe(url), exc)
     return False
 
@@ -173,6 +186,20 @@ def _apprise(cfg: dict, message: Message) -> bool:
         payload["urls"] = cfg["urls"]
     return _json_post(f"{base}/notify", payload)
 
+
+#: Hints for the fields that are not the main address. Without these the
+#: editor repeated the provider's URL hint under every field, so Discord's
+#: Username box said "A Discord channel webhook URL."
+FIELD_LABELS = {"url": "URL", "chat_id": "Chat ID", "urls": "Apprise URLs"}
+
+FIELD_HELP = {
+    "username": "Optional. Overrides the webhook's display name.",
+    "token": "The access token for this service.",
+    "priority": "Optional message priority.",
+    "chat_id": "The chat id to post into.",
+    "user": "Your user key.",
+    "urls": "Optional. Apprise URLs to notify, one per line or comma separated.",
+}
 
 NOTIFIERS: dict[str, dict] = {
     "discord": {"label": "Discord", "send": _discord,
@@ -291,3 +318,29 @@ def update_available(current: str, latest: str, url: str = "") -> Message:
         body=f"This install is running {current}.",
         url=url,
     )
+
+
+def send_test(cfg: dict) -> tuple[bool, str]:
+    """Send one test message through ONE connection and say what happened.
+
+    Used by the editor's Test button, which tests the form on screen -- saved
+    or not. Returns (delivered, message).
+    """
+    spec = NOTIFIERS.get(str(cfg.get("type") or "").lower())
+    if spec is None:
+        return False, "unknown connection type"
+    needs = [f for f in spec["fields"] if f in ("url", "token")]
+    missing = [f for f in needs if not str(cfg.get(f) or "").strip()]
+    if missing and "url" in spec["fields"] and "url" in missing:
+        return False, "Enter the URL first."
+    message = Message("grab", "ROMarr test notification",
+                      body="If you can read this, the connection works.",
+                      reasons=("+50 this is a test",))
+    _last.reason = ""
+    try:
+        ok = bool(spec["send"](cfg, message))
+    except Exception as exc:
+        return False, f"failed: {exc.__class__.__name__}"
+    if ok:
+        return True, "Delivered"
+    return False, "Not delivered: " + (getattr(_last, "reason", "") or "unknown error")

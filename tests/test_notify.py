@@ -209,3 +209,37 @@ def test_an_unverified_import_is_still_an_import():
 
 def test_a_failure_carries_the_reason():
     assert "no seeders" in failed("X", "no seeders on a public tracker").text()
+
+
+# --- the editor's Test button (issue #33) -----------------------------------
+
+def test_send_test_reports_delivery_for_an_unsaved_connection(monkeypatch):
+    monkeypatch.setattr(notify, "_post", lambda *a, **k: True)
+    ok, message = notify.send_test({"type": "discord",
+                                    "url": "https://discord.com/api/webhooks/1/x"})
+    assert ok and message == "Delivered"
+
+
+def test_send_test_says_why_it_failed():
+    # nothing listens on this port, so the failure is real and local
+    ok, message = notify.send_test({"type": "webhook",
+                                    "url": "http://127.0.0.1:9/hook"})
+    assert not ok
+    assert message.startswith("Not delivered: ")
+    assert "reach" in message or "HTTP" in message
+
+
+def test_send_test_asks_for_the_url_instead_of_guessing():
+    ok, message = notify.send_test({"type": "discord", "url": ""})
+    assert not ok and "URL" in message
+
+
+def test_send_test_rejects_an_unknown_type():
+    assert notify.send_test({"type": "carrier-pigeon"}) == (
+        False, "unknown connection type")
+
+
+def test_only_the_url_field_carries_the_provider_hint():
+    """Discord's Username box used to repeat 'A Discord channel webhook URL.'"""
+    assert notify.FIELD_HELP["username"] != NOTIFIERS["discord"]["help"]
+    assert notify.FIELD_LABELS["url"] == "URL"

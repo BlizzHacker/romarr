@@ -746,6 +746,30 @@ this, and the Download Clients page says so rather than failing obscurely.
 pip install playwright && playwright install --with-deps chromium
 ```
 
+**Running ROMarr in Docker or Unraid?** The default image is Alpine (musl), and
+Playwright publishes only glibc wheels, so `pip install playwright` inside it
+fails with *"No matching distribution found"* and always will. Use the browser
+edition instead, which is the same app on Debian with the Playwright client
+(and no Chromium) preinstalled:
+
+```
+ghcr.io/blizzhacker/romarr:browser
+```
+
+On Unraid, set the container's **Repository** to that, or pick the `browser`
+tag in the template. Then run the browser itself in a second container and set
+**Browser Host** to it:
+
+```bash
+docker run -d --name playwright --restart unless-stopped -p 3000:3000 \
+  --init --ipc=host mcr.microsoft.com/playwright:v1.62.0-noble \
+  npx -y playwright@1.62.0 run-server --port 3000 --host 0.0.0.0
+# Browser Host: ws://<that-host>:3000
+```
+
+The client and the server must be the same Playwright version (the image ships
+1.62.0).
+
 Then either leave **Browser Host** blank to launch Chromium beside ROMarr, or
 — better for a small container — run the browser somewhere else:
 
