@@ -33,6 +33,7 @@ import logging
 import os
 import re
 import secrets
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -69,6 +70,12 @@ class SABnzbd:
     def __init__(self, config: SabConfig, session: requests.Session | None = None):
         self._config = config
         self._session = session or requests.Session()
+        self._added = threading.local()
+
+    #: The id of the job the last `add` on this thread created, or "".
+    @property
+    def last_job_id(self) -> str:
+        return getattr(self._added, "job_id", "")
 
     @property
     def configured(self) -> bool:
@@ -97,6 +104,7 @@ class SABnzbd:
 
     def add(self, url: str, *, name: str = "") -> bool:
         """Hand SABnzbd an NZB URL to fetch and queue."""
+        self._added.job_id = ""
         if not self.configured:
             return False
         params = {"name": url, "cat": self._config.category}
@@ -106,6 +114,12 @@ class SABnzbd:
         if not out or not out.get("status"):
             log.warning("sabnzbd rejected the nzb")
             return False
+        # SABnzbd's id for the job. History reports it back as `nzo_id`, so
+        # the import sweep can pair the finished job with its queue row
+        # without trusting that the job kept the title it was given. Kept
+        # per thread, and read straight after `add` by hand_off_with_id.
+        ids = out.get("nzo_ids") or []
+        self._added.job_id = str(ids[0]) if ids else ""
         return True
 
     def completed(self) -> list[dict]:
@@ -120,6 +134,7 @@ class SABnzbd:
                 "content_path": s.get("storage") or "",
                 "save_path": s.get("storage") or "",
                 "state": s.get("status", ""),
+                "id": s.get("nzo_id", ""),
             }
             for s in slots
             if str(s.get("status", "")).lower() == "completed"
@@ -1620,12 +1635,18 @@ class DebridClient:
         if not self.configured:
             return []
         out = []
-        for name, links in self._finished():
+        for entry in self._finished():
+            # A service that knows the torrent's infohash may append it as a
+            # third element; the others still return `(name, links)`.
+            name, links, *rest = entry
             target = Path(self._config.save_path) / name
             if self._fetch_links(links, target):
-                out.append({"name": name, "content_path": str(target),
-                            "save_path": self._config.save_path,
-                            "state": self.DONE_STATE})
+                row = {"name": name, "content_path": str(target),
+                       "save_path": self._config.save_path,
+                       "state": self.DONE_STATE}
+                if rest and rest[0]:
+                    row["hash"] = str(rest[0])
+                out.append(row)
         return out
 
     def _fetch_links(self, links: list, target) -> bool:
@@ -1726,7 +1747,7 @@ class RealDebrid(DebridClient):
             if not info or info.get("status") != "downloaded":
                 continue
             out.append((info.get("filename") or torrent_id,
-                        info.get("links") or []))
+                        info.get("links") or [], info.get("hash") or ""))
         return out
 
     def _resolve(self, link) -> tuple[str, str]:
@@ -2991,6 +3012,39 @@ def hand_off(client, url: str, *, name: str = "") -> bool:
     if name and getattr(client, "TAKES_NAME", False):
         return client.add(url, name=name)
     return client.add(url)
+
+
+def hand_off_with_id(client, url: str, *, name: str = "") -> tuple[bool, str]:
+    """`hand_off`, plus the client's own id for the job when it reports one.
+
+    Clients that cannot report an id (everything but SABnzbd today) return an
+    empty string, and the importer then matches by infohash or by title.
+    """
+    ok = hand_off(client, url, name=name)
+    return ok, (getattr(client, "last_job_id", "") or "") if ok else ""
+
+
+def match_queue_item(queue, download: dict):
+    """The queue row a finished download belongs to, or None.
+
+    Identity first: the infohash the client reports against the one in the
+    row's `release_id`, or the client's job id against `download_id`. Only when
+    neither side has an id to compare does the title decide, which is also how
+    rows queued before ids were recorded keep working.
+    """
+    found = str(download.get("hash") or "").strip().lower()
+    job = str(download.get("id") or "").strip()
+    if found or job:
+        for item in queue:
+            if found and item.release_id == f"btih:{found}":
+                return item
+            if job and item.download_id == job:
+                return item
+    name = download.get("name", "")
+    for item in queue:
+        if item.release == name:
+            return item
+    return None
 
 
 def pick_client(protocol: str, clients: list) -> object | None:

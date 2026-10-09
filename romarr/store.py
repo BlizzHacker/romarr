@@ -135,6 +135,12 @@ class QueueItem:
     # A request can be satisfied from any one row, so the list is not
     # necessarily 1:1 with game files; an import-failed row leaves it empty.
     imported_paths: list[str] = field(default_factory=list)
+    # The download client's own id for this job, captured when it was handed
+    # over (SABnzbd's nzo_id). The import sweep matches on this -- or on the
+    # infohash in `release_id` -- before it falls back to the release title,
+    # because a client rarely names a job the way the indexer titled it.
+    # Empty on rows queued before this field existed; those match by name.
+    download_id: str = ""
 
 
 @dataclass
