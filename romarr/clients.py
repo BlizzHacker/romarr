@@ -8,9 +8,12 @@ or an API response.
 
 from __future__ import annotations
 
+import base64
 import datetime
+import json
 import logging
 import sys
+import time
 from dataclasses import dataclass
 
 import requests
@@ -333,8 +336,40 @@ class Romm:
         #: per process rather than a broken rescan.
         self._scan_task = "scan"
         self._token = config.api_token or ""
+        #: Whether `_token` came from the password grant, as opposed to being
+        #: configured. Only a token ROMarr itself obtained can be replaced.
+        self._token_from_login = False
+
+    #: Refresh a password-grant token this many seconds before its `exp`.
+    REFRESH_MARGIN = 60
+
+    @staticmethod
+    def _jwt_expiry(token: str) -> float | None:
+        """The `exp` claim of a JWT, read without verifying it, or None.
+
+        Only used to decide when to ask for a new token, never to trust one.
+        Opaque tokens (`rmm_...` client tokens) and anything unparseable give
+        None and are simply used until the server says otherwise.
+        """
+        try:
+            payload = token.split(".")[1]
+            payload += "=" * (-len(payload) % 4)
+            exp = json.loads(base64.urlsafe_b64decode(payload)).get("exp")
+            return float(exp) if isinstance(exp, (int, float)) else None
+        except (IndexError, ValueError, TypeError, AttributeError):
+            return None
 
     def token(self) -> str | None:
+        if self._token and self._token_from_login:
+            expiry = self._jwt_expiry(self._token)
+            if expiry is not None and expiry - time.time() < self.REFRESH_MARGIN:
+                # About to lapse. Swap it now rather than let RomM answer the
+                # next request with its 500 for a dead bearer token.
+                stale, self._token = self._token, ""
+                if self.token():
+                    return self._token
+                self._token = stale
+                return stale
         if self._token:
             return self._token
         if not (self._config.username and self._config.password):
@@ -365,7 +400,34 @@ class Romm:
                         getattr(response, "status_code", "no response"))
             return None
         self._token = response.json().get("access_token", "")
+        self._token_from_login = bool(self._token)
         return self._token or None
+
+    def _token_refused_with_500(self) -> bool:
+        """Whether a 500 is RomM 5.3.1 rejecting our expired bearer token.
+
+        RomM 5.3.1 lets `OAuthCredentialsException` escape its auth middleware
+        (rommapp/romm#4788), so an expired or invalid JWT gets a bare
+        "Internal Server Error" from EVERY endpoint, `/api/heartbeat` included,
+        and nothing in the body names the cause. A body match is therefore not
+        possible; behaviour is. The heartbeat answers 200 with no token and
+        500 with ours only when the token is the problem. A server that is
+        down fails the first probe, so a real outage is never read as auth.
+        """
+        if not (self._token and self._token_from_login
+                and self._config.username and self._config.password):
+            return False
+        url = f"{self._config.base_url.rstrip('/')}/api/heartbeat"
+        try:
+            bare = self._session.get(url, timeout=self.HEALTH_TIMEOUT)
+            if not bare.ok:
+                return False
+            with_token = self._session.get(
+                url, headers={"Authorization": f"Bearer {self._token}"},
+                timeout=self.HEALTH_TIMEOUT)
+        except requests.RequestException:
+            return False
+        return with_token.status_code == 500
 
     def _headers(self) -> dict[str, str]:
         token = self.token()
@@ -381,13 +443,16 @@ class Romm:
         restart appeared to fix it, which made it look like a slow leak rather
         than an expired credential.
 
-        Only 401 is retried. A 403 is a permissions problem that another token
-        will not solve, and retrying it would just double the load while
-        producing the same answer.
+        A 401 is retried, and so is a 500 that `_token_refused_with_500` can
+        attribute to the token (RomM 5.3.1 reports a dead bearer token that
+        way). Each request is retried at most once. A 403 is a permissions
+        problem that another token will not solve, and retrying it would just
+        double the load while producing the same answer.
         """
         response = self._session.get(url, params=params, headers=self._headers(),
                                      timeout=timeout)
-        if response.status_code == 401:
+        if response.status_code == 401 or (
+                response.status_code == 500 and self._token_refused_with_500()):
             log.info("romm token rejected; re-authenticating")
             self._token = ""
             response = self._session.get(url, params=params,
