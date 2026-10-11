@@ -2384,11 +2384,25 @@ class ROMarr:
         translation_policy = (policy_kw.get("translation_policy")
                               or self.store.settings.get("translation_policy")
                               or "exclude")
+        translation_langs = (policy_kw.get("translation_langs")
+                             or self.store.settings.get("translation_langs")
+                             or ("en",))
+        if isinstance(translation_langs, str):
+            translation_langs = [c for c in translation_langs.split(",") if c]
+        from .collections import normalise_lang
+        translation_langs = tuple(dict.fromkeys(
+            normalise_lang(c) for c in translation_langs if str(c).strip()))
+        region_mode = str(policy_kw.get("region_mode")
+                          or self.store.settings.get("region_mode")
+                          or "prefer").lower()
         policy = Policy(
             regions=regions,
             one_game_one_rom=bool(policy_kw.get("one_game_one_rom", True)),
             exclude=frozenset(exclude),
             translation_policy=str(translation_policy),
+            translation_langs=translation_langs,
+            region_mode=region_mode if region_mode in ("prefer", "strict")
+            else "prefer",
         )
         plan = build_plan(dat, self._present_titles(platform), policy)
         return {
@@ -2399,7 +2413,9 @@ class ROMarr:
             "policy": {"regions": list(policy.regions),
                        "one_game_one_rom": policy.one_game_one_rom,
                        "exclude": sorted(policy.exclude),
-                       "translation_policy": policy.translation_policy},
+                       "translation_policy": policy.translation_policy,
+                       "translation_langs": list(policy.translation_langs),
+                       "region_mode": policy.region_mode},
             "titles": [
                 {"name": t.name, "parent": t.parent, "status": t.status,
                  "why": t.chosen_because,
@@ -4817,6 +4833,10 @@ def make_handler(service: ROMarr):
                              if r] or None,
                     translation_policy=query.get("translation_policy",
                                                  [""])[0] or None,
+                    translation_langs=[
+                        c for c in query.get("translation_langs", [""])[0]
+                        .split(",") if c] or None,
+                    region_mode=query.get("region_mode", [""])[0] or None,
                     exclude=[e for e in query.get("exclude", [""])[0].split(",")
                              if e] if "exclude" in query else None))
             if route.path == "/api/v1/collection":
@@ -5166,6 +5186,8 @@ def make_handler(service: ROMarr):
                     one_game_one_rom=bool(body.get("one_game_one_rom", True)),
                     regions=body.get("regions") or None,
                     translation_policy=body.get("translation_policy") or None,
+                    translation_langs=body.get("translation_langs") or None,
+                    region_mode=body.get("region_mode") or None,
                     exclude=body.get("exclude")
                     if body.get("exclude") is not None else None))
             if route.path == "/api/v1/collection/step":

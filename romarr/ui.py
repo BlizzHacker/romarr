@@ -2496,14 +2496,29 @@ RENDER.media=()=>settingsPage('Media Management',
   +chk('rescan_after_import','Tell your library server to rescan after an import',SETTINGS.rescan_after_import)
   +sel('translation_policy','Fan translations in 1G1R sets',
      [['exclude','Exclude — published dumps only'],
-      ['fill','Fill gaps — use a T-En only when no preferred-region dump exists'],
-      ['prefer','Prefer — take a T-En over the region winner when one exists'],
-      ['keep_both','Keep both — original plus the T-En in a Translations subfolder']],
+      ['fill','Fill gaps — use a translation only when no preferred-region dump exists'],
+      ['prefer','Prefer — take a translation over the region winner when one exists'],
+      ['keep_both','Keep both — original plus the translation in a Translations subfolder']],
      SETTINGS.translation_policy||'exclude',
-     'What Collections does with an English fan translation. The Digimon-only-'
-     +'in-Japan case: "Fill" downloads the translation instead of leaving the '
-     +'game Japanese-only; "Keep both" files it under Translations/ so your '
-     +'library shows it as a variant.'));
+     'What Collections does with a fan translation in a language you selected '\
+     +'below. The Digimon-only-in-Japan case: "Fill" downloads the translation '\
+     +'instead of leaving the game Japanese-only; "Keep both" files it under '\
+     +'Translations/ so your library shows it as a variant.')
+  +`<div class="field"><label>Fan-translation languages</label>
+     <input type="text" data-k="translation_langs" data-list="1"
+       value="${esc((SETTINGS.translation_langs||['en']).join(', '))}">
+     <div style="color:var(--dim);font-size:11.5px;margin-top:4px">
+       Comma-separated codes, e.g. <code>de, en</code>. Matches scene markers
+       like <code>[T-De]</code> / <code>[T+Eng]</code>; an unmarked
+       <code>(Translation)</code> counts as English.</div></div>`
+  +sel('region_mode','Region list in 1G1R sets',
+     [['prefer','Prefer selected regions — keep a title even when no dump matches'],
+      ['strict','Only selected regions — omit a title when no dump matches']],
+     SETTINGS.region_mode||'prefer',
+     '"Prefer" is the historical fallback: a game with only Japan dumps stays '\
+     +'in the set rather than being lost. "Strict" treats the region list as '\
+     +'an allowlist — the plan counts every title omitted for having no dump '\
+     +'in your regions.'));
 
 RENDER.profiles=()=>settingsPage('Release Profile',
   'A quality profile means nothing for a cartridge dump — there is no bitrate. '
@@ -3505,6 +3520,9 @@ RENDER.collections=async()=>{
        +'<input id="cregions" placeholder="usa,world,europe,japan" '
        +'style="flex:1;min-width:180px;padding:7px 10px;background:var(--bg);'
        +'color:var(--fg);border:1px solid var(--line);border-radius:6px">'
+       +'<label class="help" style="margin:0" title="Treat the region list as an allowlist: omit a title when no dump matches one of your regions">'\
+       +'<input type="checkbox" id="cstrict"'+((SETTINGS.region_mode||'prefer')==='strict'?' checked':'')+'> '\
+       +'Only selected regions</label>'
        +'<button class="btn" id="cplan">Preview plan</button></div>'
        +'<div class="row" style="flex-wrap:wrap;gap:14px;margin-top:10px">'
        +['proto','beta','demo','hack','unlicensed'].map(k=>
@@ -3515,12 +3533,18 @@ RENDER.collections=async()=>{
        +'<label class="help" style="margin:0">Fan translations</label>'
        +'<select id="ctrans">'
        +[['exclude','exclude (published dumps only)'],
-         ['fill','fill gaps (T-En only where no preferred region exists)'],
-         ['prefer','prefer (T-En over the region winner)'],
-         ['keep_both','keep both (original + T-En under Translations/)']].map(o=>
+         ['fill','fill gaps (a selected-language translation only where no preferred region exists)'],
+         ['prefer','prefer (a selected-language translation over the region winner)'],
+         ['keep_both','keep both (original + translation under Translations/)']].map(o=>
           '<option value="'+o[0]+'"'+((SETTINGS.translation_policy||'exclude')===o[0]?' selected':'')
           +'>'+o[1]+'</option>').join('')
-       +'</select></div>'
+       +'</select>'
+       +'<label class="help" style="margin:0">languages</label>'
+       +'<input id="ctranslangs" placeholder="'+esc((SETTINGS.translation_langs||['en']).join(', '))+'" '
+       +'value="'+esc((SETTINGS.translation_langs||['en']).join(', '))+'" '
+       +'style="width:110px;padding:6px 8px;background:var(--bg);color:var(--fg);'
+       +'border:1px solid var(--line);border-radius:6px" title="Comma-separated codes, e.g. de, en">'
+       +'</div>'
       :'<div class="empty-cat"><b>No DAT loaded</b>'
        +'Point DAT_PATH at a directory of No-Intro or Redump DATs. Without one '
        +'there is no list of what a complete set contains.</div>')
@@ -3579,7 +3603,9 @@ RENDER.collections=async()=>{
       +'&platform='+encodeURIComponent($('#cplat').value)
       +'&onegame='+($('#c1g1r').checked?'1':'0')
       +'&regions='+encodeURIComponent($('#cregions').value.trim())
+      +'&region_mode='+($('#cstrict').checked?'strict':'prefer')
       +'&translation_policy='+encodeURIComponent($('#ctrans').value)
+      +'&translation_langs='+encodeURIComponent($('#ctranslangs').value.trim())
       +'&exclude='+encodeURIComponent(ex);
     const d=await j('/api/v1/collection/plan?'+q).catch(()=>({error:'plan failed'}));
     if(d.error){out.innerHTML='<div class="panel-note panel-warn">'+esc(d.error)+'</div>';return;}
@@ -3594,9 +3620,11 @@ RENDER.collections=async()=>{
       +tile(c.missing,'missing','var(--warn)')
       +tile(c.bad,'bad dumps','var(--bad)')
       +tile(c.excluded,'excluded by policy','var(--dim)')
+      +((c.region_omitted||0)?tile(c.region_omitted,'omitted — no dump in your regions','var(--dim)'):'')
       +'</div>'
       +'<p class="help">'+esc(d.dat)+(d.dat_version?' ('+esc(d.dat_version)+')':'')
-      +' — region order '+esc((d.policy.regions||[]).join(' → '))+'.</p>'
+      +' — region order '+esc((d.policy.regions||[]).join(' → '))
+      +(d.policy.region_mode==='strict'?' (strict: titles without a matching-region dump are omitted)':'')+'.</p>'
       +'<div class="row"><button class="btn" id="cstart">Request '+c.missing
       +' missing</button>'
       +'<label class="help" style="margin:0">at <input id="cpp" type="number" '
@@ -3635,7 +3663,9 @@ RENDER.collections=async()=>{
           per_pass:parseInt($('#cpp').value,10)||5,
           one_game_one_rom:$('#c1g1r').checked,
           regions:($('#cregions').value.trim()||'').split(',').filter(Boolean),
+          region_mode:$('#cstrict').checked?'strict':'prefer',
           translation_policy:$('#ctrans').value,
+          translation_langs:($('#ctranslangs').value.trim()||'').split(',').map(s=>s.trim()).filter(Boolean),
           exclude:ex.split(',').filter(Boolean)})});
       toast(r.error?r.error:('Queued '+(r.queued||0)+' titles'));
       e.target.disabled=false; e.target.textContent='Request missing';

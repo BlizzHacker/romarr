@@ -55,16 +55,73 @@ _FLAGS = {
 _PAREN = re.compile(r"[\(\[]([^\)\]]*)[\)\]]")
 
 #: The scene's translation markers, which are not plain words: `[T-En]`,
-#: `[T+Eng]`, `[T-En by Foo]`. Matched on the bracket group as a whole
+#: `[T+Eng]`, `[T-De by Foo]`. Matched on the bracket group as a whole
 #: because the `T-` / `T+` prefix is the signal, not a standalone token.
-_TRANSLATION_MARK = re.compile(r"\bt[+-]\s*(?:en|eng|english)\b", re.IGNORECASE)
+#: The language code after the marker is captured so the planner can honour
+#: a configured language list instead of assuming English.
+_TRANSLATION_MARK = re.compile(r"\bt[+-]\s*([a-z]{2,10})\b", re.IGNORECASE)
+
+#: Three-letter and spelled-out language codes normalised to the two-letter
+#: codes the planner configuration uses. Scene groups do not agree on a
+#: register (`[T-En]`, `[T+Eng]`, `[T-English]` all appear in the wild), and
+#: an operator typing "en" should match all of them.
+_LANG_ALIASES = {
+    "en": "en", "eng": "en", "english": "en",
+    "de": "de", "deu": "de", "ger": "de", "german": "de",
+    "fr": "fr", "fra": "fr", "fre": "fr", "french": "fr",
+    "es": "es", "spa": "es", "esp": "es", "spanish": "es",
+    "it": "it", "ita": "it", "italian": "it",
+    "pt": "pt", "por": "pt", "ptb": "pt",
+    "nl": "nl", "dut": "nl", "nla": "nl", "dutch": "nl",
+    "sv": "sv", "swe": "sv", "swedish": "sv",
+    "ru": "ru", "rus": "ru", "russian": "ru",
+    "ja": "ja", "jpn": "ja", "jp": "ja", "japanese": "ja",
+    "ko": "ko", "kor": "ko", "korean": "ko",
+    "zh": "zh", "chi": "zh", "chn": "zh", "chinese": "zh",
+    "pl": "pl", "pol": "pl", "polish": "pl",
+}
+
+
+def normalise_lang(code: str) -> str:
+    """A language token from a name or from the operator, lower-cased and
+    mapped to its two-letter form. Unknown tokens pass through so a language
+    this table has never heard of still matches an identical selection."""
+    c = (code or "").strip().lower()
+    return _LANG_ALIASES.get(c, c)
+
+
+def translation_langs_in(name: str) -> set[str]:
+    """The fan-translation language codes a DAT/release name declares.
+
+    Empty when the name carries a bare `(Translation)` word with no language
+    marker -- the No-Intro convention does not record one. Callers decide what
+    that means (`_langs_of` assumes English, preserving the behaviour from
+    before languages were configurable).
+    """
+    return {normalise_lang(m.group(1))
+            for m in _TRANSLATION_MARK.finditer(name or "")}
+
+
+def _langs_of(name: str) -> set[str]:
+    """The languages a translation name counts as, for policy matching.
+
+    A name with an explicit marker yields those codes. A name that only says
+    `(Translation)` / `(Translated)` yields `en`: the scene overwhelmingly
+    translates into English, and assuming English for unmarked translations is
+    exactly what the planner did before languages became configurable -- the
+    default must not surprise existing users.
+    """
+    langs = translation_langs_in(name)
+    if langs:
+        return langs
+    return {"en"}
 
 
 def is_translation(name: str) -> bool:
-    """Whether a DAT/release name is an English fan translation.
+    """Whether a DAT/release name is a fan translation, any language.
 
     Both conventions: the No-Intro `(Translation)` word and the scene's
-    `[T-En]` / `[T+Eng]` marker.
+    `[T-En]` / `[T+Eng]` / `[T-De]` marker.
     """
     if _TRANSLATION_MARK.search(name or ""):
         return True
@@ -102,6 +159,16 @@ def flags_in(name: str) -> set[str]:
 #:                shows it as a variant rather than a second game
 TRANSLATION_POLICIES = ("exclude", "fill", "prefer", "keep_both")
 
+#: How the configured region list is applied in a 1G1R set.
+#:
+#:   prefer -- a preference order: the best matching region wins, but when no
+#:             dump matches, the title is kept anyway rather than lost
+#:             (the historical behaviour, and the default)
+#:   strict -- an allowlist: when no dump matches a configured region, the
+#:             title is omitted from the set entirely. The summary counts the
+#:             omissions so "why did my set shrink" has an answer.
+REGION_MODES = ("prefer", "strict")
+
 
 @dataclass(frozen=True)
 class Policy:
@@ -119,6 +186,12 @@ class Policy:
     verified_only: bool = False
     #: How translations are treated. See TRANSLATION_POLICIES.
     translation_policy: str = "exclude"
+    #: Which fan-translation languages the policy accepts, normalised
+    #: two-letter codes (see normalise_lang). The historical behaviour was
+    #: English-only, so that stays the default.
+    translation_langs: tuple[str, ...] = ("en",)
+    #: How the region list is applied. See REGION_MODES.
+    region_mode: str = "prefer"
 
     @property
     def uses_translations(self) -> bool:
@@ -165,6 +238,11 @@ class Plan:
     titles: list[Title] = field(default_factory=list)
     #: Titles the policy excluded, kept as a count so the total still adds up.
     excluded: int = 0
+    #: Titles omitted because no dump matched a configured region and the
+    #: operator chose strict region mode. Reported separately from `excluded`
+    #: because "excluded: proto/demo" and "omitted: wrong region" are
+    #: different decisions with different fixes.
+    region_omitted: int = 0
 
     def counts(self) -> dict[str, int]:
         out = {PRESENT_VERIFIED: 0, PRESENT_UNKNOWN: 0, PRESENT_BAD: 0,
@@ -173,6 +251,7 @@ class Plan:
             out[title.status] = out.get(title.status, 0) + 1
         out["expected"] = len(self.titles)
         out["excluded"] = self.excluded
+        out["region_omitted"] = self.region_omitted
         out["have"] = out["expected"] - out[MISSING]
         return out
 
@@ -186,19 +265,47 @@ def _region_rank(name: str, order: tuple[str, ...]) -> int:
     return min((order.index(r) for r in found if r in order), default=len(order))
 
 
-def _best_translation(members: list[Game], order: tuple[str, ...]) -> "Game | None":
-    """The English translation in a group most worth taking, or None.
+def _best_translation(members: list[Game], order: tuple[str, ...],
+                      langs: tuple[str, ...] = ("en",)) -> "Game | None":
+    """The translation in a group most worth taking, or None.
+
+    Only translations into one of the configured languages are candidates --
+    the policy says which languages the operator reads, and a set that asked
+    for T-De should not quietly take a T-En because it sorted first.
 
     Prefers a translation of a preferred-region base over one of an obscure
     region, then the parent over a clone, then name -- the same shape the
     region ranking uses, so the choice is explainable the same way.
     """
-    translations = [g for g in members if is_translation(g.name)]
+    wanted = {normalise_lang(c) for c in langs}
+    translations = [g for g in members
+                    if is_translation(g.name) and (_langs_of(g.name) & wanted)]
     if not translations:
         return None
     return min(translations,
                key=lambda g: (_region_rank(g.name, order),
                               0 if not g.cloneof else 1, g.name))
+
+
+#: Full language names for the plan's explanation strings. Anything not
+#: listed is shown as its normalised code, upper-cased -- accurate beats
+#: pretty, and inventing names for every ISO 639 code is how wrong labels
+#: end up in a report.
+_LANG_LABELS = {
+    "en": "English", "de": "German", "fr": "French", "es": "Spanish",
+    "it": "Italian", "pt": "Portuguese", "nl": "Dutch", "sv": "Swedish",
+    "ru": "Russian", "ja": "Japanese", "ko": "Korean", "zh": "Chinese",
+    "pl": "Polish",
+}
+
+
+def _lang_label(name: str) -> str:
+    """The display name for the first configured language a translation
+    declares, for the plan's 'why' column."""
+    langs = sorted(_langs_of(name))
+    if not langs:
+        return "Fan"
+    return _LANG_LABELS.get(langs[0], langs[0].upper())
 
 
 def explain(dat: Dat, winner: Game, group: list[Game],
@@ -273,42 +380,69 @@ def build_plan(dat: Dat, present: dict[str, str], policy: Policy) -> Plan:
                              key=lambda g: (_region_rank(g.name, order),
                                             0 if not g.cloneof else 1, g.name))
 
-            # Translation policy. A group may hold an English fan translation
-            # of a title whose only real dump is Japanese; whether to reach
-            # for it -- and whether to keep the original alongside -- is the
-            # operator's call, not a guess.
+            # Translation policy. A group may hold a fan translation of a
+            # title whose only real dump is in a language the operator does
+            # not read; whether to reach for it -- into which languages --
+            # and whether to keep the original alongside is the operator's
+            # call, not a guess.
             winner_outside = _region_rank(winner.name, order) >= len(order)
-            translation = _best_translation(members, order)
+            translation = _best_translation(members, order,
+                                            policy.translation_langs)
+            strict = policy.region_mode == "strict"
             if policy.uses_translations and translation is not None:
                 take_it = (policy.translation_policy == "prefer"
                            or winner_outside)  # fill / keep_both: gap only
                 if take_it and policy.translation_policy == "keep_both":
                     # Both: the original winner stays, and the translation is
-                    # a second row filed under Translations/.
-                    because, lost = explain(dat, winner, members, policy.regions)
-                    plan.titles.append(Title(
-                        name=winner.name, parent=parent,
-                        status=present.get(winner.name, MISSING),
-                        chosen_because=because, discarded=lost,
-                        outside_preference=winner_outside))
-                    plan.titles.append(Title(
-                        name=translation.name, parent=parent,
-                        status=present.get(translation.name, MISSING),
-                        chosen_because="English translation, kept as a variant",
-                        outside_preference=False, is_translation=True))
-                    continue
-                if take_it:
-                    # fill / prefer: the translation replaces the winner.
+                    # a second row filed under Translations/. In strict mode
+                    # the original only stays if it is inside the allowed
+                    # regions -- strict means strict, variants included.
+                    if not (strict and winner_outside):
+                        because, lost = explain(dat, winner, members,
+                                                policy.regions)
+                        plan.titles.append(Title(
+                            name=winner.name, parent=parent,
+                            status=present.get(winner.name, MISSING),
+                            chosen_because=because, discarded=lost,
+                            outside_preference=winner_outside))
+                    if strict and _region_rank(translation.name, order) \
+                            >= len(order):
+                        # Neither half of the group is inside the allowlist.
+                        if strict and winner_outside:
+                            plan.region_omitted += 1
+                        continue
                     plan.titles.append(Title(
                         name=translation.name, parent=parent,
                         status=present.get(translation.name, MISSING),
                         chosen_because=(
-                            "English translation used because no dump exists "
-                            "in your preferred regions" if winner_outside
-                            else "English translation preferred over "
-                                 f"{winner.name}"),
+                            f"{_lang_label(translation.name)} translation, "
+                            "kept as a variant"),
                         outside_preference=False, is_translation=True))
                     continue
+                if take_it:
+                    # fill / prefer: the translation replaces the winner.
+                    if strict and _region_rank(translation.name, order) \
+                            >= len(order):
+                        plan.region_omitted += 1
+                        continue
+                    plan.titles.append(Title(
+                        name=translation.name, parent=parent,
+                        status=present.get(translation.name, MISSING),
+                        chosen_because=(
+                            f"{_lang_label(translation.name)} translation "
+                            "used because no dump exists in your preferred "
+                            "regions" if winner_outside
+                            else f"{_lang_label(translation.name)} "
+                                 f"translation preferred over {winner.name}"),
+                        outside_preference=False, is_translation=True))
+                    continue
+
+            if strict and winner_outside:
+                # Strict region mode: the configured regions are an allowlist,
+                # not a preference. Losing the title is the operator's explicit
+                # choice, so it is counted rather than silently kept.
+                plan.region_omitted += 1
+                continue
 
             because, lost = explain(dat, winner, members, policy.regions)
             plan.titles.append(Title(
@@ -323,11 +457,15 @@ def build_plan(dat: Dat, present: dict[str, str], policy: Policy) -> Plan:
                 if not wanted:
                     plan.excluded += 1
                     continue
+                outside = _region_rank(game.name, order) >= len(order)
+                if policy.region_mode == "strict" and outside:
+                    plan.region_omitted += 1
+                    continue
                 plan.titles.append(Title(
                     name=game.name, parent=parent,
                     status=present.get(game.name, MISSING),
                     chosen_because="every dump kept (1G1R off)",
-                    outside_preference=_region_rank(game.name, order) >= len(order),
+                    outside_preference=outside,
                 ))
     return plan
 

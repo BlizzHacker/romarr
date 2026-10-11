@@ -218,6 +218,13 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # exclude | fill | prefer | keep_both. See collections.TRANSLATION_POLICIES.
     # keep_both files the translation in the platform's Translations subfolder.
     "translation_policy": "exclude",
+    # Which fan-translation languages the policy accepts. "en" preserves the
+    # historical English-only behaviour; operators select their own codes
+    # under Settings -> Media Management.
+    "translation_langs": ["en"],
+    # "prefer" keeps a title even when no dump matches the region list (the
+    # historical fallback); "strict" treats the list as an allowlist.
+    "region_mode": "prefer",
     "rename_on_import": True,
     "overwrite_existing": False,
     # Profile: for ROMs the meaningful axis is region and revision, not
