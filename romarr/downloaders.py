@@ -3000,6 +3000,191 @@ def _stream_to(response, target: Path, url: str) -> Path:
     return destination
 
 
+@dataclass
+class HubConfig:
+    """Configuration for the ROM Hub download lane."""
+    save_path: str
+    base_url: str = ""          # carried for the status row like every client
+    #: How many plugin fetches to run per sweep. One, for the same reason the
+    #: site lane runs one: a plugin fetch is a subprocess talking to a network
+    #: the operator allowlisted, not a firehose.
+    max_active: int = 1
+
+
+class HubDownloader:
+    """ROM Hub plugins as a download client.
+
+    The lane that makes an enabled plugin part of acquisition instead of a
+    CLI curiosity: search results from the hub protocol carry a `hub://`
+    URL, `add` records the job in a ledger beside the downloads, and the
+    sweep asks the plugin for its gated FetchPlan and streams the files
+    through the Hub's own downloader. From here on the file is like any
+    other finished download: the import sweep matches it to its queue row
+    by name and runs it through DAT verification and naming.
+
+    The Hub's `import` verb uploads straight to the library server, which
+    is exactly the pipeline this lane must NOT take -- ROMarr owns import.
+    So this fetches only, into staging, and lets the normal path do the rest.
+    """
+
+    #: Jobs are labelled with the release title for the same reason the site
+    #: lane labels them: the import sweep matches a finished download to its
+    #: queue row by that title.
+    TAKES_NAME = True
+
+    LEDGER = ".romarr-hub.json"
+
+    protocol = "hub"
+
+    def __init__(self, config: HubConfig, fetch=None):
+        self._config = config
+        #: Injectable for tests; live use goes through hub.fetch, which owns
+        #: the PluginProcess lifecycle and the sandbox policy.
+        self._fetch = fetch
+        self.detail = ""
+        self.path_mappings: list | tuple = ()
+
+    @property
+    def name(self) -> str:
+        return "ROM Hub"
+
+    @property
+    def configured(self) -> bool:
+        return bool(self._config.save_path)
+
+    def reachable(self) -> bool:
+        from . import hub
+        if not self.configured:
+            self.detail = "no download directory set"
+            return False
+        if not hub.available():
+            self.detail = "ROM Hub is not installed in this container"
+            return False
+        plugins = hub.searchable_plugins()
+        if not plugins:
+            self.detail = ("ROM Hub is installed but no enabled plugin "
+                           "declares search")
+            return False
+        try:
+            Path(self._config.save_path).mkdir(parents=True, exist_ok=True)
+        except OSError as err:
+            self.detail = f"download directory is not writable: {err.strerror}"
+            return False
+        self.detail = f"{len(plugins)} searchable plugin(s): " \
+                      + ", ".join(plugins)
+        return True
+
+    # -- the ledger (same shape as the site lane's) --------------------------
+
+    def _ledger_path(self) -> Path:
+        return Path(self._config.save_path) / self.LEDGER
+
+    def _read(self) -> list[dict]:
+        try:
+            rows = json.loads(self._ledger_path().read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return []
+        return [r for r in rows if isinstance(r, dict)]
+
+    def _write(self, rows: list[dict]) -> None:
+        try:
+            path = self._ledger_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(rows, indent=1), encoding="utf-8")
+        except OSError as err:
+            log.warning("could not record the hub download queue: %s", err)
+
+    def add(self, url: str, *, save_path: str | None = None,
+            name: str = "") -> bool:
+        """Record a hub job. The plugin fetch happens in the next sweep."""
+        if not self.configured:
+            return False
+        if not str(url or "").startswith("hub://"):
+            log.warning("hub downloader was handed a %s link, not a hub:// one",
+                        str(url).split(":", 1)[0] or "blank")
+            return False
+        from . import hub
+        try:
+            hub.decode_result(url)
+        except ValueError as err:
+            log.warning("refusing an undecodable hub release: %s", err)
+            return False
+        rows = self._read()
+        if any(r.get("url") == url and r.get("state") in ("pending", "done")
+               for r in rows):
+            return True
+        rows.append({
+            "url": url,
+            "name": name,
+            "save_path": save_path or self._config.save_path,
+            "state": "pending",
+            "detail": "",
+            "file": "",
+            "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        })
+        self._write(rows)
+        return True
+
+    def completed(self) -> list[dict]:
+        """Fetch what is pending, then report everything already here."""
+        if not self.configured:
+            return []
+        rows = self._read()
+        fetched = 0
+        for row in rows:
+            if row.get("state") != "pending":
+                continue
+            if fetched >= self._config.max_active:
+                break
+            fetched += 1
+            self._run(row)
+        if fetched:
+            self._write(rows)
+        out = []
+        for row in rows:
+            if row.get("state") != "done" or not row.get("file"):
+                continue
+            path = Path(row["file"])
+            if not path.exists():
+                continue
+            out.append({
+                "name": row.get("name") or path.name,
+                "content_path": str(path),
+                "save_path": str(path.parent),
+                "state": "done",
+            })
+        return out
+
+    def _run(self, row: dict) -> None:
+        """Fetch one hub job through its plugin, recording why if it failed."""
+        from . import hub
+        try:
+            result = hub.decode_result(row.get("url", ""))
+        except ValueError as err:
+            row.update(state="failed", detail=str(err))
+            return
+        target = Path(row.get("save_path") or self._config.save_path)
+        try:
+            if self._fetch is not None:
+                outcome = self._fetch(result, target)
+            else:
+                outcome = hub.fetch(result, target)
+        except Exception as err:  # pragma: no cover -- hub.fetch catches
+            outcome = {"ok": False, "error": f"{type(err).__name__}: {err}",
+                       "files": []}
+        if not outcome.get("ok") or not outcome.get("files"):
+            row.update(state="failed",
+                       detail=str(outcome.get("error") or "no files fetched"))
+            return
+        # A multi-file plan (a disc set) is reported by its directory, which
+        # is what the import sweep already understands from qBittorrent; a
+        # single file is reported by the file itself.
+        files = outcome["files"]
+        row.update(state="done", detail="",
+                   file=str(Path(files[0]) if len(files) == 1
+                            else Path(files[0]).parent))
+
+
 def hand_off(client, url: str, *, name: str = "") -> bool:
     """Give a client a release, telling the ones that can use it its title.
 
@@ -3451,6 +3636,17 @@ CLIENT_TYPES = {
                        "asks for longer"),
         ],
     },
+    "hub": {
+        "label": "ROM Hub",
+        "protocol": "hub",
+        "default_port": 0,
+        "fields": [
+            FIELD("name", "Name", default="ROM Hub"),
+            FIELD("enable", "Enable", "bool", True),
+            FIELD("save_path", "Save Path", default="/downloads/hub",
+                  help="Where plugin fetches land; the importer reads here"),
+        ],
+    },
     "browser": {
         "label": "Headless Browser",
         "protocol": "browser",
@@ -3609,6 +3805,9 @@ def build_client(cfg: dict):
         client = NZBGet(NzbgetConfig(
             base_url=url, username=cfg.get("username", ""),
             password=cfg.get("password", ""), category=category))
+    elif kind == "hub":
+        client = HubDownloader(HubConfig(
+            save_path=cfg.get("save_path", "")))
     elif kind in ("direct", "browser"):
         # A blank host means "launch one here", so an unset host must not be
         # assembled into `ws://localhost:3000` -- that would point the driver

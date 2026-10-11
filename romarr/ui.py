@@ -729,6 +729,25 @@ RENDER.hub=async()=>{
       : '<div class="panel-note panel-warn"><b>Plugins run with no '
         +'confinement.</b> '+esc(hs.sandbox_detail||'')+' A plugin you install '
         +'can reach any host and read any file ROMarr can.</div>');
+  // What enabling a searchable plugin actually does now, said out loud:
+  // its results join Interactive Search once the ROM Hub download client
+  // is configured. Before that existed, the honest sentence was "CLI-only".
+  const acq=hs.acquisition||'';
+  const acqNote=hs.available===false ? '' :
+    (acq==='ready'
+      ? '<div class="panel-note" style="border-left:3px solid var(--ok)">'
+        +'<b>Enabled plugins join search.</b> Every enabled plugin that '
+        +'declares <span class="pill">search</span> answers Interactive '
+        +'Search alongside your indexers ('
+        +esc((hs.searchable_plugins||[]).join(', '))+'). Grabbing one stages '
+        +'the fetch through the ROM Hub client, then imports it like any '
+        +'other download &mdash; DAT verification and naming included.</div>'
+      : '<div class="panel-note panel-warn"><b>Plugins are installed but not '
+        +'part of search yet.</b> '+esc(acq)
+        +'. Add a <b>ROM Hub</b> download client (Download Clients page) to '
+        +'stage plugin fetches; until then an enabled plugin is only usable '
+        +'through <code>rom-hub search</code> / <code>rom-hub import</code> '
+        +'inside the container.</div>');
 
   const p=$('#page');
   p.innerHTML='<div class="empty">Reading the plugin catalogue…</div>';
@@ -771,7 +790,7 @@ RENDER.hub=async()=>{
       '<span class="chip'+(cap===name?' on':'')+'" data-cap="'+esc(name)+'">'
       +esc(name)+'<span class="n">'+n+'</span></span>').join('');
 
-    p.innerHTML=sandboxNote+'<div class="card"><h3>Plugins'
+    p.innerHTML=sandboxNote+acqNote+'<div class="card"><h3>Plugins'
       +'<span class="help" style="margin-left:10px">'+items.length+' of '+(d.total||0)+'</span></h3>'
       +'<div class="cat-bar">'
       +'<input id="pq" placeholder="Search plugins by name, author or description…" value="'+esc(q)+'">'

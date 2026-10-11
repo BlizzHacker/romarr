@@ -1368,6 +1368,9 @@ class ROMarr:
             except Exception as err:
                 log.warning("prowlarr search failed for %r: %s", game, err)
                 releases = []
+            # The hub lane joins here too, or this endpoint answers a
+            # different question than the request path it claims to mirror.
+            releases = releases + self._hub_releases(game, None)
         pick = best_release(releases, game, platform,
                            profile=self.profile, blocklist=self.blocklist)
         scored = sorted(
@@ -1404,6 +1407,61 @@ class ROMarr:
                      "indexer": r.indexer, "private": r.private}
                     for s, r in scored[:5]],
         }
+
+    def _hub_enabled(self) -> bool:
+        """Whether the hub acquisition lane is wired up.
+
+        Both halves are required: an enabled plugin that declares `search`
+        (something to ask) and a configured ROM Hub download client
+        (somewhere to stage what comes back). Results that cannot be grabbed
+        are noise on a search page, so the lane stays quiet until both exist.
+        """
+        if not any(getattr(c, "protocol", "") == "hub"
+                   and getattr(c, "configured", False)
+                   for c in self.clients):
+            return False
+        return bool(hub.searchable_plugins())
+
+    def _hub_releases(self, game: str, platform=None) -> list:
+        """ROM Hub plugin results as Releases, for the same pipeline.
+
+        The plugin's result row rides inside a `hub://` download_url -- the
+        queue and the client ledger only ever carry strings, and the row is
+        what the plugin needs to produce a FetchPlan later. The plugin slug
+        is the indexer, so Interactive Search shows where a result came from
+        without a special case.
+        """
+        if not self._hub_enabled():
+            return []
+        from .selection import Release
+        try:
+            rows, err = hub.search(game,
+                                   platform=platform.slug if platform else None)
+        except Exception as exc:
+            log.warning("rom hub search failed for %r: %s", game, exc)
+            return []
+        if err:
+            log.warning("rom hub search unavailable: %s", err)
+            return []
+        out = []
+        for row in rows:
+            if not row.get("title"):
+                continue
+            out.append(Release(
+                title=row["title"],
+                size=int(row.get("size_bytes") or 0),
+                seeders=0,
+                # A plugin result is a game by definition -- it came from a
+                # ROM source. 1000 is the console range the scorer accepts;
+                # inventing a category would make `is_game_release` reject
+                # every row the Hub returned.
+                categories=(1000,),
+                download_url=hub.encode_result(row),
+                protocol="hub",
+                indexer=f"hub:{row.get('plugin') or 'plugin'}",
+                info_url=str(row.get("url") or ""),
+            ))
+        return out
 
     def _search_releases(self, game: str, platform) -> list:
         """Find releases for a game, favouring recall over a tidy query.
@@ -1442,6 +1500,15 @@ class ROMarr:
                         continue
                     seen.add(key)
                     merged.append(release)
+        # Enabled ROM Hub plugins are searched alongside the indexers: the
+        # same titles, scored by the same rules, grabbable from the same
+        # Interactive Search page. One query, not per-term: the Hub's own
+        # fan-out already merges every plugin's answer for it.
+        for release in self._hub_releases(game, platform):
+            key = (release.title, release.download_url)
+            if key not in seen:
+                seen.add(key)
+                merged.append(release)
         return merged
 
     def request(self, game: str, platform_name: str, external_request_id: str = "") -> dict:
@@ -1601,7 +1668,8 @@ class ROMarr:
 
         try:
             releases = (self._search_releases(game, platform) if platform
-                        else self.prowlarr.search(game))
+                        else self.prowlarr.search(game)
+                        + self._hub_releases(game, None))
         except Exception as err:
             log.warning("interactive search failed for %r: %s", game, err)
             return {"error": f"search failed: {type(err).__name__}",
@@ -5074,9 +5142,21 @@ def make_handler(service: ROMarr):
                 # know before installing one, so it travels with the
                 # availability answer instead of hiding in a startup log.
                 confined, why = hub.sandbox_state()
+                searchable = hub.searchable_plugins()
+                lane_ready = service._hub_enabled()
                 return self._json(200, {"available": hub.available(),
                                         "sandboxed": confined,
-                                        "sandbox_detail": why})
+                                        "sandbox_detail": why,
+                                        "searchable_plugins": searchable,
+                                        # The Plugins page says out loud what
+                                        # enabling a plugin now does: its
+                                        # results join Interactive Search,
+                                        # provided the ROM Hub download client
+                                        # is configured to stage the fetches.
+                                        "acquisition": ("ready" if lane_ready
+                                                        else ("no ROM Hub download client configured"
+                                                              if searchable else
+                                                              "no enabled plugin declares search"))})
             if route.path == "/api/search":
                 game = (query.get("game") or [""])[0]
                 if not game:
