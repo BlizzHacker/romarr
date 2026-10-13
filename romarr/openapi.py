@@ -30,6 +30,16 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "/link": ("GET", "Where a peering invitation link lands. A constant page, "
                      "served without a credential: the invitation is in the "
                      "URL fragment, which never reaches the server."),
+    "/oidc/login": ("GET", "Start an OpenID Connect sign-in: 303 to the "
+                           "configured IdP's authorization endpoint with "
+                           "PKCE (S256), state and nonce. Served without a "
+                           "credential — obtaining one is the point."),
+    "/oidc/callback": ("GET", "The IdP's redirect back. Verifies state "
+                              "against the flow cookie, exchanges the code "
+                              "with the PKCE verifier, validates the id_token "
+                              "(iss/aud/exp/nonce and, where possible, its "
+                              "signature) and issues a session. Refuses "
+                              "without a live flow cookie."),
     "/api/v1/login": ("POST", "Exchange an API key or password for a session "
                               "cookie. Requires the TOTP code when two-factor "
                               "is enrolled."),

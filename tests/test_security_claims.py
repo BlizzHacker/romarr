@@ -34,11 +34,14 @@ def test_the_documented_open_paths_are_the_actual_open_paths(doc, tmp_path):
     handler = make_handler(ROMarr({"ROMARR_DATA": str(tmp_path / "s.json")}))
     actual = set(handler.OPEN_PATHS)
     # `/link` was added with invitation links: the person opening one is
-    # somebody else's operator with no account here. It is on this list
-    # because it is a CONSTANT -- see the guarantee asserted just below.
+    # somebody else's operator with no account here. The two `/oidc` routes
+    # are the sign-in round trip: `/oidc/login` starts it (no session yet),
+    # `/oidc/callback` is the IdP's cross-site redirect back. All three are on
+    # this list because they are CONSTANTS -- see the guarantee asserted below.
     assert actual == {"/", "/login", "/link", "/api/health", "/api/v1/login",
                       "/api/v1/setup",
                       "/api/v1/connect/steam/return",
+                      "/oidc/login", "/oidc/callback",
                       "/api/v1/peer/accept", "/api/v1/peer/shelf",
                       "/api/v1/peer/netplay"}, (
         "the set of unauthenticated routes changed; SECURITY.md lists them")

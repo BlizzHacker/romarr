@@ -120,16 +120,24 @@ class Auth:
 
     # -- sessions -----------------------------------------------------------
 
-    def issue_session(self) -> str:
+    def issue_session(self, subject: str = "") -> str:
         """A signed `<expiry>.<signature>` token.
 
         Signed with the API key, so a session cannot be carried to another
         install and a rotated key invalidates every outstanding session --
         which is what rotating a key is for.
+
+        `subject` names who the session belongs to when something other than
+        "whoever holds the key/password" established it -- an OIDC login
+        records the IdP's account here. Absent keeps the old two-part shape
+        byte-for-byte, so sessions issued by earlier builds still validate.
         """
         expires = int(time.time()) + self.session_seconds
+        claims = {"exp": expires}
+        if subject:
+            claims["sub"] = subject
         body = base64.urlsafe_b64encode(
-            json.dumps({"exp": expires}).encode()).decode().rstrip("=")
+            json.dumps(claims).encode()).decode().rstrip("=")
         return f"{body}.{self._sign(body)}"
 
     def check_session(self, token: str | None) -> bool:

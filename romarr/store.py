@@ -193,6 +193,29 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # an invitation carries it, and without one the friend who redeems the
     # invitation has nowhere to call back to.
     "public_url": "",
+    # --- OpenID Connect sign-in (Authentik or any OIDC IdP) ---
+    # Off until an issuer + client id exist. Distinct from forward-auth SSO
+    # (sso.py), which believes a reverse proxy's headers; this makes ROMarr
+    # the relying party in a real authorization-code + PKCE flow with a
+    # "Sign in" button on the login page.
+    "oidc_enabled": False,
+    "oidc_issuer": "",              # e.g. https://authentik.moveweight.com/application/o/romarr/
+    "oidc_client_id": "",
+    "oidc_scopes": "openid profile email",
+    "oidc_display_name": "SSO",     # the button label
+    "oidc_required_group": "",      # empty = any authenticated user
+    "oidc_allowed_emails": [],      # empty = no email allowlist
+    # Optional manual endpoints; blank = use the issuer's discovery document.
+    "oidc_authorize_url": "",
+    "oidc_token_url": "",
+    "oidc_jwks_uri": "",
+    "oidc_userinfo_url": "",
+    # Signature verification. On by default; only turn off for a local http
+    # IdP you cannot give ROMarr a JWKS for, and know what that means.
+    "oidc_verify_signature": True,
+    # Confidential-client secret, if the IdP issued one. Underscore prefix
+    # marks it a credential so it is masked out of any settings response.
+    "_oidc_client_secret": "",
     # Read ROM hashes from the library server so netplay can match on bytes.
     # Daily and at startup; off only if you never want the traffic.
     "hash_index": True,

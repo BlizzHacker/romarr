@@ -515,6 +515,11 @@ class ROMarr:
                     "ROMARR_AUTH=forward with no ROMARR_TRUSTED_PROXIES: every "
                     "request will be refused. Set it to the proxy's address, "
                     "e.g. 192.168.0.0/24")
+        # OIDC sign-in (Authentik or any IdP). Independent of forward mode:
+        # this is ROMarr being the relying party itself, so it works on a
+        # directly-reachable install with no proxy in front.
+        self.oidc = None
+        self.reload_oidc()
 
         self._seed_from_env(e)
         self.reload_clients()
@@ -1173,7 +1178,8 @@ class ROMarr:
         # here by name for the same reason as the two above: the underscore
         # is a naming convention, not a boundary, and `_romm_url` proves the
         # convention is not a reliable one to filter on.
-        for secret in ("_api_key", "_password_hash", "_peers"):
+        for secret in ("_api_key", "_password_hash", "_peers",
+                       "_oidc_client_secret"):
             out.pop(secret, None)
         return out
 
@@ -4093,6 +4099,60 @@ class ROMarr:
     #: Where release news comes from. Only ever read, never written to.
     RELEASES_URL = "https://api.github.com/repos/BlizzHacker/romarr/releases/latest"
 
+    def reload_oidc(self) -> None:
+        """(Re)build the OIDC client from stored settings + environment.
+
+        Called at startup and after any settings save that touches an oidc_*
+        key, so the login button appears the moment the configuration is
+        complete -- no restart, same contract as every other live setting.
+        """
+        from .oidc import client_from_settings
+        self.oidc = client_from_settings(self.store.settings, self._env)
+        if self.oidc is not None:
+            problems = self.oidc.problems()
+            if problems:
+                log.warning("OIDC is configured but incomplete: %s",
+                            "; ".join(problems))
+                self.oidc = None
+            else:
+                log.info("OIDC sign-in enabled via %s", self.oidc.issuer)
+
+    def oidc_status(self) -> dict:
+        """What the login page and Settings need to know about OIDC. No
+        secrets: the button label and whether a client secret is set, never
+        the secret."""
+        if self.oidc is None:
+            return {"enabled": False}
+        return {
+            "enabled": True,
+            "display_name": self.oidc.display_name,
+            "issuer": self.oidc.issuer,
+            "client_id": self.oidc.client_id,
+            "has_secret": bool(self.oidc.client_secret),
+            "required_group": self.oidc.required_group,
+            "verify_signature": self.oidc.verify_signature,
+        }
+
+    def oidc_redirect_uri(self, request_host: str,
+                          forwarded_proto: str = "") -> str:
+        """The callback URL registered with the IdP.
+
+        public_url wins when set -- that is the address the IdP was told
+        about, and a request Host behind a proxy may be the internal one. The
+        Host header is the fallback for an install that never set public_url
+        and is reached directly; there, X-Forwarded-Proto from a proxy (or
+        https as the safe default -- a wrong guess is visible as a
+        redirect_uri mismatch at the IdP, not a silent failure) picks the
+        scheme.
+        """
+        base = str(self.store.settings.get("public_url") or "").rstrip("/")
+        if not base and request_host:
+            scheme = str(forwarded_proto or "").strip().lower() or "https"
+            if scheme not in ("http", "https"):
+                scheme = "https"
+            base = f"{scheme}://{request_host}"
+        return f"{base}/oidc/callback" if base else "/oidc/callback"
+
     def check_update(self) -> dict:
         """Ask github.com whether a newer ROMarr exists, and -- only when the
         operator turned auto_update on -- apply it through apply_update()."""
@@ -4723,6 +4783,14 @@ def make_handler(service: ROMarr):
         #: the URL fragment, which never reaches this server at all.
         OPEN_PATHS = ("/", "/login", "/link", "/api/health", "/api/v1/login",
                       "/api/v1/setup", "/api/v1/connect/steam/return",
+                      # The OIDC round trip: /oidc/login starts it (no session
+                      # yet — that is the point), and /oidc/callback arrives as
+                      # a cross-site redirect from the IdP, which the
+                      # SameSite=Strict session cookie deliberately does not
+                      # ride. Its own credentials are the state/nonce/PKCE
+                      # cookies (SameSite=Lax, short-lived) and the code the
+                      # IdP issued; see oidc.py.
+                      "/oidc/login", "/oidc/callback",
                       # Peer-facing: authenticated by peer id + token in
                       # headers, which is a DIFFERENT credential from the
                       # operator's session. Open to the session gate and
@@ -4749,6 +4817,94 @@ def make_handler(service: ROMarr):
             self.send_header("Content-Length", str(len(raw)))
             self.end_headers()
             return self.wfile.write(raw)
+
+        def _oidc_error(self, message: str, code: int = 400):
+            """A login failure the person can read, with a way back.
+
+            Not JSON: this arrives in a browser mid-redirect, and a bare 400
+            body is a dead end. The reason is escaped — it can carry values
+            echoed by the IdP.
+            """
+            from html import escape
+            body = ("<!doctype html><meta charset='utf-8'><title>Sign-in "
+                    "failed</title><body style='font:15px/1.5 system-ui;"
+                    "max-width:34em;margin:4em auto;padding:0 1em'>"
+                    "<h2>Sign-in did not complete</h2>"
+                    f"<p>{escape(str(message))}</p>"
+                    "<p><a href='/login'>Back to the sign-in page</a></p>")
+            return self._send(code, body.encode("utf-8"),
+                              "text/html; charset=utf-8")
+
+        def _oidc_callback(self, query: dict):
+            """Finish the OIDC round trip: verify, then issue a session.
+
+            Every value the IdP returned is untrusted until checked. The
+            state must match the cookie this browser got at /oidc/login, the
+            PKCE verifier proves the code was issued to THIS client, and the
+            nonce inside the id_token binds it to this login. oidc.authenticate
+            raises OidcError — with a reason fit for the person waiting — on
+            any failure; nothing here trusts anything it did not check.
+            """
+            from .oidc import (COOKIE_NONCE, COOKIE_STATE, COOKIE_VERIFIER,
+                               OidcError)
+            if service.oidc is None:
+                return self._oidc_error("OIDC sign-in is not configured")
+            # The IdP sends ?error=... when the person cancelled or it refused.
+            error = (query.get("error") or [""])[0]
+            if error:
+                detail = (query.get("error_description") or [""])[0]
+                return self._oidc_error(
+                    f"The sign-in provider refused the request "
+                    f"({error})" + (f": {detail}" if detail else ""))
+            cookies = parse_cookies(self.headers.get("Cookie", ""))
+            verifier = cookies.get(COOKIE_VERIFIER, "")
+            expected_state = cookies.get(COOKIE_STATE, "")
+            nonce = cookies.get(COOKIE_NONCE, "")
+            if not verifier or not expected_state:
+                return self._oidc_error(
+                    "The sign-in session expired or the cookies were lost. "
+                    "Start the sign-in again — a bookmarked callback URL will "
+                    "not work.")
+            code = (query.get("code") or [""])[0]
+            state = (query.get("state") or [""])[0]
+            if not code:
+                return self._oidc_error("The provider returned no code")
+            host = self.headers.get("X-Forwarded-Host") \
+                or self.headers.get("Host") or ""
+            proto = self.headers.get("X-Forwarded-Proto") or ""
+            redirect_uri = service.oidc_redirect_uri(host, proto)
+            try:
+                identity = service.oidc.authenticate(
+                    code, redirect_uri, verifier, state, expected_state, nonce)
+            except OidcError as exc:
+                log.warning("oidc login refused: %s", exc)
+                return self._oidc_error(str(exc), code=403)
+            except Exception as exc:              # noqa: BLE001
+                log.warning("oidc login failed: %s: %s",
+                            exc.__class__.__name__, exc)
+                return self._oidc_error(
+                    f"The sign-in could not be completed "
+                    f"({exc.__class__.__name__})")
+            # In. The session is the same signed cookie a password login gets;
+            # who the person is rides inside it, so every later request knows
+            # the account without asking the IdP again.
+            token = service.auth.issue_session(subject=identity.user)
+            self.send_response(303)
+            self.send_header("Location", "/")
+            self.send_header(
+                "Set-Cookie",
+                f"{SESSION_COOKIE}={token}; HttpOnly; SameSite=Strict; "
+                f"Path=/; Max-Age={service.auth.session_seconds}")
+            # Clear the flow cookies: they are single-use and a stale verifier
+            # left in the jar would only ever confuse the next login.
+            for name in (COOKIE_VERIFIER, COOKIE_STATE, COOKIE_NONCE):
+                self.send_header("Set-Cookie",
+                                 f"{name}=; HttpOnly; SameSite=Lax; Path=/; "
+                                 "Max-Age=0")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            log.info("oidc sign-in: %s", identity.user)
+            return None
 
         def _drain(self) -> None:
             """Read the request body before refusing it.
@@ -4882,7 +5038,8 @@ def make_handler(service: ROMarr):
                     return self._send(
                         200,
                         ui_login_page(claimed=service.claimed,
-                                      totp=service.auth.totp.enabled)
+                                      totp=service.auth.totp.enabled,
+                                      oidc=service.oidc_status())
                         .encode("utf-8"),
                         "text/html; charset=utf-8")
                 if route.path == "/login":
@@ -5259,6 +5416,43 @@ def make_handler(service: ROMarr):
                 from .connect import PASTE_SOURCES, TOKEN_SOURCES
                 return self._json(200, {"token_sources": TOKEN_SOURCES,
                                         "paste_sources": PASTE_SOURCES})
+            if route.path == "/oidc/login":
+                # Step one: bounce the browser to the IdP. The three flow
+                # values (PKCE verifier, state, nonce) go into short-lived
+                # http-only cookies rather than server state, because the
+                # callback arrives as a cross-site redirect that the
+                # SameSite=Strict session cookie does not ride -- these are
+                # Lax so they do. Generated here, never read from the caller.
+                if service.oidc is None:
+                    return self._oidc_error("OIDC sign-in is not configured")
+                from .oidc import (COOKIE_NONCE, COOKIE_STATE, COOKIE_TTL,
+                                   COOKIE_VERIFIER, generate_pkce, new_random)
+                host = self.headers.get("X-Forwarded-Host") \
+                    or self.headers.get("Host") or ""
+                proto = self.headers.get("X-Forwarded-Proto") or ""
+                redirect_uri = service.oidc_redirect_uri(host, proto)
+                verifier, challenge = generate_pkce()
+                state, nonce = new_random(), new_random()
+                try:
+                    location = service.oidc.login_url(
+                        redirect_uri, state, nonce, challenge)
+                except Exception as exc:          # noqa: BLE001
+                    return self._oidc_error(str(exc))
+                self.send_response(303)
+                self.send_header("Location", location)
+                for name, value in ((COOKIE_VERIFIER, verifier),
+                                    (COOKIE_STATE, state),
+                                    (COOKIE_NONCE, nonce)):
+                    self.send_header(
+                        "Set-Cookie",
+                        f"{name}={value}; HttpOnly; SameSite=Lax; Path=/; "
+                        f"Max-Age={COOKIE_TTL}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return None
+            if route.path == "/oidc/callback":
+                # Step two: the IdP sent the browser back with a code.
+                return self._oidc_callback(query)
             if route.path == "/api/v1/connect/steam":
                 # Step one: bounce the browser to Steam. The return URL is
                 # built from the request's own host so it works on a LAN
@@ -6150,7 +6344,19 @@ def make_handler(service: ROMarr):
                 return self._json(400, {"error": "invalid json"})
 
             if route.path == "/api/v1/config":
+                # A blank or masked secret means "unchanged", not "delete it":
+                # the settings form never sees the real value (safe_settings
+                # removes it), so echoing an empty field back must not wipe a
+                # stored secret.
+                secret = body.get("_oidc_client_secret")
+                if "_oidc_client_secret" in body and secret in ("", "********"):
+                    body.pop("_oidc_client_secret")
                 updated = service.store.update_settings(body)
+                if any(str(k).startswith("oidc") or k == "_oidc_client_secret"
+                       for k in body):
+                    # An SSO change takes effect at the next login attempt,
+                    # not the next restart.
+                    service.reload_oidc()
                 if "dat_path" in body:
                     # A stored path nothing re-reads is a setting that lies;
                     # reload_dats both stores and applies it.

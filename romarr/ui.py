@@ -2703,8 +2703,9 @@ RENDER.indexers=async()=>{
 };
 
 RENDER.general=()=>settingsPage('General',
-  'Connections to the rest of the stack. Credentials live in the environment '
-  +'file, not here — this page never shows or stores a secret.',
+  'Connections to the rest of the stack. Download-client and indexer credentials '
+  +'live in the environment file; the OIDC client secret below is the one '
+  +'secret this page stores, write-only — it is never read back.',
   `<div class="field"><label>Prowlarr</label>
      <input type="text" value="${esc(SETTINGS._prowlarr_url||'')}" disabled></div>
    <div class="field"><label>qBittorrent</label>
@@ -2758,7 +2759,45 @@ RENDER.general=()=>settingsPage('General',
       <button class="btn ghost" id="g-totpoff" type="button">Disable</button>
       <span class="help" style="margin:0">Gates sign-in; the API key is
         already a high-entropy secret and is not gated.</span></div>
-    <pre id="g-totpout" style="display:none;font:12px/1.6 ui-monospace,Menlo,monospace;color:var(--dim);white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:10px"></pre>`,
+    <pre id="g-totpout" style="display:none;font:12px/1.6 ui-monospace,Menlo,monospace;color:var(--dim);white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);border-radius:6px;padding:10px"></pre>
+    <h3 style="margin-top:18px">Sign in with an identity provider (OIDC)</h3>
+    <p class="help">Let people sign in through Authentik, Keycloak, Zitadel,
+      Google or any OpenID Connect provider. ROMarr acts as the relying party:
+      a "Sign in" button on the login page runs the authorization-code + PKCE
+      flow, verifies the returned id_token, and starts a ROMarr session. Leave
+      the issuer blank to keep it off. Set your public URL above first — the
+      callback is <code>&lt;public-url&gt;/oidc/callback</code>, which is the
+      redirect URI to register with your provider.</p>`
+  +chk('oidc_enabled','Enable OIDC sign-in',SETTINGS.oidc_enabled)
+  +fld('oidc_display_name','Button label',SETTINGS.oidc_display_name||'SSO',
+       'text','placeholder="Authentik"')
+  +`<div class="field"><label>Issuer URL</label>
+     <input type="text" data-k="oidc_issuer" value="${esc(SETTINGS.oidc_issuer||'')}"
+       placeholder="https://authentik.example.com/application/o/romarr/">
+     <div style="color:var(--dim);font-size:11.5px;margin-top:4px">
+       Authentik: the provider's "OpenID Configuration" issuer, shown on the
+       provider page. ROMarr reads <code>/.well-known/openid-configuration</code>
+       from it to find the endpoints.</div></div>`
+  +fld('oidc_client_id','Client ID',SETTINGS.oidc_client_id)
+  +`<div class="field"><label>Client secret (confidential clients only)</label>
+     <input type="password" data-k="_oidc_client_secret" autocomplete="new-password"
+       placeholder="${SETTINGS.oidc_client_id?'stored — leave blank to keep':''}">
+     <div style="color:var(--dim);font-size:11.5px;margin-top:4px">
+       A public/PKCE client (Authentik's usual choice for this) needs no secret.
+       Stored write-only; never shown again.</div></div>`
+  +fld('oidc_scopes','Scopes',SETTINGS.oidc_scopes||'openid profile email',
+       'text','placeholder="openid profile email"')
+  +fld('oidc_required_group','Required group (optional)',
+       SETTINGS.oidc_required_group||'',
+       'text','placeholder="romarr-users"')
+  +`<div class="field"><label>Allowed emails (optional)</label>
+     <input type="text" data-k="oidc_allowed_emails" data-list="1"
+       value="${esc((SETTINGS.oidc_allowed_emails||[]).join(', '))}"
+       placeholder="alice@example.com, bob@example.com">
+     <div style="color:var(--dim);font-size:11.5px;margin-top:4px">
+       Blank = any user your provider authenticates (and in the required group,
+       if set). The provider must send a <code>groups</code> claim for a group
+       restriction to work — Authentik needs it in the scope mapping.</div></div>`,
   ()=>{
     $('#g-key').onclick=async()=>{
       const d=await j('/api/v1/system/apikey').catch(()=>({}));
@@ -4100,16 +4139,39 @@ body{display:flex;align-items:center;justify-content:center;min-height:100vh;
 .err.on{display:block}
 .alt{margin-top:16px;text-align:center;font-size:12px;color:var(--dim)}
 .alt a{cursor:pointer}
+.sso{display:block;width:100%;padding:11px;margin-top:4px;text-align:center;
+  background:var(--accent);color:var(--accent-ink);border-radius:var(--r-sm);
+  font-size:14px;font-weight:600;text-decoration:none;
+  transition:filter var(--t),box-shadow var(--t)}
+.sso:hover{filter:brightness(1.07);box-shadow:var(--shadow-1)}
+.sso-or{display:flex;align-items:center;gap:10px;margin:18px 0 2px;
+  color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.08em}
+.sso-or::before,.sso-or::after{content:"";flex:1;height:1px;
+  background:var(--line)}
 @media(max-width:420px){.box{padding:24px 20px}}
 """
 
 
-def login_page(*, claimed: bool, totp: bool = False) -> str:
+def login_page(*, claimed: bool, totp: bool = False,
+               oidc: dict | None = None) -> str:
     """The sign-in screen, or the first-run claim screen.
 
     Server-rendered and served unauthenticated, because the whole failure was
     a browser with no way to obtain a credential.
+
+    `oidc` is service.oidc_status(): when enabled, an SSO button leads the
+    round trip. Shown on the claim screen too — a configured IdP is a way in
+    before anybody has set a password, and refusing it there would lock an
+    SSO-only install out of its own setup.
     """
+    oidc = oidc or {}
+    sso_button = ""
+    if oidc.get("enabled"):
+        label = str(oidc.get("display_name") or "SSO")
+        sso_button = (
+            f'<a class="sso" href="/oidc/login">Sign in with '
+            f'{label.replace("<", "").replace(">", "")}</a>'
+            '<div class="sso-or"><span>or</span></div>')
     if claimed:
         title, action = "Sign in", "Sign in"
         fields = """
@@ -4149,6 +4211,7 @@ def login_page(*, claimed: bool, totp: bool = False) -> str:
 <form class="box" id="f" autocomplete="on">
   <h1>ROM<span>arr</span></h1>
   <div class="sub">{title}</div>
+  {sso_button}
   {fields}
   <button type="submit" id="go">{action}</button>
   <div class="err" id="err"></div>

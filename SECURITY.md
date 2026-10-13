@@ -88,7 +88,7 @@ install; the only way off is explicit.
   launched. A file that is merely *unparseable* still falls back to defaults,
   because nothing in it can be handed back.
 
-Exactly ten routes answer without a credential, and no others (this count is
+Exactly twelve routes answer without a credential, and no others (this count is
 asserted against the code, not maintained by hand):
 
 | Route | Why |
@@ -100,6 +100,8 @@ asserted against the code, not maintained by hand):
 | `/api/v1/setup` | First-run claim. Open only while unclaimed; `409` after. |
 | `/api/health` | Container health checks have no credential to offer. |
 | `/api/v1/connect/steam/return` | Steam's OpenID redirect. It *cannot* carry the session cookie — see below. |
+| `/oidc/login` | Starts the OIDC round trip. There is no session yet — getting one is the point. Its only output is a redirect to the IdP plus three short-lived http-only cookies. |
+| `/oidc/callback` | The IdP's redirect back. Cross-site by nature, so the `SameSite=Strict` session cookie does not ride it; it authenticates with the state/nonce/PKCE cookies instead — see below. |
 | `/api/v1/peer/accept` | A peer redeeming an invitation you minted. Carries the one-time secret or the claim code. |
 | `/api/v1/peer/shelf` | A peer reading what you share. Requires peer id + token. |
 | `/api/v1/peer/netplay` | A peer proposing a session. Requires peer id + token. |
@@ -200,6 +202,38 @@ and the whole assertion is posted back to Steam with `check_authentication` and
 must come back `is_valid:true`. The parameters arrive through the user's
 browser and are treated as attacker-controlled until Steam itself confirms
 them.
+
+**The OIDC callback is open for the same reason, and defends itself the same
+way — but it cannot borrow Steam's server-side `state`.** `/oidc/login` starts
+from a browser with *no* session (getting one is the point), so there is no
+authenticated request to hang a one-time token off. The three values the flow
+needs instead ride **short-lived, http-only, `SameSite=Lax` cookies** set on
+the redirect out and read back on the redirect in:
+
+- **PKCE verifier** — proves the `code` was issued to *this* client. The S256
+  challenge went out in the authorize URL; the verifier never leaves ROMarr and
+  the browser. A code intercepted in transit is worthless without it.
+- **state** — must equal the query `state` the IdP echoed back, or the callback
+  is refused as a possible CSRF before any token exchange happens.
+- **nonce** — must equal the `nonce` claim *inside* the id_token, binding that
+  token to this login so a captured token cannot be replayed into a later flow.
+
+`Lax` (not `Strict`) is deliberate and safe here: the IdP's redirect is a
+top-level navigation, which `Lax` cookies ride, and `Lax` still blocks the
+cookies on cross-site *subresource* and *POST* requests. The session cookie
+stays `Strict`; only these three transient, single-use, non-credential values
+are `Lax`, and the callback clears all three on success.
+
+Then the id_token itself is validated claim by claim — `iss` equals the
+configured issuer, `aud` contains our client_id, `exp`/`iat` are sane, `azp`
+(if present) is us — and its **signature is verified against the IdP's JWKS**
+when `cryptography` is installed. Without it, ROMarr falls back to the channel
+trust OIDC Core §3.1.3.7 allows (the token came straight from the token
+endpoint over TLS) — **https issuers only**; an http issuer with no verifier is
+refused, because there is no trusted channel to lean on. A required group or an
+email allowlist is enforced last, and a *missing* `groups` claim fails a group
+restriction rather than satisfying it. The client secret is stored write-only
+and never returned by any settings response.
 
 ### `ROMARR_AUTH=disabled`
 
