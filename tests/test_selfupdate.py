@@ -267,6 +267,9 @@ def test_check_update_applies_when_auto_update_is_on(tmp_path, monkeypatch):
                         {"ok": True, "message": "updating to v99.0.0"})
 
     class FakeResponse:
+        status_code = 200
+        headers = {}
+
         def raise_for_status(self):
             pass
 
@@ -287,6 +290,9 @@ def test_check_update_does_not_apply_when_auto_update_is_off(tmp_path, monkeypat
     monkeypatch.setattr(svc, "apply_update", lambda: applied.append(1))
 
     class FakeResponse:
+        status_code = 200
+        headers = {}
+
         def raise_for_status(self):
             pass
 

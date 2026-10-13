@@ -151,6 +151,9 @@ def test_update_check_notices_a_newer_release(tmp_path, monkeypatch):
     monkeypatch.setattr(s, "notify", lambda m: told.append(m) or [])
 
     class FakeResponse:
+        status_code = 200
+        headers = {}
+
         def raise_for_status(self):
             pass
 
@@ -198,3 +201,54 @@ def test_grab_notifies_with_the_scorers_reasons(tmp_path, monkeypatch):
     assert len(told) == 1
     assert told[0].event == "grab"
     assert told[0].reasons, "the grab message carries the scorer's reasoning"
+
+
+def test_update_check_explains_a_rate_limit_instead_of_blaming_the_network(tmp_path, monkeypatch):
+    """A homelab NAT shares one GitHub IP across every container; 60
+    unauthenticated calls/hour is exhausted casually, and 'could not reach
+    github.com' sent operators debugging a network that worked."""
+    s = svc(tmp_path)
+
+    class Limited:
+        status_code = 403
+        headers = {"X-RateLimit-Reset": "1791912049"}
+
+        def raise_for_status(self):
+            raise AssertionError("must not be reached on a 403")
+
+        def json(self):
+            return {}
+
+    import requests as _requests
+    monkeypatch.setattr(_requests, "get", lambda *a, **kw: Limited())
+    out = s.check_update()
+    assert out["ok"] is False
+    assert "rate-limited" in out["message"]
+    assert "GITHUB_TOKEN" in out["message"]
+
+
+def test_update_check_sends_a_token_when_one_is_configured(tmp_path, monkeypatch):
+    s = svc(tmp_path)
+    seen = {}
+
+    class Ok:
+        status_code = 200
+        headers = {}
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"tag_name": "v99.0.0", "html_url": "https://x"}
+
+    def fake_get(url, **kw):
+        seen.update(kw.get("headers") or {})
+        return Ok()
+
+    import requests as _requests
+    monkeypatch.setattr(_requests, "get", fake_get)
+    monkeypatch.setenv("GITHUB_TOKEN", "ghp_test123")
+    monkeypatch.setattr(s, "notify", lambda m: [])
+    out = s.check_update()
+    assert out["ok"] is True
+    assert seen.get("Authorization") == "Bearer ghp_test123"

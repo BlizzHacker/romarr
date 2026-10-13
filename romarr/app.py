@@ -4094,14 +4094,32 @@ class ROMarr:
     RELEASES_URL = "https://api.github.com/repos/BlizzHacker/romarr/releases/latest"
 
     def check_update(self) -> dict:
-        """Ask github.com whether a newer ROMarr exists. Telling somebody is
-        the entire feature -- nothing is downloaded or applied, because an
-        *arr that updates itself is an *arr that restarts mid-import."""
+        """Ask github.com whether a newer ROMarr exists, and -- only when the
+        operator turned auto_update on -- apply it through apply_update()."""
         import requests as _requests
+        headers = {"Accept": "application/vnd.github+json"}
+        # Unauthenticated GitHub API calls are rate limited to 60/hour per
+        # IP, and a homelab NAT shares one IP across every container that
+        # ever touched the API. A token lifts that to 5,000/hour; without
+        # one a 403 is almost always the limit, and saying "could not
+        # reach github.com" sent operators hunting for a network fault
+        # that did not exist.
+        token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
         try:
-            response = _requests.get(
-                self.RELEASES_URL, timeout=10,
-                headers={"Accept": "application/vnd.github+json"})
+            response = _requests.get(self.RELEASES_URL, timeout=10,
+                                     headers=headers)
+            if response.status_code in (403, 429) and not token:
+                reset = response.headers.get("X-RateLimit-Reset") or ""
+                return {"ok": False,
+                        "message": "github.com rate-limited this address "
+                                   "(unauthenticated API: 60 requests/hour "
+                                   "per IP, shared across your network). "
+                                   "Set GITHUB_TOKEN in the environment to "
+                                   "lift it to 5,000/hour"
+                                   + (f"; limit resets at {reset}" if reset
+                                      else "")}
             response.raise_for_status()
             body = response.json()
         except Exception as err:
