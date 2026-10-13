@@ -2519,9 +2519,9 @@ RENDER.media=()=>settingsPage('Media Management',
       ['prefer','Prefer — take a translation over the region winner when one exists'],
       ['keep_both','Keep both — original plus the translation in a Translations subfolder']],
      SETTINGS.translation_policy||'exclude',
-     'What Collections does with a fan translation in a language you selected '\
-     +'below. The Digimon-only-in-Japan case: "Fill" downloads the translation '\
-     +'instead of leaving the game Japanese-only; "Keep both" files it under '\
+     'What Collections does with a fan translation in a language you selected '
+     +'below. The Digimon-only-in-Japan case: "Fill" downloads the translation '
+     +'instead of leaving the game Japanese-only; "Keep both" files it under '
      +'Translations/ so your library shows it as a variant.')
   +`<div class="field"><label>Fan-translation languages</label>
      <input type="text" data-k="translation_langs" data-list="1"
@@ -2534,9 +2534,9 @@ RENDER.media=()=>settingsPage('Media Management',
      [['prefer','Prefer selected regions — keep a title even when no dump matches'],
       ['strict','Only selected regions — omit a title when no dump matches']],
      SETTINGS.region_mode||'prefer',
-     '"Prefer" is the historical fallback: a game with only Japan dumps stays '\
-     +'in the set rather than being lost. "Strict" treats the region list as '\
-     +'an allowlist — the plan counts every title omitted for having no dump '\
+     '"Prefer" is the historical fallback: a game with only Japan dumps stays '
+     +'in the set rather than being lost. "Strict" treats the region list as '
+     +'an allowlist — the plan counts every title omitted for having no dump '
      +'in your regions.'));
 
 RENDER.profiles=()=>settingsPage('Release Profile',
@@ -3539,8 +3539,8 @@ RENDER.collections=async()=>{
        +'<input id="cregions" placeholder="usa,world,europe,japan" '
        +'style="flex:1;min-width:180px;padding:7px 10px;background:var(--bg);'
        +'color:var(--fg);border:1px solid var(--line);border-radius:6px">'
-       +'<label class="help" style="margin:0" title="Treat the region list as an allowlist: omit a title when no dump matches one of your regions">'\
-       +'<input type="checkbox" id="cstrict"'+((SETTINGS.region_mode||'prefer')==='strict'?' checked':'')+'> '\
+       +'<label class="help" style="margin:0" title="Treat the region list as an allowlist: omit a title when no dump matches one of your regions">'
+       +'<input type="checkbox" id="cstrict"'+((SETTINGS.region_mode||'prefer')==='strict'?' checked':'')+'> '
        +'Only selected regions</label>'
        +'<button class="btn" id="cplan">Preview plan</button></div>'
        +'<div class="row" style="flex-wrap:wrap;gap:14px;margin-top:10px">'
