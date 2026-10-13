@@ -40,6 +40,7 @@ import logging
 import os
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -86,7 +87,13 @@ def detect(root: Path | None = None) -> Environment:
     still a container (the image owns the code on a real deployment); the
     container markers are checked first so the answer matches how the operator
     actually updates it."""
-    python = shutil.which("python3") or os.sys.executable or "python3"
+    # sys.executable FIRST: it is the interpreter actually running ROMarr,
+    # which on the common LXC/venv install is /opt/romarr/.venv/bin/python.
+    # shutil.which("python3") would find the SYSTEM python3, and pip-installing
+    # into that hits PEP 668 ("externally-managed-environment") and fails --
+    # so a real update adding a dependency would restart into broken code.
+    # Proved on a live install: the log showed the venv was bypassed.
+    python = sys.executable or shutil.which("python3") or "python3"
     if _container_marker():
         return Environment(kind="docker", python=python,
                            detail="running inside a container; the image owns "
@@ -163,12 +170,22 @@ echo "=== $(date -u '+%Y-%m-%dT%H:%M:%SZ') self-update start: target {target} ==
 sleep 3
 cd {env.repo!r}
 git fetch --tags origin
+PRE=$(git rev-parse HEAD)
 echo "pre-update commit: $(git rev-parse --short HEAD)"
 git checkout {env.branch or 'main'} 2>/dev/null || git checkout main
 git merge --ff-only {target}
 echo "post-update commit: $(git rev-parse --short HEAD)"
+# Dependencies must install into the SAME interpreter that runs ROMarr
+# ({env.python!r} -- sys.executable, i.e. the venv on a normal install).
+# If they cannot, a restart would come up on new code with missing imports,
+# which is worse than staying on the old version: roll the checkout back and
+# stop here, leaving the running service untouched.
 if [ -f requirements.txt ]; then
-  {env.python!r} -m pip install -q -r requirements.txt || echo "WARN: pip install failed"
+  if ! {env.python!r} -m pip install -q -r requirements.txt; then
+    echo "ERROR: dependency install failed; rolling back to $PRE, NOT restarting"
+    git reset --hard "$PRE"
+    exit 1
+  fi
 fi
 echo "restarting {env.service}..."
 if command -v systemctl >/dev/null 2>&1; then

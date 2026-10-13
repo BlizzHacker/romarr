@@ -113,6 +113,29 @@ def test_the_script_is_fail_stop_and_ff_only():
     assert "systemctl restart romarr" in script
     assert "requirements.txt" in script       # deps move with the code
     assert "pre-update commit" in script      # the rollback handle
+    # Deps install into the interpreter that RUNS romarr (the venv), and a
+    # failed install rolls the checkout back and stops before restarting --
+    # coming up on new code with missing imports is worse than staying put.
+    assert "/opt/romarr/.venv/bin/python" in script and "-m pip install" in script
+    assert "git reset --hard" in script
+    assert "NOT restarting" in script
+
+
+def test_detect_prefers_the_running_interpreter_not_system_python(monkeypatch):
+    """A venv install's sys.executable is the venv python; shutil.which
+    ('python3') would find the system one, where pip install hits PEP 668 and
+    fails. Proved on a live box: the self-update log showed the venv bypassed
+    and 'externally-managed-environment'."""
+    monkeypatch.setattr(selfupdate, "_container_marker", lambda: False)
+    monkeypatch.setattr(selfupdate.sys, "executable",
+                        "/opt/romarr/.venv/bin/python")
+    monkeypatch.setattr(selfupdate.shutil, "which",
+                        lambda name: "/usr/bin/git" if name == "git"
+                        else "/usr/bin/python3")
+    env = selfupdate.detect(root=selfupdate.Path("/nonexistent"))
+    # kind is 'none' (no .git under /nonexistent), but the python it picked
+    # is the point: the running venv, not the system python3.
+    assert env.python == "/opt/romarr/.venv/bin/python"
 
 
 def test_launch_refuses_a_non_git_install():
