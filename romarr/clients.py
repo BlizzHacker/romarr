@@ -674,6 +674,18 @@ class Romm:
             cover = it.get("path_cover_small") or it.get("path_cover_large") or ""
             if cover and not cover.startswith("http"):
                 cover = f"{base}/{cover.lstrip('/')}"
+            if cover.startswith("http://"):
+                # A plain-http library behind an https proxy is the common
+                # self-hosted shape, and a browser will not render an http
+                # image on an https page -- mixed content, silently blank
+                # posters. Route it through ROMarr's own origin instead: the
+                # browser fetches same-origin (whatever scheme the UI is
+                # served over), ROMarr fetches the library server-side where
+                # the internal address is reachable and mixed content is not
+                # a thing. https covers stay direct -- no proxy needed, and
+                # no bytes through ROMarr that do not have to be.
+                from urllib.parse import quote
+                cover = "/api/v1/asset?url=" + quote(cover, safe="")
             # RomM keeps what it learned from IGDB and friends in `metadatum`,
             # merged across whichever providers identified the game. Absent
             # for anything unidentified, which is most of a fresh library --

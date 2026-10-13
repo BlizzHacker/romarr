@@ -4218,6 +4218,53 @@ class ROMarr:
             "update_log": selfupdate.read_log(env),
         }
 
+    def fetch_asset(self, url: str) -> tuple[int, str, bytes]:
+        """One library image, fetched server-side for the browser.
+
+        Exists for the mixed-content case: a library on http:// behind an
+        https proxy cannot hand its covers to a secure page directly, so
+        ROMarr — which talks to the library over the internal network anyway
+        — relays the bytes. The response is same-origin with the UI, which
+        is a scheme the browser already trusts.
+
+        NOT an open proxy. The URL's origin must equal a configured
+        library's origin, and nothing else is ever fetched: without that
+        rule this endpoint would turn every session holder into a scanner
+        of ROMarr's own network. Returns (status, content-type, body).
+        """
+        import requests as _requests
+        from urllib.parse import urlsplit
+
+        wanted = str(url or "").strip()
+        parts = urlsplit(wanted)
+        if parts.scheme not in ("http", "https") or not parts.netloc:
+            return 400, "application/json", b'{"error":"http(s) URL required"}'
+        origin = f"{parts.scheme}://{parts.netloc}"
+        allowed = set()
+        for cfg, backend in self.game_libraries:
+            base = str(cfg.get("url") or "") or str(
+                getattr(getattr(backend, "_config", None), "base_url", "") or "")
+            b = urlsplit(base)
+            if b.scheme and b.netloc:
+                allowed.add(f"{b.scheme}://{b.netloc}")
+        if origin not in allowed:
+            return 403, "application/json", \
+                b'{"error":"not a configured library origin"}'
+        try:
+            response = _requests.get(wanted, timeout=20, stream=True)
+        except _requests.RequestException as err:
+            log.warning("asset proxy fetch failed for %s: %s", origin, err)
+            return 502, "application/json", b'{"error":"library unreachable"}'
+        with response:
+            if response.status_code != 200:
+                return response.status_code, "application/json", \
+                    b'{"error":"library did not serve the asset"}'
+            # Covers are small; screenshots are not tiny. 10 MB bounds a
+            # mistake (an HTML error page, a video) without bounding art.
+            body = response.content[:10 * 1024 * 1024]
+            ctype = response.headers.get("Content-Type") or "image/png"
+            return 200, ctype.split(";")[0].strip(), body
+
     def _auto_import_summary(self) -> str:
         done = self.import_finished(retry_failed=False)
         if not done:
@@ -4990,6 +5037,24 @@ def make_handler(service: ROMarr):
                     "tags": service.store.settings.get("_tags") or {}})
             if route.path == "/api/v1/update":
                 return self._json(200, service.update_status())
+            if route.path == "/api/v1/asset":
+                # The mixed-content relay for library images (issue #49).
+                # Auth is the session gate every route here already passed --
+                # an <img> tag carries the cookie. The origin check inside
+                # fetch_asset is what keeps this from being an open proxy.
+                target = (query.get("url") or [""])[0]
+                code, ctype, body = service.fetch_asset(target)
+                self.send_response(code)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(len(body)))
+                if code == 200:
+                    # Covers repeat on every shelf render; a day of browser
+                    # cache is the difference between a poster grid that
+                    # loads and one that hammers the library server.
+                    self.send_header("Cache-Control",
+                                     "private, max-age=86400")
+                self.end_headers()
+                return self.wfile.write(body)
             if route.path == "/api/v1/manualimport":
                 return self._json(200, service.scan(
                     query.get("path", [""])[0]))
