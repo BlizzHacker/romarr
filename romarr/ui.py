@@ -650,6 +650,7 @@ NAV = [
                   ("connections", "Connections", None),
                   ("metadata", "Metadata", None), ("general", "General", None)]),
     ("System",   [("status", "Status", None), ("stats", "Stats", None),
+                  ("update", "Update", None),
                   ("ecosystem", "Ecosystem", None),
                   ("platforms", "Platforms", None),
                   ("getstarted", "Get Started", None),
@@ -701,6 +702,7 @@ function go(page){
     indexers:'Indexers',clients:'Download Clients',libraries:'Libraries',
     general:'General',
     status:'System Status',platforms:'Platforms',tasks:'Tasks',logs:'Logs',
+    update:'Update',
     blocklist:'Blocklist',connections:'Connections',metadata:'Metadata',
     calendar:'Release Calendar',manualimport:'Manual Import',
     collections:'Collections \u2014 full sets and 1G1R',
@@ -2181,8 +2183,9 @@ RENDER.stats=async()=>{
   $('#page').innerHTML=`
     ${s.update_available?`<div class="card" style="border-color:var(--warn)">
       <h3>Update available</h3><p class="help">ROMarr ${esc(s.latest_version)} is out;
-      this install is running ${esc(s.version)}. Nothing updates itself &mdash;
-      pull the new image when it suits you.</p></div>`:''}
+      this install is running ${esc(s.version)}. ${SETTINGS.auto_update
+        ?'Auto-update is ON — it applies on the next daily check once nothing is downloading.'
+        :'Turn on auto-update under Settings → General, or update by hand when it suits you.'}</p></div>`:''}
     <div class="card"><h3>This install</h3><div class="st">
       <div><b>${esc(s.version)}</b><span>Version</span></div>
       <div><b>${num(s.library_on_disk)}</b><span>On disk here</span></div>
@@ -2733,8 +2736,19 @@ RENDER.general=()=>settingsPage('General',
        SETTINGS.rss_sync_interval_minutes,'number')
   +fld('list_sync_interval_hours','List sync (hours)',
        SETTINGS.list_sync_interval_hours,'number')
-  +chk('update_check','Check github.com daily for a newer ROMarr (never auto-updates)',
+  +chk('update_check','Check github.com daily for a newer ROMarr',
        SETTINGS.update_check)
+  +chk('auto_update','Apply updates automatically (git installs only; waits until nothing is downloading, then restarts ROMarr)',
+       SETTINGS.auto_update)
+  +sel('update_channel','Update channel',
+     [['stable','Stable — latest GitHub release tag'],
+      ['nightly','Nightly — latest commit on main']],
+     SETTINGS.update_channel||'stable',
+     'Stable follows tagged releases. Nightly follows the main branch and '
+     +'restarts on any new commit — useful for a dev install, too eager for '
+     +'a living-room one.')
+  +chk('auto_update_plugins','Update ROM Hub plugins daily from their sources',
+       SETTINGS.auto_update_plugins)
   +`<h3 style="margin-top:18px">Security</h3>
     <div class="row" style="gap:8px;align-items:center;margin:8px 0">
       <button class="btn ghost" id="g-key" type="button">Reveal API key</button>
@@ -3837,6 +3851,86 @@ RENDER.tasks=async()=>{
 };
 
 let LOG_TIMER=null;
+RENDER.update=async()=>{
+  const d=await j('/api/v1/update').catch(()=>null);
+  if(!d){$('#page').innerHTML='<div class="panel-note panel-warn">Could not read update status.</div>';return;}
+  const inst=d.install||{}, st=d.settings||{};
+  const kindLabel={git:'git checkout (self-update possible)',
+    docker:'container image (updates come from the host)',
+    none:'unknown install shape'}[inst.kind]||inst.kind;
+  const badge=(on)=>on
+    ?'<span class="pill" style="background:var(--ok);color:#08210d">ON</span>'
+    :'<span class="pill">off</span>';
+  const plugins=Object.entries(d.plugins||{});
+  $('#page').innerHTML=
+    '<div class="card"><h3>This install</h3>'
+    +'<div class="st">'
+    +'<div><b>'+esc(d.running_version)+'</b><span>Running</span></div>'
+    +'<div><b>'+esc(d.latest_version||'—')+'</b><span>Latest on GitHub</span></div>'
+    +'<div><b>'+(d.update_available?'<span style="color:var(--warn)">yes</span>':'no')+'</b><span>Update available</span></div>'
+    +'</div>'
+    +'<p class="help">Install shape: <b>'+esc(kindLabel)+'</b>'
+    +(inst.branch?' — branch <code>'+esc(inst.branch)+'</code> at <code>'+esc(inst.commit||'')+'</code>':'')+'</p>'
+    +'</div>'
+    +'<div class="card"><h3>Automatic updates</h3>'
+    +'<p class="help">Settings live under Settings → General; this page shows and acts. '
+    +'Auto-update waits until nothing is downloading, then fetches, fast-forwards '
+    +'and restarts. A container install cannot update itself — the host pulls the new image.</p>'
+    +'<table><tbody>'
+    +'<tr><td>Daily update check</td><td>'+badge(st.update_check)+'</td></tr>'
+    +'<tr><td>Auto-apply ROMarr updates</td><td>'+badge(st.auto_update)+'</td></tr>'
+    +'<tr><td>Channel</td><td>'+esc(st.update_channel||'stable')+'</td></tr>'
+    +'<tr><td>Auto-update ROM Hub plugins</td><td>'+badge(st.auto_update_plugins)+'</td></tr>'
+    +'</tbody></table>'
+    +'<div class="row" style="gap:8px;margin-top:10px">'
+    +'<button class="btn ghost" id="up-check">Check now</button>'
+    +(inst.can_apply?'<button class="btn" id="up-apply">Update now</button>':'')
+    +(plugins.length?'<button class="btn ghost" id="up-plugins">Update plugins now</button>':'')
+    +'</div>'
+    +'<div id="up-msg" style="margin-top:10px"></div>'
+    +'</div>'
+    +((d.docker_guidance||[]).length
+      ?'<div class="card"><h3>How to update this container</h3><p class="help">'
+       +'ROMarr runs from an image, so the update happens on the host:</p><pre style="font:12px/1.6 ui-monospace,Menlo,monospace;color:var(--dim)">'
+       +esc(d.docker_guidance.join('\n'))+'</pre></div>'
+      :'')
+    +(plugins.length
+      ?'<div class="card"><h3>ROM Hub plugins</h3><table><thead><tr>'
+       +'<th>Plugin</th><th>Source</th><th>Ref</th><th>Commit</th></tr></thead><tbody>'
+       +plugins.map(([slug,info])=>'<tr><td>'+esc(slug)+'</td>'
+         +'<td style="color:var(--dim);font-size:12px">'+esc(info.source||'—')+'</td>'
+         +'<td>'+esc(info.ref||'latest')+'</td>'
+         +'<td><code>'+esc((info.commit||'').slice(0,8))+'</code></td></tr>').join('')
+       +'</tbody></table></div>'
+      :'')
+    +((d.update_log||'')
+      ?'<div class="card"><h3>Last self-update log</h3>'
+       +'<pre style="font:12px/1.6 ui-monospace,Menlo,monospace;color:var(--dim);white-space:pre-wrap;max-height:40vh;overflow:auto">'
+       +esc(d.update_log)+'</pre></div>'
+      :'');
+  const msg=$('#up-msg');
+  const say=(t,bad)=>{msg.innerHTML='<div class="panel-note '+(bad?'panel-warn':'')+'">'+esc(t)+'</div>';};
+  const run=(name,fn)=>async e=>{
+    e.target.disabled=true; e.target.textContent='Running…';
+    say('Working…');
+    try{
+      const r=await fn();
+      say(r.message||(r.error?r.error:'done'), !r.ok&&!!r.error);
+      setTimeout(()=>go('update'), r.ok&&name==='ApplyUpdate'?2500:0);
+    }catch(err){say('request failed: '+err, true);}
+    e.target.disabled=false;
+  };
+  const cmd=(name)=>j('/api/v1/command',{method:'POST',
+    headers:{'content-type':'application/json'},
+    body:JSON.stringify({name})});
+  $('#up-check').onclick=run('UpdateCheck',()=>cmd('UpdateCheck'));
+  if($('#up-apply'))$('#up-apply').onclick=async e=>{
+    if(!confirm('Update ROMarr now? Downloads in flight will defer the update; otherwise ROMarr restarts itself.'))return;
+    await run('ApplyUpdate',()=>cmd('ApplyUpdate'))(e);
+  };
+  if($('#up-plugins'))$('#up-plugins').onclick=run('PluginUpdate',()=>cmd('PluginUpdate'));
+};
+
 RENDER.logs=async()=>{
   clearInterval(LOG_TIMER);
   $('#page').innerHTML=`<div class="card"><h3>Live log</h3>

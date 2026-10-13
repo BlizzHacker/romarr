@@ -628,6 +628,15 @@ class ROMarr:
             "UpdateCheck", "Check github.com for a newer ROMarr",
             lambda: 86400 if self.store.settings.get("update_check", True) else 0,
             lambda: self.check_update()["message"])
+        # Plugins update on the same daily clock, gated by their own setting:
+        # each re-installs from the source its registry entry recorded, so
+        # "latest from GitHub" is the Hub's own install path, not a git
+        # command this process invents.
+        self.scheduler.add(
+            "PluginUpdate", "Update ROM Hub plugins from their sources",
+            lambda: (86400 if self.store.settings.get(
+                "auto_update_plugins", False) else 0),
+            lambda: hub.update_plugins()["message"])
         # Netplay is useless without hashes, and a shelf this size takes
         # minutes to read. Nobody should have to know that, or press a
         # button for it, so it runs daily and once at startup.
@@ -4118,10 +4127,96 @@ class ROMarr:
             self.store.settings["_update_notified"] = latest
             self.notify(update_available(VERSION, latest, url))
         self.store.save()
+        # Auto-apply is the operator's explicit choice, checked once per day
+        # here and never in a request path. A busy queue defers to the next
+        # sweep rather than restarting mid-import.
+        if newer and self.store.settings.get("auto_update", False):
+            applied = self.apply_update()
+            if applied.get("ok"):
+                return {"ok": True, "latest": latest, "update_available": True,
+                        "message": applied["message"]}
+            message = (f"{latest} is available; auto-update did not run: "
+                       f"{applied.get('error', '')}")
+            return {"ok": True, "latest": latest, "update_available": True,
+                    "message": message}
         message = (f"{latest} is available (running {VERSION})" if newer
                    else f"up to date ({VERSION})")
         return {"ok": True, "latest": latest, "update_available": newer,
                 "message": message}
+
+    def apply_update(self) -> dict:
+        """Update THIS ROMarr from its own GitHub repo, now.
+
+        git installs: resolve the channel's target ref, refuse while the
+        queue is busy, then launch the detached updater (fetch, ff-only
+        merge, pip, service restart). Docker installs: cannot, and the
+        reply says exactly what the host must run instead. Nothing here
+        guesses -- the install shape is detected, and an unknown shape
+        refuses with the reason.
+        """
+        from . import selfupdate
+
+        env = selfupdate.detect()
+        if env.kind == "docker":
+            return selfupdate.docker_guidance()
+        if not env.can_apply:
+            return {"ok": False, "error": env.detail}
+        channel = str(self.store.settings.get("update_channel")
+                      or "stable").lower()
+        if channel not in ("stable", "nightly"):
+            return {"ok": False, "error": f"unknown update channel {channel!r}"}
+        with self._lock:
+            busy = selfupdate.queue_busy(self.queue)
+        if busy:
+            return {"ok": False, "deferred": True,
+                    "error": "downloads or imports are in flight; the update "
+                             "will apply on the next daily check"}
+        latest = str(self.store.settings.get("_latest_version") or "")
+        if channel == "nightly":
+            # Nightly tracks main, so "newer" is not a version question:
+            # fetch and let --ff-only decide whether anything moved.
+            latest = latest or VERSION
+        target, why = selfupdate.resolve_target(env, channel, latest)
+        if not target:
+            return {"ok": False, "error": why}
+        result = selfupdate.launch(env, target)
+        if result.get("ok"):
+            self.store.record(Event(kind="update", game="", platform="",
+                                    release=VERSION,
+                                    detail=f"self-update to {target} started "
+                                           f"from {env.commit}"))
+            self.store.save()
+        return result
+
+    def update_status(self) -> dict:
+        """Everything the Update page shows: install shape, channel, the
+        last check's verdict, and the tail of the last self-update log."""
+        from . import selfupdate
+
+        env = selfupdate.detect()
+        return {
+            "running_version": VERSION,
+            "latest_version": self.store.settings.get("_latest_version") or "",
+            "update_available": bool(
+                self.store.settings.get("_update_available")),
+            "install": {"kind": env.kind, "detail": env.detail,
+                        "branch": env.branch, "commit": env.commit,
+                        "repo": env.repo, "can_apply": env.can_apply},
+            "settings": {
+                "update_check": bool(
+                    self.store.settings.get("update_check", True)),
+                "auto_update": bool(
+                    self.store.settings.get("auto_update", False)),
+                "update_channel": str(
+                    self.store.settings.get("update_channel") or "stable"),
+                "auto_update_plugins": bool(
+                    self.store.settings.get("auto_update_plugins", False)),
+            },
+            "plugins": hub.plugin_sources(),
+            "docker_guidance": (selfupdate.docker_guidance()["guidance"]
+                                if env.kind == "docker" else []),
+            "update_log": selfupdate.read_log(env),
+        }
 
     def _auto_import_summary(self) -> str:
         done = self.import_finished(retry_failed=False)
@@ -4297,6 +4392,10 @@ class ROMarr:
             return self.list_sync()
         if name == "UpdateCheck":
             return self.check_update()
+        if name == "ApplyUpdate":
+            return self.apply_update()
+        if name == "PluginUpdate":
+            return hub.update_plugins()
         if name == "RefreshLibrary":
             counted, failed = 0, []
             for cfg, backend in self.game_libraries:
@@ -4889,6 +4988,8 @@ def make_handler(service: ROMarr):
             if route.path == "/api/v1/tag":
                 return self._json(200, {
                     "tags": service.store.settings.get("_tags") or {}})
+            if route.path == "/api/v1/update":
+                return self._json(200, service.update_status())
             if route.path == "/api/v1/manualimport":
                 return self._json(200, service.scan(
                     query.get("path", [""])[0]))

@@ -254,6 +254,62 @@ def install(slug: str) -> dict:
     return _run_cli("plugin", "install", slug)
 
 
+def plugin_sources() -> dict:
+    """slug -> {source, ref, commit} for every installed plugin.
+
+    The registry's state.json records what each plugin was installed FROM
+    (git URL or catalog slug) and the commit it resolved to, which is exactly
+    what an update needs: re-run that install, and the Hub's own copy-first,
+    swap-second staging makes it atomic.
+    """
+    out: dict[str, dict] = {}
+    try:
+        state = _json.loads((HOME / "state.json").read_text(encoding="utf-8"))
+    except Exception:
+        return out
+    if not isinstance(state, dict):
+        return out
+    for slug, entry in state.items():
+        if isinstance(entry, dict):
+            out[slug] = {
+                "source": str(entry.get("source") or ""),
+                "ref": str(entry.get("ref") or "") or None,
+                "commit": str(entry.get("commit") or ""),
+            }
+    return out
+
+
+def update_plugins() -> dict:
+    """Re-install every plugin from its recorded source, pulling the latest.
+
+    A plugin pinned to a ref updates within that ref (a branch moves, a tag
+    does not); a plugin installed from a catalog slug updates when its
+    catalog does. Uses the Hub's own install path, so staging, state.json
+    and the manifest check are the Hub's -- nothing here reaches around them.
+    Returns per-plugin results; one plugin failing never stops the rest.
+    """
+    sources = plugin_sources()
+    if not sources:
+        return {"ok": True, "updated": [], "failed": {},
+                "message": "no installed plugins"}
+    updated, failed = [], {}
+    for slug, info in sorted(sources.items()):
+        if not info["source"]:
+            failed[slug] = "no recorded source -- installed by hand?"
+            continue
+        args = ["plugin", "install", info["source"]]
+        if info["ref"]:
+            args += ["--ref", info["ref"]]
+        result = _run_cli(*args)
+        if result["ok"]:
+            updated.append(slug)
+        else:
+            failed[slug] = (result["err"] or result["out"] or
+                            "install failed")[:200]
+    return {"ok": not failed, "updated": updated, "failed": failed,
+            "message": f"updated {len(updated)}, failed {len(failed)}"}
+
+
 # ------------------------------------------------------------- search/fetch --
 #
 # The two in-process bridges the acquisition pipeline needs: `search` asks

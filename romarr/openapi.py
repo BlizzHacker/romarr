@@ -92,6 +92,9 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "/api/v1/blocklist": ("GET", "Releases that will never be taken, with the "
                                  "reason each was blocked."),
     "/api/v1/tag": ("GET", "Tags, by library item."),
+    "/api/v1/update": ("GET", "Update status: install shape, channel, the "
+                              "latest version on GitHub, ROM Hub plugin "
+                              "sources, and the tail of the last self-update."),
     "/api/v1/collection": ("GET", "Set-acquisition batches in progress, and "
                                   "the DATs available to plan against."),
     "/api/v1/collection/plan": ("GET", "Compare a DAT against the library: "

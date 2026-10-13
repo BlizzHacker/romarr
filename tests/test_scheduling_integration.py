@@ -21,7 +21,21 @@ def test_the_service_registers_its_jobs(tmp_path):
     s = svc(tmp_path)
     names = {j["name"] for j in s.scheduler.status()}
     assert names == {"ImportCompleted", "MissingGameSearch", "RssSync",
-                     "ListSync", "UpdateCheck", "HashIndex", "FailedDownloads"}
+                     "ListSync", "UpdateCheck", "PluginUpdate", "HashIndex",
+                     "FailedDownloads"}
+
+
+def test_plugin_update_job_is_off_until_asked_and_toggles_live(tmp_path):
+    """Auto-updating plugins is opt-in: the job exists but is disabled by
+    default, and flipping the setting arms it at the next tick without a
+    restart -- the same contract every other interval job has."""
+    s = svc(tmp_path)
+    jobs = {j["name"]: j for j in s.scheduler.status()}
+    assert not jobs["PluginUpdate"]["enabled"]
+    s.store.update_settings({"auto_update_plugins": True})
+    jobs = {j["name"]: j for j in s.scheduler.status()}
+    assert jobs["PluginUpdate"]["enabled"]
+    assert jobs["PluginUpdate"]["interval_seconds"] == 86400
 
 
 def test_turning_off_failed_download_handling_disables_its_job_live(tmp_path):

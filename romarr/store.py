@@ -287,9 +287,18 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "auto_import_interval_minutes": 1,
     "search_missing_interval_hours": 12,
     "rss_sync_interval_minutes": 60,
-    # Whether to ask github.com once a day if a newer ROMarr exists. Checking
-    # is the whole feature -- nothing is ever downloaded or applied.
+    # Whether to ask github.com once a day if a newer ROMarr exists.
     "update_check": True,
+    # Whether the daily check also APPLIES the update (git installs only; a
+    # container cannot update itself and will say so). Off by default: an
+    # appliance that reboots itself should be one the operator asked for.
+    "auto_update": False,
+    # "stable" follows release tags; "nightly" follows origin/main.
+    "update_channel": "stable",
+    # Whether the daily check also refreshes ROM Hub plugins from their own
+    # git sources. Each plugin's source and ref are what `plugin install`
+    # already recorded, so this re-runs that install to the latest commit.
+    "auto_update_plugins": False,
 }
 
 

@@ -49,8 +49,13 @@ def test_general_settings_expose_the_clock():
         assert key in html, key
 
 
-def test_the_stats_page_says_updates_are_never_automatic():
-    assert "Nothing updates itself" in page()
+def test_the_stats_page_reports_update_state_honestly():
+    """The page used to claim "Nothing updates itself" — true while checking
+    was the whole feature, false the moment auto-apply exists. Now it says
+    which mode the install is in."""
+    html = page()
+    assert "Auto-update is ON" in html
+    assert "Turn on auto-update" in html
 
 
 def test_frontend_rows_survive_pathless_backend_rows(tmp_path):
