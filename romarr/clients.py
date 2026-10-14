@@ -13,6 +13,7 @@ import datetime
 import json
 import logging
 import sys
+import threading
 import time
 from dataclasses import dataclass
 
@@ -339,6 +340,19 @@ class Romm:
         #: None until the first rescan finds out; False once it answered 404 or
         #: 405, so older servers pay for the probe once rather than per import.
         self._scan_endpoint: bool | None = None
+        #: Platform folders whose rescan RomM refused with 409 because another
+        #: scan was already running or queued. RomM 5.4 allows one library
+        #: scan at a time whatever platforms it covers, so a batch import
+        #: across platforms would otherwise rescan only the first one. None in
+        #: the set stands for the whole library. Folded into the next scan
+        #: request, and retried on a timer so the last import is not left
+        #: waiting for RomM's nightly scan.
+        self._deferred_scan: set[str | None] = set()
+        self._deferred_lock = threading.Lock()
+        self._deferred_timer: threading.Timer | None = None
+        self._deferred_attempts = 0
+        #: How the retry is scheduled; tests replace it to run it by hand.
+        self._timer = threading.Timer
         self._token = config.api_token or ""
         #: Whether `_token` came from the password grant, as opposed to being
         #: configured. Only a token ROMarr itself obtained can be replaced.
@@ -769,6 +783,55 @@ class Romm:
             ))
         return out
 
+    #: How long to wait before asking again after a 409, and how many times.
+    #: A quick scan of one platform takes seconds to minutes; a scheduled
+    #: full scan can take much longer, after which the nightly scan is the
+    #: fallback anyway.
+    DEFERRED_SCAN_SECONDS = 120
+    DEFERRED_SCAN_ATTEMPTS = 30
+
+    def _defer_scan(self, wanted: set[str | None]) -> None:
+        """Remember platforms RomM was too busy to scan, and retry later."""
+        with self._deferred_lock:
+            self._deferred_scan |= wanted
+            if self._deferred_timer is not None:
+                return
+            if self._deferred_attempts >= self.DEFERRED_SCAN_ATTEMPTS:
+                log.warning(
+                    "romm is still scanning after %d retries; leaving %s to "
+                    "its next scheduled scan",
+                    self._deferred_attempts,
+                    ", ".join(sorted(s or "the library" for s in self._deferred_scan)))
+                self._deferred_scan.clear()
+                self._deferred_attempts = 0
+                return
+            self._deferred_attempts += 1
+            log.info("romm is already scanning; rescanning %s in %ds",
+                     ", ".join(sorted(s or "the library" for s in self._deferred_scan)),
+                     self.DEFERRED_SCAN_SECONDS)
+            timer = self._timer(self.DEFERRED_SCAN_SECONDS, self._retry_deferred_scan)
+            timer.daemon = True
+            self._deferred_timer = timer
+        timer.start()
+
+    def _retry_deferred_scan(self) -> None:
+        with self._deferred_lock:
+            self._deferred_timer = None
+            if not self._deferred_scan:
+                return
+            # rescan() folds the rest of the set back in.
+            slug = self._deferred_scan.pop()
+        try:
+            ok = self.rescan(slug)
+        except Exception as err:  # a timer thread has no caller to raise to
+            log.warning("romm deferred rescan failed: %s", err)
+            ok = False
+        if not ok:
+            # rescan() keeps the platforms it was carrying for others, but not
+            # the one it was asked for; this one was deferred too.
+            with self._deferred_lock:
+                self._deferred_scan.add(slug)
+
     def rescan(self, platform_slug: str | None = None) -> bool:
         """Ask RomM to pick up newly-imported files.
 
@@ -778,9 +841,10 @@ class Romm:
         logged and reported, never raised, because a successful import must not
         be reported as a failure over a courtesy call.
 
-        RomM 4.x runs this through its task API. The older /api/scan is gone and
-        returned 404, which looked like a broken service rather than a moved
-        endpoint.
+        RomM 4.x to 5.3 runs this through its task runner; 5.4 refuses
+        `scan_library` there and takes `POST /api/tasks/scan` instead. The
+        older /api/scan is gone and returned 404, which looked like a broken
+        service rather than a moved endpoint.
         """
         base = self._config.base_url.rstrip("/")
         response = None
@@ -792,15 +856,22 @@ class Romm:
         # Proven against a live RomM 5.4.0. Anything older answers 404 or 405
         # and falls through to the task-runner path below.
         if self._scan_endpoint is not False:
+            with self._deferred_lock:
+                wanted = self._deferred_scan | {platform_slug or None}
+                self._deferred_scan.clear()
             body: dict = {"type": "quick"}
-            if platform_slug:
-                body["platform_fs_slugs"] = [platform_slug]
+            if None not in wanted:
+                body["platform_fs_slugs"] = sorted(wanted)
             try:
                 response = self._session.post(
                     f"{base}/api/tasks/scan", json=body,
                     headers=self._headers(), timeout=self._config.timeout)
             except requests.RequestException as err:
                 log.warning("romm rescan failed: %s", err)
+                # Keep platforms an earlier 409 deferred, so the retry timer
+                # or the next import still asks for them.
+                with self._deferred_lock:
+                    self._deferred_scan |= wanted - {platform_slug or None}
                 return False
             if response.status_code in (404, 405):
                 self._scan_endpoint = False
@@ -808,11 +879,18 @@ class Romm:
             else:
                 self._scan_endpoint = True
                 if response.status_code == 409:
-                    # "Quick Scan is already running": one scan at a time. Not
-                    # a failure -- the file is on disk, and the running scan or
-                    # the next one finds it.
-                    log.info("romm rescan skipped: a scan is already running")
+                    # "Quick Scan is already running": one library scan at a
+                    # time. The running scan may cover another platform, or be
+                    # past this one's folder, so ask again once it is done.
+                    # Not a failure: the file is on disk either way.
+                    self._defer_scan(wanted)
                     return True
+                with self._deferred_lock:
+                    if response.ok:
+                        self._deferred_attempts = 0
+                    else:
+                        # Reported below; keep what earlier 409s deferred.
+                        self._deferred_scan |= wanted - {platform_slug or None}
 
         payload: dict = {"scan_type": "quick"}
         if platform_slug:
