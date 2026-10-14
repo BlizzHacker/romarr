@@ -52,6 +52,51 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def url_candidates(raw: str) -> list[str]:
+    """Every absolute URL worth trying for a user-supplied address, in order.
+
+    A peer's public URL is typed or carried in an invitation, and plenty of
+    people paste `romarr.example.com` with no scheme. Handed straight to
+    `requests` that is a `MissingSchema` error -- the request never leaves,
+    and the operator reads "could not reach" for what was really "you forgot
+    https://". So normalize instead of refusing.
+
+    Rules:
+      * An explicit `http://` or `https://` is honoured as-is (one candidate).
+        Somebody who typed a scheme told us which one; guessing a second would
+        silently downgrade a deliberate choice.
+      * A scheme-less address yields **https first, then http** -- the secure
+        default, with the plain fallback for the LAN box that has no cert.
+        Trying both is what "make it work" means here: the caller probes in
+        order and keeps the first that answers.
+      * Anything else (empty, a bare path, a non-http scheme) yields nothing,
+        so the caller reports "no address" rather than constructing a URL that
+        cannot be right.
+    """
+    text = str(raw or "").strip()
+    if not text:
+        return []
+    lowered = text.lower()
+    if lowered.startswith(("http://", "https://")):
+        return [text]
+    # A scheme-less address. Reject an obvious non-host (a bare path or another
+    # scheme like ftp://) rather than gluing https:// onto it.
+    if "://" in lowered or text.startswith("/"):
+        return []
+    return [f"https://{text}", f"http://{text}"]
+
+
+def ensure_scheme(raw: str) -> str:
+    """The first candidate from `url_candidates`, or "" when there is none.
+
+    For the places that store or display ONE url (a peer row, an invitation
+    link) rather than probe: a scheme-less address becomes its https form, so
+    what is persisted is always a usable absolute URL.
+    """
+    candidates = url_candidates(raw)
+    return candidates[0] if candidates else ""
+
+
 # --- what a peer may see and do ---------------------------------------------
 
 #: How much of the shelf a peer is shown. Default is nothing: a fresh peer
@@ -315,7 +360,10 @@ class Federation:
 
     def __init__(self, name: str = "ROMarr", url: str = ""):
         self.name = name
-        self.url = url
+        # Normalized once here: an operator who set "romarr.example.com" in
+        # Settings gets a usable absolute URL in every invitation link minted
+        # from it (parse_invite_link refuses a scheme-less origin outright).
+        self.url = ensure_scheme(url)
         self.peers: dict[str, Peer] = {}
         self._invites: dict[str, Invite] = {}
 
@@ -370,6 +418,9 @@ class Federation:
         url = str(url or "").strip().rstrip("/")
         if not url:
             raise ValueError("a RomM friend needs an address")
+        # Stored absolute: "romm.example.com" becomes "https://romm.example.com"
+        # so the RomM client is never handed a scheme-less base_url.
+        url = ensure_scheme(url)
         if not (username and password) and not token:
             raise ValueError("a RomM friend needs either a username and "
                              "password or an API token on their server")
@@ -427,7 +478,10 @@ class Federation:
             raise ValueError("that invitation secret is wrong")
 
         del self._invites[peer_id]          # single use, always
-        peer = Peer(peer_id=peer_id, name=name or "peer", url=url,
+        # Their URL arrived in a request body -- normalize before storing so a
+        # scheme-less address never becomes an un-sendable call later.
+        peer = Peer(peer_id=peer_id, name=name or "peer",
+                    url=ensure_scheme(url),
                     token=invite.secret, confirmed=False)
         self.peers[peer_id] = peer
         return peer

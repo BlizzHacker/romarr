@@ -3574,8 +3574,12 @@ class ROMarr:
         # Sent so the inviter's Friends page can call back. Read fresh from
         # settings for the same reason minting does: an operator who set a
         # public URL five minutes ago should not have to restart to use it.
-        mine = str(self.store.settings.get("public_url")
-                   or self.federation.url or "").strip().rstrip("/")
+        # Normalized to an absolute URL before it leaves: a scheme-less
+        # public_url stored on THEIR side would break their callback to us the
+        # same way a scheme-less peer URL breaks ours.
+        from .federation import ensure_scheme
+        mine = ensure_scheme(str(self.store.settings.get("public_url")
+                                 or self.federation.url or ""))
         try:
             response = _rq.post(
                 invite["url"] + "/api/v1/peer/accept",
@@ -3645,9 +3649,16 @@ class ROMarr:
             self.verified = bool(row.get("verified"))
 
     def _romm_friend_client(self, peer):
-        """A RomM client pointed at a friend's server, using their account."""
+        """A RomM client pointed at a friend's server, using their account.
+
+        Normalized at use as well as at store: peer rows written before the
+        normalization existed may still hold a scheme-less address, and a
+        RommConfig handed one would fail the same un-sendable way.
+        """
         from .clients import Romm, RommConfig
-        return Romm(RommConfig(base_url=peer.url, username=peer.username,
+        from .federation import ensure_scheme
+        return Romm(RommConfig(base_url=ensure_scheme(peer.url),
+                               username=peer.username,
                                password=peer.password,
                                api_token=peer.token if not peer.username
                                else "", timeout=30))
@@ -3706,23 +3717,45 @@ class ROMarr:
 
     def _call_friend(self, peer, method: str, path: str, payload=None,
                      timeout: int = 20):
-        """One request to a friend's server, as a server rather than a user."""
+        """One request to a friend's server, as a server rather than a user.
+
+        Their address may have been typed without a scheme, so every candidate
+        `url_candidates` offers is tried in order (https first, then http for
+        a scheme-less address) and the first that answers wins. A
+        `MissingSchema` -- the old failure -- cannot happen, because a
+        scheme-less address now produces two absolute URLs instead of one
+        un-sendable string.
+        """
         import requests as _rq
-        url = peer.url.rstrip("/") + path
-        try:
-            response = _rq.request(method, url, headers=peer.headers(),
-                                   json=payload, timeout=timeout)
-        except _rq.RequestException as err:
-            return None, f"could not reach {peer.name}: {err}"
-        if response.status_code == 401:
-            return None, (f"{peer.name} refused the credential -- they may "
-                          f"have removed you, or not confirmed you yet")
-        if not response.ok:
-            return None, f"{peer.name} answered HTTP {response.status_code}"
-        try:
-            return response.json(), ""
-        except ValueError:
-            return None, f"{peer.name} sent something that was not JSON"
+        from .federation import url_candidates
+
+        candidates = url_candidates(peer.url)
+        if not candidates:
+            return None, (f"{peer.name}'s address {peer.url!r} is not a URL "
+                          "ROMarr can call -- set a public address like "
+                          "https://their.server")
+        last_err = ""
+        for base in candidates:
+            url = base.rstrip("/") + path
+            try:
+                response = _rq.request(method, url, headers=peer.headers(),
+                                       json=payload, timeout=timeout)
+            except _rq.RequestException as err:
+                # This candidate did not answer. Try the next scheme before
+                # giving up -- an https-only guess that hits a plain-http LAN
+                # box is exactly the case this loop exists for.
+                last_err = f"could not reach {peer.name}: {err}"
+                continue
+            if response.status_code == 401:
+                return None, (f"{peer.name} refused the credential -- they may "
+                              f"have removed you, or not confirmed you yet")
+            if not response.ok:
+                return None, f"{peer.name} answered HTTP {response.status_code}"
+            try:
+                return response.json(), ""
+            except ValueError:
+                return None, f"{peer.name} sent something that was not JSON"
+        return None, last_err or f"could not reach {peer.name}"
 
     #: A friend's shelf is refetched at most this often. Their library does
     #: not change per keystroke, and filtering happens here.
@@ -5753,10 +5786,13 @@ def make_handler(service: ROMarr):
             if route.path == "/api/v1/peer/invite":
                 # Pick up a public URL set since startup, so the operator
                 # does not have to restart to mint a usable invitation.
-                configured = str(
-                    service.store.settings.get("public_url") or "").strip()
+                # ensure_scheme: a Settings value typed without "https://"
+                # still mints a link parse_invite_link will accept.
+                from .federation import ensure_scheme
+                configured = ensure_scheme(str(
+                    service.store.settings.get("public_url") or ""))
                 if configured:
-                    service.federation.url = configured.rstrip("/")
+                    service.federation.url = configured
                 invite = service.federation.invite(
                     name=str(body.get("name") or service.federation.name))
                 payload = {
