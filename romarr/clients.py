@@ -335,6 +335,10 @@ class Romm:
         #: remembered, so the version difference costs one extra request
         #: per process rather than a broken rescan.
         self._scan_task = "scan"
+        #: Whether this server has RomM 5.4's dedicated `POST /api/tasks/scan`.
+        #: None until the first rescan finds out; False once it answered 404 or
+        #: 405, so older servers pay for the probe once rather than per import.
+        self._scan_endpoint: bool | None = None
         self._token = config.api_token or ""
         #: Whether `_token` came from the password grant, as opposed to being
         #: configured. Only a token ROMarr itself obtained can be replaced.
@@ -779,16 +783,48 @@ class Romm:
         endpoint.
         """
         base = self._config.base_url.rstrip("/")
+        response = None
+        # RomM 5.4 stopped running `scan_library` on demand through the
+        # generic task runner -- it answers 400 "Task 'scan_library' cannot be
+        # run" -- and added `POST /api/tasks/scan` for token-authenticated
+        # clients instead. That endpoint takes a ScanPayload, so the scan can
+        # be narrowed to the one platform folder an import just touched.
+        # Proven against a live RomM 5.4.0. Anything older answers 404 or 405
+        # and falls through to the task-runner path below.
+        if self._scan_endpoint is not False:
+            body: dict = {"type": "quick"}
+            if platform_slug:
+                body["platform_fs_slugs"] = [platform_slug]
+            try:
+                response = self._session.post(
+                    f"{base}/api/tasks/scan", json=body,
+                    headers=self._headers(), timeout=self._config.timeout)
+            except requests.RequestException as err:
+                log.warning("romm rescan failed: %s", err)
+                return False
+            if response.status_code in (404, 405):
+                self._scan_endpoint = False
+                response = None
+            else:
+                self._scan_endpoint = True
+                if response.status_code == 409:
+                    # "Quick Scan is already running": one scan at a time. Not
+                    # a failure -- the file is on disk, and the running scan or
+                    # the next one finds it.
+                    log.info("romm rescan skipped: a scan is already running")
+                    return True
+
         payload: dict = {"scan_type": "quick"}
         if platform_slug:
             payload["platforms"] = [platform_slug]
-        try:
-            response = self._session.post(
-                f"{base}/api/tasks/run/{self._scan_task}", json=payload,
-                headers=self._headers(), timeout=self._config.timeout)
-        except requests.RequestException as err:
-            log.warning("romm rescan failed: %s", err)
-            return False
+        if response is None:
+            try:
+                response = self._session.post(
+                    f"{base}/api/tasks/run/{self._scan_task}", json=payload,
+                    headers=self._headers(), timeout=self._config.timeout)
+            except requests.RequestException as err:
+                log.warning("romm rescan failed: %s", err)
+                return False
 
         # RomM renamed this task between 4.x and 5.x -- `scan` became
         # `scan_library`, and 5.x answers the old name with a 4xx whose body
@@ -796,7 +832,8 @@ class Romm:
         # name failed there and was reported as a PERMISSION problem, which
         # sent the operator hunting through RomM's user settings for a
         # setting that was never involved. Learn the name, once, and retry.
-        if not response.ok and self._scan_task in str(response.text or ""):
+        if (not response.ok and self._scan_endpoint is not True
+                and self._scan_task in str(response.text or "")):
             for name in ("scan_library", "scan"):
                 if name == self._scan_task:
                     continue
