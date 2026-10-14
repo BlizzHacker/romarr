@@ -58,7 +58,7 @@ from .downloaders import (
     CLIENT_TYPES, NZBGet, NzbgetConfig, SABnzbd, SabConfig, build_client,
     hand_off_with_id, match_queue_item, merge_secrets, pick_client, redact,
 )
-from .indexers import INDEXER_TYPES, build_indexer, redact_indexer
+from .indexers import INDEXER_TYPES, build_indexer, merge_indexer_secrets, redact_indexer
 from .indexers import Prowlarr, ProwlarrConfig
 from .library import import_rom, map_remote_path, platform_dir
 from .collections import is_translation
@@ -1267,6 +1267,13 @@ class ROMarr:
         url, key = cfg.get("url", ""), cfg.get("api_key", "")
         if not url:
             return {"ok": False, "message": "a URL is required"}
+        if key == "********":
+            # The placeholder reached here with nothing stored to merge it
+            # against -- testing eight asterisks would produce a 401 and a
+            # misleading "Rejected the API key".
+            return {"ok": False,
+                    "message": "the API key field still holds the masked "
+                               "placeholder -- type the real key"}
         try:
             if kind == "prowlarr":
                 probe = Prowlarr(ProwlarrConfig(base_url=url, api_key=key))
@@ -5137,7 +5144,11 @@ def make_handler(service: ROMarr):
                 # Configured entries first, then whatever Prowlarr proxies --
                 # the latter are managed there and shown read-only, the way an
                 # *arr shows an indexer it did not define.
-                items = [redact(i) for i in service.store.list_items("indexers")]
+                # redact_indexer, not the downloaders redact: its secret set
+                # covers passkey (torrentrss), which downloaders does not
+                # declare and would have shipped to the browser in the clear.
+                items = [redact_indexer(i)
+                         for i in service.store.list_items("indexers")]
                 proxied, err = [], None
                 try:
                     proxied = service.prowlarr.indexers()
@@ -6237,11 +6248,21 @@ def make_handler(service: ROMarr):
             if route.path == "/api/import":
                 return self._json(200, {"imported": service.import_finished()})
             if route.path in ("/api/v1/downloadclient", "/api/v1/indexer"):
-                key = "download_clients" if "downloadclient" in route.path else "indexers"
+                is_indexer = "indexer" in route.path
+                key = "indexers" if is_indexer else "download_clients"
                 existing = service.store.get_item(key, body.get("id")) if body.get("id") else None
-                saved = service.store.put_item(key, merge_secrets(dict(body), existing))
+                # Each family merges against its OWN type specs: the
+                # downloaders merge looks secrets up in CLIENT_TYPES, which
+                # has no entry for "prowlarr" -- it silently merged nothing
+                # and stored the form's `********` placeholder as the real
+                # API key (#57). Same split for redaction on the way out.
+                merged = (merge_indexer_secrets(dict(body), existing)
+                          if is_indexer
+                          else merge_secrets(dict(body), existing))
+                saved = service.store.put_item(key, merged)
                 service.reload_clients()
-                return self._json(200, redact(saved))
+                return self._json(200, redact_indexer(saved) if is_indexer
+                                  else redact(saved))
             if route.path == "/api/v1/library":
                 existing = (service.store.get_item("libraries", body.get("id"))
                             if body.get("id") else None)
@@ -6270,8 +6291,12 @@ def make_handler(service: ROMarr):
                 existing = service.store.get_item("download_clients", body.get("id"))                     if body.get("id") else None
                 return self._json(200, service.test_client(merge_secrets(dict(body), existing)))
             if route.path == "/api/v1/indexer/test":
+                # merge_indexer_secrets: a Test pressed on a saved indexer
+                # whose form still shows `********` must test the STORED key,
+                # not eight asterisks (#57: "Rejected the API key" after save).
                 existing = service.store.get_item("indexers", body.get("id"))                     if body.get("id") else None
-                return self._json(200, service.test_indexer(merge_secrets(dict(body), existing)))
+                return self._json(200, service.test_indexer(
+                    merge_indexer_secrets(dict(body), existing)))
             if route.path in ("/api/v1/webhook", "/api/v1/webhook/ggrequestz"):
                 result = service.handle_request_webhook(body)
                 # GG Requestz treats every 2xx response as delivered and does

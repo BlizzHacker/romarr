@@ -840,3 +840,25 @@ def redact_indexer(cfg: dict) -> dict:
         k: (SECRET_PLACEHOLDER if k in secrets and v else v)
         for k, v in cfg.items()
     }
+
+
+def merge_indexer_secrets(new: dict, old: dict | None) -> dict:
+    """Keep the stored credential when an indexer form sends the placeholder.
+
+    The mirror of downloaders.merge_secrets, against INDEXER_TYPES: an edit
+    form shows `********` for the API key, and saving or testing that verbatim
+    would send eight asterisks to Prowlarr/Jackett as the credential -- a 401
+    reported as "Rejected the API key" for a key that was never wrong. The
+    downloaders version cannot cover this: it reads CLIENT_TYPES, whose specs
+    know nothing of indexer types, so for a `prowlarr` body it merged no
+    fields at all and the placeholder was stored as the real key.
+
+    Union of every indexer secret name (same reasoning as redact_indexer),
+    so a field carried over from a previous type is kept too.
+    """
+    if not old:
+        return new
+    for name in secret_field_names():
+        if new.get(name) in (SECRET_PLACEHOLDER, "", None):
+            new[name] = old.get(name, "")
+    return new
