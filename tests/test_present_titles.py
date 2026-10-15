@@ -112,3 +112,48 @@ def test_a_flat_library_is_unchanged_by_the_layout_fix(tmp_path):
     (library / "ps2" / "Manhunt (Europe).iso").write_text("x")
 
     assert set(service._present_titles("ps2")) == {"Manhunt (Europe)"}
+
+
+def test_a_game_filed_in_a_subfolder_counts_as_present(tmp_path):
+    """Recursion, the question that was asked and the bug behind it.
+
+    The planner used iterdir(): a game filed one directory deeper than the
+    platform root surfaced as its PARENT DIRECTORY's name, and the title
+    itself read as missing -- so a collection batch queued a fresh download
+    of a game already on disk.
+    """
+    service, library = service_with(tmp_path)
+    platform = library / "snes"
+    (platform / "Nintendo").mkdir(parents=True)
+    (platform / "Nintendo" / "Chrono Trigger (USA).sfc").write_text("x")
+
+    present = service._present_titles("snes")
+
+    assert "Chrono Trigger (USA)" in present
+    assert "Nintendo" in present, (
+        "the containing folder also counts: a library organized by "
+        "publisher/genre must not lose its disc-set-style folders")
+
+
+def test_translations_subfolder_contents_are_seen(tmp_path):
+    """keep-both policy files T-En patches under Translations/; the planner
+    must see the titles there or it re-downloads every patched game."""
+    service, library = service_with(tmp_path)
+    trans = library / "snes" / "Translations"
+    trans.mkdir(parents=True)
+    (trans / "Final Fantasy VI (USA) (T-En).sfc").write_text("x")
+
+    assert "Final Fantasy VI (USA) (T-En)" in service._present_titles("snes")
+
+
+def test_a_deep_disc_set_answers_to_its_directory_name(tmp_path):
+    service, library = service_with(tmp_path)
+    disc = library / "psx" / "Square" / "Final Fantasy VII (USA)"
+    disc.mkdir(parents=True)
+    (disc / "FF7 (USA) (Disc 1).bin").write_text("x")
+    (disc / "FF7 (USA) (Disc 2).bin").write_text("x")
+
+    present = service._present_titles("psx")
+
+    assert "Final Fantasy VII (USA)" in present
+    assert "FF7 (USA) (Disc 1)" in present

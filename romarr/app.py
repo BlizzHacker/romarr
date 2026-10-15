@@ -2432,14 +2432,32 @@ class ROMarr:
                 folder = platform_dir(self.library_root(cfg), platform_slug,
                                       layout=self.library_layout(cfg))
                 try:
-                    entries = list(folder.iterdir())
+                    # Recursive on purpose. iterdir() sees one level: a game
+                    # filed in a subfolder ("Nintendo/Chrono Trigger.zip", a
+                    # disc-set's inner tracks, anything under Translations/)
+                    # surfaced as its PARENT DIRECTORY's name and the title
+                    # itself read as missing -- so collection import queued a
+                    # fresh download of a game already on disk. Walk the tree;
+                    # a directory named for a game (a disc set) still answers
+                    # to its own name via its files' stems below.
+                    # is_dir() guard first: rglob on a MISSING directory
+                    # yields nothing instead of raising, which would mark the
+                    # platform as listed and skip the shelf fallback below.
+                    if not folder.is_dir():
+                        continue
+                    entries = [p for p in folder.rglob("*") if p.is_file()]
                 except OSError:
                     continue
                 listed = True
                 for entry in entries:
-                    # A disc set lands as a directory named for the game; a
-                    # cartridge as a file. Both answer to their stem.
-                    note(entry.name if entry.is_dir() else entry.stem)
+                    # A cartridge zip answers to its stem. A disc-set file
+                    # inside a game-named directory answers to BOTH its own
+                    # stem and the directory name, because that is how the
+                    # set is filed and how the DAT names the game.
+                    note(entry.stem)
+                    for parent in entry.relative_to(folder).parents:
+                        if str(parent) not in (".", ""):
+                            note(parent.name)
         if not listed:
             for item in (self.library_view() or {}).get("items", []):
                 note(str(item.get("name") or ""))
