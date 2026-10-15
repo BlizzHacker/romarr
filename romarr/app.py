@@ -1447,11 +1447,23 @@ class ROMarr:
     def _hub_releases(self, game: str, platform=None) -> list:
         """ROM Hub plugin results as Releases, for the same pipeline.
 
-        The plugin's result row rides inside a `hub://` download_url -- the
-        queue and the client ledger only ever carry strings, and the row is
-        what the plugin needs to produce a FetchPlan later. The plugin slug
-        is the indexer, so Interactive Search shows where a result came from
-        without a special case.
+        Two lanes out of one row, decided by what the plugin's source
+        actually distributes:
+
+        * A row whose plugin resolved a **magnet** (`resolve_torrents` set
+          `row["magnet"]`) becomes a `protocol="torrent"` Release carrying
+          that magnet -- it is handed to the operator's torrent client like
+          any indexer magnet. Sources that distribute by torrent only, such
+          as MiNERVA Archive, ride this lane; without it their results were
+          ungrabbable, because the `hub://` fetch lane is HTTP-only by
+          design (the Hub is deliberately not a torrent client).
+        * Anything else keeps the **`hub://` lane**: the plugin's result row
+          rides base64-encoded inside the download_url -- the queue and the
+          client ledger only ever carry strings, and the row is what the
+          plugin needs to produce a FetchPlan later.
+
+        The plugin slug is the indexer either way, so Interactive Search
+        shows where a result came from without a special case.
         """
         if not self._hub_enabled():
             return []
@@ -1465,9 +1477,32 @@ class ROMarr:
         if err:
             log.warning("rom hub search unavailable: %s", err)
             return []
+        # Magnet-bearing rows get their plugin's `torrent` capability run
+        # over them first -- host-gated, tracker-augmented. One grouped pass,
+        # never one subprocess per row; see hub.resolve_torrents.
+        try:
+            rows = hub.resolve_torrents(rows)
+        except Exception as exc:  # defensive: resolution must never kill a search
+            log.warning("hub torrent resolution failed: %s", exc)
         out = []
         for row in rows:
             if not row.get("title"):
+                continue
+            magnet = str(row.get("magnet") or "")
+            if magnet.startswith("magnet:"):
+                out.append(Release(
+                    title=row["title"],
+                    size=int(row.get("size_bytes") or 0),
+                    # A torrent source publishes no seeder count; the same
+                    # reasoning as the RSS and MiNERVA drivers: 0 reads as
+                    # "dead" to the scorer, and unknown is not dead.
+                    seeders=1,
+                    categories=(1000,),
+                    download_url=magnet,
+                    protocol="torrent",
+                    indexer=f"hub:{row.get('plugin') or 'plugin'}",
+                    info_url=str(row.get("url") or ""),
+                ))
                 continue
             out.append(Release(
                 title=row["title"],

@@ -383,7 +383,7 @@ def searchable_plugins() -> list[str]:
 
 
 def search(query: str, platform: str | None = None, limit: int = 25,
-           timeout: float = 30.0) -> tuple[list[dict], str]:
+           timeout: float = 90.0) -> tuple[list[dict], str]:
     """Search every enabled ROM Hub plugin, merged.
 
     Returns `(rows, error)`. Rows are plain dicts with the Hub's SearchResult
@@ -407,7 +407,11 @@ def search(query: str, platform: str | None = None, limit: int = 25,
         return [], f"could not read the plugin registry: {exc}"
     if not plugins:
         return [], ""
-    fetcher = HttpxFetcher()
+    # The fetcher gets the same budget as the call. Its own default (30s) is
+    # shorter than some sources need -- MiNERVA measured 21-25s per query
+    # live, and a ReadTimeout inside the plugin surfaced as a plugin failure
+    # rather than as a slow source. One timeout to reason about, not two.
+    fetcher = HttpxFetcher(timeout=max(60.0, timeout))
     try:
         outcome = search_all(plugins, fetcher=fetcher, query=query,
                              platform=platform, limit=limit, timeout=timeout,
@@ -423,6 +427,95 @@ def search(query: str, platform: str | None = None, limit: int = 25,
         except Exception:  # pragma: no cover -- pydantic model, always dumps
             rows.append(dict(r))
     return rows, ""
+
+
+def resolve_torrents(rows: list[dict]) -> list[dict]:
+    """Give every magnet-bearing row its plugin-resolved magnet, in place.
+
+    Some sources distribute by torrent only -- MiNERVA Archive is one -- and
+    their magnets arrive bare: an info-hash with no trackers, which is a
+    DHT-only download that never starts on networks that block it. The Hub's
+    `torrent` capability exists for exactly this: the plugin describes the
+    torrent (`TorrentSource`), the host validates it against the plugin's own
+    manifest allowlist (`check_magnet`, which gates every `tr=` by hostname)
+    and hands it over.
+
+    This is the general half of that handoff on ROMarr's side: nothing here
+    knows which plugin produced the row or what site it came from. Rows are
+    grouped by plugin so one sandboxed subprocess resolves all of a plugin's
+    rows -- spawning one per result would be absurd -- and every failure
+    degrades to the row's own raw magnet rather than losing the result: a
+    DHT-only download that starts slowly beats no download at all.
+
+    A resolved magnet rides in the row's `magnet` key. `_hub_releases` reads
+    that key and builds a `protocol="torrent"` Release, so the grab goes to
+    the operator's torrent client exactly like an indexer magnet; rows
+    without it keep riding the `hub://` FetchPlan lane.
+    """
+    if not rows:
+        return rows
+    try:
+        from rom_hub import registry as _registry
+        from rom_hub.broker.fetcher import HttpxFetcher
+        from rom_hub.broker.host import PluginProcess
+        from rom_hub.types import SearchResult
+    except Exception as exc:
+        log.warning("torrent resolution unavailable: %s", exc)
+        return rows
+
+    by_plugin: dict[str, list[dict]] = {}
+    for row in rows:
+        if str(row.get("source_id") or "").startswith("magnet:"):
+            by_plugin.setdefault(str(row.get("plugin") or ""), []).append(row)
+    if not by_plugin:
+        return rows
+
+    fetcher = HttpxFetcher(timeout=90.0)
+    try:
+        for slug, plugin_rows in by_plugin.items():
+            try:
+                plugin = _registry.Registry(HOME).get(slug)
+            except Exception as exc:
+                log.warning("cannot resolve torrents for %r: %s", slug, exc)
+                continue
+            if not getattr(plugin, "enabled", True):
+                continue
+            manifest = getattr(plugin, "manifest", None)
+            if "torrent" not in (getattr(manifest, "capabilities", None) or {}):
+                # No torrent capability: these rows stay on the hub:// lane.
+                continue
+            try:
+                with PluginProcess(
+                        plugin_dir=plugin.path, manifest=manifest,
+                        config=getattr(plugin, "config", {}) or {},
+                        fetcher=fetcher, timeout=90.0,
+                        allow_unsandboxed=_unsandboxed()) as proc:
+                    for row in plugin_rows:
+                        raw = str(row.get("source_id") or "")
+                        try:
+                            result = SearchResult(**{
+                                k: v for k, v in row.items() if k != "magnet"})
+                            source = proc.resolve_torrent(result)
+                            magnet = str(getattr(source, "source", "") or "")
+                            # Only a magnet kind belongs here; a torrent_url
+                            # would need the fetch lane, not the client.
+                            if (magnet.startswith("magnet:")
+                                    and getattr(source, "kind", "") == "magnet"):
+                                row["magnet"] = magnet
+                        except Exception as exc:
+                            log.warning(
+                                "%s could not resolve its torrent for %r: %s "
+                                "-- falling back to the bare magnet",
+                                slug, row.get("title", "")[:60], exc)
+                            row.setdefault("magnet", raw)
+            except Exception as exc:
+                log.warning("torrent plugin %r failed to run: %s", slug, exc)
+                for row in plugin_rows:
+                    row.setdefault("magnet",
+                                   str(row.get("source_id") or ""))
+    finally:
+        fetcher.close()
+    return rows
 
 
 def fetch(row: dict, dest_dir) -> dict:

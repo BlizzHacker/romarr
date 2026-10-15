@@ -505,155 +505,6 @@ class TorrentRss:
 
 
 @dataclass
-class MinervaConfig:
-    #: Base of a MiNERVA Archive deployment. There is no key: the API is
-    #: public, which is also why the timeout is generous rather than tight --
-    #: a community archive answers when it answers.
-    base_url: str = "https://minerva-archive.org"
-    name: str = "MiNERVA"
-    timeout: int = 45
-    #: Optional narrowing, straight from MiNERVA's own filter bar. Values
-    #: must match what /v1/api/rom/filters lists (e.g. group "TOSEC",
-    #: "No-Intro"; console "Nintendo Super Famicom & Super Entertainment
-    #: System"). Empty means no narrowing.
-    group: str = ""
-    console: str = ""
-    region: str = ""
-    #: MiNERVA's tokenised mode splits the query into words and matches each,
-    #: instead of substring-matching the whole phrase. Better recall for
-    #: "mario kart" against "Mario Kart (World)"; off by default because the
-    #: site's own default is off and looser matching means more junk rows.
-    tokenised: bool = False
-    #: Search pages are 100 rows and the endpoint says "more" by returning
-    #: more than 100. One page is enough for a title search; raise for a
-    #: broad sweep.
-    max_pages: int = 1
-
-
-class Minerva:
-    """MiNERVA Archive (minerva-archive.org): the Myrient continuation.
-
-    Myrient shut down 31 March 2026; MiNERVA is the community archive of its
-    entire catalogue, distributed as torrents. Its search API is public JSON
-    with no key:
-
-        GET /v1/api/rom/search?query=&offset=&tokenised=&group=&console=
-            &region=&manufacturer=&min_size=&max_size=
-        -> [{"id", "full_path", "magnet", "so_id"}, ...]
-
-    Two properties of this source shape the driver:
-
-      * **Torrents are per collection group, not per game.** A result's
-        magnet (`so_id`) covers a whole dump -- "TOSEC - Nintendo" is one
-        torrent holding thousands of zips. The magnet is still the right
-        download_url (it is what the site gives; there is no per-file
-        download), and the scorer's title match still picks the right
-        release, but an operator should know a grab may be a large torrent.
-        Rows sharing an `so_id` are collapsed to one release so Interactive
-        Search shows one entry per torrent rather than a hundred identical
-        magnets.
-      * **No seeder counts and no sizes in search results.** Like the RSS
-        driver, results are reported as private with one nominal seeder so
-        "0 seeders = dead" does not discard the entire archive; size is
-        unknown (0) and scoring falls back to title evidence.
-    """
-
-    def __init__(self, config: MinervaConfig,
-                 session: requests.Session | None = None):
-        self._config = config
-        self._session = session or requests.Session()
-        # The site sits behind Cloudflare and rejects urllib's default agent
-        # with a 403/1010 challenge page -- verified live. Identify as a
-        # browser-class client; this is a public archive, not a rate-limit
-        # dodge, and every request is a search a person asked for. Assigned,
-        # not setdefault: requests pre-populates its own User-Agent, and the
-        # default is exactly what Cloudflare refuses.
-        self._session.headers["User-Agent"] = (
-            "Mozilla/5.0 (compatible; ROMarr/1.0; +https://github.com/"
-            "BlizzHacker/romarr)")
-
-    @property
-    def name(self) -> str:
-        return self._config.name
-
-    def _api(self, path: str, **params) -> list | dict:
-        base = self._config.base_url.rstrip("/")
-        url = f"{base}/v1/api/rom/{path}"
-        response = self._session.get(
-            url, params={k: v for k, v in params.items() if v not in ("", None)},
-            timeout=self._config.timeout,
-            headers={"Accept": "application/json"})
-        response.raise_for_status()
-        return response.json()
-
-    def caps(self) -> bool:
-        """Reachable and speaking MiNERVA: the filters endpoint answers."""
-        data = self._api("filters")
-        # A JSON list/dict is not proof this is MiNERVA; the filter shape is.
-        return isinstance(data, dict) and "groups" in data
-
-    def search(self, term: str, *, limit: int = 100) -> list[Release]:
-        term = str(term or "").strip()
-        if not term:
-            return []
-        rows: list[dict] = []
-        offset = 0
-        for _ in range(max(1, self._config.max_pages)):
-            page = self._api("search", query=term.lower(), offset=offset,
-                             tokenised="true" if self._config.tokenised else "",
-                             group=self._config.group,
-                             console=self._config.console,
-                             region=self._config.region)
-            if not isinstance(page, list):
-                break
-            rows.extend(page)
-            # The endpoint signals "there is more" by returning a full page;
-            # >100 is the site's own hasMore rule, 100 is a full page.
-            if len(page) < 100:
-                break
-            offset += 100
-        return self.parse(rows)[:limit]
-
-    def parse(self, rows: list[dict]) -> list[Release]:
-        """Search rows -> releases, one per distinct collection torrent."""
-        base = self._config.base_url.rstrip("/")
-        out: list[Release] = []
-        seen: set = set()
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            magnet = str(row.get("magnet") or "")
-            path = str(row.get("full_path") or "")
-            if not magnet.startswith("magnet:") or not path:
-                continue
-            # One release per torrent, else a hundred rows of the same giant
-            # magnet drown every other source in the results. Keyed on the
-            # magnet itself (the btih is the torrent's identity) as well as
-            # so_id: the live archive carries rows that share a magnet under
-            # different so_ids -- [a8]/[a9] alternates of one dump -- and both
-            # keys are needed to collapse them to one release.
-            key = (row.get("so_id"), magnet)
-            if magnet in seen or (row.get("so_id") is not None
-                                  and key in seen):
-                continue
-            seen.add(magnet)
-            seen.add(key)
-            title = path.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
-            rom_id = row.get("id")
-            out.append(Release(
-                title=title,
-                size=0,                 # not published in search results
-                seeders=1,              # see class docstring: unknown, not 0
-                categories=(SEARCH_CATEGORIES[0],),
-                download_url=magnet, protocol="torrent",
-                indexer=self.name, private=True,
-                info_url=f"{base}/rom?id={rom_id}" if rom_id else "",
-            ))
-        return out
-
-
-
-@dataclass
 class TorrentPotatoConfig:
     url: str
     name: str = "TorrentPotato"
@@ -760,13 +611,6 @@ def build_indexer(cfg: dict):
         return TorrentRss(TorrentRssConfig(
             url=cfg["url"], name=name,
             private=bool(cfg.get("private", True))))
-    if driver == "minerva":
-        return Minerva(MinervaConfig(
-            base_url=cfg["url"], name=name,
-            group=str(cfg.get("group") or ""),
-            console=str(cfg.get("console") or ""),
-            region=str(cfg.get("region") or ""),
-            tokenised=bool(cfg.get("tokenised", False))))
     if driver == "potato":
         return TorrentPotato(TorrentPotatoConfig(
             url=cfg["url"], name=name,
@@ -956,38 +800,6 @@ INDEXER_TYPES = {
             INDEXER_FIELD("passkey", "Passkey", "secret"),
             INDEXER_FIELD("priority", "Priority", "int", 25),
             INDEXER_FIELD("private", "Private tracker", "bool", True),
-        ],
-    },
-    "minerva": {
-        "label": "MiNERVA Archive",
-        "protocol": "torrent",
-        "driver": "minerva",
-        "help": "minerva-archive.org -- the community continuation of Myrient "
-                "(shut down March 2026): its whole catalogue as collection "
-                "torrents. Public JSON search API, no key. Note a torrent is "
-                "a whole dump group, not one game.",
-        "fields": [
-            INDEXER_FIELD("name", "Name", default="MiNERVA"),
-            INDEXER_FIELD("enable", "Enable", "bool", True),
-            INDEXER_FIELD("url", "URL",
-                          default="https://minerva-archive.org",
-                          help="A MiNERVA Archive deployment. The public one "
-                               "works as-is."),
-            INDEXER_FIELD("group", "Group filter",
-                          help="Optional: only this dump group, e.g. TOSEC or "
-                               "No-Intro (values from the site's filter bar)"),
-            INDEXER_FIELD("console", "Console filter",
-                          help="Optional: only this console, e.g. \"Nintendo "
-                               "Super Famicom & Super Entertainment System\""),
-            INDEXER_FIELD("region", "Region filter",
-                          help="Optional: only this region, e.g. USA"),
-            INDEXER_FIELD("tokenised", "Tokenised search", "bool", False,
-                          help="Match each query word separately instead of "
-                               "the whole phrase -- better recall, more noise"),
-            INDEXER_FIELD("priority", "Priority", "int", 40,
-                          help="Higher (less preferred) than a tracker by "
-                               "default: results are whole-collection "
-                               "torrents"),
         ],
     },
 }
