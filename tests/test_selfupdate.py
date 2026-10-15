@@ -96,6 +96,57 @@ def test_an_unreadable_queue_defers_rather_than_assuming_idle():
     assert selfupdate.queue_busy(Boom()) is True
 
 
+class _AgedItem(_Item):
+    def __init__(self, state, at):
+        super().__init__(state)
+        self.at = at
+
+
+def test_a_stalled_grab_does_not_starve_the_update_forever():
+    """The live failure this locks down: nine mislabeled grabs from public
+    trackers cycled grabbed/stalled/failed/regrabbed for days, every cycle
+    minting a fresh `grabbed` row, and every daily UpdateCheck deferred
+    behind a queue that would never empty. A `grabbed` row older than the
+    stall timeout is dead weight, not work in flight."""
+    from datetime import datetime, timedelta, timezone
+    now = datetime.now(timezone.utc)
+    old = (now - timedelta(days=3)).isoformat(timespec="seconds")
+    fresh = now.isoformat(timespec="seconds")
+
+    # A grabbed row three days old, stall timeout 180 minutes: not busy.
+    assert selfupdate.queue_busy([_AgedItem("grabbed", old)],
+                                 stall_minutes=180) is False
+    # A genuinely fresh grab still defers the update.
+    assert selfupdate.queue_busy([_AgedItem("grabbed", fresh)],
+                                 stall_minutes=180) is True
+    # Mixed: one fresh row among dead ones is still busy.
+    assert selfupdate.queue_busy([_AgedItem("grabbed", old),
+                                  _AgedItem("grabbed", fresh)],
+                                 stall_minutes=180) is True
+    # An importing row is always busy, however old -- an import that has run
+    # three days is a wedged import, and restarting mid-write is worse.
+    assert selfupdate.queue_busy([_AgedItem("importing", old)],
+                                 stall_minutes=180) is True
+
+
+def test_a_row_with_no_readable_timestamp_still_counts_as_busy():
+    """When in doubt, defer: an undatable grabbed row is treated as live."""
+    assert selfupdate.queue_busy([_AgedItem("grabbed", "")],
+                                 stall_minutes=180) is True
+    assert selfupdate.queue_busy([_AgedItem("grabbed", "not a date")],
+                                 stall_minutes=180) is True
+
+
+def test_stall_timeout_zero_means_no_age_check():
+    """An operator who disabled the stall sweep gets the old behavior: any
+    grabbed row defers, whatever its age."""
+    from datetime import datetime, timedelta, timezone
+    old = (datetime.now(timezone.utc)
+           - timedelta(days=30)).isoformat(timespec="seconds")
+    assert selfupdate.queue_busy([_AgedItem("grabbed", old)],
+                                 stall_minutes=0) is True
+
+
 # -- the detached script ------------------------------------------------------
 
 def test_the_script_is_fail_stop_and_ff_only():

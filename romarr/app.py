@@ -4302,7 +4302,14 @@ class ROMarr:
         if channel not in ("stable", "nightly"):
             return {"ok": False, "error": f"unknown update channel {channel!r}"}
         with self._lock:
-            busy = selfupdate.queue_busy(self.queue)
+            # The stall timeout is passed so a grabbed row that died days ago
+            # does not defer the update forever -- see queue_busy.
+            try:
+                stall = int(self.store.settings.get(
+                    "stalled_timeout_minutes") or 0)
+            except (TypeError, ValueError):
+                stall = 0
+            busy = selfupdate.queue_busy(self.queue, stall_minutes=stall)
         if busy:
             return {"ok": False, "deferred": True,
                     "error": "downloads or imports are in flight; the update "

@@ -126,10 +126,43 @@ def _git(git: str, cwd: Path, *args: str) -> str:
 BUSY_STATES = frozenset({"grabbed", "importing"})
 
 
-def queue_busy(queue) -> bool:
-    """Whether any queue row is mid-flight. Reads states, never the network."""
+def _row_age_minutes(item, now) -> float | None:
+    """How long this row has been sitting, or None if it will not say."""
+    from datetime import datetime, timezone
     try:
-        return any(getattr(item, "state", "") in BUSY_STATES for item in queue)
+        stamped = datetime.fromisoformat(getattr(item, "at", "") or "")
+    except (TypeError, ValueError):
+        return None
+    if stamped.tzinfo is None:
+        stamped = stamped.replace(tzinfo=timezone.utc)
+    return (now - stamped).total_seconds() / 60.0
+
+
+def queue_busy(queue, *, stall_minutes: int = 0) -> bool:
+    """Whether any queue row is mid-flight. Reads states, never the network.
+
+    `stall_minutes` (the same setting retire_dead_downloads uses) makes the
+    answer honest about dead weight: a `grabbed` row older than the stall
+    timeout is not work in flight, it is a download that died and has not
+    been swept yet. Counting those as busy starved the auto-update forever on
+    a live install -- nine mislabeled grabs from public trackers cycled
+    grabbed/stalled/failed/regrabbed for days, each cycle minting a fresh
+    `grabbed` row, and every daily UpdateCheck deferred behind a queue that
+    would never empty. A stalled row blocks nothing; the sweep retires it.
+    """
+    from datetime import datetime, timezone
+    try:
+        now = datetime.now(timezone.utc)
+        for item in queue:
+            state = getattr(item, "state", "")
+            if state not in BUSY_STATES:
+                continue
+            if state == "grabbed" and stall_minutes > 0:
+                age = _row_age_minutes(item, now)
+                if age is not None and age >= stall_minutes:
+                    continue
+            return True
+        return False
     except Exception:
         # An unreadable queue is not an idle one: when in doubt, defer.
         return True
