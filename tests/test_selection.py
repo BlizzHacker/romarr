@@ -602,6 +602,24 @@ def test_a_full_size_cartridge_dump_is_never_penalised_for_being_large():
         assert score(biggest, "some game", by_slug(slug)) > 0, slug
 
 
+def test_an_unknown_size_of_zero_is_not_rejected_as_too_small():
+    """Sources that publish no size -- an RSS feed, MiNERVA's search API --
+    report 0. That means UNKNOWN, not "3 bytes"; treating it as a real floor
+    rejection silenced an entire indexer whose title matches were perfect.
+    A sizeless release with a clean title must survive scoring."""
+    snes = by_slug("snes")
+    unknown = rel("Chrono Trigger (USA)", size=0, seeders=1)
+    assert score(unknown, "chrono trigger", snes) > 0
+
+
+def test_a_real_too_small_release_is_still_rejected():
+    """The floor still fires for a size that is genuinely tiny -- only the
+    literal unknown (0) is exempt."""
+    snes = by_slug("snes")
+    tiny = rel("Chrono Trigger (USA)", size=1024, seeders=1)  # 1KB, below floor
+    assert score(tiny, "chrono trigger", snes) < 0
+
+
 def test_a_retranslation_is_penalised_like_a_translation():
     """"Chrono Trigger (Retranslated)" is a real RetroWithin title. The junk
     marker was the exact word "translation", so every other form of the word --

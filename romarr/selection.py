@@ -481,12 +481,18 @@ def judge(release: Release, wanted: str,
                 f"too big for a {platform.name} {medium} "
                 f"({release.size // 1048576}MB, ceiling "
                 f"{platform.max_size // 1048576}MB)")
-        elif release.size < _size_floor(platform):
+        elif 0 < release.size < _size_floor(platform):
             # The floor is per medium for the same reason the ceiling is. Four
             # kilobytes is a real floor for an Atari cartridge and no floor at
             # all for a disc: a few hundred KB offered for a PlayStation
             # request is a patch, a cheat file or a lone .cue, and every one of
             # those imports cleanly and boots nothing.
+            #
+            # `0 <` because zero means UNKNOWN, not tiny. Sources that publish
+            # no size -- an RSS feed, MiNERVA's search API -- reported 0 and
+            # every one of their releases was rejected as "too small", however
+            # good the title match was. Absent evidence is not evidence of
+            # absence; the title and extension checks still decide those.
             add(-200, f"too small to be a {platform.name} {medium}")
 
     if profile:
