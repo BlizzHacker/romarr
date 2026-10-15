@@ -87,8 +87,9 @@ from .platforms import PLATFORMS, resolve
 from .sso import ForwardAuth
 from .totp import Totp
 from .playability import (
-    DOWNLOAD, MOONLIGHT_KINDS, PAIRING_IS_MANUAL, PLAYERS, WOLF, MoonlightHost,
-    PlayerPolicy, StreamServer, StreamSources, routes_for, routes_for_file)
+    DOWNLOAD, MOONLIGHT_KINDS, NCI_DEFAULT_PORT, PAIRING_IS_MANUAL, PLAYERS,
+    WOLF, MoonlightHost, PlayerPolicy, RetroArchNCI, StreamServer,
+    StreamSources, routes_for, routes_for_file)
 from .lists import LIST_TYPES
 
 #: List-source fields that are credentials: masked on the way out, kept on
@@ -399,12 +400,36 @@ class ROMarr:
             desktop_url=e.get("STEAM_HEADLESS_URL", ""),
         ) if moonlight_host else None
 
-        # Both stream tiers behind the single slot `routes_for` takes. The
-        # RetroArch server goes first because it knows which cores it has,
-        # while the Moonlight host is inferring from application names -- so
-        # an inferred answer never displaces a known one.
-        self.stream = (StreamSources(self.retroarch, self.moonlight)
-                       if (self.retroarch or self.moonlight) else None)
+        # Real RetroArch, as opposed to a custom HTTP server in front of one.
+        # The Network Control Interface is a UDP socket -- 55355 by default,
+        # off unless `network_cmd_enable = "true"` -- that answers VERSION,
+        # GET_STATUS and GET_CONFIG_PARAM and nothing ROMarr would send
+        # anyway (the client is read-only by allowlist, see
+        # `playability.RetroArchNCI`). It reports what is playing, never
+        # which cores are installed, so it grants a stream route to exactly
+        # one platform at a time: the one whose game is loaded right now.
+        # Weak on its own, and still worth wiring, because for that platform
+        # the evidence is a running core rather than a guess.
+        nci_host = e.get("RETROARCH_NCI_HOST", "")
+        try:
+            nci_port = int(e.get("RETROARCH_NCI_PORT", "") or NCI_DEFAULT_PORT)
+        except ValueError:
+            nci_port = NCI_DEFAULT_PORT
+        self.store.settings["_retroarch_nci"] = (
+            f"{nci_host}:{nci_port}" if nci_host else "")
+        self.retroarch_nci = RetroArchNCI(nci_host, port=nci_port) \
+            if nci_host else None
+
+        # All the stream tiers behind the single slot `routes_for` takes. The
+        # HTTP stream server goes first because it knows which cores it has,
+        # then real RetroArch's NCI -- which knows what is *loaded*, a proof
+        # for one platform -- and last the Moonlight host, which is inferring
+        # from application names. Confidence order, so an inferred answer
+        # never displaces a known one.
+        self.stream = (StreamSources(self.retroarch, self.retroarch_nci,
+                                     self.moonlight)
+                       if (self.retroarch or self.retroarch_nci
+                           or self.moonlight) else None)
 
         # Which browser players this install offers, and in what order. All
         # four unless the operator says otherwise -- see PlayerPolicy for why
@@ -1946,6 +1971,7 @@ class ROMarr:
             "titled": getattr(self, 'titled', None) and len(getattr(self, 'titled', TitleDBIndex()).titles) or 0,
             "play_routes": self.play_route_counts(),
             "stream_url": self.store.settings.get("_stream_url", ""),
+            "retroarch_nci": self.retroarch_nci_status(),
             "moonlight": self.moonlight_status(),
             "events": len(self.store.events),
             "uptime": f"{up // 3600}h {(up % 3600) // 60}m",
@@ -2758,6 +2784,24 @@ class ROMarr:
         counts["total"] = len(PLATFORMS)
         counts["players"] = by_player
         return counts
+
+    def retroarch_nci_status(self) -> dict:
+        """The real-RetroArch source, or an honest account of there not being one.
+
+        Its own row rather than folded into the stream server's, because the
+        two answer different questions: `STREAM_SERVER_URL` is a custom HTTP
+        router that knows its installed cores, while the NCI is stock
+        RetroArch's UDP interface that knows only what is loaded right now.
+        Host and port are shown -- never a credential, and the NCI has none,
+        which is precisely why ROMarr sends it reads only.
+        """
+        if not self.retroarch_nci:
+            return {
+                "configured": False,
+                "hint": ("set RETROARCH_NCI_HOST to a RetroArch running with "
+                         "network_cmd_enable to see it here"),
+            }
+        return self.retroarch_nci.status()
 
     def moonlight_status(self) -> dict:
         """The Moonlight host, or an honest account of there not being one.

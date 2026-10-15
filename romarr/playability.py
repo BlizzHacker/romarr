@@ -1229,6 +1229,453 @@ class StreamServer:
 
 
 # ===========================================================================
+# RetroArch itself: the Network Control Interface
+# ===========================================================================
+#
+# `StreamServer` above talks to a custom HTTP service that some operators run
+# in front of RetroArch. Real, stock RetroArch has no HTTP API at all. What
+# it has is the **Network Control Interface** (NCI): a UDP socket, port 55355
+# by default, that takes one plain-text command per datagram and replies to
+# whoever sent it. It is switched on with `network_cmd_enable = "true"` in
+# retroarch.cfg and is off by default. The operator-facing equivalent, for
+# checking a host by hand, is `retroarch --command "VERSION;HOST;PORT"` --
+# where HOST and PORT are the *destination*, not further commands.
+#
+# What the NCI answers, read out of `command.c` at tag v1.19.1 rather than
+# out of anybody's blog post:
+#
+#   * `VERSION`                -> `1.19.1`
+#   * `GET_STATUS`              -> `GET_STATUS PLAYING|PAUSED
+#                                   <system_id>,<basename>,crc32=XXXXXXXX`
+#                                  when content is loaded, or
+#                                  `GET_STATUS CONTENTLESS` when it is not.
+#                                  (Upstream master has since dropped the
+#                                  crc32 field and added an `ERROR` reply;
+#                                  the parser below accepts both shapes.)
+#   * `GET_CONFIG_PARAM <name>` -> `GET_CONFIG_PARAM <name> <value>`, or
+#                                  the literal value `unsupported` for a
+#                                  param this build does not have.
+#
+# What it does not answer: **which cores are installed.** There is no core
+# list in any release ROMarr pins (upstream master grew a `LIST_CORES`
+# after 1.19.1; this class does not use it, and must not grow a use of it
+# without re-reading this paragraph, because a routing answer built on a
+# command the operator's RetroArch does not have is a timeout per platform).
+# So the honest derivation runs the other way: a *loaded game* names its
+# core's `system_id`, and that is proof the core exists on that host. The
+# absence of proof is not proof of absence, and every answer below is built
+# on that asymmetry -- "unknown", never "no".
+#
+# Even `GET_CONFIG_PARAM` does not close the gap. It can read
+# `libretro_directory`, which says *where* cores live -- but listing that
+# directory needs filesystem access to somebody else's RetroArch host, which
+# ROMarr does not have and is not growing an SSH client to get. The
+# boundary is recorded in `RetroArchNCI.status()` rather than left to be
+# rediscovered by whoever wonders why the directory is shown but empty.
+
+#: The NCI's default port. RetroArch's own `DEFAULT_NETWORK_CMD_PORT`.
+NCI_DEFAULT_PORT = 55355
+
+#: UDP on a LAN, three datagrams per probe. Shorter than `STREAM_TIMEOUT`
+#: because there is no connection to establish and no body to transfer, and
+#: a silent host must cost seconds rather than the five an HTTP timeout does.
+NCI_TIMEOUT = 2.0
+
+#: The complete vocabulary of this module's conversation with RetroArch.
+#:
+#: Enforced before every datagram, and the enforcement *raises* rather than
+#: filtering quietly: the NCI serves state-changing commands -- `LOAD_CORE`,
+#: `LOAD_CONTENT`, `MENU_TOGGLE`, `QUIT` -- on the same socket as the reads
+#: above, with no authentication of any kind. RetroArch's own source says so
+#: outright ("Anyone on that network can then send LOAD_CORE"). ROMarr is a
+#: playability *probe*: it must be able to ask a host what it is playing
+#: without being able to disturb anybody playing it, and a read-only
+#: guarantee that lives only in a docstring is one refactor away from not
+#: being one.
+NCI_READ_ONLY = ("VERSION", "GET_STATUS", "GET_CONFIG_PARAM")
+
+#: libretro `system_id` -> ROMarr slugs, read out of the `systemid` and
+#: `display_name` fields of libretro-super's published `*.info` files rather
+#: than remembered. One `system_id` can cover several machines -- Beetle PCE
+#: advertises "PC Engine / SuperGrafx / CD", Dolphin answers `gamecube` for
+#: both of its machines -- and where two cores share an id but not a feature
+#: set the table stays on the intersection: `fb_alpha` is answered by FBNeo
+#: (which plays Neo Geo) and by fbalpha2012_cps1/cps2 (which do not), so it
+#: maps to `arcade` only, and `mega_drive` is answered by both Genesis Plus
+#: GX and PicoDrive but only PicoDrive does 32X, so `sega32` is left out.
+#: Under-claiming costs a warning; over-claiming sends somebody to a game
+#: that displays and does nothing.
+NCI_SYSTEM_PLATFORMS: dict[str, tuple[str, ...]] = {
+    "nes": ("nes",),                              # fceumm, nestopia, mesen
+    "super_nes": ("snes",),                       # snes9x, bsnes, mesen-s
+    "game_boy": ("gb", "gbc"),                    # gambatte, sameboy
+    "game_boy_advance": ("gba",),                 # mgba
+    "nintendo_64": ("n64",),                      # mupen64plus_next, parallel_n64
+    "mega_drive": ("genesis-slash-megadrive", "sms", "gamegear", "segacd"),
+    "playstation": ("psx",),                      # pcsx_rearmed, beetle psx (hw), swanstation
+    "playstation2": ("ps2",),                     # pcsx2 (lrps2 era)
+    "playstation_portable": ("psp",),             # ppsspp
+    "nds": ("nds",),                              # melonds, desmume
+    "3ds": ("3ds",),                              # citra, azahar
+    "gamecube": ("ngc", "wii"),                   # dolphin
+    "dreamcast": ("dc",),                         # flycast
+    "sega_saturn": ("saturn",),                   # yabause, kronos, yabasanshiro
+    "pc_engine": ("turbografx16--1", "supergrafx",
+                  "turbografx-16-slash-pc-engine-cd"),   # beetle pce
+    "pc_fx": ("pc-fx",),                          # beetle pc-fx
+    "neo_geo_pocket": ("neo-geo-pocket", "neo-geo-pocket-color"),
+    "wonderswan": ("wonderswan", "wonderswan-color"),
+    "atari_2600": ("atari2600",),                 # stella, stella2014
+    "atari_5200": ("atari5200",),                 # a5200
+    "atari_7800": ("atari7800",),                 # prosystem
+    "atari_lynx": ("lynx",),                      # handy
+    "atari_jaguar": ("jaguar",),                  # virtualjaguar
+    "3do": ("3do",),                              # opera
+    "cdi": ("philips-cd-i",),                     # same_cdi
+    "commodore_amiga": ("amiga",),                # puae
+    "commodore_c64": ("c64",),                    # vice_x64, vice_x64sc
+    "commodore_c128": ("c128",),                  # vice_x128
+    "commodore_vic20": ("vic-20",),               # vice_xvic
+    "cpc": ("acpc",),                             # cap32, crocods
+    "zx_spectrum": ("zxs",),                      # fuse
+    "dos": ("dos",),                              # dosbox_pure
+    "mame": ("arcade",),                          # mame2003, mame2003_plus
+    "fb_alpha": ("arcade",),                      # fbneo, fbalpha2012_cps*
+}
+
+
+@dataclass(frozen=True)
+class NCIStatus:
+    """One `GET_STATUS` reply, parsed.
+
+    `state` is `playing`, `paused`, `contentless`, `error` or empty -- empty
+    meaning the reply was never gotten or was not one RetroArch would send.
+    Empty is kept distinct from `contentless` on purpose: "sitting at the
+    menu with nothing loaded" is a fact about the host, and "ROMarr did not
+    hear" is a fact about the network, and an operator fixing one does not
+    want to be told the other.
+    """
+
+    state: str = ""
+    system_id: str = ""
+    game: str = ""
+    crc32: str = ""
+
+
+def parse_nci_status(reply: str) -> NCIStatus:
+    """Parse a `GET_STATUS` reply in either published shape.
+
+    v1.19.1 answers `GET_STATUS PLAYING <system_id>,<basename>,crc32=%x`;
+    upstream master dropped the crc32 field and added `GET_STATUS ERROR`.
+    A basename may itself contain commas -- "Game, The (USA).chd" is a real
+    filename shape -- so the crc32 is peeled off the *end* first and the
+    system_id off the *front*, and only the basename between them is taken
+    as-is. Anything that is not a shape RetroArch publishes parses to the
+    empty status rather than to a guess.
+    """
+    text = (reply or "").strip()
+    if not text.upper().startswith("GET_STATUS"):
+        return NCIStatus()
+    rest = text[len("GET_STATUS"):].strip()
+    if rest.upper() == "CONTENTLESS":
+        return NCIStatus(state="contentless")
+    if rest.upper().startswith("ERROR"):
+        return NCIStatus(state="error")
+    state, _, tail = rest.partition(" ")
+    if state.lower() not in ("playing", "paused"):
+        return NCIStatus()
+    crc = ""
+    marker = ",crc32="
+    if marker in tail:
+        tail, _, crc = tail.rpartition(marker)
+    system_id, _, game = tail.partition(",")
+    return NCIStatus(state=state.lower(), system_id=system_id.strip(),
+                     game=game.strip(), crc32=crc.strip())
+
+
+class RetroArchNCI:
+    """Read-only client for a real RetroArch's Network Control Interface.
+
+    Duck-types `StreamServer` -- `tier`, `why`, `reachable`, `label`,
+    `engine` -- so `routes_for` and `StreamSources` consume it unchanged,
+    for the reason `MoonlightHost` gives: "played somewhere else and
+    delivered as video" is one idea and the pixels' provenance is detail.
+
+    **What it can answer, and what it refuses to.**
+
+      * That the host is up and is RetroArch: `VERSION` answers with a
+        version string, and a service that answers with anything else is
+        reported as "something else is on that port", not as RetroArch.
+      * What is loaded right now: `GET_STATUS` yields the state, the core's
+        `system_id`, the basename and (on 1.19.x) the CRC32. When the
+        `system_id` maps to a ROMarr slug via `NCI_SYSTEM_PLATFORMS`, that
+        platform gets a stream route -- the loaded game is *proof* the core
+        exists, which is the strongest evidence any stream source in this
+        module offers for a single platform.
+      * Where cores live: `GET_CONFIG_PARAM libretro_directory`. Shown on
+        the status page and never listed -- see the section header for the
+        boundary, which is a filesystem ROMarr cannot see.
+
+    For every other platform the honest answer is **unknown**, and unknown
+    is not a route: `tier` returns None and `why` says, in words, that the
+    NCI reports what is playing and never what is installed. This is the
+    same refusal `platforms_from_apps` makes for Moonlight hosts, and
+    for the same reason -- a RetroArch with no cores and a RetroArch with
+    forty look the same from outside, and the only window the NCI opens is
+    the one game somebody happens to be playing.
+
+    Read-only is enforced, not promised: every datagram passes an allowlist
+    check (`NCI_READ_ONLY`) that raises on anything else, because the same
+    socket happily carries `LOAD_CORE` and `QUIT` from anyone who can reach
+    the port. A probe must not disturb a running game.
+
+    The breaker and cache are `StreamServer`'s, carried over whole: only
+    successes are cached (a failure must never be remembered as "cannot
+    play this"), and a host that does not answer stops being asked for
+    `DOWN_COOLDOWN`. UDP makes that more important, not less -- a silent
+    host is ambiguous between switched off, firewalled and running with
+    `network_cmd_enable` off, and none of the three is fixed by asking
+    thirty more times per page. Where the OS does hand back a distinction
+    (ICMP port-unreachable surfacing as `ECONNREFUSED` on a connected UDP
+    socket) the problem text reports it, because "nothing is listening
+    there" and "nothing came back" send an operator to different checks.
+    """
+
+    #: Same numbers, same reasoning as `StreamServer.DOWN_COOLDOWN`.
+    DOWN_COOLDOWN = 30.0
+    CACHE_TTL = 300.0
+
+    def __init__(self, host: str, *, port: int = NCI_DEFAULT_PORT,
+                 timeout: float = NCI_TIMEOUT, transport=None):
+        self.host, self.port = _split_host(host, port or NCI_DEFAULT_PORT)
+        self.timeout = timeout
+        #: Injectable UDP transport: `command text -> reply text`, raising
+        #: on failure. Tests supply a fake; the default opens a real socket
+        #: per datagram, connected so that ICMP refusals are visible.
+        self._transport = transport or self._udp_command
+        self._reachable = False
+        self._problem = "not probed"
+        self._version = ""
+        self._status = NCIStatus()
+        self._libretro_directory = ""
+        self._down_until = 0.0
+        self._fresh_until = 0.0
+
+    # -- the shape `routes_for` consumes ------------------------------------
+
+    @property
+    def label(self) -> str:
+        return f"{self.host}:{self.port}"
+
+    @property
+    def engine(self) -> str:
+        """Named with its version once known: "RetroArch 1.19.1"."""
+        return f"RetroArch {self._version}" if self._version else "RetroArch"
+
+    @property
+    def reachable(self) -> bool:
+        return self._reachable
+
+    def tier(self, slug: str) -> str | None:
+        """`"stream"` only for the platform whose core is *provably* loaded.
+
+        Never `"local"` -- this renders on the RetroArch host, not in a
+        browser -- and None for everything else, including every platform
+        this host may well play but is not playing right now. That None is
+        "unknown", and `why` is where the difference between "unknown" and
+        "no" gets said out loud.
+        """
+        self.refresh()
+        if not self._reachable or not slug:
+            return None
+        return STREAM if slug in self._loaded_slugs() else None
+
+    def why(self, slug: str) -> str:
+        """The honest sentence for a platform the NCI cannot rule on."""
+        if not self._reachable:
+            return ""
+        if slug in self._loaded_slugs():
+            return ""
+        loaded = {
+            "contentless": "nothing is loaded on it right now",
+            "error": "it could not report what is loaded",
+        }.get(self._status.state)
+        if not loaded and self._status.system_id:
+            loaded = (f"it is running {self._status.system_id} content "
+                      f"({self._status.game or 'unnamed'})")
+        return (f"{self.engine} answers at {self.host}:{self.port}, but its "
+                "network command interface reports what is playing and never "
+                f"which cores are installed"
+                + (f" -- {loaded}" if loaded else "")
+                + ", so ROMarr cannot say whether it plays this platform")
+
+    # -- probing ------------------------------------------------------------
+
+    def refresh(self, *, force: bool = False) -> None:
+        """Probe once per TTL, and stop probing a silent host for a while.
+
+        `MoonlightHost.refresh`'s shape exactly: one probe answers every
+        question (`VERSION`, `GET_STATUS`, `libretro_directory`), because a
+        Library page must not cost three datagrams per row, and an installed
+        core becoming *loaded* must be visible without restarting ROMarr.
+        """
+        now = time.monotonic()
+        if not force:
+            if now < self._fresh_until:
+                return
+            if now < self._down_until:
+                self._reachable = False
+                return
+        self._probe()
+        if self._reachable:
+            self._fresh_until = now + self.CACHE_TTL
+            self._down_until = 0.0
+        else:
+            self._down_until = now + self.DOWN_COOLDOWN
+            self._fresh_until = 0.0
+
+    def _probe(self) -> None:
+        """VERSION as the handshake, then the two reads that matter.
+
+        `VERSION` is the reachability gate: it is the one reply that proves
+        the thing on this port is RetroArch rather than some other service.
+        The two reads after it are best-effort -- UDP loses datagrams, and a
+        dropped `GET_STATUS` must not downgrade a host that just answered
+        `VERSION` into "unreachable".
+        """
+        self._reachable, self._problem = False, ""
+        self._version, self._status = "", NCIStatus()
+        self._libretro_directory = ""
+        try:
+            reply = self._command("VERSION")
+        except ConnectionRefusedError as exc:
+            # The one distinction UDP does allow, on an OS that surfaces
+            # ICMP port-unreachable: the host is up and *nothing is
+            # listening* -- RetroArch is not running, or network_cmd_enable
+            # is off. Worth more than silence because it names the fix.
+            self._problem = ("refused -- nothing is listening on that UDP "
+                             "port (RetroArch is not running there, or "
+                             "network_cmd_enable is off)")
+            log.info("retroarch nci %s refused: %s", self.label, exc)
+            return
+        except Exception as exc:
+            # Silent host: switched off, firewalled, or NCI disabled. UDP
+            # cannot tell those apart and this message refuses to pretend.
+            self._problem = ("no answer -- the host is down, a firewall "
+                             "dropped the datagram, or the network command "
+                             "interface is off; UDP cannot say which")
+            log.info("retroarch nci %s did not answer: %s", self.label, exc)
+            return
+
+        version = (reply or "").strip()
+        if not re.fullmatch(r"[0-9][0-9A-Za-z.+~_-]*", version):
+            self._problem = (f"something answered on port {self.port} but "
+                             "not with a version -- it is not RetroArch")
+            log.info("retroarch nci %s answered VERSION with %r",
+                     self.label, version[:80])
+            return
+        self._reachable, self._version = True, version
+
+        try:
+            self._status = parse_nci_status(self._command("GET_STATUS"))
+        except Exception as exc:
+            log.info("retroarch nci %s answered VERSION %s but lost "
+                     "GET_STATUS: %s", self.label, version, exc)
+        try:
+            reply = self._command("GET_CONFIG_PARAM libretro_directory")
+            self._libretro_directory = _parse_config_param(reply)
+        except Exception as exc:
+            log.info("retroarch nci %s: libretro_directory unreadable: %s",
+                     self.label, exc)
+
+    def _command(self, text: str) -> str:
+        """Send one command -- or refuse to, if it is not a read.
+
+        The check is here rather than in `_probe` so that there is no path
+        through this class to the socket that skips it, including paths
+        added later by somebody who never read the section header.
+        """
+        verb = text.strip().split(" ", 1)[0].upper()
+        if verb not in NCI_READ_ONLY:
+            raise PermissionError(
+                f"refusing to send {verb!r}: ROMarr is read-only against "
+                f"RetroArch (allowed: {', '.join(NCI_READ_ONLY)})")
+        return self._transport(text)
+
+    def _udp_command(self, text: str) -> str:
+        """The real transport: one connected UDP round trip.
+
+        `connect` on a UDP socket sends nothing; it pins the peer so that an
+        ICMP port-unreachable comes back as `ConnectionRefusedError` (on
+        Linux) instead of vanishing, which is the only honest "refused"
+        signal this protocol offers. One socket per datagram, because the
+        probe is three requests per TTL and a persistent socket would be a
+        lifetime to manage for nothing.
+        """
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(self.timeout)
+        try:
+            sock.connect((self.host, self.port))
+            sock.sendall(text.encode("utf-8"))
+            return sock.recv(65535).decode("utf-8", "replace")
+        finally:
+            sock.close()
+
+    def _loaded_slugs(self) -> tuple[str, ...]:
+        """The slugs the currently-loaded content *proves*, and no others."""
+        if self._status.state not in ("playing", "paused"):
+            return ()
+        return NCI_SYSTEM_PLATFORMS.get(self._status.system_id.lower(), ())
+
+    # -- reporting ----------------------------------------------------------
+
+    def status(self) -> dict:
+        """Everything the UI can honestly show about this host."""
+        self.refresh()
+        return {
+            "configured": True,
+            "host": self.host,
+            "port": self.port,
+            "label": self.label,
+            "engine": self.engine,
+            "ok": self._reachable,
+            "problem": self._problem,
+            "version": self._version,
+            "state": self._status.state,
+            "system_id": self._status.system_id,
+            "game": self._status.game,
+            "crc32": self._status.crc32,
+            "platforms": list(self._loaded_slugs()),
+            "libretro_directory": self._libretro_directory,
+            # The boundary, on every response rather than in a doc nobody
+            # opens: the NCI does not publish an installed-core list, and
+            # the directory above is *where cores live on a filesystem
+            # ROMarr cannot see*. An empty `platforms` is "nothing loaded",
+            # never "nothing installed".
+            "cores_listed": False,
+            "note": ("the network command interface reports what is playing "
+                     "and never which cores are installed; a platform not "
+                     "listed here is unknown, not absent"),
+        }
+
+
+def _parse_config_param(reply: str) -> str:
+    """The value out of `GET_CONFIG_PARAM <name> <value>`.
+
+    Split into at most three pieces because a directory path may contain
+    spaces. The literal value `unsupported` is what RetroArch answers for a
+    param its build does not have, and is reported as no value rather than
+    as a directory called "unsupported".
+    """
+    text = (reply or "").strip()
+    parts = text.split(" ", 2)
+    if len(parts) < 3 or parts[0].upper() != "GET_CONFIG_PARAM":
+        return ""
+    value = parts[2].strip()
+    return "" if value.lower() == "unsupported" else value
+
+
+# ===========================================================================
 # Moonlight hosts: Wolf, Sunshine, Steam Headless
 # ===========================================================================
 #

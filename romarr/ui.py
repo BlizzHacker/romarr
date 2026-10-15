@@ -2854,6 +2854,17 @@ RENDER.status=async()=>{
         : `<tr><td>Stream server</td><td><span class="dot"></span>not configured</td>
            <td style="color:var(--dim)">set STREAM_SERVER_URL to play PS2, GameCube,
            Wii, Dreamcast and 3DS here</td></tr>`}
+      ${(h.retroarch_nci||{}).configured
+        ? row('RetroArch (network commands)',(h.retroarch_nci||{}).ok,
+              (h.retroarch_nci||{}).ok
+                ?`${esc((h.retroarch_nci||{}).label)} — ${esc((h.retroarch_nci||{}).engine)}${
+                    (h.retroarch_nci||{}).state==='playing'||(h.retroarch_nci||{}).state==='paused'
+                    ?`, playing ${esc((h.retroarch_nci||{}).game||'content')} (${esc((h.retroarch_nci||{}).system_id||'')})`
+                    :', nothing loaded'} — reports what is playing, never which cores are installed`
+                :((h.retroarch_nci||{}).problem||''))
+        : `<tr><td>RetroArch (network commands)</td><td><span class="dot"></span>not configured</td>
+           <td style="color:var(--dim)">set RETROARCH_NCI_HOST to a RetroArch with
+           network_cmd_enable = "true" (UDP 55355); ROMarr only reads from it</td></tr>`}
       ${(h.moonlight||{}).configured
         ? row(esc((h.moonlight||{}).kind_label||'Moonlight host'),
               (h.moonlight||{}).ok,

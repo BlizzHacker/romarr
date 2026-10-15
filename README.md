@@ -447,6 +447,7 @@ request actually came through it.
 | `QBITTORRENT_CATEGORY` etc. | no | Download category per client (default `romarr`) |
 | `GGREQUESTZ_URL` | no | Request front-end, shown on the status page |
 | `STREAM_SERVER_URL` | no | Headless RetroArch stream server. Read-only; it is asked which platforms it can play, so PS2, GameCube, Wii, Dreamcast and 3DS are reported as playable rather than download-only |
+| `RETROARCH_NCI_HOST` / `RETROARCH_NCI_PORT` | no | A real RetroArch's Network Control Interface — stock RetroArch has no HTTP API. UDP, port `55355` by default, and off until `network_cmd_enable = "true"` in retroarch.cfg. Read-only by allowlist (`VERSION`, `GET_STATUS`, `GET_CONFIG_PARAM`); it reports what is *loaded*, never which cores are installed, so it grants a stream route only to the platform whose game is running right now |
 | `MOONLIGHT_HOST` | no | A Wolf, Sunshine or Steam Headless machine, e.g. `192.168.0.50`. Probed with the unauthenticated `/serverinfo`; reported on the status page |
 | `MOONLIGHT_KIND` | no | `wolf` (default), `sunshine` or `steam-headless`. Not sniffed — `/serverinfo` cannot tell them apart |
 | `MOONLIGHT_USER` / `MOONLIGHT_PASS` | no | Sunshine/Steam Headless admin credentials, so ROMarr can read the app list and relay a pairing PIN. Never written to the state file |

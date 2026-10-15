@@ -419,6 +419,7 @@ environment at any time:
 `ROMARR_AUTH` and the SSO set, `ROMARR_SSL_CERT` / `ROMARR_SSL_KEY`,
 `ROMARR_PLAYERS`, `ROMARR_JSDOS_URL`, `ROMARR_EMULARITY_URL`, `LOG_LEVEL`,
 `DAT_PATH`, the `MOONLIGHT_*` and `WOLF_*` set, `STREAM_SERVER_URL`,
+`RETROARCH_NCI_HOST` / `RETROARCH_NCI_PORT`,
 `GGREQUESTZ_URL`, `PUID`, `PGID`, `UMASK`, `TZ`.
 
 ROMarr does tell you about this in the one case where it can be certain: if
@@ -572,6 +573,8 @@ Do not set both names for the same thing — the new one wins.
 |---|---|---|
 | `GGREQUESTZ_URL` | unset | Request front-end, shown on the System page |
 | `STREAM_SERVER_URL` | unset | Headless RetroArch. Read-only: ROMarr asks which platforms it can play, and reports PS2/GameCube/Wii/Dreamcast/3DS as playable instead of download-only |
+| `RETROARCH_NCI_HOST` | unset | A real RetroArch's Network Control Interface (UDP; stock RetroArch has no HTTP API). Read-only by allowlist — `VERSION`, `GET_STATUS`, `GET_CONFIG_PARAM` — and it reports what is loaded, never which cores are installed, so it grants a stream route only to the platform whose game is running |
+| `RETROARCH_NCI_PORT` | `55355` | RetroArch's own `DEFAULT_NETWORK_CMD_PORT`. Needs `network_cmd_enable = "true"` in retroarch.cfg |
 | `MOONLIGHT_HOST` | unset | A Wolf, Sunshine or Steam Headless machine, e.g. `192.168.0.50` |
 | `MOONLIGHT_KIND` | `wolf` | Also `sunshine`, `steam-headless`. Not sniffed — `/serverinfo` cannot tell them apart |
 | `MOONLIGHT_USER` / `MOONLIGHT_PASS` | unset | Sunshine/Steam Headless admin credentials. Never written to the state file |

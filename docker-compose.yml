@@ -100,6 +100,16 @@ services:
       # download-only. Everything works without it, minus those routes.
       # STREAM_SERVER_URL: http://romm-stream:8090
 
+      # Optional real-RetroArch Network Control Interface -- stock RetroArch
+      # has no HTTP API; this is its UDP one (network_cmd_enable = "true" in
+      # retroarch.cfg, port 55355 by default). ROMarr sends it reads only --
+      # VERSION, GET_STATUS, GET_CONFIG_PARAM, enforced by allowlist -- so a
+      # probe can never disturb a running game. It reports what is loaded,
+      # never which cores are installed, and grants a stream route to exactly
+      # the platform whose game is running.
+      # RETROARCH_NCI_HOST: 192.168.0.60
+      # RETROARCH_NCI_PORT: 55355
+
       # Optional DAT directory. Loose .dat/.xml files AND the ZIP archives
       # No-Intro distributes are read. Mount the host directory below and
       # point this at the container path.
