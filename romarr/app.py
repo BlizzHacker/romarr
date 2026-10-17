@@ -37,6 +37,7 @@ import os
 import pathlib
 import re
 import threading
+import uuid
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -99,7 +100,7 @@ LIST_SECRETS = ("api_key", "openxbl_key", "npsso", "itchio_key",
                 "battlenet_cookie", "humble_cookie")
 from .scheduler import Scheduler, next_search_due
 from .selection import best_release, judge, score
-from .store import Event, QueueItem, Store
+from .store import Event, QueueItem, SeerrRequest, Store
 from .ui import page as ui_page
 from .ui import link_page as ui_link_page
 from .ui import login_page as ui_login_page
@@ -1681,9 +1682,11 @@ class ROMarr:
         # it: the import sweep matches a finished download to its queue row by
         # that title, and a file named by the site it came from would never
         # match. See downloaders.hand_off.
-        if external_request_id:
-            self.store.mark_seerr_dispatching(external_request_id,
-                                               f"{client.name} {pick.protocol} handoff")
+        # The peer may have cancelled while the search ran; the store says so
+        # by refusing the dispatching claim, and nothing is handed off.
+        if (external_request_id
+                and not self.store.mark_seerr_dispatching(external_request_id)):
+            return {"ok": False, "error": "the request was cancelled"}
         ok, download_id = hand_off_with_id(client, pick.download_url,
                                            name=pick.title)
         item = QueueItem(game, platform_slug, pick.title, pick.seeders,
@@ -1720,7 +1723,7 @@ class ROMarr:
                                     release=pick.title, detail=item.detail))
             if external_request_id:
                 self.store.update_seerr_request(external_request_id,
-                                                {"error": item.detail}, status="failed")
+                                                error=item.detail, status="failed")
         return {"ok": ok, "release": pick.title, "seeders": pick.seeders}
 
     # -- interactive search -------------------------------------------------
@@ -4868,6 +4871,13 @@ class ROMarr:
 
 # -- HTTP ------------------------------------------------------------------
 
+def integration_view(row: SeerrRequest) -> dict:
+    """One integration request as the external platform reads it."""
+    return {"request_id": row.external_request_id, "name": row.name or row.game,
+            "platform": row.platform, "status": row.status,
+            "assets": list(row.assets), "error": row.error}
+
+
 def make_handler(service: ROMarr):
     class Handler(BaseHTTPRequestHandler):
         server_version = "ROMarr"
@@ -5535,6 +5545,23 @@ def make_handler(service: ROMarr):
                                   or {"status": "never run"})
             if route.path == "/api/v1/stats":
                 return self._json(200, service.stats())
+            if route.path == "/api/v1/integration/info":
+                return self._json(200, {
+                    "name": "Cartridge (ROMarr)",
+                    "version": VERSION,
+                    "description": "ROMarr is a complete Cartridge implementation for game libraries",
+                    "supports_resume": True,
+                    "supports_multi_platform": True,
+                })
+            if route.path == "/api/v1/integration/requests":
+                return self._json(200, {"requests": [
+                    integration_view(service.store.get_seerr_request(row["id"]))
+                    for row in service.store.settings.get("integration_requests") or []]})
+            if route.path == "/api/v1/integration/requests/current":
+                current = service.store.latest_seerr_request()
+                if current is None:
+                    return self._json(404, {"error": "no tracked requests"})
+                return self._json(200, integration_view(current))
             if route.path == "/api/v1/game/meta":
                 platform = (query.get("platform") or [""])[0]
                 game = (query.get("game") or [""])[0]
@@ -6287,63 +6314,31 @@ def make_handler(service: ROMarr):
             # The response carries a stable request id the caller tracks.
             # GET: poll status -- requested, searching, download, imported,
             # available. Assets list the imported file paths for the player.
-            if route.path == "/api/v1/integration/requests" and route.method == "POST":
+            if route.path == "/api/v1/integration/requests":
                 game = (body.get("name") or "").strip()
                 platform = (body.get("platform") or "").strip()
                 if not game or not platform:
                     return self._json(400, {"error": "name and platform are required"})
-                result = service.request(game, platform)
-                ext_id = (result.get("id") or "")[:16]
-                if not ext_id:
-                    return self._json(500, {"error": "missing request id"})
-                # Seed the integration row so the GET handler can reconcile it.
-                service.store.update_seerr_request(ext_id,
-                    name=game, platform=platform,
-                    status=result.get("status", "requested"))
-                return self._json(202, {
-                    "request_id": ext_id,
-                    "name": game,
-                    "platform": platform,
-                    "status": result.get("status", "requested"),
-                    "assets": []
-                })
-            if route.path == "/api/v1/integration/requests" and route.method == "GET":
-                # List all tracked integration requests
-                rows = []
-                for item in service.store.queue:
-                    if item.external_request_id:
-                        row = service.store.get_seerr_request(item.external_request_id)
-                        if row:
-                            rows.append({
-                                "request_id": item.external_request_id,
-                                "name": row.get("name", item.game),
-                                "platform": row.get("platform", item.platform),
-                                "status": row.get("status", "requested"),
-                                "assets": row.get("assets", []),
-                                "error": row.get("error", ""),
-                            })
-                return self._json(200, {"requests": rows})
-            # Single-request status endpoint (polls by id)
-            if route.path == "/api/v1/integration/requests/current":
-                current = service.store.latest_seerr_request()
-                if current is None:
-                    return self._json(404, {"error": "no tracked requests"})
-                return self._json(200, {
-                    "request_id": current.external_request_id,
-                    "name": current.name,
-                    "platform": current.platform,
-                    "status": current.status,
-                    "assets": current.assets,
-                    "error": current.error,
-                })
-            if route.path == "/api/v1/integration/info":
-                return self._json(200, {
-                    "name": "Cartridge (ROMarr)",
-                    "version": VERSION,
-                    "description": "ROMarr is a complete Cartridge implementation for game libraries",
-                    "supports_resume": True,
-                    "supports_multi_platform": True,
-                })
+                # The peer's own id, when it sends one, makes a retried POST
+                # the same request rather than a second download.
+                ext_id = (str(body.get("externalRequestId") or "").strip()[:64]
+                          or uuid.uuid4().hex[:16])
+                if service.store.get_seerr_request(ext_id) is None:
+                    service.store.put_seerr_request(SeerrRequest(
+                        ext_id, platform, game=game, name=game, status="searching"))
+                    result = service.request(game, platform,
+                                             external_request_id=ext_id)
+                    row = service.store.get_seerr_request(ext_id)
+                    if not result.get("ok") and row.status == "searching":
+                        # Some failures (an unknown platform) return before
+                        # the pipeline touches the row; none may leave it
+                        # "searching" forever.
+                        service.store.update_seerr_request(
+                            ext_id, status="failed",
+                            error=str(result.get("error") or ""),
+                            only_if_not_cancelled=True)
+                return self._json(202, integration_view(
+                    service.store.get_seerr_request(ext_id)))
             if route.path == "/api/v1/release/grab":
                 release_id = (body.get("id") or "").strip()
                 if not release_id:
