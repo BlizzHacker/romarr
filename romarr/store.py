@@ -287,6 +287,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # Behaviour
     "auto_import": True,
     "rescan_after_import": True,
+    # Scan every finished download with ClamAV before it is imported (see
+    # clamav.py). The address is clamd's: tcp://host:3310, or a socket path.
+    "clamav_enabled": False,
+    "clamav_address": "",
     # Failed download handling, the same idea Radarr and Sonarr have: a
     # release that could not be downloaded is not one to choose again. When
     # on, a download that the client refused, that finished with no ROMs in

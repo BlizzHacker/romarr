@@ -51,6 +51,7 @@ from .libraries import (
 )
 from .clients import QBittorrent, QbitConfig, Romm, RommConfig
 from . import hub  # ROM Hub bridge -- the Cartridge plugin layer
+from . import clamav
 from .dat import DatIndex, parse_dat
 from .decompress import run_batch as run_decompress_batch, scan_compressed
 from .titled import TitleDBIndex, build_index as build_titled_index, validate_switch_rom
@@ -1973,6 +1974,7 @@ class ROMarr:
             "stream_url": self.store.settings.get("_stream_url", ""),
             "retroarch_nci": self.retroarch_nci_status(),
             "moonlight": self.moonlight_status(),
+            "clamav": self.clamav_status(),
             "events": len(self.store.events),
             "uptime": f"{up // 3600}h {(up % 3600) // 60}m",
         }
@@ -4734,6 +4736,54 @@ class ROMarr:
                     + (" (dry run)" if dry_run else ""))))
         return result
 
+    def clamav_status(self) -> dict:
+        """Whether downloads are scanned before import, and whether clamd answers."""
+        address = str(self.store.settings.get("clamav_address") or "").strip()
+        out = {"configured": bool(self.store.settings.get("clamav_enabled")),
+               "address": address, "ok": False, "version": "", "problem": ""}
+        if out["configured"]:
+            try:
+                out["version"] = clamav.version(address) if address else ""
+                out["ok"] = bool(address)
+                out["problem"] = "" if address else "no ClamAV address set"
+            except clamav.ScanUnavailable as err:
+                out["problem"] = str(err)
+        return out
+
+    def _virus_check(self, path: Path, name: str, platform, queue_item) -> dict | None:
+        """None when a finished download may be imported, else why not.
+
+        Scanning is fail-closed: a download ClamAV could not judge waits for
+        the next sweep, untouched, rather than going in unscanned. Only an
+        infection marks the row, as the release's fault, so failed download
+        handling replaces it.
+        """
+        if not self.store.settings.get("clamav_enabled"):
+            return None
+        address = str(self.store.settings.get("clamav_address") or "").strip()
+        try:
+            if not address:
+                raise clamav.ScanUnavailable("ClamAV is enabled but has no address")
+            found, too_large = clamav.scan(address, path)
+        except clamav.ScanUnavailable as err:
+            log.warning("%s waits for a virus scan: %s", name, err)
+            return {"name": name, "ok": False, "reason": f"waiting for ClamAV: {err}"}
+        for file in too_large:
+            log.warning("ClamAV refused %s as larger than its StreamMaxLength; "
+                        "imported unscanned", file)
+        if not found:
+            return None
+        detail = "ClamAV: " + "; ".join(
+            f"{f.signature} in {Path(f.path).name}" for f in found)
+        self.store.record(Event(kind="failed", game=name, platform=platform.slug,
+                                detail=detail))
+        self.notify(failed(name, detail))
+        if queue_item is not None:
+            queue_item.state = "import-failed"
+            queue_item.release_fault = True
+            queue_item.detail = detail
+        return {"name": name, "ok": False, "reason": detail}
+
     def import_finished(self, *, retry_failed: bool = True) -> list[dict]:
         """Import anything the download client has completed.
 
@@ -4782,6 +4832,10 @@ class ROMarr:
             if queue_item is not None and queue_item.state in ("imported", "import-failed"):
                 continue
             if platform is None:
+                continue
+            refused = self._virus_check(path, name, platform, queue_item)
+            if refused is not None:
+                results.append(refused)
                 continue
             # Which library this platform belongs to. A platform rule wins over
             # the default, so "PSX goes to Gaseous" is one row in the Libraries

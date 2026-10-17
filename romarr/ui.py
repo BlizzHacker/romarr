@@ -2516,6 +2516,13 @@ RENDER.media=()=>settingsPage('Media Management',
   +chk('rename_on_import','Rename on import',SETTINGS.rename_on_import)
   +chk('overwrite_existing','Overwrite an existing file',SETTINGS.overwrite_existing)
   +chk('rescan_after_import','Tell your library server to rescan after an import',SETTINGS.rescan_after_import)
+  +chk('clamav_enabled','Scan downloads with ClamAV before importing them',SETTINGS.clamav_enabled)
+  +fld('clamav_address','ClamAV address',SETTINGS.clamav_address||'','text',
+     'placeholder="tcp://clamav:3310 or /run/clamav/clamd.sock"')
+  +`<div style="color:var(--dim);font-size:11.5px;margin:-6px 0 12px">
+     An infected download is refused and blocklisted; while ClamAV cannot be
+     reached, finished downloads wait instead of going in unscanned. System &rarr;
+     Status shows whether it answers.</div>`
   +sel('translation_policy','Fan translations in 1G1R sets',
      [['exclude','Exclude — published dumps only'],
       ['fill','Fill gaps — use a translation only when no preferred-region dump exists'],
@@ -2854,6 +2861,13 @@ RENDER.status=async()=>{
         : `<tr><td>Stream server</td><td><span class="dot"></span>not configured</td>
            <td style="color:var(--dim)">set STREAM_SERVER_URL to play PS2, GameCube,
            Wii, Dreamcast and 3DS here</td></tr>`}
+      ${(h.clamav||{}).configured
+        ? row('ClamAV (scans downloads before import)',(h.clamav||{}).ok,
+              (h.clamav||{}).ok?`${(h.clamav||{}).address} — ${(h.clamav||{}).version}`
+                :((h.clamav||{}).problem||''))
+        : `<tr><td>ClamAV</td><td><span class="dot"></span>not configured</td>
+           <td style="color:var(--dim)">turn it on under Media Management to scan
+           downloads before they reach the library</td></tr>`}
       ${(h.retroarch_nci||{}).configured
         ? row('RetroArch (network commands)',(h.retroarch_nci||{}).ok,
               (h.retroarch_nci||{}).ok
