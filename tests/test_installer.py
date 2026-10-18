@@ -205,3 +205,29 @@ def test_both_proxmox_scripts_agree_on_the_variable_names():
     for legacy in ("ROMM_URL=", "ROMM_LIBRARY=", "ROMM_USERNAME="):
         assert legacy not in community, (
             f"{legacy} is the alias, not the documented name")
+
+
+def test_the_template_matches_the_host_architecture():
+    """Issue #66: an amd64 host was handed the arm64 template.
+
+    The pick was "newest debian-13-standard", and with both architectures on
+    offer the newest was an arm64 build, so the container that got created
+    could never start.
+    """
+    bash = shutil.which("bash")
+    if not bash:
+        pytest.skip("bash not available")
+    body = CT.read_text(encoding="utf-8")
+    func = re.search(r"^pick_template\(\) \{.*?^\}", body, re.S | re.M)
+    assert func, "pick_template() is gone from the installer"
+    listing = (
+        "system          debian-12-standard_12.12-1_amd64.tar.zst\n"
+        "system          debian-13-standard_13.1-2_amd64.tar.zst\n"
+        "system          debian-13-standard_13.6-1_arm64.tar.zst\n"
+    )
+    for arch, want in (("amd64", "debian-13-standard_13.1-2_amd64.tar.zst"),
+                       ("arm64", "debian-13-standard_13.6-1_arm64.tar.zst")):
+        script = f"OSVERSION=13 ARCH={arch}\n{func.group(0)}\npick_template\n"
+        done = subprocess.run([bash, "-c", script], input=listing,
+                              capture_output=True, text=True)
+        assert done.stdout.strip() == want, (arch, done.stdout, done.stderr)

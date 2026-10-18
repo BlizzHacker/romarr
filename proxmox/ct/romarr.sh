@@ -85,10 +85,29 @@ TEMPLATE_STORE=$(pvesm status -content vztmpl 2>/dev/null \
 info "Updating template list"
 pveam update >/dev/null 2>&1 || true
 
-TEMPLATE=$(pveam available --section system 2>/dev/null \
-  | awk -v v="debian-${OSVERSION}-standard" '$2 ~ v {print $2}' | sort -V | tail -1)
+# Match the host's architecture (issue #66). A list that offers both names
+# them `..._amd64.tar.zst` / `..._arm64.tar.zst`, and the newest of the two can
+# be the wrong one -- an amd64 host was handed the arm64 rootfs and the
+# container it created would not start.
+host_arch() {
+  local a
+  a=$(dpkg --print-architecture 2>/dev/null || uname -m)
+  case "$a" in
+    x86_64) echo amd64 ;;
+    aarch64) echo arm64 ;;
+    *) echo "$a" ;;
+  esac
+}
+ARCH="${ARCH:-$(host_arch)}"
+
+pick_template() {
+  awk -v v="debian-${OSVERSION}-standard" -v a="_${ARCH}.tar" \
+    '$2 ~ v && index($2, a) {print $2}' | sort -V | tail -1
+}
+
+TEMPLATE=$(pveam available --section system 2>/dev/null | pick_template)
 [[ -n "$TEMPLATE" ]] || die \
-  "No Debian ${OSVERSION} template offered by this host. Set OSVERSION=<n>."
+  "No Debian ${OSVERSION} ${ARCH} template offered by this host. Set OSVERSION=<n> or ARCH=<arch>."
 
 if ! pveam list "$TEMPLATE_STORE" 2>/dev/null | grep -q "$TEMPLATE"; then
   info "Downloading $TEMPLATE"
