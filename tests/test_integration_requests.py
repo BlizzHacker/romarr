@@ -133,3 +133,43 @@ def test_a_cancelled_request_is_not_handed_off(server):
     result = service.grab(METROID, "Super Metroid", "snes", external_request_id="peer-4")
     assert result == {"ok": False, "error": "the request was cancelled"}
     assert service.clients[0].added == []
+
+
+
+def test_a_claim_is_won_once_under_concurrency(tmp_path):
+    """Two POSTs with one id racing must not both reach a download client."""
+    import threading
+    from romarr.store import SeerrRequest, Store
+    store = Store(tmp_path / "romarr.json")
+    wins = []
+    barrier = threading.Barrier(8)
+
+    def claim():
+        barrier.wait()
+        wins.append(store.claim_seerr_request(
+            SeerrRequest("same-id", "snes", game="Chrono Trigger", status="searching")))
+
+    threads = [threading.Thread(target=claim) for _ in range(8)]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join()
+    assert wins.count(True) == 1
+
+
+def test_an_over_long_id_is_refused_not_truncated(server):
+    """Truncating would fold two different peer ids into one request."""
+    service, call = server
+    status, _ = call("POST", "/api/v1/integration/requests",
+                     {"name": "Super Metroid", "platform": "snes",
+                      "externalRequestId": "x" * 65})
+    assert status == 400 and service.clients[0].added == []
+
+
+def test_the_list_skips_a_row_that_vanished(server):
+    service, call = server
+    service.store.settings.setdefault("integration_requests", []).append({"id": "ghost"})
+    real = service.store.get_seerr_request
+    service.store.get_seerr_request = lambda i: None if i == "ghost" else real(i)
+    status, body = call("GET", "/api/v1/integration/requests")
+    assert status == 200 and body["requests"] == []

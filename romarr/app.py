@@ -5608,9 +5608,10 @@ def make_handler(service: ROMarr):
                     "supports_multi_platform": True,
                 })
             if route.path == "/api/v1/integration/requests":
+                rows = (service.store.get_seerr_request(row["id"])
+                        for row in list(service.store.settings.get("integration_requests") or []))
                 return self._json(200, {"requests": [
-                    integration_view(service.store.get_seerr_request(row["id"]))
-                    for row in service.store.settings.get("integration_requests") or []]})
+                    integration_view(row) for row in rows if row is not None]})
             if route.path == "/api/v1/integration/requests/current":
                 current = service.store.latest_seerr_request()
                 if current is None:
@@ -6375,11 +6376,15 @@ def make_handler(service: ROMarr):
                     return self._json(400, {"error": "name and platform are required"})
                 # The peer's own id, when it sends one, makes a retried POST
                 # the same request rather than a second download.
-                ext_id = (str(body.get("externalRequestId") or "").strip()[:64]
+                ext_id = (str(body.get("externalRequestId") or "").strip()
                           or uuid.uuid4().hex[:16])
-                if service.store.get_seerr_request(ext_id) is None:
-                    service.store.put_seerr_request(SeerrRequest(
-                        ext_id, platform, game=game, name=game, status="searching"))
+                if len(ext_id) > 64:
+                    # Truncating would fold two ids into one request.
+                    return self._json(400, {"error": "externalRequestId is longer than 64 characters"})
+                # The claim is atomic: two concurrent POSTs with one id must
+                # not both reach a download client.
+                if service.store.claim_seerr_request(SeerrRequest(
+                        ext_id, platform, game=game, name=game, status="searching")):
                     result = service.request(game, platform,
                                              external_request_id=ext_id)
                     row = service.store.get_seerr_request(ext_id)

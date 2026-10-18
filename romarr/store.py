@@ -696,6 +696,19 @@ class Store:
             updated_at=row.get("updated_at", ""),
         )
 
+    def claim_seerr_request(self, row: "SeerrRequest") -> bool:
+        """Insert ``row`` unless its id is already tracked; True iff inserted.
+
+        The check and the insert share one lock hold, so of two concurrent
+        POSTs carrying the same ``externalRequestId`` exactly one wins and
+        runs the pipeline.
+        """
+        with self._lock:
+            if self._row_for_integration(row.external_request_id) is not None:
+                return False
+            self.put_seerr_request(row)
+            return True
+
     def put_seerr_request(self, row: "SeerrRequest") -> "SeerrRequest":
         """Insert or replace a row by ``external_request_id``.
 
