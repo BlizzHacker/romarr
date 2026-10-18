@@ -163,7 +163,7 @@ pct exec "$CTID" -- bash -c "
   # disc platforms ship as. Without it every PlayStation, PS2 and Wii import
   # fails on a format it cannot open. Debian's GNU tar is not a substitute.
   apt-get install -y -qq python3-venv python3-pip curl ca-certificates \
-    libarchive-tools >/dev/null
+    libarchive-tools git >/dev/null
 " || die "Dependency install failed inside container $CTID."
 msg "Dependencies installed"
 

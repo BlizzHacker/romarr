@@ -750,11 +750,17 @@ plugins — install, enable and disable them from the UI.
 | `stream` | 3 | resolve an item to a playable URL |
 | `census` | 1 | enumerate a whole source into a local catalogue |
 
-Install ROM Hub alongside ROMarr to enable the tab:
+Install ROM Hub **into ROMarr's own environment** to enable the tab. On the
+Proxmox LXC or a source install that is `/opt/romarr/.venv`, and it needs `git`:
 
 ```bash
-pip install "rom-hub @ git+https://github.com/BlizzHacker/rom-hub@master"
+apt-get install -y git
+/opt/romarr/.venv/bin/pip install "rom-hub @ git+https://github.com/BlizzHacker/rom-hub@master"
+systemctl restart romarr
 ```
+
+A `pip install` into the system Python or into a different venv is invisible
+to ROMarr.
 
 Plugins requiring an API key (e.g. RetroAchievements) are marked in the UI.
 
@@ -891,7 +897,7 @@ The full list, including every way an install can fail to start, is in
 | Container exits 1 with "romarr.json exists but cannot be read" | The state file is owned by a user the container does not run as | `chown -R` your PUID:PGID on the directory mounted at `/config` — do not delete the file |
 | Imported ROM never appears | Library rescan refused | RomM: grant the account task permission. Gaseous: see above |
 | ROM imports but will not play | Platform has no emulator core in the library's web player | Expected — the ROM is catalogued, not playable in-browser |
-| Hub tab empty | ROM Hub not installed | `pip install "rom-hub @ git+https://github.com/BlizzHacker/rom-hub@master"` |
+| Hub tab empty | ROM Hub not installed in ROMarr's venv | `/opt/romarr/.venv/bin/pip install "rom-hub @ git+https://github.com/BlizzHacker/rom-hub@master"` (needs `git`), then `systemctl restart romarr` |
 | A ROM-site release is refused with "no download client configured for direct" | The site plugin fetches over HTTP and no Direct HTTP client exists | Add one — Download Clients → Add → Direct HTTP |
 | "Browser mode is not configured" on the Download Clients page | No Chromium the browser lane can drive | Expected unless you installed one; see [Downloading from a ROM site](#downloading-from-a-rom-site). Direct downloads are unaffected |
 

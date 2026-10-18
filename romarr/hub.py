@@ -56,6 +56,11 @@ def _backend_env() -> dict:
 
 def _import():
     """Import the Hub lazily so ROMarr still starts if it isn't installed."""
+    # Python caches each site-packages directory listing, so without this a
+    # `pip install rom-hub` made while ROMarr is running stays invisible until
+    # a restart -- the Hub tab just keeps saying it is not installed.
+    import importlib
+    importlib.invalidate_caches()
     from rom_hub import catalog_sources, registry  # noqa: WPS433
     return catalog_sources, registry
 
