@@ -170,6 +170,8 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
                              "platform, grabs by indexer, shelf totals."),
     "/api/v1/game/meta": ("GET", "The shelf: status, rating and notes, for "
                                  "one game (?platform=&game=) or all."),
+    "/api/v1/game/roulette": ("GET", "Backlog roulette: one shelf game at "
+                                     "random (?status=shelved[,playing]&platform=)."),
     "/api/v1/importlist": ("GET", "Import lists and how many titles each has "
                                   "fed into Wanted."),
     "/api/v1/importlist/schema": ("GET", "The list types and their fields."),
