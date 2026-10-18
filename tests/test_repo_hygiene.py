@@ -49,8 +49,11 @@ def test_no_unresolved_merge_conflicts(marker):
 
 def test_the_readme_still_opens_with_what_romarr_is():
     """A reader decides in two lines. They must be the right two."""
-    head = README_HEAD = (ROOT / "README.md").read_text(encoding="utf-8")[:400]
-    assert head.startswith("# ROMarr")
+    head = (ROOT / "README.md").read_text(encoding="utf-8")[:600]
+    # The page may open inside a centred <div>; what matters is that the first
+    # heading names the product and the tagline follows straight after it.
+    first = next(line for line in head.splitlines() if line.startswith("# "))
+    assert first.rstrip().endswith("ROMarr"), first
     assert "arr for games" in head
 
 

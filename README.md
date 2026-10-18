@@ -1,38 +1,76 @@
-# ROMarr
+<div align="center">
 
-**The *arr for games.** Request a title — ROMarr searches your indexers, picks the
-best release, hands it to your download client, and files the ROM into your game
-library.
+# 🎮 ROMarr
+
+### The *arr for games.
+
+**Ask for a game. ROMarr finds the best copy, downloads it, verifies it and files it into your library — automatically.**<br>
+If Radarr does your movies and Sonarr does your TV, ROMarr is the one that was missing.
+
+[![CI](https://github.com/BlizzHacker/romarr/actions/workflows/docker.yml/badge.svg)](https://github.com/BlizzHacker/romarr/actions/workflows/docker.yml)
+[![Docker](https://img.shields.io/badge/docker-ghcr.io-2496ed?logo=docker&logoColor=white)](https://github.com/BlizzHacker/romarr/pkgs/container/romarr)
+[![platforms](https://img.shields.io/badge/arch-amd64%20%7C%20arm64%20%7C%20armv7-lightgrey)](#docker)
+[![licence MIT](https://img.shields.io/badge/licence-MIT-blue)](LICENSE)
+[![GitHub stars](https://img.shields.io/github/stars/BlizzHacker/romarr?style=social)](https://github.com/BlizzHacker/romarr/stargazers)
+
+**[🚀 Install in 60 seconds](#-install-in-60-seconds)** · **[📸 See it in action](#-see-it-in-action)** · **[🧑‍💻 Build with us](#-build-with-us)** · **[📖 Full docs](#contents)**
+
+![Interactive search on a live install: 51 releases scored, the verified dump on top, every rejection explained](docs/img/interactive-search-live.png)
+
+<sub>A real search on a live install: 51 releases scored, the verified dump on top, and every rejection explained.</sub>
+
+</div>
+
+## ✨ Why people use ROMarr
+
+| | |
+|---|---|
+| 🔎 **Smart search** | Searches all your indexers at once and scores every release, so verified clean dumps win and romhacks or wrong-platform files are rejected, with the reason shown. |
+| 📥 **Hands-off downloads** | Works with qBittorrent, Transmission, Deluge, rTorrent, uTorrent, Flood, Aria2, SABnzbd, NZBGet, Synology and Real-Debrid, then imports and renames for you. |
+| 📚 **Your library, organised** | Files into RomM, Gaseous or Retrom, and keeps a Wanted list that it re-searches on a schedule until every game is found. |
+| 🛡️ **Safe by default** | Optional ClamAV virus scan before import; bad releases are blocklisted and replaced automatically. |
+| 🧩 **Endless sources** | Add new sources with [ROM Hub](https://github.com/BlizzHacker/rom-hub) plugins, right from the Hub tab. |
+| 👥 **Better with friends** | Share libraries, browse a friend's shelf, set up netplay, and track what you're playing (with a roulette for your backlog). |
+
+## 🚀 Install in 60 seconds
+
+```bash
+docker run -d --name romarr --restart unless-stopped \
+  -p 6868:6868 -v /srv/romarr/config:/config \
+  ghcr.io/blizzhacker/romarr:latest
+```
+
+Open **http://localhost:6868**, set a password, and connect your indexers.
+Prefer something else? [Docker Compose](#docker-compose) · [Proxmox LXC one-liner](#proxmox-lxc) · [Home Assistant add-on](#home-assistant) · [From source](#from-source)
+
+## 📸 See it in action
+
+| Your library | Plugins from ROM Hub |
+|---|---|
+| ![Library](docs/img/library.png) | ![Hub plugins](docs/img/hub-plugins.png) |
+| **Stats and your shelf** | **Friends and shared libraries** |
+| ![Stats](docs/img/stats.png) | ![Friends](docs/img/friends.png) |
+
+[Take the full tour →](#the-tour)
+
+## 🧑‍💻 Build with us
+
+ROMarr is MIT-licensed and contributions are welcome, from a typo fix to a whole new download client.
+
+- **Add a game source** without touching ROMarr: write a [ROM Hub plugin](https://github.com/BlizzHacker/rom-hub/blob/master/CONTRIBUTING.md).
+- **Integrate your app** through the REST API. Every route is described at `/api/v1/openapi.json` on your install.
+- **Pick up an issue**: [open issues](https://github.com/BlizzHacker/romarr/issues). Questions and ideas are welcome there too.
+- **Run it locally**: `python -m romarr` from a clone, and `pytest` runs 2,300+ tests. See [Development](#development).
 
 ```
 Move Weight
 └─ Yarr.It ................ one front door for a self-hosted media library
    └─ Cartridge ........... tools for self-hosting a retro game library
       └─ ROMarr ........... you are here
-         └─ ROM Hub ....... ROMarr's plugin factory
+         └─ ROM Hub ....... ROMarr's plugin engine
 ```
 
-ROMarr runs perfectly well on its own — nothing above it is required.
-
-[ROM Hub](https://github.com/BlizzHacker/rom-hub) is ROMarr's plugin factory:
-it is where a source is written, run and sandboxed, and ROMarr picks the
-plugins up from its Hub tab. Adding a source means writing a plugin there, not
-patching ROMarr.
-
-If you run Radarr for films and Sonarr for TV, this is the missing one.
-
-[![CI](https://github.com/BlizzHacker/romarr/actions/workflows/docker.yml/badge.svg)](https://github.com/BlizzHacker/romarr/actions/workflows/docker.yml)
-[![licence MIT](https://img.shields.io/badge/licence-MIT-blue)](LICENSE)
-[![Docker](https://img.shields.io/badge/docker-ghcr.io-2496ed)](https://github.com/BlizzHacker/romarr/pkgs/container/romarr)
-[![platforms](https://img.shields.io/badge/arch-amd64%20%7C%20arm64%20%7C%20armv7-lightgrey)](#docker)
-
-![Interactive search on a live install: 51 releases scored, the verified dump on top, every rejection explained](docs/img/interactive-search-live.png)
-
-*A real search on a live install — 51 releases, the DAT-verified dump ranked
-first at +50, romhacks and wrong-platform releases rejected with the reason
-written next to each. Every screenshot in this README is from the
-maintainer's production instance; [docs/PROOF.md](docs/PROOF.md) is the
-full claim-by-claim evidence file.*
+ROMarr runs perfectly well on its own; nothing above it is required.
 
 ## 🆕 What's new
 
