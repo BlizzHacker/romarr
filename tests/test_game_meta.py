@@ -74,3 +74,26 @@ def test_mark_searched_stamps_only_the_matching_item(tmp_path):
     rows = {w["game"]: w for w in s.missing()}
     assert rows["Chrono Trigger"]["searched_at"]
     assert rows["Earthbound"]["searched_at"] == ""
+
+
+def test_roulette_draws_only_from_the_asked_statuses(tmp_path):
+    import random
+    from romarr.store import Store
+    store = Store(tmp_path / "romarr.json")
+    store.set_game_meta("snes", "Chrono Trigger", status="shelved")
+    store.set_game_meta("snes", "EarthBound", status="completed")
+    store.set_game_meta("n64", "Banjo-Kazooie", status="playing")
+    rng = random.Random(1)
+    picks = {store.roulette(("shelved",), rng=rng)["game"] for _ in range(10)}
+    assert picks == {"Chrono Trigger"}
+    both = {store.roulette(("shelved", "playing"), rng=rng)["game"] for _ in range(40)}
+    assert both == {"Chrono Trigger", "Banjo-Kazooie"}
+    assert store.roulette(("playing",), platform="snes") is None
+
+
+def test_roulette_refuses_a_status_the_shelf_cannot_hold(tmp_path):
+    import pytest
+    from romarr.store import Store
+    store = Store(tmp_path / "romarr.json")
+    with pytest.raises(ValueError):
+        store.roulette(("wanted",))

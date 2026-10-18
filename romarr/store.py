@@ -587,6 +587,30 @@ class Store:
             return dict((self.settings.get("game_meta") or {})
                         .get(self._meta_key(platform, game)) or {})
 
+    def roulette(self, statuses=("shelved",), platform: str = "",
+                 rng=None) -> dict | None:
+        """One game picked at random from the shelf, or None if nothing fits.
+
+        Backlog roulette (Questarr 1.5 shipped it; credited in the README):
+        the answer to "what do I play next" for somebody whose shelf is too
+        long to choose from. Only statuses the shelf actually stores are
+        accepted, so a typo is an error rather than an empty draw.
+        """
+        import random
+        wanted = tuple(s.strip().lower() for s in statuses if s and s.strip())
+        bad = [s for s in wanted if s not in self.GAME_STATUSES]
+        if bad or not wanted:
+            raise ValueError(
+                f"unknown status {', '.join(bad) or '(none)'}; one of "
+                f"{', '.join(self.GAME_STATUSES)}")
+        pool = [row for row in self.all_game_meta()
+                if row.get("status") in wanted
+                and (not platform or row.get("platform") == platform)]
+        if not pool:
+            return None
+        pool.sort(key=lambda r: (r.get("platform", ""), r.get("game", "")))
+        return dict((rng or random).choice(pool))
+
     def all_game_meta(self) -> list[dict]:
         with self._lock:
             return [dict(v) for v in (self.settings.get("game_meta") or {}).values()]

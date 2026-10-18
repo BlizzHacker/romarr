@@ -2227,7 +2227,22 @@ RENDER.stats=async()=>{
       <div><b>${(s.statuses||{}).playing||0}</b><span>Playing</span></div>
       <div><b>${(s.statuses||{}).completed||0}</b><span>Completed</span></div>
       <div><b>${(s.statuses||{}).shelved||0}</b><span>Shelved</span></div>
-    </div><p class="help">Set from any game tile in the Library.</p></div>`;
+    </div><p class="help">Set from any game tile in the Library.</p>
+      <div class="row"><select id="rl-st"><option value="shelved">From Shelved</option>
+        <option value="playing">From Playing</option>
+        <option value="shelved,playing">From both</option></select>
+        <button class="btn" id="rl-go">Pick my next game</button></div>
+      <div id="rl-out" style="margin-top:8px"></div></div>`;
+  const rl=document.getElementById('rl-go');
+  if(rl)rl.onclick=async()=>{
+    const out=document.getElementById('rl-out');
+    const st=document.getElementById('rl-st').value;
+    const r=await fetch('/api/v1/game/roulette?status='+encodeURIComponent(st),
+      {headers:typeof authHeaders==='function'?authHeaders():{}});
+    const b=await r.json().catch(()=>({}));
+    if(out)out.innerHTML=r.ok
+      ?`<b>${esc(b.game)}</b> <span class="help">(${esc(b.platform)})</span>`
+      :`<span class="help">${esc(b.error||'Nothing to pick from yet.')}</span>`;};
 
   const paintAudit=a=>{
     // Guard the node: this is called from a fetch .then() and a poll timer,

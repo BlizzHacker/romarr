@@ -5617,6 +5617,16 @@ def make_handler(service: ROMarr):
                 if current is None:
                     return self._json(404, {"error": "no tracked requests"})
                 return self._json(200, integration_view(current))
+            if route.path == "/api/v1/game/roulette":
+                raw = (query.get("status") or ["shelved"])[0]
+                try:
+                    pick = service.store.roulette(
+                        raw.split(","), (query.get("platform") or [""])[0])
+                except ValueError as err:
+                    return self._json(400, {"error": str(err)})
+                if pick is None:
+                    return self._json(404, {"error": f"nothing on the shelf as {raw}"})
+                return self._json(200, pick)
             if route.path == "/api/v1/game/meta":
                 platform = (query.get("platform") or [""])[0]
                 game = (query.get("game") or [""])[0]
