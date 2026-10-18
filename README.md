@@ -34,6 +34,13 @@ written next to each. Every screenshot in this README is from the
 maintainer's production instance; [docs/PROOF.md](docs/PROOF.md) is the
 full claim-by-claim evidence file.*
 
+## 🆕 What's new
+
+- **🎲 Backlog roulette.** Can't choose? *Stats → Shelf → Pick my next game* draws one from your Shelved or Playing games.
+- **🛡️ Virus scanning before import.** Point ROMarr at ClamAV and every finished download is scanned; an infected release is refused, blocklisted and replaced automatically.
+- **🔗 Integration API that actually works.** External apps such as Cartridge frontends can request games and poll their status, and retries never download twice.
+- **🖥️ Proxmox installer fixed for every CPU.** The one-line LXC installer now picks the right template for your host (amd64 or arm64).
+
 ---
 
 ## Contents
@@ -931,6 +938,22 @@ stack by MoveWeight.
 | **Above** | [Yarr.It](https://github.com/BlizzHacker/yarr-it) — [yarrit.com](https://yarrit.com) | The front door for a self-hosted media library. Ad-free torrent streaming that plays in the browser. |
 
 Brand and naming: [BRAND.md](https://github.com/BlizzHacker/rom-hub/blob/master/BRAND.md).
+
+## 🌐 More from Move Weight
+
+ROMarr is part of a family of open, self-hostable projects built by
+**[Move Weight](https://moveweight.com)**. Use one, or plug them all together.
+
+| Project | What it is |
+|---|---|
+| 🏴‍☠️ **[Yarr.It](https://yarrit.com)** | One front door for your whole media library: search, stream in the browser, and watch on your TV. |
+| 🎮 **[ROMarr](https://github.com/BlizzHacker/romarr)** | The *arr for games: request a title, and it's found, downloaded and filed into your library. |
+| 🧩 **[ROM Hub](https://github.com/BlizzHacker/rom-hub)** | The plugin engine behind ROMarr: new game sources, box art and metadata for RomM, Gaseous and Retrom. |
+| ⚔️ **[CrypticRealm](https://crypticrealm.com)** | An open-world fantasy RPG that plays right in your browser, with FPS and RTS modes. |
+| 🔥 **[Forgeverse](https://forgeverse.org)** | Creative studio apps for game makers: characters, textures and more, with bring-your-own AI. |
+| 🥊 **[Galaxy Kombat](https://gk.moveweight.com)** | A 3D fighting game that runs in the browser. |
+
+If one of these is useful to you, a ⭐ on GitHub is the easiest way to help.
 
 ## Acknowledgements
 
