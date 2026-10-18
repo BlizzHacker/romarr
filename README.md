@@ -169,6 +169,21 @@ any Wanted row, or `DELETE /api/v1/wanted/missing`. Until now the only way
 off that list was an import, so a typo went on costing an indexer search on
 every sweep and every RSS pass, forever, for a game that does not exist.
 
+### Scanned before it reaches the library
+
+Point ROMarr at a ClamAV daemon (**Media Management → Scan downloads with
+ClamAV**, address `tcp://clamav:3310` or a socket path) and every finished
+download is streamed to it before anything is imported. An infected one is
+refused with the signature named, and counted as the release's fault, so the
+blocklist retires it and the next best release is grabbed. While clamd cannot
+be reached, finished downloads **wait** rather than going in unscanned.
+System → Status shows whether it answers.
+
+One limit is clamd's own: it refuses a stream longer than its
+`StreamMaxLength`. Such a file is imported unscanned and logged by name, since
+refusing it would leave every large disc image unimportable. Raise the limit
+in `clamd.conf` if you want those scanned too.
+
 ### Lists, and the accounts that feed them
 
 ![Import Lists: a synced top-100 and the connected-accounts table](docs/img/lists.png)
