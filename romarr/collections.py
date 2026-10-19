@@ -46,6 +46,8 @@ MISSING = "missing"
 _FLAGS = {
     "proto": ("proto", "prototype"),
     "beta": ("beta",),
+    "debug": ("debug",),
+    "promo": ("promo",),
     "demo": ("demo", "sample", "kiosk"),
     "hack": ("hack", "trainer"),
     "translation": ("translation", "translated"),
@@ -337,6 +339,9 @@ def explain(dat: Dat, winner: Game, group: list[Game],
             why = (f"region ranks lower ({order[other_rank].upper()})"
                    if other_rank < len(order)
                    else "region not in your preference")
+        elif (other_rank == rank and not (flags_in(winner.name) & {"debug", "promo"})
+              and flags_in(other.name) & {"debug", "promo"}):
+            why = "same region rank; retail dump preferred over debug/promo"
         elif other_rank == rank and not winner.cloneof and other.cloneof:
             why = "clone of the chosen dump, same region rank"
         else:

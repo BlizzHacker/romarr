@@ -1071,3 +1071,15 @@ just plausible.
 MIT — see [LICENSE](LICENSE).
 
 Unofficial. Not affiliated with or endorsed by the RomM, Gaseous or Retrom projects.
+
+### PS4, PS5 and PS Vita
+
+ROMarr recognizes PS4/PS5 package libraries and PS Vita VPK/PKG/ZIP libraries
+for configured-source search and import. See [modern-console support and
+limits](docs/MODERN-CONSOLES.md). Playback and installation happen outside
+ROMarr; these targets do not add browser emulation.
+
+Genesis keeps its existing ROMarr identifier but new imports and RomM rescans
+use the RomM filesystem slug `genesis`. Existing folders are not moved
+automatically; operators with `genesis-slash-megadrive` folders should either
+keep their explicit RomM mapping or plan a folder migration before switching.

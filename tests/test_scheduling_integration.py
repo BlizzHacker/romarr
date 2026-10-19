@@ -128,7 +128,7 @@ def test_list_sync_reports_unresolvable_platforms(tmp_path):
     s = svc(tmp_path)
     s.store.put_item("import_lists", {
         "name": "mixed", "type": "paste",
-        "content": "Super Metroid\tsnes\nHalo\tplaystation 5",
+        "content": "Super Metroid\tsnes\nHalo\tplaystation 6",
     })
     out = s.list_sync()
     assert out["added"] == 1
