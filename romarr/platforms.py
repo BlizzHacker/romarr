@@ -35,7 +35,7 @@ COMPUTER = "computer"
 class Platform:
     """A console RomM can hold and an emulator can run."""
 
-    slug: str                      # RomM's fs_slug -- the library folder name
+    slug: str                      # stable ROMarr ID; romm_fs_slug maps folder names
     name: str                      # human label
     extensions: tuple[str, ...]    # ROM extensions, most-preferred first
     aliases: tuple[str, ...] = field(default=())
@@ -205,6 +205,16 @@ PLATFORMS: tuple[Platform, ...] = (
              (".iso", ".pkg", ".zip", ".7z"),
              ("playstation 3", "ps3"),
              max_size=64 * GB, media=DISC),
+    # Acquisition and library organization only. Playback is external.
+    Platform("ps4", "Sony PlayStation 4", (".pkg",),
+             ("playstation 4", "sony playstation 4", "ps4"),
+             max_size=256 * GB, media=DISC),
+    Platform("ps5", "Sony PlayStation 5", (".pkg",),
+             ("playstation 5", "sony playstation 5", "ps5"),
+             max_size=256 * GB, media=DISC),
+    Platform("psvita", "Sony PlayStation Vita", (".vpk", ".pkg", ".zip"),
+             ("playstation vita", "sony playstation vita", "ps vita", "vita"),
+             max_size=16 * GB, archive_is_the_rom=True),
     Platform("psp", "Sony PlayStation Portable",
              (".cso", ".iso", ".chd", ".pbp"),
              ("playstation portable", "psp"),
@@ -603,3 +613,8 @@ def platform_for_file(filename: str) -> Platform | None:
             if lowered.endswith(ext):
                 return platform
     return None
+
+
+def romm_fs_slug(slug: str) -> str:
+    """Translate stable ROMarr/IGDB identifiers to RomM's folder names."""
+    return {"genesis-slash-megadrive": "genesis"}.get(slug, slug)

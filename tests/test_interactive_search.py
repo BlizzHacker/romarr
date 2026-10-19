@@ -111,8 +111,8 @@ def test_an_unknown_platform_is_refused_rather_than_scored_blind(tmp_path):
     # `psx` was the example here until it became a supported platform. The
     # rule under test is unchanged: a name nothing recognises must be refused,
     # not scored as though no platform had been asked for.
-    out = s.candidates("Astro Bot", "playstation 5")
-    assert out["unknown_platform"] == "playstation 5"
+    out = s.candidates("Astro Bot", "playstation 6")
+    assert out["unknown_platform"] == "playstation 6"
     assert out["items"] == []
 
 

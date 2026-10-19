@@ -23,7 +23,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from .dat import BAD_DUMP, UNKNOWN, VERIFIED, Match, hash_bytes
-from .platforms import Platform
+from .platforms import Platform, romm_fs_slug
 from .selection import pick_all_rom_sets, pick_rom_set
 
 log = logging.getLogger(__name__)
@@ -316,7 +316,7 @@ def platform_dir(library_root: Path, platform: "Platform | str", *,
                  layout: str = "flat", translation: bool = False) -> Path:
     """Where a ROM for this platform is filed, under the chosen layout."""
     slug = getattr(platform, "slug", platform)
-    base = library_root / slug
+    base = library_root / romm_fs_slug(slug)
     if str(layout).lower() in ("nested", "romm_b", "b"):
         base = base / "roms"
     if translation:

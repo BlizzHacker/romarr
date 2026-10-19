@@ -35,7 +35,7 @@ FOREIGN_PLATFORM_MARKERS = {
     # "Dynasty Warriors 2 - PlayStation 2" as its own platform: "playstation"
     # is psx's alias, and it is a substring of every later Sony console.
     "playstation 2", "playstation 3", "playstation 4", "playstation 5",
-    "playstation portable", "playstation vita",
+    "playstation portable", "playstation vita", "ps vita",
     "nintendo 64", "super nintendo", "game boy advance", "game boy color",
     "sega saturn", "sega dreamcast", "master system", "game gear",
     # "xbox" is a substring of both later machines, so the spelled-out forms
