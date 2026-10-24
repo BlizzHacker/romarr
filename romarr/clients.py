@@ -121,6 +121,11 @@ class QBittorrent:
         self._config = config
         self._session = session or requests.Session()
         self._authed = False
+        self._added = threading.local()
+
+    @property
+    def last_job_id(self) -> str:
+        return getattr(self._added, "job_id", "")
 
     def _url(self, path: str) -> str:
         return f"{self._config.base_url.rstrip('/')}/api/v2/{path.lstrip('/')}"
@@ -170,13 +175,16 @@ class QBittorrent:
     def add(self, magnet_or_url: str, *, save_path: str | None = None) -> bool:
         if not self._authed:
             self.login()
-        data = {"urls": magnet_or_url, "category": self._config.category}
+        tag = "romarr-" + secrets.token_hex(12)
+        data = {"urls": magnet_or_url, "category": self._config.category,
+                "tags": tag}
         if save_path:
             data["savepath"] = save_path
         response = self._post("torrents/add", data=data, timeout=self._config.timeout)
         if not response.ok:
             log.warning("qbittorrent add failed: %s", response.status_code)
             return False
+        self._added.job_id = "qbit-tag:" + tag
         return True
 
     def reachable(self) -> bool:

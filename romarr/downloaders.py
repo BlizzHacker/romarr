@@ -3226,9 +3226,26 @@ def match_queue_item(queue, download: dict):
             if job and item.download_id == job:
                 return item
     name = download.get("name", "")
+    title_matches = [item for item in queue
+                     if item.state == "grabbed" and item.release == name]
+    if len(title_matches) == 1:
+        return title_matches[0]
+    tags = {part.strip() for part in str(download.get("tags") or "").split(",")
+            if part.strip()}
     for item in queue:
-        if item.release == name:
+        job_id = str(getattr(item, "download_id", "") or "")
+        if job_id.startswith("qbit-tag:") and job_id[9:] in tags:
             return item
+    try:
+        total_size = int(download.get("total_size") or 0)
+    except (TypeError, ValueError):
+        total_size = 0
+    if total_size > 0:
+        size_matches = [item for item in queue
+                        if item.state == "grabbed" and item.size > 0
+                        and item.size == total_size]
+        if len(size_matches) == 1:
+            return size_matches[0]
     return None
 
 

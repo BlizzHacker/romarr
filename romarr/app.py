@@ -339,6 +339,7 @@ class ROMarr:
         # carrying Prowlarr's API key.
         self._candidates: dict[str, dict] = {}
         self._lock = threading.Lock()
+        self._dat_reload_lock = threading.Lock()
         # Lets a configuration change wake the background refresh instead of
         # waiting out its interval. Created before reload_libraries, which sets
         # it.
@@ -1988,6 +1989,10 @@ class ROMarr:
         return DAT_SCAN_DEPTH, DAT_SCAN_MAX_ENTRIES
 
     def reload_dats(self, directory: str = "") -> dict:
+        with self._dat_reload_lock:
+            return self._reload_dats(directory)
+
+    def _reload_dats(self, directory: str = "") -> dict:
         """Load every DAT under `directory`.
 
         Optional and quiet. An operator with no DATs is the common case on
@@ -2000,17 +2005,18 @@ class ROMarr:
         """
         import zipfile
 
-        self.dats = DatIndex()
         self.store.settings["dat_path"] = str(directory or "")
         if not directory:
+            self.dats = DatIndex()
             return {"loaded": 0, "path": ""}
         root = Path(directory)
         if not root.is_dir():
+            self.dats = DatIndex()
             log.warning("DAT_PATH %s is not a directory", root)
             return {"loaded": 0, "path": str(root),
                     "error": f"{root} is not a directory"}
         found, stopped = _find_dats(root)
-        loaded_count = 0
+        loaded_by_name = {}
         for path in found:
             try:
                 # Handle ZIP archives containing DAT files
@@ -2027,20 +2033,30 @@ class ROMarr:
                                     content = dat_file.read().decode('utf-8', errors='replace')
                                     parsed = parse_dat(content)
                                     if parsed.games:
-                                        self.dats.add(parsed)
-                                        loaded_count += 1
+                                        key = parsed.name.casefold() or dat_name.casefold()
+                                        previous = loaded_by_name.get(key)
+                                        if previous is None or parsed.version > previous.version:
+                                            loaded_by_name[key] = parsed
                     except (zipfile.BadZipFile, OSError) as zip_err:
                         log.warning("could not read zip %s: %s", path, zip_err)
                         continue
                 else:
                     # Regular .dat or .xml file
-                    self.dats.add(parse_dat(path.read_text(encoding="utf-8",
-                                                           errors="replace")))
-                    loaded_count += 1
+                    parsed = parse_dat(path.read_text(encoding="utf-8",
+                                                      errors="replace"))
+                    if parsed.games:
+                        key = parsed.name.casefold() or path.name.casefold()
+                        previous = loaded_by_name.get(key)
+                        if previous is None or parsed.version > previous.version:
+                            loaded_by_name[key] = parsed
             except (OSError, ValueError) as exc:
                 log.warning("could not read %s: %s", path, exc)
-        log.info("loaded %d DAT(s) from %s", len(self.dats.dats), root)
-        result = {"loaded": len(self.dats.dats), "path": str(root),
+        index = DatIndex()
+        for parsed in loaded_by_name.values():
+            index.add(parsed)
+        self.dats = index
+        log.info("loaded %d DAT(s) from %s", len(index.dats), root)
+        result = {"loaded": len(index.dats), "path": str(root),
                   "examined": len(found)}
         if stopped:
             result["truncated"] = stopped
@@ -4835,6 +4851,15 @@ class ROMarr:
             if queue_item is not None and queue_item.state in ("imported", "import-failed"):
                 continue
             if platform is None:
+                category = str(torrent.get("category") or "")
+                romarr_categories = {
+                    str(getattr(getattr(client, "_config", None), "category", ""))
+                    for client in self.clients
+                }
+                if category and category in romarr_categories:
+                    log.warning("completed download %r in category %r could "
+                                "not be matched to a ROMarr queue row; import "
+                                "skipped", name, category)
                 continue
             refused = self._virus_check(path, name, platform, queue_item)
             if refused is not None:

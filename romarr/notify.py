@@ -87,7 +87,14 @@ def _post(url: str, *, data: bytes | None = None, headers: dict | None = None,
         with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
             return 200 <= response.status < 300
     except urllib.error.HTTPError as exc:
-        _last.reason = f"the endpoint answered HTTP {exc.code}"
+        detail = ""
+        try:
+            payload = json.loads(exc.read(4096).decode("utf-8", "replace"))
+            if isinstance(payload, dict) and isinstance(payload.get("message"), str):
+                detail = " — " + " ".join(payload["message"].split())[:240]
+        except (ValueError, UnicodeError):
+            pass
+        _last.reason = f"the endpoint answered HTTP {exc.code}{detail}"
         log.warning("notification to %s rejected: HTTP %s",
                     _safe(url), exc.code)
     except Exception as exc:                    # a down endpoint is routine
@@ -104,7 +111,9 @@ def _safe(url: str) -> str:
 
 def _json_post(url: str, payload: dict, headers: dict | None = None) -> bool:
     return _post(url, data=json.dumps(payload).encode(),
-                 headers={"Content-Type": "application/json", **(headers or {})})
+                 headers={"Content-Type": "application/json",
+                          "User-Agent": "ROMarr (+https://github.com/BlizzHacker/romarr)",
+                          **(headers or {})})
 
 
 # --- providers -------------------------------------------------------------
@@ -112,10 +121,17 @@ def _json_post(url: str, payload: dict, headers: dict | None = None) -> bool:
 # Each takes (config, message) and returns whether it was delivered.
 
 def _discord(cfg: dict, message: Message) -> bool:
-    payload = {"content": message.text()[:1900]}
+    payload = {"content": message.text()[:1900],
+               "allowed_mentions": {"parse": []}}
     if cfg.get("username"):
         payload["username"] = cfg["username"]
-    return _json_post(cfg.get("url", ""), payload)
+    parts = urllib.parse.urlsplit(str(cfg.get("url", "")))
+    query = urllib.parse.parse_qsl(parts.query, keep_blank_values=True)
+    if not any(key == "wait" for key, _ in query):
+        query.append(("wait", "true"))
+    url = urllib.parse.urlunsplit(parts._replace(
+        query=urllib.parse.urlencode(query)))
+    return _json_post(url, payload)
 
 
 def _slack(cfg: dict, message: Message) -> bool:
@@ -142,7 +158,9 @@ def _ntfy(cfg: dict, message: Message) -> bool:
     if cfg.get("priority"):
         headers["Priority"] = str(cfg["priority"])
     body = "\n".join([message.body, *message.reasons]).strip() or message.title
-    return _post(cfg.get("url", ""), data=body.encode(), headers=headers)
+    return _post(cfg.get("url", ""), data=body.encode(),
+                 headers={"User-Agent": "ROMarr (+https://github.com/BlizzHacker/romarr)",
+                          **headers})
 
 
 def _gotify(cfg: dict, message: Message) -> bool:
