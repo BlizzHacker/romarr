@@ -294,7 +294,9 @@ public sealed class MainWindow : Form
             using (var installer = new HttpClient { Timeout = TimeSpan.FromMinutes(3) })
             {
                 installer.DefaultRequestHeaders.Add("X-Api-Key", key);
-                var installed = await installer.PostAsJsonAsync(origin + "/api/v1/hub/plugin", new { slug = "archive-org", action = "install" });
+                var installed = await installer.PostAsync(origin + "/api/v1/hub/plugin",
+                    new StringContent(JsonSerializer.Serialize(new { slug = "archive-org", action = "install" }),
+                                      System.Text.Encoding.UTF8, "application/json"));
                 var installedResult = await installed.Content.ReadFromJsonAsync<JsonElement>();
                 if (!installed.IsSuccessStatusCode || !installedResult.GetProperty("ok").GetBoolean())
                     throw new Exception("The packaged Git/Python could not install a catalogue plugin: " + installedResult);
@@ -302,7 +304,9 @@ public sealed class MainWindow : Form
             var installedHub = await http.GetFromJsonAsync<JsonElement>(origin + "/api/v1/hub/catalogue");
             if (!installedHub.GetProperty("items").EnumerateArray().Any(p => p.GetProperty("slug").GetString() == "archive-org" && p.GetProperty("installed").GetBoolean()))
                 throw new Exception("The installed plugin was not present in the catalogue.");
-            var put = await http.PutAsJsonAsync(origin + "/api/v1/config", new { preferred_regions = new[] { "EUR", "USA" } });
+            var put = await http.PutAsync(origin + "/api/v1/config",
+                new StringContent(JsonSerializer.Serialize(new { preferred_regions = new[] { "EUR", "USA" } }),
+                                  System.Text.Encoding.UTF8, "application/json"));
             put.EnsureSuccessStatusCode();
             StopBackend();
             await StartBackend();
