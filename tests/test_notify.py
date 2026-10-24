@@ -243,3 +243,34 @@ def test_only_the_url_field_carries_the_provider_hint():
     """Discord's Username box used to repeat 'A Discord channel webhook URL.'"""
     assert notify.FIELD_HELP["username"] != NOTIFIERS["discord"]["help"]
     assert notify.FIELD_LABELS["url"] == "URL"
+
+
+def test_discord_webhook_uses_wait_and_disables_implicit_mentions(sent):
+    Notifier([conn("discord")]).send(Message(ON_GRAB, "@everyone hello"))
+    assert "wait=true" in sent[0]["url"]
+    payload = json.loads(sent[0]["data"])
+    assert payload["allowed_mentions"] == {"parse": []}
+    assert "User-Agent" in sent[0]["headers"]
+
+
+def test_discord_wait_parameter_is_not_duplicated(sent):
+    Notifier([conn("discord", url="https://discord.test/hook?wait=false")]).send(
+        Message(ON_GRAB, "hello"))
+    assert sent[0]["url"].count("wait=") == 1
+
+
+def test_test_button_shows_json_reason_from_a_403(monkeypatch):
+    import io
+    import urllib.error
+
+    def forbidden(request, timeout):
+        raise urllib.error.HTTPError(
+            request.full_url, 403, "Forbidden", {},
+            io.BytesIO(b'{"message":"Unknown Webhook","code":10015}'))
+    monkeypatch.setattr(notify.urllib.request, "urlopen", forbidden)
+    ok, message = notify.send_test({
+        "type": "discord",
+        "url": "https://discord.com/api/webhooks/1/secret"})
+    assert not ok
+    assert "HTTP 403" in message
+    assert "Unknown Webhook" in message

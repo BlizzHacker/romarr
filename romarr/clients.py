@@ -188,6 +188,53 @@ class QBittorrent:
         self._added.job_id = "qbit-tag:" + tag
         return True
 
+    def torrents(self) -> list[dict]:
+        """Return the client's torrent list for an explicit collection plan."""
+        if not self._authed and not self.login():
+            return []
+        response = self._get("torrents/info", timeout=self._config.timeout)
+        response.raise_for_status()
+        return [row for row in response.json() if isinstance(row, dict)]
+
+    def torrent_files(self, torrent_hash: str) -> list[dict]:
+        if not self._authed and not self.login():
+            return []
+        response = self._get("torrents/files",
+                             params={"hash": torrent_hash},
+                             timeout=self._config.timeout)
+        response.raise_for_status()
+        return [row for row in response.json() if isinstance(row, dict)]
+
+    def set_file_priorities(self, torrent_hash: str,
+                            priorities: dict[int, int]) -> bool:
+        """Set selected qBittorrent file priorities in compact API calls."""
+        for priority in sorted(set(int(v) for v in priorities.values())):
+            ids = [str(int(i)) for i, value in priorities.items()
+                   if int(value) == priority]
+            if not ids:
+                continue
+            response = self._post(
+                "torrents/filePrio",
+                data={"hash": torrent_hash, "id": "|".join(ids),
+                      "priority": str(priority)},
+                timeout=self._config.timeout,
+            )
+            if not response.ok:
+                return False
+        return True
+
+    def pause_torrent(self, torrent_hash: str) -> bool:
+        response = self._post("torrents/pause",
+                              data={"hashes": torrent_hash},
+                              timeout=self._config.timeout)
+        return bool(response.ok)
+
+    def resume_torrent(self, torrent_hash: str) -> bool:
+        response = self._post("torrents/resume",
+                              data={"hashes": torrent_hash},
+                              timeout=self._config.timeout)
+        return bool(response.ok)
+
     def reachable(self) -> bool:
         """Whether the download client answers at all.
 

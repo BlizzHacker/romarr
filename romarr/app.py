@@ -1154,6 +1154,8 @@ class ROMarr:
                 continue
             client = build_client(cfg)
             if client is not None:
+                client.romarr_id = str(cfg.get("id") or "")
+                client.romarr_name = str(cfg.get("name") or "")
                 # A client that has to READ a file another host wrote needs
                 # the translation table, and the table belongs to the install
                 # rather than to any one client row -- so it is handed over
@@ -2350,7 +2352,7 @@ class ROMarr:
             log.warning("could not roll back %s: %s", destination, err)
 
     def adopt(self, path: str, platform_slug: str = "", *,
-              force: bool = False) -> dict:
+              force: bool = False, require_verified: bool = False) -> dict:
         """Import one file the operator picked out of a manual-import scan.
 
         Separate from `import_finished` because the two have different
@@ -2407,7 +2409,7 @@ class ROMarr:
 
         outcomes = import_rom(source, platform, self.library_root(target_cfg),
                               dats=self.dats,
-                              require_verified=False,
+                              require_verified=require_verified,
                               layout=self.library_layout(target_cfg),
                               translation=is_translation(source.name))
 
@@ -2699,6 +2701,332 @@ class ROMarr:
     def collection_status(self) -> dict:
         return {"batches": [b.progress() for b in self._batches().values()],
                 "dats": self.dat_names()}
+
+    def _source_client(self, client_id: str = ""):
+        clients = [c for c in self.clients
+                   if isinstance(c, QBittorrent)]
+        if client_id:
+            return next((c for c in clients
+                         if getattr(c, "romarr_id", "") == client_id), None)
+        return clients[0] if len(clients) == 1 else None
+
+    def collection_source_torrents(self) -> dict:
+        rows = []
+        for client in self.clients:
+            if not isinstance(client, QBittorrent):
+                continue
+            try:
+                for torrent in client.torrents():
+                    rows.append({
+                        "client_id": getattr(client, "romarr_id", ""),
+                        "client_name": getattr(client, "romarr_name", "qBittorrent"),
+                        "hash": str(torrent.get("hash") or ""),
+                        "name": str(torrent.get("name") or ""),
+                        "size": int(torrent.get("size") or 0),
+                        "state": str(torrent.get("state") or ""),
+                        "category": str(torrent.get("category") or ""),
+                    })
+            except Exception as err:  # noqa: BLE001 - report client status to UI
+                log.warning("could not list collection torrents from %s: %s",
+                            getattr(client, "romarr_name", "qBittorrent"),
+                            err.__class__.__name__)
+        return {"torrents": rows,
+                "jobs": self.store.list_items("collection_sources")}
+
+    def _collection_source_plan(self, client_id: str, torrent_hash: str,
+                                dat_name: str, platform: str,
+                                cap_bytes: int, **policy_kw) -> dict:
+        from .collection_torrent import plan_source
+
+        client = self._source_client(client_id)
+        if client is None:
+            return {"error": "select one configured qBittorrent client"}
+        try:
+            torrent = next((t for t in client.torrents()
+                            if str(t.get("hash") or "").lower()
+                            == torrent_hash.lower()), None)
+            if torrent is None:
+                return {"error": "source torrent no longer exists"}
+            listing = client.torrent_files(torrent_hash)
+        except Exception as err:  # noqa: BLE001 - client failures are actionable
+            return {"error": f"could not read the source torrent: {err.__class__.__name__}"}
+        plan = self.collection_plan(dat_name, platform, **policy_kw)
+        if plan.get("error"):
+            return plan
+        dat = next((d for d in self.dats.dats if d.name == plan["dat"]), None)
+        missing = [t["name"] for t in plan["titles"]
+                   if t["status"] == "missing"]
+        result = plan_source(missing, dat, listing, cap_bytes,
+                             int(torrent.get("piece_size") or 0))
+        if result.get("error"):
+            return result
+        result.update({
+            "client_id": getattr(client, "romarr_id", ""),
+            "client_name": getattr(client, "romarr_name", "qBittorrent"),
+            "torrent_hash": torrent_hash,
+            "torrent_name": str(torrent.get("name") or ""),
+            "dat": plan["dat"], "platform": platform,
+        })
+        return result
+
+    def collection_source_start(self, client_id: str, torrent_hash: str,
+                                dat_name: str, platform: str,
+                                cap_bytes: int, **policy_kw) -> dict:
+        import shutil
+        import uuid
+
+        client = self._source_client(client_id)
+        if client is None:
+            return {"error": "select one configured qBittorrent client"}
+        plan = self._collection_source_plan(client_id, torrent_hash, dat_name,
+                                            platform, cap_bytes, **policy_kw)
+        if plan.get("error"):
+            return plan
+        if not plan["batches"]:
+            return {"error": "no missing DAT files matched this torrent"}
+        try:
+            torrent = next(t for t in client.torrents()
+                           if str(t.get("hash") or "").lower()
+                           == torrent_hash.lower())
+            source_root = map_remote_path(
+                torrent.get("save_path") or torrent.get("content_path") or "",
+                self.store.settings.get("remote_path_mappings"))
+            if not source_root or not Path(source_root).is_dir():
+                return {"error": "qBittorrent source path is not mounted here"}
+            stage_root = self.library / ".romarr-collection-spool"
+            stage_root.mkdir(parents=True, exist_ok=True)
+            free = shutil.disk_usage(stage_root).free
+            if free < int(plan["cap_bytes"]):
+                return {"error": "less free space than the selected staging cap"}
+            listing = client.torrent_files(torrent_hash)
+            original = {str(int(f.get("index"))): int(f.get("priority") or 0)
+                        for f in listing if f.get("index") is not None}
+            was_paused = "paused" in str(torrent.get("state") or "").lower()
+            job_id = uuid.uuid4().hex[:12]
+            job = {
+                "id": job_id, "client_id": getattr(client, "romarr_id", ""),
+                "torrent_hash": torrent_hash, "torrent_name": plan["torrent_name"],
+                "save_path": str(source_root), "platform": platform,
+                "dat": plan["dat"], "cap_bytes": int(plan["cap_bytes"]),
+                "reserve_bytes": int(plan["reserve_bytes"]),
+                "original_priorities": original, "was_paused": was_paused,
+                "batches": plan["batches"], "batch": 0, "status": "running",
+                "started": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "errors": [],
+            }
+            self.store.put_item("collection_sources", job)
+            try:
+                self._prepare_collection_source_batch(client, job, force=True)
+            except Exception:
+                restored = self._restore_source_priorities(client, job)
+                job["status"] = "cancelled" if restored else "restore-needed"
+                if not restored:
+                    job["restore_status"] = "cancelled"
+                self.store.put_item("collection_sources", job)
+                raise
+            self.store.put_item("collection_sources", job)
+            return {"ok": True, **self._source_job_progress(job)}
+        except Exception as err:  # noqa: BLE001
+            log.exception("could not start selective collection torrent")
+            return {"error": f"could not start source torrent: {err.__class__.__name__}"}
+
+    @staticmethod
+    def _source_job_progress(job: dict) -> dict:
+        batches = job.get("batches") or []
+        current = int(job.get("batch") or 0)
+        total_titles = sum(len(b.get("groups") or []) for b in batches)
+        done = sum(1 for b in batches for g in b.get("groups") or []
+                   if g.get("status") == "imported")
+        return {
+            "id": job.get("id"), "torrent_name": job.get("torrent_name"),
+            "dat": job.get("dat"), "platform": job.get("platform"),
+            "status": job.get("status"), "batch": current + 1,
+            "batches": len(batches), "done": done, "total": total_titles,
+            "errors": job.get("errors") or [],
+            "stage_path": job.get("stage_path") or "",
+        }
+
+    def _prepare_collection_source_batch(self, client, job: dict, *,
+                                        force: bool = False) -> bool:
+        batches = job.get("batches") or []
+        index = int(job.get("batch") or 0)
+        if index >= len(batches):
+            return False
+        files = client.torrent_files(job["torrent_hash"])
+        ids = {int(f["index"]) for f in files if f.get("index") is not None}
+        priorities = {i: 0 for i in ids}
+        wanted = {int(f["index"])
+                  for group in batches[index].get("groups") or []
+                  for f in group.get("files") or []}
+        if not wanted or not wanted.issubset(ids):
+            raise ValueError("planned source file list changed")
+        expected = {i: (1 if i in wanted else 0) for i in ids}
+        current = {int(f["index"]): int(f.get("priority") or 0)
+                   for f in files if f.get("index") is not None}
+        if not force and all(current.get(i) == p for i, p in expected.items()):
+            return True
+        if not client.pause_torrent(job["torrent_hash"]):
+            raise RuntimeError("qBittorrent refused to pause before file selection")
+        if not client.set_file_priorities(job["torrent_hash"], priorities):
+            raise RuntimeError("qBittorrent refused to deselect unwanted files")
+        if not client.set_file_priorities(job["torrent_hash"],
+                                          {i: 1 for i in wanted}):
+            raise RuntimeError("qBittorrent refused to select planned files")
+        if not client.resume_torrent(job["torrent_hash"]):
+            raise RuntimeError("qBittorrent refused to resume selected files")
+        return True
+
+    def collection_source_step(self, job_id: str) -> dict:
+        import shutil
+        from pathlib import PurePosixPath
+
+        job = self.store.get_item("collection_sources", job_id)
+        if not job:
+            return {"error": "no such source batch"}
+        if job.get("status") != "running":
+            return self._source_job_progress(job)
+        client = self._source_client(job.get("client_id", ""))
+        if client is None:
+            return {"error": "the qBittorrent client for this batch is unavailable"}
+        batch_index = int(job.get("batch") or 0)
+        batches = job.get("batches") or []
+        if batch_index >= len(batches):
+            job["status"] = "done"
+            if not self._restore_source_priorities(client, job):
+                job["status"] = "restore-needed"
+                job["restore_status"] = "done"
+            self.store.put_item("collection_sources", job)
+            return self._source_job_progress(job)
+        try:
+            self._prepare_collection_source_batch(client, job)
+            files = client.torrent_files(job["torrent_hash"])
+            by_index = {int(f["index"]): f for f in files
+                        if f.get("index") is not None}
+            batch = batches[batch_index]
+            waiting = []
+            for group in batch.get("groups") or []:
+                if group.get("status") == "imported":
+                    continue
+                for planned in group.get("files") or []:
+                    row = by_index.get(int(planned["index"]))
+                    if row is None or float(row.get("progress") or 0) < 1:
+                        waiting.append(planned["name"])
+            if waiting:
+                return {"ok": True, "waiting": True,
+                        "message": f"{len(waiting)} file(s) are still downloading",
+                        **self._source_job_progress(job)}
+            stage_root = self.library / ".romarr-collection-spool" / job_id
+            stage_root.mkdir(parents=True, exist_ok=True)
+            job["stage_path"] = str(stage_root)
+            for group in batch.get("groups") or []:
+                if group.get("status") == "imported":
+                    continue
+                game_dir = stage_root / str(group["id"])
+                game_dir.mkdir(parents=True, exist_ok=True)
+                for planned in group.get("files") or []:
+                    rel = PurePosixPath(str(planned["name"]))
+                    if rel.is_absolute() or ".." in rel.parts:
+                        raise ValueError("qBittorrent returned an unsafe file path")
+                    source = (Path(job["save_path"]) / Path(*rel.parts)).resolve(strict=True)
+                    source.relative_to(Path(job["save_path"]).resolve())
+                    dest = game_dir / Path(*rel.parts)
+                    dest.parent.mkdir(parents=True, exist_ok=True)
+                    if not dest.exists():
+                        if source.stat().st_size != int(planned["size"]):
+                            raise ValueError(f"source size changed: {planned['name']}")
+                        used = sum(p.stat().st_size for p in stage_root.rglob("*")
+                                   if p.is_file())
+                        if used + source.stat().st_size + int(job["reserve_bytes"]) > int(job["cap_bytes"]):
+                            raise ValueError("staging cap would be exceeded")
+                        shutil.copy2(source, dest)
+                candidates = [p for p in game_dir.rglob("*") if p.is_file()]
+                if not candidates:
+                    raise ValueError(f"no staged file for {group['title']}")
+                preferred = (".zip", ".7z", ".rar", ".chd", ".iso", ".cue",
+                             ".gdi", ".m3u", ".cso", ".pbp")
+                candidates.sort(key=lambda p: (preferred.index(p.suffix.lower())
+                                               if p.suffix.lower() in preferred
+                                               else len(preferred), p.name.lower()))
+                result = self.adopt(str(candidates[0]), job["platform"],
+                                    require_verified=True)
+                if not result.get("ok"):
+                    group["status"] = "failed"
+                    group["error"] = "; ".join(
+                        r.get("reason", "") for r in result.get("refused", []))
+                    job["errors"] = [f"{group['title']}: {group['error']}"]
+                    self.store.put_item("collection_sources", job)
+                    return {"error": group["error"] or "verification/import failed",
+                            **self._source_job_progress(job)}
+                group["status"] = "imported"
+                group["imported"] = result.get("imported") or []
+                shutil.rmtree(game_dir, ignore_errors=True)
+                self.store.put_item("collection_sources", job)
+            if batch_index + 1 < len(batches):
+                job["batch"] = batch_index + 1
+                self._prepare_collection_source_batch(client, job)
+            else:
+                job["status"] = "done"
+                if not self._restore_source_priorities(client, job):
+                    job["status"] = "restore-needed"
+                    job["restore_status"] = "done"
+            self.store.put_item("collection_sources", job)
+            return {"ok": True, **self._source_job_progress(job)}
+        except Exception as err:  # noqa: BLE001 - persisted progress permits retry
+            job["errors"] = [f"{err.__class__.__name__}: {err}"]
+            self.store.put_item("collection_sources", job)
+            return {"error": job["errors"][0], **self._source_job_progress(job)}
+
+    def _restore_source_priorities(self, client, job: dict) -> bool:
+        try:
+            if not client.pause_torrent(job["torrent_hash"]):
+                return False
+            original = {int(i): int(p) for i, p in
+                        (job.get("original_priorities") or {}).items()}
+            if not client.set_file_priorities(job["torrent_hash"], original):
+                return False
+            if not job.get("was_paused") and not client.resume_torrent(job["torrent_hash"]):
+                return False
+            return True
+        except Exception as err:  # noqa: BLE001
+            log.warning("could not restore source torrent priorities: %s",
+                        err.__class__.__name__)
+            return False
+
+    def collection_source_control(self, job_id: str, action: str) -> dict:
+        job = self.store.get_item("collection_sources", job_id)
+        if not job:
+            return {"error": "no such source batch"}
+        if action == "cancel" and job.get("status") == "running":
+            client = self._source_client(job.get("client_id", ""))
+            if client is None:
+                return {"error": "the qBittorrent client for this batch is unavailable"}
+            restored = self._restore_source_priorities(client, job)
+            if restored:
+                job["status"] = "cancelled"
+            else:
+                job["status"] = "restore-needed"
+                job["restore_status"] = "cancelled"
+            self.store.put_item("collection_sources", job)
+        elif action == "restore":
+            client = self._source_client(job.get("client_id", ""))
+            if client is None:
+                return {"error": "the qBittorrent client for this batch is unavailable"}
+            restored = self._restore_source_priorities(client, job)
+            if restored:
+                job["status"] = job.pop("restore_status", "cancelled")
+            self.store.put_item("collection_sources", job)
+        elif action == "retry":
+            for batch in job.get("batches") or []:
+                for group in batch.get("groups") or []:
+                    if group.get("status") == "failed":
+                        group.pop("error", None)
+                        group["status"] = ""
+            job["errors"] = []
+            job["status"] = "running"
+            self.store.put_item("collection_sources", job)
+        else:
+            return {"error": "unknown action"}
+        return self._source_job_progress(job)
 
     def reload_metadata(self) -> None:
         """Rebuild the provider chain from stored settings."""
@@ -4164,10 +4492,11 @@ class ROMarr:
                         sha, verdict.game or path.stem, platform.slug,
                         verdict.status == VERIFIED,
                         str(path.relative_to(self.library)))
-                if sha in seen and len(state["duplicates"]) < 200:
+                if sha in seen:
                     state["duplicates"].append({
                         "file": str(path.relative_to(self.library)),
-                        "same_as": seen[sha]})
+                        "same_as": seen[sha], "sha1": sha,
+                        "size": int(digest.get("size") or 0)})
                 elif sha:
                     seen[sha] = str(path.relative_to(self.library))
             self.hashes.save()
@@ -4186,6 +4515,34 @@ class ROMarr:
             target=run, name="romarr-audit", daemon=True)
         ROMarr._audit_thread.start()
         return dict(state)
+
+    def duplicate_quarantine_state(self) -> dict:
+        from .quarantine import manifests, preview
+        audit = dict(self._audit_state or {})
+        return {"preview": preview(audit.get("duplicates") or []),
+                "manifests": manifests(self.library)}
+
+    def quarantine_duplicates(self, platform_slug: str,
+                              candidates: list[dict]) -> dict:
+        from .quarantine import quarantine
+        state = self._audit_state or {}
+        if state.get("status") != "done" or state.get("platform") != platform_slug:
+            return {"error": "run a completed audit for this platform first"}
+        root = self.library / platform_slug
+        if not root.is_dir():
+            return {"error": "audited platform directory is unavailable"}
+        try:
+            return quarantine(self.library, root, candidates,
+                              state.get("duplicates") or [])
+        except (OSError, ValueError) as err:
+            return {"error": str(err)}
+
+    def restore_duplicate(self, manifest_id: str, entry_id: str) -> dict:
+        from .quarantine import restore
+        try:
+            return restore(self.library, manifest_id, entry_id)
+        except (OSError, ValueError) as err:
+            return {"error": str(err)}
 
     def search_missing(self, *, auto: bool = False) -> dict:
         """Retry Wanted, the way *arr's missing search does.
@@ -5487,6 +5844,8 @@ def make_handler(service: ROMarr):
                              if e] if "exclude" in query else None))
             if route.path == "/api/v1/collection":
                 return self._json(200, service.collection_status())
+            if route.path == "/api/v1/collection/source":
+                return self._json(200, service.collection_source_torrents())
             if route.path == "/api/v1/openapi.json":
                 return self._json(200, openapi_spec(VERSION))
             if route.path == "/api/v1/metadataprovider":
@@ -5622,6 +5981,8 @@ def make_handler(service: ROMarr):
             if route.path == "/api/v1/audit":
                 return self._json(200, dict(service._audit_state)
                                   or {"status": "never run"})
+            if route.path == "/api/v1/audit/quarantine":
+                return self._json(200, service.duplicate_quarantine_state())
             if route.path == "/api/v1/stats":
                 return self._json(200, service.stats())
             if route.path == "/api/v1/integration/info":
@@ -5913,6 +6274,27 @@ def make_handler(service: ROMarr):
                     region_mode=body.get("region_mode") or None,
                     exclude=body.get("exclude")
                     if body.get("exclude") is not None else None))
+            if route.path == "/api/v1/collection/source/plan":
+                return self._json(200, service._collection_source_plan(
+                    str(body.get("client_id") or ""),
+                    str(body.get("torrent_hash") or ""),
+                    str(body.get("dat") or ""),
+                    str(body.get("platform") or ""),
+                    int(body.get("cap_bytes") or 0)))
+            if route.path == "/api/v1/collection/source/start":
+                return self._json(200, service.collection_source_start(
+                    str(body.get("client_id") or ""),
+                    str(body.get("torrent_hash") or ""),
+                    str(body.get("dat") or ""),
+                    str(body.get("platform") or ""),
+                    int(body.get("cap_bytes") or 0)))
+            if route.path == "/api/v1/collection/source/step":
+                return self._json(200, service.collection_source_step(
+                    str(body.get("id") or "")))
+            if route.path == "/api/v1/collection/source/control":
+                return self._json(200, service.collection_source_control(
+                    str(body.get("id") or ""),
+                    str(body.get("action") or "")))
             if route.path == "/api/v1/collection/step":
                 return self._json(200, service.collection_step(
                     str(body.get("id") or "")))
@@ -6181,6 +6563,14 @@ def make_handler(service: ROMarr):
                     str(body.get("peer_id") or ""),
                     str(body.get("title") or ""),
                     str(body.get("platform") or "")))
+            if route.path == "/api/v1/audit/quarantine/move":
+                return self._json(200, service.quarantine_duplicates(
+                    str(body.get("platform") or ""),
+                    list(body.get("files") or [])))
+            if route.path == "/api/v1/audit/restore":
+                return self._json(200, service.restore_duplicate(
+                    str(body.get("manifest_id") or ""),
+                    str(body.get("entry_id") or "")))
             if route.path == "/api/v1/audit":
                 return self._json(200, service.audit_library(
                     str(body.get("platform") or "")))

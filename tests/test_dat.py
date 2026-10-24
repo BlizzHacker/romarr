@@ -348,3 +348,21 @@ def test_a_rom_line_does_not_end_the_game_block_early():
     """`rom ( ... )` closes on its own line; only a bare `)` ends the block."""
     dat = parse_dat(CMP)
     assert len(dat.games["Chrono Trigger (USA)"].roms) == 1
+
+
+def test_logiqx_clrmamepro_header_element_does_not_route_to_cmp_parser():
+    xml = """<?xml version="1.0"?>
+<datafile><header><name>Real Logiqx</name>
+<clrmamepro forcenodump="required"/></header>
+<game name="Parent (USA)" id="parent"><rom name="p.bin" size="1" crc="aa"/></game>
+<game name="Clone (Europe)" id="clone" cloneofid="parent">
+<rom name="c.bin" size="1" crc="bb"/></game></datafile>"""
+    dat = parse_dat(xml)
+    assert set(dat.games) == {"Parent (USA)", "Clone (Europe)"}
+    assert dat.parent_of("Clone (Europe)") == "Parent (USA)"
+
+
+def test_logiqx_dat_with_a_utf8_bom_is_still_parsed():
+    xml = '\ufeff<?xml version="1.0"?><datafile><header><name>BOM</name></header>' \
+          '<game name="Game"><rom name="g.bin" size="1" crc="aa"/></game></datafile>'
+    assert parse_dat(xml).games["Game"].roms[0].crc == "aa"

@@ -140,3 +140,67 @@ def test_real_debrid_completed_reports_the_torrent_hash(tmp_path):
     rd._download = lambda url, dest: dest.parent.mkdir(parents=True, exist_ok=True) or dest.write_bytes(b"x") or True
     rows = rd.completed()
     assert rows and rows[0]["hash"] == HASH
+
+
+def test_qbittorrent_add_tags_the_job_and_exposes_the_same_identity():
+    from romarr.clients import QBittorrent, QbitConfig
+
+    class Response:
+        status_code = 200
+        text = "Ok."
+        ok = True
+
+    class Session:
+        def __init__(self):
+            self.posts = []
+        def post(self, url, **kwargs):
+            self.posts.append((url, kwargs))
+            return Response()
+
+    session = Session()
+    client = QBittorrent(QbitConfig(base_url="http://qbit:8080",
+                                    username="u", password="p"),
+                         session=session)
+    client._authed = True
+    assert client.add("https://tracker.test/file.torrent")
+    url, kwargs = session.posts[0]
+    tag = kwargs["data"]["tags"]
+    assert tag.startswith("romarr-")
+    assert client.last_job_id == "qbit-tag:" + tag
+    assert url.endswith("/api/v2/torrents/add")
+
+
+def test_qbittorrent_tag_matches_a_renamed_completed_torrent():
+    from romarr.downloaders import match_queue_item
+    item = QueueItem("Tony Hawk 3", "ps2", "long indexer title", 0,
+                     "grabbed", download_id="qbit-tag:romarr-abc")
+    assert match_queue_item([item], {
+        "name": "Tony Hawk's Pro Skater 3 (USA).7z",
+        "tags": "other, romarr-abc"}) is item
+
+
+def test_exact_size_fallback_matches_only_one_grabbed_row():
+    from romarr.downloaders import match_queue_item
+    item = QueueItem("Tony Hawk 3", "ps2", "indexer release title", 0,
+                     "grabbed", size=2731101058)
+    assert match_queue_item([item], {
+        "name": "different torrent name", "total_size": "2731101058"}) is item
+
+
+def test_ambiguous_exact_size_does_not_claim_a_download():
+    from romarr.downloaders import match_queue_item
+    rows = [QueueItem("A", "snes", "release a", 0, "grabbed", size=123),
+            QueueItem("B", "nes", "release b", 0, "grabbed", size=123)]
+    assert match_queue_item(rows, {"name": "unknown", "total_size": 123}) is None
+
+
+def test_unmatched_romarr_category_completion_is_logged(tmp_path, caplog):
+    s = svc(tmp_path)
+    class CategorizedClient(FakeClient):
+        _config = type("Config", (), {"category": "romarr"})()
+    s.clients = [CategorizedClient([{"name": "unmatched",
+                                     "category": "romarr",
+                                     "content_path": str(tmp_path / "missing")}])]
+    with caplog.at_level("WARNING"):
+        assert s.import_finished() == []
+    assert "could not be matched to a ROMarr queue row" in caplog.text
