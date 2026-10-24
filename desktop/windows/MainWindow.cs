@@ -169,8 +169,8 @@ public sealed class MainWindow : Form
                 if (backend is null || backend.HasExited) throw new IOException("ROMarr stopped while starting. Open the desktop log from the ROMarr menu for details.");
                 try
                 {
-                    var health = await http.GetFromJsonAsync<Dictionary<string, bool>>(origin + "/api/health");
-                    if (health?.GetValueOrDefault("ok") == true) break;
+                    var health = await http.GetFromJsonAsync<JsonElement>(origin + "/api/health");
+                    if (health.TryGetProperty("ok", out var healthy) && healthy.ValueKind == JsonValueKind.True) break;
                 }
                 catch (HttpRequestException) { }
                 catch (TaskCanceledException) { }

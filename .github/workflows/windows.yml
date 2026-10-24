@@ -25,6 +25,8 @@ jobs:
         python: ['3.11', '3.13']
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
@@ -133,9 +135,11 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 45
     permissions:
-      contents: write
+      contents: read
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v6
         with:
           python-version: '3.13'
@@ -217,15 +221,25 @@ jobs:
           compression-level: 0
           if-no-files-found: error
           retention-days: 7
+  release-assets:
+    name: Attach tested desktop packages to release
+    needs: desktop
+    if: github.event_name == 'release'
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          name: ROMarr-Windows-desktop-packages
+          path: assets
       - name: Attach packages to the published release
-        if: github.event_name == 'release'
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $files = @(Get-ChildItem -LiteralPath $env:ROMARR_DESKTOP_OUTPUT -File | Where-Object Extension -in '.zip','.msix')
-          $files += Get-Item -LiteralPath (Join-Path $env:ROMARR_DESKTOP_OUTPUT 'SHA256SUMS.txt')
-          & gh release upload $env:RELEASE_TAG @($files.FullName) --clobber
+          $files = @(Get-ChildItem -LiteralPath assets -File -Recurse)
+          & gh release upload $env:RELEASE_TAG @($files.FullName) --repo $env:GITHUB_REPOSITORY --clobber
           if ($LASTEXITCODE -ne 0) { throw 'The desktop release assets could not be uploaded.' }
