@@ -60,6 +60,8 @@ def test_unknown_dump_keeps_its_name(tmp_path):
 @pytest.mark.parametrize("canonical", [
     "../outside.sfc", "/outside.sfc", "dir/outside.sfc",
     "C:" + chr(92) + "outside.sfc", "CON.sfc", "Game?.sfc",
+    "NUL.tar.gz", "con.backup.bin", "LPT9.part.sfc", "COM1.tar.gz",
+    "COM¹.data.sfc", "LPT³.backup.sfc", "CONIN$.sfc", "CONOUT$.sfc",
 ])
 def test_unsafe_dat_name_does_not_escape_or_break_filename(tmp_path, canonical):
     source = tmp_path / "safe.sfc"

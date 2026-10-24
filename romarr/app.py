@@ -1267,17 +1267,19 @@ class ROMarr:
             return {"ok": False,
                     "error": "That folder is not available to ROMarr. Check the path and, "
                              "if you use Docker, its folder mount."}
-        result = self.reload_dats(directory)
-        self.store.save()
-        if result.get("error"):
-            return {"ok": False, **result}
-        if not result.get("loaded"):
-            return {"ok": False, **result,
-                    "error": "No readable DATs were found. Choose a folder containing "
-                             "No-Intro or Redump .dat, .xml, or .zip files."}
-        return {"ok": True, **result,
-                "message": f"Loaded {result['loaded']} DAT(s). You can now verify files "
-                           "and compare your collection."}
+        with self._dat_reload_lock:
+            result = self._reload_dats(directory, preserve_on_empty=True)
+            if result.get("error") or not result.get("loaded"):
+                # A rejected candidate was never published to active readers.
+                if result.get("error"):
+                    return {"ok": False, **result}
+                return {"ok": False, **result,
+                        "error": "No readable DATs were found. Choose a folder containing "
+                                 "No-Intro or Redump .dat, .xml, or .zip files."}
+            self.store.save()
+            return {"ok": True, **result,
+                    "message": f"Loaded {result['loaded']} DAT(s). You can now verify files "
+                               "and compare your collection."}
 
     # --- inbound webhooks -------------------------------------------------
 
@@ -2060,7 +2062,7 @@ class ROMarr:
         with self._dat_reload_lock:
             return self._reload_dats(directory)
 
-    def _reload_dats(self, directory: str = "") -> dict:
+    def _reload_dats(self, directory: str = "", *, preserve_on_empty: bool = False) -> dict:
         """Load every DAT under `directory`.
 
         Optional and quiet. An operator with no DATs is the common case on
@@ -2073,13 +2075,17 @@ class ROMarr:
         """
         import zipfile
 
-        self.store.settings["dat_path"] = str(directory or "")
         if not directory:
+            if preserve_on_empty:
+                return {"loaded": 0, "path": ""}
+            self.store.settings["dat_path"] = ""
             self.dats = DatIndex()
             return {"loaded": 0, "path": ""}
         root = Path(directory)
         if not root.is_dir():
-            self.dats = DatIndex()
+            if not preserve_on_empty:
+                self.store.settings["dat_path"] = str(directory)
+                self.dats = DatIndex()
             log.warning("DAT_PATH %s is not a directory", root)
             return {"loaded": 0, "path": str(root),
                     "error": f"{root} is not a directory"}
@@ -2122,14 +2128,20 @@ class ROMarr:
         index = DatIndex()
         for parsed in loaded_by_name.values():
             index.add(parsed)
-        self.dats = index
-        log.info("loaded %d DAT(s) from %s", len(index.dats), root)
         result = {"loaded": len(index.dats), "path": str(root),
                   "examined": len(found)}
         if stopped:
             result["truncated"] = stopped
             log.warning("DAT scan stopped early: %s", stopped)
         
+        # Build the candidate index entirely off to the side. Setup may reject
+        # an empty/unreadable selection without exposing it to import readers.
+        if preserve_on_empty and not index.dats:
+            return result
+        self.store.settings["dat_path"] = str(directory)
+        self.dats = index
+        log.info("loaded %d DAT(s) from %s", len(index.dats), root)
+
         # Also initialize TitleDB for Switch validation
         self.reload_titled()
         

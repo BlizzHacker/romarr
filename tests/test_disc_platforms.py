@@ -195,6 +195,13 @@ def _readme() -> str:
         encoding="utf-8")
 
 
+def _feature_docs() -> str:
+    from pathlib import Path
+    assert "docs/FEATURES.md" in _readme(), "README must link to playback details"
+    return (Path(__file__).resolve().parents[1] / "docs" / "FEATURES.md").read_text(
+        encoding="utf-8")
+
+
 def test_the_readme_no_longer_excludes_disc_platforms():
     """The claim that started this, pinned so it cannot come back.
 
@@ -203,21 +210,20 @@ def test_the_readme_no_longer_excludes_disc_platforms():
     map runs nine optical systems in a browser, and the stream server runs the
     rest server-side.
     """
-    readme = _readme().lower()
+    readme = (_readme() + _feature_docs()).lower()
     assert "disc-based platforms are excluded" not in readme
     assert "cannot stream" not in readme
 
 
-def test_the_readme_lists_the_disc_platforms_the_code_supports():
-    """A README that names a platform the code cannot request, or omits one it
-    can, is the same defect facing either way."""
-    readme = _readme()
+def test_linked_feature_guide_lists_supported_disc_platforms():
+    """Platform detail remains discoverable after shortening the README."""
+    readme = _feature_docs()
     for name in ("PlayStation 2", "Dreamcast", "GameCube", "Saturn", "PSP",
                  "Neo Geo CD", "Amiga CD32"):
         assert name in readme, name
 
 
-def test_the_readme_documents_every_play_route():
-    readme = _readme()
+def test_linked_feature_guide_documents_every_play_route():
+    readme = _feature_docs()
     for route in ("EmulatorJS", "Archive.org", "Download", "STREAM_SERVER_URL"):
         assert route in readme, route

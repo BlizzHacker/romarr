@@ -167,3 +167,61 @@ const editItem=()=>{};const addItem=()=>{};
     result = subprocess.run([node, "-e", harness + ui.JS[start:end] + checks],
                             text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.parametrize("malformed", [False, True])
+def test_failed_optional_dat_check_preserves_working_index_and_path(tmp_path, malformed):
+    svc = service(tmp_path)
+    working = tmp_path / "working-dats"
+    working.mkdir()
+    (working / "system.dat").write_text(
+        '<datafile><header><name>Working</name></header><game name="Game">'
+        '<rom name="Game.bin" size="1" crc="aa"/></game></datafile>')
+    assert svc.setup_dats(str(working))["ok"]
+    previous_index = svc.dats
+    rejected = tmp_path / "other-dats"
+    rejected.mkdir()
+    if malformed:
+        (rejected / "broken.dat").write_text("this is not a DAT")
+    result = svc.setup_dats(str(rejected))
+    assert result["ok"] is False
+    assert svc.dats is previous_index
+    assert svc.setup_status()["dat_loaded"] == 1
+    assert svc.store.settings["dat_path"] == str(working)
+    assert service(tmp_path).store.settings["dat_path"] == str(working)
+
+
+@pytest.mark.parametrize("malformed", [False, True])
+def test_failed_optional_dat_candidate_is_never_published(tmp_path, monkeypatch, malformed):
+    svc = service(tmp_path)
+    working = tmp_path / "working-dats"
+    working.mkdir()
+    (working / "system.dat").write_text(
+        '<datafile><header><name>Working</name></header><game name="Game">'
+        '<rom name="Game.bin" size="1" crc="aa"/></game></datafile>')
+    assert svc.setup_dats(str(working))["ok"]
+    rejected = tmp_path / "other-dats"
+    rejected.mkdir()
+    if malformed:
+        (rejected / "broken.dat").write_text("this is not a DAT")
+    publications = []
+    assign = ROMarr.__setattr__
+
+    def observe_assignment(instance, name, value):
+        if instance is svc and name == "dats":
+            publications.append(value)
+        assign(instance, name, value)
+
+    class ObservedSettings(dict):
+        def __setitem__(self, key, value):
+            if key == "dat_path":
+                publications.append(value)
+            super().__setitem__(key, value)
+
+    svc.store.settings = ObservedSettings(svc.store.settings)
+    monkeypatch.setattr(ROMarr, "__setattr__", observe_assignment)
+    monkeypatch.setattr(svc, "reload_titled", lambda: pytest.fail(
+        "failed DAT setup must not refresh unrelated state"))
+
+    assert svc.setup_dats(str(rejected))["ok"] is False
+    assert publications == [], "failed index/path must never become active, even temporarily"

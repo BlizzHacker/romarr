@@ -14,7 +14,7 @@ Failed or stalled releases may be blocklisted with a reason, allowing another re
 
 The importer reads supported archives, identifies ROM candidates and files them under the destination platform. Multi-track discs need all referenced tracks. Arcade/Neo Geo and DOS archives can be kept intact because their internal layout matters to the emulator.
 
-DAT checksums distinguish **verified**, **bad dump** and **unknown**. A matching title alone does not verify the bytes. No matching DAT means unknown; normal imports do not treat that as a bad dump. A refused bad dump needs an explicit override, which is recorded.
+DAT checksums distinguish **verified**, **bad dump** and **unknown**. Every member must match for a multi-file set to be verified; a conflicting member makes the set bad, while an unidentified member prevents verification. A matching title alone does not verify the bytes. Manual Import refuses bad dumps unless explicitly overridden. Completed-download imports record the verdict and can retain them; verified-only workflows refuse any result that is not verified. Unknown files are not automatically treated as bad dumps.
 
 **Settings → Media Management → Rename on import** controls canonical naming for verified single-file imports. With it enabled, a verified file can use the DAT's canonical name while retaining its source extension. Disable it to preserve the source filename. Unknown files preserve their names. Importing preserves the source, and an existing destination is not overwritten. This does not rename a library in place or migrate its platform folders; those need a separate preview and are [planned](../ROADMAP.md).
 
@@ -45,6 +45,15 @@ Genesis imports use the RomM filesystem slug `genesis`. Existing `genesis-slash-
 ## Players and modern consoles
 
 **System → Platforms** reports the routes configured for your install. A browser player, RetroArch server or Moonlight host is a separate component with its own core, format and firmware requirements. A catalogue row without a file cannot be played or downloaded locally.
+
+Supported optical systems include PlayStation 2, Dreamcast, GameCube, Saturn, PSP, Neo Geo CD and Amiga CD32. Import support and playback support are separate: your player needs the relevant core and firmware.
+
+| Route | What it means |
+|---|---|
+| **EmulatorJS** | Browser playback through a compatible library server and installed core; support depends on the file/platform. |
+| **Stream** | Playback on a configured server. `STREAM_SERVER_URL` connects the headless RetroArch service; Moonlight hosts have separate settings and requirements. |
+| **Archive.org** | An external item's supported in-page emulator, where the source provides one; it is not local playback for every system. |
+| **Download** | Retrieve an existing local file for a player elsewhere. A catalogue entry without bytes does not provide a working download. |
 
 ROMarr can expose routes through configured EmulatorJS, Ruffle, js-dos, Emularity or streaming hosts where appropriate. This is not a promise that every platform/format runs in a browser. Read the page's reason when a route is unavailable.
 
@@ -88,7 +97,9 @@ GG Requestz sends approved requests to ROMarr. Open **System → GG Requestz req
 REQUEST_WEBHOOK_URL=http://romarr:6868/api/v1/webhook/ggrequestz?apikey=<ROMARR_API_KEY>
 ```
 
-The `romarr` hostname works only when both containers share a network where that name resolves. Otherwise use ROMarr's reachable host address. GG Requestz versions that send only approved requests need approval or their auto-approve option enabled.
+`GGREQUESTZ_URL` goes the other direction: it tells ROMarr where the GG Requestz page is for its link/status check. It does not configure request delivery. Set `REQUEST_WEBHOOK_URL` in GG Requestz for delivery to ROMarr.
+
+The `romarr` hostname works only when both containers share a network where that name resolves. Otherwise use ROMarr's reachable host address. GG Requestz versions that send only approved requests need approval or their `request.auto_approve` option enabled.
 
 The URL contains your API key; treat it as a password. A reachable GG Requestz page does not prove it has an outbound webhook configured.
 

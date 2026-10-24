@@ -9,7 +9,8 @@
 | Published amd64 or arm64 Docker image | ROM Hub and Git are included. Open **Hub → Plugins** (`/#hub`). |
 | Published 32-bit ARM/armv7 Docker image | ROM Hub is not included. Use an amd64/arm64 host for plugins, or use ROMarr's indexers and normal download clients. |
 | Proxmox LXC or Python source checkout | Check **Hub → Plugins**. If the host is missing, install it into the same Python environment that runs ROMarr, as below. |
-| Windows launcher | ROM Hub is optional. The launcher installs ROMarr's base requirements; see the Windows command below for the additional host package. Linux seccomp confinement is unavailable on Windows. |
+| Native Windows app | The Windows ZIP includes ROM Hub. Linux seccomp confinement is unavailable on Windows. |
+| Windows source helper | ROM Hub is optional. The PowerShell helper installs ROMarr's base requirements; see the command below for the additional host package. |
 
 The top of the Plugins page reports whether plugins can run confined on your host. Installing a plugin runs third-party code with access available to the ROMarr process, so read its repository and install sources you trust.
 
@@ -49,7 +50,7 @@ Install Git using your operating system's package manager. Then install the host
 
 For a checkout using `.venv`, use `.venv/bin/python` instead. Installing into system Python or another virtual environment will not make the package available to ROMarr. Refresh the Plugins page after installing; restart ROMarr after a package upgrade if it has already loaded an older module.
 
-For the [Windows launcher](INSTALL.md#windows-source-install), run from the repository directory:
+For the advanced [Windows source helper](INSTALL.md#windows-source-install), run from the repository directory:
 
 ```powershell
 .\.venv-windows\Scripts\python.exe -m pip install "rom-hub @ https://github.com/BlizzHacker/rom-hub/archive/8e46348783546ee03b00e2c933155ba60d29619d.tar.gz"

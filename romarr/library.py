@@ -437,8 +437,11 @@ def _import_name(primary: str, verdict: Match, *, rename: bool) -> str:
             or canonical.endswith((" ", "."))):
         return original
     stem = Path(canonical).stem
+    # Windows reserves device names even before multiple suffixes (NUL.tar.gz)
+    # and recognizes superscript digits in COM/LPT device names as well.
+    device = canonical.split(".", 1)[0].rstrip()
     if (not stem or stem in (".", "..")
-            or re.fullmatch(r"(?i:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])", stem)):
+            or re.fullmatch(r"(?i:CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|COM[1-9¹²³]|LPT[1-9¹²³])", device)):
         return original
     # Hash normalization can equate .smc/.sfc dumps. A title change must not
     # relabel the physical format, so retain the source file extension.

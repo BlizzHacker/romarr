@@ -1,5 +1,7 @@
 # ROMarr
 
+The *arr for games.
+
 Find games, verify ROMs, and import them into your library.
 
 [![Tests and images](https://github.com/BlizzHacker/romarr/actions/workflows/docker.yml/badge.svg)](https://github.com/BlizzHacker/romarr/actions/workflows/docker.yml)
@@ -17,7 +19,7 @@ Find games, verify ROMs, and import them into your library.
 | Find and download a particular game | **Add New** or **Interactive Search** | A search source, a matching download client, and a destination folder. |
 | Check what a collection is missing | **Collections** | A No-Intro or Redump DAT and your local library. |
 | Reclaim space taken by exact duplicates | **Stats → Audit** | A local library; review the preview before moving duplicates to quarantine. Restore is available. |
-| Add another game source | **Hub → Plugins** | ROM Hub, included in the amd64 and arm64 Docker images. [Details](docs/PLUGINS.md). |
+| Add another game source | **Hub → Plugins** | ROM Hub, included in the Windows app and amd64/arm64 Docker images. [Details](docs/PLUGINS.md). |
 
 You can use a plain **folder** as your library. RomM, Gaseous, Retrom and other library integrations are optional. Your emulator or frontend plays the games; ROMarr handles finding, checking and importing files.
 
@@ -31,7 +33,7 @@ Imports can be checked against DAT checksums. The result is **verified**, **bad 
 |---|---|---|
 | **Docker Compose** | Most servers, NAS hosts, or Docker Desktop | [Quick start below](#docker-compose-quick-start) |
 | **Proxmox LXC** | A Proxmox host | [LXC installer](docs/INSTALL.md#proxmox-lxc) |
-| **Windows** | Running directly on a Windows PC | [PowerShell launcher](docs/INSTALL.md#windows-source-install). Python 3.11+ and Git required; no native installer or Windows service package is shipped. |
+| **Windows app** | Windows 10/11 on x64 | [Download the Windows ZIP](docs/INSTALL.md#windows-app), extract it and double-click **ROMarr.exe**. No Python, PowerShell or .NET installation required. |
 | **Linux/macOS source checkout** | Development or an existing Python host | [Source instructions](docs/INSTALL.md#from-source) |
 | **Home Assistant add-on** | A Home Assistant installation | [Add-on instructions](docs/INSTALL.md#home-assistant); this packaging needs more field testing. |
 
@@ -99,6 +101,10 @@ The image includes archive tools. **ROM Hub is included on amd64/arm64; it is un
 - PS4, PS5 and PS Vita search/import formats, with [explicit playback and installation limits](docs/MODERN-CONSOLES.md).
 
 Source access, available files, credentials and platform support vary. Check the result and the task history; a configured connection does not guarantee a particular game is available.
+
+## Play with Cartridge
+
+[Cartridge for Windows](https://github.com/BlizzHacker/RommForDesktop/releases/latest) and [Cartridge for Xbox](https://github.com/BlizzHacker/RommForXbox) are optional players for a RomM library. Choose the app for your device. ROMarr manages acquisition and imports; Cartridge connects to RomM to browse and play. You can keep using your existing frontend instead. The Windows app's **Cartridge** menu and the Setup Guide link to both.
 
 ## Help and documentation
 

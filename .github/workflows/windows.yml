@@ -1,16 +1,18 @@
-name: Windows native smoke
+name: Windows source and native desktop
 
 on:
   push:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  release:
+    types: [published]
 
 permissions:
   contents: read
 
 jobs:
-  native:
+  source-smoke:
     runs-on: windows-latest
     timeout-minutes: 10
     strategy:
@@ -66,9 +68,33 @@ jobs:
             throw 'ROMarr health timed out'
           }
           function Stop-Native($Process) {
-            if ($Process -and -not $Process.HasExited) {
+            if (-not $Process) { return }
+            $owned = [Collections.Generic.List[Diagnostics.Process]]::new()
+            $owned.Add($Process)
+            if (-not $Process.HasExited) {
+              # Retain handles before taskkill so restart waits for Python too.
+              $snapshot = @(Get-CimInstance Win32_Process)
+              $parents = @($Process.Id)
+              while ($parents.Count) {
+                $children = @($snapshot | Where-Object { $_.ParentProcessId -in $parents })
+                $parents = @($children.ProcessId)
+                foreach ($child in $children) {
+                  $handle = Get-Process -Id $child.ProcessId -ErrorAction SilentlyContinue
+                  if ($handle) { $owned.Add($handle) }
+                }
+              }
               & taskkill.exe /PID $Process.Id /T /F | Out-Null
-              $Process.WaitForExit(10000) | Out-Null
+              $killCode = $LASTEXITCODE
+              if ($killCode -ne 0 -and -not $Process.HasExited) {
+                throw "Could not stop the owned launcher tree (taskkill $killCode)."
+              }
+            }
+            foreach ($handle in $owned) {
+              if (-not $handle.WaitForExit(10000)) {
+                throw "Owned process $($handle.Id) did not exit before restart."
+              }
+              $handle.Refresh()
+              if (-not $handle.HasExited) { throw "Owned process $($handle.Id) is still running." }
             }
           }
           $process = $null
@@ -97,3 +123,105 @@ jobs:
             Stop-Native $process
             Get-ChildItem -LiteralPath $root -Filter '*.log' | ForEach-Object { Get-Content -LiteralPath $_.FullName }
           }
+
+  desktop:
+    name: Native desktop package and EXE proof
+    runs-on: windows-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build self-contained ZIP and unsigned MSIX
+        shell: pwsh
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          STORE_IDENTITY_NAME: ${{ vars.WINDOWS_STORE_IDENTITY_NAME }}
+          STORE_PUBLISHER: ${{ vars.WINDOWS_STORE_PUBLISHER }}
+          STORE_PUBLISHER_DISPLAY_NAME: ${{ vars.WINDOWS_STORE_PUBLISHER_DISPLAY_NAME }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          [xml]$project = Get-Content -LiteralPath .\desktop\windows\ROMarr.Desktop.csproj
+          $version = [string]$project.Project.PropertyGroup.Version
+          if ($env:EVENT_NAME -eq 'release' -and $env:RELEASE_TAG -ne "v$version") {
+            throw 'Release tag and desktop project version must match before packages are published.'
+          }
+          $output = Join-Path $env:RUNNER_TEMP 'romarr-desktop-package'
+          $options = @{ OutputDirectory = $output; Version = $version; PythonPath = (Get-Command python).Source }
+          if ($env:STORE_IDENTITY_NAME) { $options.StoreIdentityName = $env:STORE_IDENTITY_NAME }
+          if ($env:STORE_PUBLISHER) { $options.StorePublisher = $env:STORE_PUBLISHER }
+          if ($env:STORE_PUBLISHER_DISPLAY_NAME) { $options.StorePublisherDisplayName = $env:STORE_PUBLISHER_DISPLAY_NAME }
+          & .\scripts\build-windows-desktop.ps1 @options
+          if ($LASTEXITCODE -ne 0) { throw 'Desktop package build failed.' }
+          "ROMARR_DESKTOP_OUTPUT=$output" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "ROMARR_DESKTOP_VERSION=$version" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Run the real native EXE with no external Python or Git
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bundle = Join-Path $env:ROMARR_DESKTOP_OUTPUT "ROMarr-$env:ROMARR_DESKTOP_VERSION-win-x64"
+          $proof = Join-Path $env:RUNNER_TEMP 'romarr-desktop-proof'
+          [IO.Directory]::CreateDirectory($proof) | Out-Null
+          $exe = Join-Path $bundle 'ROMarr.exe'
+          $previousPath = $env:PATH
+          $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
+          $process = $null
+          try {
+            $process = Start-Process -FilePath $exe -ArgumentList @('--smoke-test', ('"' + $proof + '"')) -PassThru -WindowStyle Hidden
+            if (-not $process.WaitForExit(600000)) {
+              $process.Kill($true)
+              throw 'The native EXE smoke test timed out.'
+            }
+            if ($process.ExitCode -ne 0) { throw "The native EXE failed with exit code $($process.ExitCode)." }
+            $evidence = Join-Path $proof 'smoke-proof.json'
+            if (-not (Test-Path -LiteralPath $evidence)) { throw 'The real EXE did not produce smoke proof.' }
+            Get-Content -LiteralPath $evidence
+            $result = Get-Content -LiteralPath $evidence -Raw | ConvertFrom-Json
+            foreach ($property in @('nativeWindow','embeddedInterface','bundledPython','bundledHub','pluginInstall','setupGuide','authentication','persistence')) {
+              if ($result.$property -ne $true) { throw "Native proof is missing: $property" }
+            }
+          } finally {
+            $env:PATH = $previousPath
+            if ($process -and -not $process.HasExited) { $process.Kill($true) }
+            Get-ChildItem -LiteralPath $proof -Filter '*error*' -File -Recurse | ForEach-Object { Get-Content -LiteralPath $_.FullName }
+          }
+      - name: Upload native proof and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ROMarr-Windows-native-proof
+          path: |
+            ${{ runner.temp }}/romarr-desktop-proof/**
+            ${{ runner.temp }}/romarr-desktop-package/ROMarr-*/BUILD-INFO.json
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Upload desktop ZIP and unsigned MSIX
+        uses: actions/upload-artifact@v4
+        with:
+          name: ROMarr-Windows-desktop-packages
+          path: |
+            ${{ runner.temp }}/romarr-desktop-package/*.zip
+            ${{ runner.temp }}/romarr-desktop-package/*.msix
+            ${{ runner.temp }}/romarr-desktop-package/SHA256SUMS.txt
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+      - name: Attach packages to the published release
+        if: github.event_name == 'release'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $files = @(Get-ChildItem -LiteralPath $env:ROMARR_DESKTOP_OUTPUT -File | Where-Object Extension -in '.zip','.msix')
+          $files += Get-Item -LiteralPath (Join-Path $env:ROMARR_DESKTOP_OUTPUT 'SHA256SUMS.txt')
+          & gh release upload $env:RELEASE_TAG @($files.FullName) --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'The desktop release assets could not be uploaded.' }

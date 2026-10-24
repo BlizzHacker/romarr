@@ -12,6 +12,7 @@ ROMarr can import files you already have with only a destination folder. Searchi
 - [Proxmox LXC](#proxmox-lxc)
 - [Home Assistant](#home-assistant)
 - [From source](#from-source)
+- [Windows app](#windows-app)
 - [Windows source install](#windows-source-install)
 - [First run: claiming the install](#first-run-claiming-the-install)
 - [The rule that catches everyone](#the-rule-that-catches-everyone)
@@ -319,9 +320,29 @@ ZIP handling is built in. Install `bsdtar` for supported `.7z` and `.rar` archiv
 
 `.env.example` documents additional environment options. Python does not automatically load a `.env` file; source it or supply an environment file through your service manager. Configure connections in the UI after first startup.
 
+## Windows app
+
+Download the portable **Windows 10/11 x64** app. The package contains the native Windows window, embedded WebView2 interface, Python backend, ROM Hub and Git. No Python, PowerShell, Docker, .NET or separate browser installation is required to use it.
+
+1. Open [ROMarr releases](https://github.com/BlizzHacker/romarr/releases/latest) and download **`ROMarr-1.8.0-win-x64.zip`** (choose the matching version on later releases).
+2. Extract the **whole ZIP** to a folder you own. Keep `ROMarr.exe`, `backend`, `browser` and `git` together. Do not open the EXE from inside the ZIP.
+3. Double-click **ROMarr.exe**. Choose your data folder and ROM library folder, then click **Start ROMarr**.
+4. Set your ROMarr password in the embedded interface. Follow **Settings -> Setup Guide**. Choose **I already have ROMs** to start with an existing collection.
+5. Add your connections and plugins when needed. The **Cartridge** menu offers separate optional downloads for Windows and Xbox players; neither is required for ROMarr.
+
+The app listens on `127.0.0.1:6868` by default. Its native window has folder pickers, Start/Stop, a port setting, data/log access and help links. Closing it stops the backend it started. It does not run as a Windows service or start automatically with Windows.
+
+The default data folder is `%LOCALAPPDATA%\ROMarr`; the desktop preferences file is `%LOCALAPPDATA%\ROMarr\desktop.json`. The default ROM folder is `%USERPROFILE%\Games\ROMs`. Select another drive before starting if that is where your collection belongs. Changing the data folder selects a separate installation's settings; it does not move existing data.
+
+To update, close ROMarr, extract the new release into a fresh application folder and open its `ROMarr.exe` with your existing data and library paths. Keep those data/library folders. Back up the data folder before an update. Fixed WebView2 is included and updates with the application package.
+
+Windows checks build the actual app and run it with external Python and Git removed from `PATH`. They check the native window, embedded sign-in/setup guide, API protection, bundled plugin installation and settings after restart. Check the release's linked run and proof for its exact results; real hardware and every external integration need their own field reports.
+
+The **unsigned MSIX** is for development and Store preparation. It is not a certified Microsoft Store release or a normal unsigned installation option. [Build and Store submission details](../desktop/windows/BUILDING.md).
+
 ## Windows source install
 
-The repository includes a **foreground PowerShell launcher**. There is no MSI/EXE installer or Windows service package. Docker Desktop is another option if you already use it.
+This is the advanced source route. For normal use, choose the [Windows app](#windows-app) above. The source checkout includes a foreground PowerShell helper and requires Python 3.11+ and Git. Docker Desktop is another option if you already use it.
 
 1. Install Python **3.11 or newer** and Git. Confirm `py -3 --version` and `git --version` work in PowerShell.
 2. Clone the repository into a folder where you want the checkout and virtual environment to live.

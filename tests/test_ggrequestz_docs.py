@@ -6,11 +6,13 @@ from pathlib import Path
 ROOT = Path(__file__).parents[1]
 
 
-def test_the_readme_documents_the_actual_ggrequestz_receiver():
+def test_readme_links_to_the_actual_ggrequestz_receiver_documentation():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    assert "REQUEST_WEBHOOK_URL=http://romarr:6868/api/v1/webhook/ggrequestz" in readme
-    assert "GGREQUESTZ_URL` goes the other direction" in readme
-    assert "request.auto_approve" in readme
+    assert "docs/FEATURES.md" in readme
+    guide = (ROOT / "docs" / "FEATURES.md").read_text(encoding="utf-8")
+    assert "REQUEST_WEBHOOK_URL=http://romarr:6868/api/v1/webhook/ggrequestz" in guide
+    assert "GGREQUESTZ_URL` goes the other direction" in guide
+    assert "request.auto_approve" in guide
 
 
 def test_the_compose_file_does_not_claim_the_link_setting_delivers_requests():
