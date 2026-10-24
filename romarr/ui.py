@@ -416,6 +416,7 @@ input:focus,select:focus,textarea:focus{border-color:var(--accent-line);
   color:var(--fg);border-radius:var(--r-md);cursor:pointer;text-align:left;
   font-family:inherit;font-size:13px;font-weight:600;line-height:1.4;
   transition:all var(--t)}
+.pick button[aria-pressed=true]{border-color:var(--accent);background:var(--accent-softer)}
 .pick button:hover{border-color:var(--accent-line);background:var(--surface-2);
   transform:translateY(-1px)}
 .pick small{display:block;color:var(--dim);font-size:11px;margin-top:3px;
@@ -644,7 +645,7 @@ NAV = [
     ("Activity", [("queue", "Queue", "queued"), ("history", "History", None),
                   ("blocklist", "Blocklist", None)]),
     ("Hub",      [("hub", "Plugins", None), ("peers", "Friends", None)]),
-    ("Settings", [("media", "Media Management", None), ("profiles", "Profiles", None),
+    ("Settings", [("setup", "Setup Guide", None), ("media", "Media Management", None), ("profiles", "Profiles", None),
                   ("indexers", "Indexers", None), ("clients", "Download Clients", None),
                   ("libraries", "Libraries", None),
                   ("connections", "Connections", None),
@@ -707,7 +708,7 @@ function go(page){
     blocklist:'Blocklist',connections:'Connections',metadata:'Metadata',
     calendar:'Release Calendar',manualimport:'Manual Import',
     collections:'Collections \u2014 full sets and 1G1R',
-    getstarted:'Get Started',
+    getstarted:'Get Started',setup:'Setup Guide',
     hub:'ROM Hub — Plugins'};
   $('#top h1').textContent=titles[page]||'ROMarr';
   $('#search').classList.toggle('hide', !['library','add'].includes(page));
@@ -721,37 +722,7 @@ RENDER.hub=async()=>{
   // Installing a plugin means running its author's code. Whether that code is
   // confined is the thing to know first, so it goes at the top of the page
   // rather than in a log the operator will never read.
-  const hs=await j('/api/v1/hub/status').catch(()=>({}));
-  const confined=hs.sandboxed===true;
-  const sandboxNote=hs.available===false ? '' :
-    (confined
-      ? '<div class="panel-note" style="border-left:3px solid var(--ok)">'
-        +'<b>Plugins run confined.</b> Each runs as its own subprocess with no '
-        +'library token and no sockets of its own &mdash; it can only reach the '
-        +'hosts it declared. It can still read files ROMarr can.</div>'
-      : '<div class="panel-note panel-warn"><b>Plugins run with no '
-        +'confinement.</b> '+esc(hs.sandbox_detail||'')+' A plugin you install '
-        +'can reach any host and read any file ROMarr can.</div>');
-  // What enabling a searchable plugin actually does now, said out loud:
-  // its results join Interactive Search once the ROM Hub download client
-  // is configured. Before that existed, the honest sentence was "CLI-only".
-  const acq=hs.acquisition||'';
-  const acqNote=hs.available===false ? '' :
-    (acq==='ready'
-      ? '<div class="panel-note" style="border-left:3px solid var(--ok)">'
-        +'<b>Enabled plugins join search.</b> Every enabled plugin that '
-        +'declares <span class="pill">search</span> answers Interactive '
-        +'Search alongside your indexers ('
-        +esc((hs.searchable_plugins||[]).join(', '))+'). Grabbing one stages '
-        +'the fetch through the ROM Hub client, then imports it like any '
-        +'other download &mdash; DAT verification and naming included.</div>'
-      : '<div class="panel-note panel-warn"><b>Plugins are installed but not '
-        +'part of search yet.</b> '+esc(acq)
-        +'. Add a <b>ROM Hub</b> download client (Download Clients page) to '
-        +'stage plugin fetches; until then an enabled plugin is only usable '
-        +'through <code>rom-hub search</code> / <code>rom-hub import</code> '
-        +'inside the container.</div>');
-
+  let hs=await j('/api/v1/hub/status').catch(()=>({}));
   const p=$('#page');
   p.innerHTML='<div class="empty">Reading the plugin catalogue…</div>';
 
@@ -782,18 +753,50 @@ RENDER.hub=async()=>{
       +'<h4>'+esc(pl.name)+(pl.author?'<span class="by">by '+esc(pl.author)+'</span>':'')+'</h4>'
       +'<div class="desc">'+esc(pl.description||'No description supplied.')+'</div>'
       +'<div class="meta">'+(caps||'<span class="help" style="margin:0">no capabilities declared</span>')+'</div>'
+      +(String(pl.repository||'').startsWith('https://')
+        ?'<a href="'+esc(pl.repository)+'" target="_blank" rel="noopener">Instructions and source</a>':'')
+      +(pl.key_required?'<div class="help">Requires an account or key. Check the instructions before installing.</div>':'')
       +'<div class="foot">'+action
       +(net?'<span class="net">reaches '+esc(net)+'</span>':'')+'</div></div>';
   };
 
   const render=d=>{
+  const confined=hs.sandboxed===true;
+  const sandboxNote=hs.available===false ? '' :
+    (confined
+      ? '<div class="panel-note" style="border-left:3px solid var(--ok)">'
+        +'<b>Plugins run confined.</b> Each runs as its own subprocess with no '
+        +'library token and no sockets of its own &mdash; it can only reach the '
+        +'hosts it declared. It can still read files ROMarr can.</div>'
+      : '<div class="panel-note panel-warn"><b>Plugins run with no '
+        +'confinement.</b> '+esc(hs.sandbox_detail||'')+' A plugin you install '
+        +'can reach any host and read any file ROMarr can.</div>');
+    const acq=hs.acquisition||'';
+    const acqNote=hs.available===false
+      ?'<div class="panel-note panel-warn"><b>ROM Hub is not available in this install.</b> '
+        +'<a href="https://github.com/BlizzHacker/romarr/blob/main/docs/PLUGINS.md" target="_blank" rel="noopener">See the installation guide</a>.</div>'
+      :acq==='ready'
+        ?'<div class="panel-note" style="border-left:3px solid var(--ok)"><b>Ready for search.</b> Enabled sources: '
+          +esc((hs.searchable_plugins||[]).join(', '))+'. Choose Interactive Search to try one.</div>'
+        :'<div class="panel-note"><b>Finish connecting a source.</b> '
+          +((hs.searchable_plugins||[]).length
+            ?'Your sources are enabled. Use Set up ROM Hub downloads above to choose where downloads are saved.'
+            :'Install and enable a search source below, then use Set up ROM Hub downloads to choose a download folder.')
+          +'</div>';
+
     const items=d.items||[];
     const facets=(d.facets&&d.facets.capabilities)||[];
     const chips=facets.map(([name,n])=>
       '<span class="chip'+(cap===name?' on':'')+'" data-cap="'+esc(name)+'">'
       +esc(name)+'<span class="n">'+n+'</span></span>').join('');
 
-    p.innerHTML=sandboxNote+acqNote+'<div class="card"><h3>Plugins'
+    p.innerHTML='<div class="card"><h3>Add game sources with ROM Hub</h3>'
+      +'<p>ROM Hub brings extra game sources into ROMarr. Pick a source below, install it, and enable it. Some sources need an account or key; their project pages explain what to enter.</p>'
+      +'<p class="help">To use a source in Interactive Search, add a ROM Hub download client and choose a writable download folder. You can keep Prowlarr alongside it, or use plugins on their own.</p>'
+      +'<div class="row"><button class="btn" id="hub-connect">Set up ROM Hub downloads</button>'
+      +'<a class="btn ghost" href="https://github.com/BlizzHacker/rom-hub" target="_blank" rel="noopener">Plugin catalogue and help</a>'
+      +'<button class="btn ghost" id="hub-search">Open Interactive Search</button></div></div>'
+      +acqNote+sandboxNote+'<div class="card"><h3>Plugins'
       +'<span class="help" style="margin-left:10px">'+items.length+' of '+(d.total||0)+'</span></h3>'
       +'<div class="cat-bar">'
       +'<input id="pq" placeholder="Search plugins by name, author or description…" value="'+esc(q)+'">'
@@ -835,6 +838,8 @@ RENDER.hub=async()=>{
       +'entry and hands you a link to review and submit yourself.</div></div>'
       +'</div>';
 
+    $('#hub-connect').onclick=()=>editItem('downloadclient',{type:'hub'},()=>RENDER.hub());
+    $('#hub-search').onclick=()=>go('search');
     const qi=$('#pq');
     let t=null;
     qi.oninput=()=>{clearTimeout(t);t=setTimeout(async()=>{
@@ -866,17 +871,24 @@ RENDER.hub=async()=>{
         actionError='Could not '+action+' '+slug+': '
           +(e&&e.message?e.message:'ROMarr did not answer.');
       }
+      hs=await j('/api/v1/hub/status').catch(()=>hs);
       render(await load());
     });
 
     $('#ownadd').onclick=async()=>{
-      const msg=$('#ownmsg');
-      const r=await fetch('/api/v1/hub/source/check',{method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({url:$('#ownurl').value.trim()})});
-      const d=await r.json();
-      msg.innerHTML='<div class="panel-note'+(d.ok?'':' panel-warn')+'">'
-        +esc(d.ok?('Source accepted: '+d.host+'. Installing…'):d.reason)+'</div>';
+      const button=$('#ownadd'), url=$('#ownurl').value.trim();
+      if(!url){toast('Paste a plugin repository URL first.');return;}
+      button.disabled=true; button.textContent='Installing...'; actionError='';
+      try{
+        const r=await fetch('/api/v1/hub/source/install',{method:'POST',
+          headers:{'Content-Type':'application/json'},body:JSON.stringify({url})});
+        const d=await r.json();
+        if(!r.ok||!d.ok)actionError=d.error||d.reason||d.err||d.out||'The plugin could not be installed.';
+        else toast('Plugin installed. Check its instructions for any account setup.');
+      }catch(e){actionError='Could not reach ROMarr. Please try again.';}
+      hs=await j('/api/v1/hub/status').catch(()=>hs);
+      render(await load());
+      if(actionError)$('#ownurl').value=url;
     };
 
     $('#ssubmit').onclick=async()=>{
@@ -2457,7 +2469,7 @@ const KINDS = {
 };
 
 /** Choose a type, then edit it. */
-async function addItem(kind){
+async function addItem(kind, afterSave){
   const types = await loadSchema(kind);
   const m = document.createElement('div');
   m.className = 'modal';
@@ -2470,11 +2482,11 @@ async function addItem(kind){
   m.onclick = e => { if(e.target === m || e.target.dataset.close !== undefined) closeModal(); };
   m.querySelectorAll('[data-t]').forEach(b => b.onclick = () => {
     closeModal();
-    editItem(kind, { type: b.dataset.t });
+    editItem(kind, { type: b.dataset.t }, afterSave);
   });
 }
 
-async function editItem(kind, item){
+async function editItem(kind, item, afterSave){
   const types = await loadSchema(kind);
   const spec = types[item.type];
   if(!spec){ toast('Unknown type: ' + item.type); return; }
@@ -2518,10 +2530,13 @@ async function editItem(kind, item){
 
   m.querySelector('#m-save').onclick = async (e) => {
     e.target.disabled = true;
-    await j(`/api/v1/${kind}`, {
+    const saved=await j(`/api/v1/${kind}`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload()) });
-    closeModal(); toast('Saved'); go((KINDS[kind] || {}).page || 'clients');
+    if(saved.error){line(false,saved.error);e.target.disabled=false;return;}
+    closeModal(); toast('Saved');
+    if(afterSave)await afterSave();
+    else go((KINDS[kind] || {}).page || 'clients');
   };
 
   const del = m.querySelector('#m-del');
@@ -2583,7 +2598,7 @@ RENDER.media=()=>settingsPage('Media Management',
      'Match your library server. RomM Structure A files as '
      +'&lt;root&gt;/&lt;platform&gt;/&lt;rom&gt;; Structure B adds a roms/ level. '
      +'Per-library overrides live on the Libraries page.')
-  +chk('rename_on_import','Rename on import',SETTINGS.rename_on_import)
+  +chk('rename_on_import','Use DAT names for verified single-file imports (disc-set filenames stay intact)',SETTINGS.rename_on_import)
   +chk('overwrite_existing','Overwrite an existing file',SETTINGS.overwrite_existing)
   +chk('rescan_after_import','Tell your library server to rescan after an import',SETTINGS.rescan_after_import)
   +chk('clamav_enabled','Scan downloads with ClamAV before importing them',SETTINGS.clamav_enabled)
@@ -3561,6 +3576,98 @@ async function requestGame(g){
 // Radarr calls this Manual Import and it exists for the same reason: somebody
 // arrives with a library already on disk, and telling them to re-download
 // everything ROMarr could have adopted is absurd.
+// The optional guide uses the same editors and connection checks as Settings.
+const SETUP={step:0,mode:'organize',initialized:false};
+RENDER.setup=async()=>{
+  const state=await j('/api/v1/setup/status').catch(()=>null);
+  if(!state||state.error){
+    $('#page').innerHTML='<div class="card"><h3>Setup Guide</h3><p class="help">We could not read your setup. Refresh this page to try again.</p></div>';
+    return;
+  }
+  if(!SETUP.initialized){SETUP.mode=state.mode||'organize';SETUP.initialized=true;}
+  const titles=['Start here','Your library','Downloads','Search sources','Optional extras','Your next step'];
+  const order=SETUP.mode==='organize'?[0,1,4,5]:[0,1,2,3,4,5];
+  const active=SETUP.step;
+  const added=rows=>rows.length?'<ul style="padding-left:20px;margin:12px 0">'
+    +rows.map(row=>'<li>'+esc(row.name)+(row.enabled?'':' <span class="help">(disabled)</span>')+'</li>').join('')+'</ul>':'';
+  const action=(id,label)=>'<button class="btn ghost" id="'+id+'">'+label+'</button>';
+  let content='';
+  if(active===0){
+    content='<h3>Welcome to ROMarr</h3><p class="help">Choose what you want to do first. You can change your mind and add more connections later.</p>'
+      +'<div class="pick"><button data-setup-mode="organize" aria-pressed="'+(SETUP.mode==='organize')+'">I already have ROMs<small>Connect a folder or library, preview existing files, and check what is missing. No indexer or download client needed.</small></button>'
+      +'<button data-setup-mode="download" aria-pressed="'+(SETUP.mode==='download')+'">Find and download games<small>Connect your library, a download client, and a search source.</small></button></div>'
+      +'<p class="help">ROMarr organizes and acquires files. You play them in a library frontend or emulator of your choice.</p>';
+  }else if(active===1){
+    content='<h3>Where should your ROMs live?</h3><p class="help">Use a plain folder, or connect RomM, Gaseous, Retrom, or another supported library. Your existing files stay in place when you add a library.</p>'
+      +added(state.libraries)
+      +'<div class="row">'+action('setup-folder','Use a folder')+action('setup-library','Connect a library server')+'</div>'
+      +'<p class="help">Choose the path ROMarr can see, such as <code>/roms</code>. If you use Docker, mount your ROM folder into the container first. Use <b>Test</b> in the form to check the path before saving.</p>'
+      +'<p class="help">You can preview files in <a href="#manualimport">Manual Import</a> before copying them into your library. Review the platform and destination first. DAT-verified single files can use the canonical name; multi-file disc sets keep their referenced filenames.</p>';
+  }else if(active===2){
+    content='<h3>Choose what downloads your files</h3><p class="help">Use qBittorrent for torrents, or SABnzbd/NZBGet for Usenet. ROMarr hands your chosen release to that app, then imports it when the download finishes.</p>'
+      +added(state.download_clients)+action('setup-client','Add a download client')
+      +'<p class="help">Enter the address ROMarr can reach. In separate Docker containers, <code>localhost</code> points back to ROMarr; use your download client’s container name or server address. Press <b>Test</b> before saving.</p>'
+      +'<p class="help">Your finished-download folder must also be readable by ROMarr. Different paths on the two apps can be connected later under <a href="#media">Media Management → Remote path mappings</a>.</p>';
+  }else if(active===3){
+    content='<h3>Where should ROMarr search?</h3><p class="help">An indexer lists available releases. Connect an existing Prowlarr instance, or add a Torznab/Newznab source directly. A download client alone does not provide search results.</p>'
+      +added(state.indexers)+'<div class="row">'+action('setup-prowlarr','Connect Prowlarr')+action('setup-indexer','Add another indexer')+'</div>'
+      +'<p class="help">Use the source’s address and API key, then press <b>Test</b>. ROM Hub plugins are another optional way to add supported sources; you can explore those next.</p>';
+  }else if(active===4){
+    content='<h3>Add confidence and more sources</h3><p class="help">Both of these are optional. You can start with your existing files and return later.</p>'
+      +'<h4>Verify with DATs</h4><p class="help">A No-Intro or Redump DAT is a checklist of known file hashes. It lets ROMarr verify a dump and compare your collection with a complete set.</p>'
+      +(state.dat_loaded?'<p class="help"><b>'+fmt(state.dat_loaded)+' DAT(s) loaded</b> · '+fmt(state.dat_games)+' games</p>':'')
+      +'<div class="field"><label for="setup-dat-path">Folder containing your DAT files</label><input id="setup-dat-path" value="'+esc(state.dat_path)+'" placeholder="/dats"></div>'
+      +action('setup-dats','Check and load DATs')+'<div id="setup-dat-result" role="status" class="testline"></div>'
+      +'<h4 style="margin-top:22px">Explore ROM Hub</h4><p class="help">ROM Hub is the plugin catalogue. Plugins can add supported search sources and download tools. Open a plugin’s details to check what it needs before installing.</p>'
+      +'<a class="btn ghost" href="#hub">Browse ROM Hub plugins</a>'
+      +(!state.hub_available?'<p class="help">ROM Hub is not available in this installation. The Plugins page explains how to add it; your folder and indexer setup can still work.</p>':'');
+  }else{
+    content='<h3>Choose your first small task</h3><p class="help">Start with one game so you can see each step. You can reopen this guide from <b>Settings → Setup Guide</b> whenever you need it.</p>'
+      +(SETUP.mode==='organize'
+        ?'<p><a class="btn" href="#manualimport">Preview existing ROMs</a></p><p class="help">Manual Import shows what ROMarr recognizes before you import. For missing games and DAT comparison, open <a href="#collections">Collections</a>. Exact duplicate cleanup starts with an audit under <a href="#stats">Stats</a>.</p>'
+        :'<p><a class="btn" href="#search">Preview a game search</a></p><p class="help">Interactive Search shows the available releases before you choose one. Follow its progress in <a href="#queue">Queue</a>. If you prefer to start with files you already have, use <a href="#manualimport">Manual Import</a>.</p>')
+      +'<p class="help">Need help? <a href="https://github.com/BlizzHacker/romarr/issues" target="_blank" rel="noopener">Open a GitHub issue</a> with your ROMarr version, what you expected, and the relevant error. Remove passwords and API keys from logs.</p>';
+  }
+  $('#page').innerHTML='<div class="card" style="max-width:900px"><div class="row" style="justify-content:space-between"><span class="help">Setup Guide</span><button class="btn ghost" id="setup-dismiss">Set up later</button></div>'
+    +'<div class="row" style="flex-wrap:wrap;gap:6px;margin:12px 0 24px">'+order.map((step,n)=>
+      '<button class="chip '+(step===active?'on':'')+'" data-setup-step="'+step+'">'+(n+1)+'. '+titles[step]+'</button>').join('')+'</div>'
+    +content+'<div class="row" style="margin-top:24px;justify-content:space-between">'
+    +'<button class="btn ghost" id="setup-back" '+(active===0?'disabled':'')+'>Back</button>'
+    +'<span class="row">'+(active>0&&active<5?'<button class="btn ghost" id="setup-skip">Skip this step</button>':'')
+    +'<button class="btn" id="setup-next">'+(active===5?'Finish guide':'Continue')+'</button></span></div></div>';
+  const finish=async()=>{
+    const result=await j('/api/v1/setup/complete',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({mode:SETUP.mode})}).catch(()=>({error:'Could not save. Please try again.'}));
+    if(result.error){toast(result.error);return;}
+    go('library');
+  };
+  $('#setup-dismiss').onclick=finish;
+  $('#setup-back').onclick=()=>{SETUP.step=order[Math.max(0,order.indexOf(active)-1)];RENDER.setup();};
+  const next=()=>{if(active===5){finish();return;}SETUP.step=order[order.indexOf(active)+1];RENDER.setup();};
+  $('#setup-next').onclick=next;
+  const skip=$('#setup-skip');if(skip)skip.onclick=next;
+  document.querySelectorAll('[data-setup-step]').forEach(btn=>btn.onclick=()=>{
+    SETUP.step=Number(btn.dataset.setupStep);RENDER.setup();});
+  document.querySelectorAll('[data-setup-mode]').forEach(btn=>btn.onclick=()=>{
+    SETUP.mode=btn.dataset.setupMode;RENDER.setup();});
+  const bind=(id,fn)=>{const button=$('#'+id);if(button)button.onclick=fn;};
+  const saved=()=>RENDER.setup();
+  bind('setup-folder',()=>editItem('library',{type:'folder',name:'My ROMs',path:state.library_path,is_default:true},saved));
+  bind('setup-library',()=>addItem('library',saved));
+  bind('setup-client',()=>addItem('downloadclient',saved));
+  bind('setup-prowlarr',()=>editItem('indexer',{type:'prowlarr'},saved));
+  bind('setup-indexer',()=>addItem('indexer',saved));
+  bind('setup-dats',async()=>{
+    const button=$('#setup-dats'),out=$('#setup-dat-result');
+    button.disabled=true;out.textContent='Checking your DAT folder…';out.className='testline';
+    const result=await j('/api/v1/setup/dats',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({directory:$('#setup-dat-path').value})})
+      .catch(()=>({error:'Could not check that folder. Please try again.'}));
+    out.className='testline '+(result.ok?'ok':'bad');out.textContent=result.message||result.error;
+    button.disabled=false;
+  });
+};
+
 RENDER.getstarted=async()=>{
   // The question a capable new self-hoster actually asked: "if I host ROMs,
   // where do I play them?" ROMarr acquires and files; something else plays.
@@ -3599,7 +3706,7 @@ RENDER.getstarted=async()=>{
      +'<td class="help" style="margin:0">'+what+'</td></tr>':'';
 
   $('#page').innerHTML=
-    '<div class="card"><h3>What ROMarr is</h3>'
+    '<div class="card"><h3>What ROMarr is</h3><p><a class="btn" href="#setup">Open the Setup Guide</a></p>'
     +'<p class="help">ROMarr is the acquisition and automation layer: it '
     +'searches your indexers, grabs the best release, checks it against a '
     +'No-Intro or Redump DAT, and files it into your library. '
@@ -4260,9 +4367,11 @@ async function refreshCounts(){
     LIB.offset=0; LIB.limit=120;
     clearTimeout(searchTimer);
     searchTimer=setTimeout(()=>RENDER.library(),250);};
-  [PLATFORMS,SETTINGS]=await Promise.all([
-    j('/api/platforms').catch(()=>[]), j('/api/v1/config').catch(()=>({}))]);
-  go(location.hash.slice(1)||'library');
+  let setupState;
+  [PLATFORMS,SETTINGS,setupState]=await Promise.all([
+    j('/api/platforms').catch(()=>[]), j('/api/v1/config').catch(()=>({})),
+    j('/api/v1/setup/status').catch(()=>({}))]);
+  go(location.hash.slice(1)||(setupState.suggested?'setup':'library'));
   refreshCounts(); setInterval(refreshCounts,15000);
 })();
 """

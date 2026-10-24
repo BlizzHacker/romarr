@@ -3,7 +3,7 @@
 Runs the stock ROMarr image as a Home Assistant add-on. Options set in the
 add-on configuration page become ROMarr's environment: every key in the
 add-on's options is upper-cased and read at start (`prowlarr_url` becomes
-`PROWLARR_URL`), so anything the [main README](../../README.md#configuration)
+`PROWLARR_URL`), so anything the [main README](../../docs/INSTALL.md#configuration-reference)
 documents can be set here.
 
 ## Install
