@@ -8,6 +8,10 @@ on:
   release:
     types: [published]
 
+concurrency:
+  group: windows-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'release' }}
+
 permissions:
   contents: read
 
@@ -77,7 +81,7 @@ jobs:
               $parents = @($Process.Id)
               while ($parents.Count) {
                 $children = @($snapshot | Where-Object { $_.ParentProcessId -in $parents })
-                $parents = @($children.ProcessId)
+                $parents = @($children | ForEach-Object { $_.ProcessId })
                 foreach ($child in $children) {
                   $handle = Get-Process -Id $child.ProcessId -ErrorAction SilentlyContinue
                   if ($handle) { $owned.Add($handle) }
