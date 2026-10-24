@@ -118,6 +118,14 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "/api/v1/collection/step": ("POST", "Request the next slice of a batch."),
     "/api/v1/collection/control": ("POST", "pause, resume, retry or cancel a "
                                            "batch."),
+    "/api/v1/collection/source": ("GET", "List qBittorrent set torrents and selective-acquisition jobs."),
+    "/api/v1/collection/source/plan": ("POST", "Preview missing DAT files from a set torrent within a staging budget."),
+    "/api/v1/collection/source/start": ("POST", "Select only the planned qBittorrent files and start a persistent staged acquisition."),
+    "/api/v1/collection/source/step": ("POST", "Stage, verify and import completed files from the current torrent batch."),
+    "/api/v1/collection/source/control": ("POST", "Cancel or retry a selective torrent acquisition."),
+    "/api/v1/audit/quarantine": ("GET", "Preview exact duplicates and list reversible quarantine manifests."),
+    "/api/v1/audit/quarantine/move": ("POST", "Re-hash and move selected byte-identical duplicates into same-volume quarantine."),
+    "/api/v1/audit/restore": ("POST", "Restore one quarantined duplicate with collision and hash checks."),
     "/api/v1/manualimport": ("GET", "Scan a directory for files ROMarr could adopt."),
     "/api/v1/backup": ("GET", "A restorable snapshot. Credentials are stripped "
                               "unless ?secrets=1."),

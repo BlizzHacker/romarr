@@ -77,3 +77,76 @@ def test_the_audit_refuses_to_run_blind(tmp_path):
     assert "DAT" in out["error"]
     assert "unknown platform" in svc.audit_library("atari 9000").get(
         "error", "") or svc.audit_library("atari 9000")["error"]
+
+
+def test_quarantine_and_restore_are_available_from_the_audit_result(tmp_path):
+    import hashlib
+    import zlib
+    from romarr.dat import DatIndex
+
+    body = b"RESTORABLE"
+    xml = ('<datafile><header><name>Audit Test</name></header><game name="Game (USA)">'
+           '<rom name="Game.zip" size="' + str(len(body)) + '" crc="'
+           + f"{zlib.crc32(body) & 0xFFFFFFFF:08x}" + '" md5="'
+           + hashlib.md5(body).hexdigest() + '" sha1="'
+           + hashlib.sha1(body).hexdigest() + '"/></game></datafile>')
+    svc = _svc(tmp_path)
+    index = DatIndex()
+    index.add(parse_dat(xml))
+    svc.dats = index
+    shelf = tmp_path / "lib" / "snes"
+    shelf.mkdir(parents=True)
+    (shelf / "Game (USA).zip").write_bytes(body)
+    (shelf / "Copy.zip").write_bytes(body)
+
+    svc.audit_library("snes")
+    state = _wait_done(svc)
+    assert len(state["duplicates"]) == 1
+    moved = svc.quarantine_duplicates("snes", [
+        {"file": state["duplicates"][0]["file"]}])
+    assert moved["ok"]
+    assert len(svc.duplicate_quarantine_state()["manifests"]) == 1
+    moved_path = shelf / moved["entries"][0]["original"]
+    assert not moved_path.exists()
+
+    restored = svc.restore_duplicate(moved["manifest_id"],
+                                    moved["entries"][0]["id"])
+    assert restored["ok"]
+    assert moved_path.read_bytes() == body
+
+
+def test_audit_preview_keeps_all_duplicates_beyond_the_old_display_cap(
+        tmp_path):
+    svc = _svc(tmp_path)
+    from romarr.dat import DatIndex
+    svc.dats = DatIndex()
+    shelf = tmp_path / "lib" / "snes"
+    shelf.mkdir(parents=True)
+    body = b"same bytes"
+    (shelf / "keeper.bin").write_bytes(body)
+    for n in range(205):
+        (shelf / f"copy-{n}.bin").write_bytes(body)
+
+    svc.audit_library("snes")
+    state = _wait_done(svc)
+    assert state["scanned"] == 206
+    assert len(state["duplicates"]) == 205
+
+
+def test_audit_exact_duplicates_include_copier_header_bytes(tmp_path):
+    from romarr.dat import DatIndex, hash_file
+
+    svc = _svc(tmp_path)
+    svc.dats = DatIndex()
+    shelf = tmp_path / "lib" / "snes"
+    shelf.mkdir(parents=True)
+    body = b"R" * 32768
+    first = shelf / "first.smc"
+    second = shelf / "second.smc"
+    first.write_bytes(b"A" * 512 + body)
+    second.write_bytes(b"B" * 512 + body)
+    assert hash_file(first)["sha1"] == hash_file(second)["sha1"]
+    svc.audit_library("snes")
+    state = _wait_done(svc)
+    assert state["scanned"] == 2
+    assert state["duplicates"] == []

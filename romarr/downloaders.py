@@ -3202,8 +3202,8 @@ def hand_off(client, url: str, *, name: str = "") -> bool:
 def hand_off_with_id(client, url: str, *, name: str = "") -> tuple[bool, str]:
     """`hand_off`, plus the client's own id for the job when it reports one.
 
-    Clients that cannot report an id (everything but SABnzbd today) return an
-    empty string, and the importer then matches by infohash or by title.
+    Clients that cannot report an id return an empty string, and the importer
+    then matches by infohash or by title. qBittorrent returns its job tag.
     """
     ok = hand_off(client, url, name=name)
     return ok, (getattr(client, "last_job_id", "") or "") if ok else ""
@@ -3212,10 +3212,9 @@ def hand_off_with_id(client, url: str, *, name: str = "") -> tuple[bool, str]:
 def match_queue_item(queue, download: dict):
     """The queue row a finished download belongs to, or None.
 
-    Identity first: the infohash the client reports against the one in the
-    row's `release_id`, or the client's job id against `download_id`. Only when
-    neither side has an id to compare does the title decide, which is also how
-    rows queued before ids were recorded keep working.
+    Prefer the recorded infohash, client job id, or qBittorrent tag. Legacy
+    rows without a comparable identity can still match an exact release
+    title, but file size never establishes identity.
     """
     found = str(download.get("hash") or "").strip().lower()
     job = str(download.get("id") or "").strip()
@@ -3225,11 +3224,28 @@ def match_queue_item(queue, download: dict):
                 return item
             if job and item.download_id == job:
                 return item
+    tags = {part.strip() for part in str(download.get("tags") or "").split(",")
+            if part.strip()}
+    tag_matches = [item for item in queue
+                   if str(getattr(item, "download_id", "") or "").startswith("qbit-tag:")
+                   and item.download_id[9:] in tags]
+    if tag_matches:
+        return tag_matches[0] if len(tag_matches) == 1 else None
+
+    def identity_conflicts(item):
+        release_id = str(getattr(item, "release_id", "") or "")
+        download_id = str(getattr(item, "download_id", "") or "")
+        if found and release_id.startswith("btih:"):
+            return True  # An equal hash would already have matched above.
+        if download_id.startswith("qbit-tag:"):
+            return bool(tags)  # A matching tag would already have matched.
+        return bool(job and download_id)
+
     name = download.get("name", "")
-    for item in queue:
-        if item.release == name:
-            return item
-    return None
+    title_matches = [item for item in queue
+                     if item.state == "grabbed" and item.release == name
+                     and not identity_conflicts(item)]
+    return title_matches[0] if len(title_matches) == 1 else None
 
 
 def pick_client(protocol: str, clients: list) -> object | None:

@@ -430,24 +430,36 @@ def parse_dat(body: str) -> Dat:
     import xml.etree.ElementTree as ET
 
     text = body or ""
-    # Sniffed rather than chosen by file extension: both formats are served
-    # as `.dat`, and the extension has never said which one it is.
-    if "clrmamepro" in text[:4096] or _CMP_BLOCK.search(text[:8192]):
-        return _parse_clrmamepro(text)
+    xml_text = text.lstrip("\ufeff").lstrip()
+    looks_xml = (xml_text.startswith("<?xml")
+                 or re.search(r"<datafile(?:\s|>)", xml_text[:4096], re.I))
+    root = None
+    if looks_xml:
+        try:
+            root = ET.fromstring(xml_text)
+        except (ET.ParseError, ValueError):
+            root = None
+    if root is None:
+        parsed = _parse_clrmamepro(text)
+        if parsed.games:
+            return parsed
+        try:
+            root = ET.fromstring(xml_text)
+        except (ET.ParseError, ValueError):
+            log.warning("DAT is neither valid XML nor ClrMamePro; ignoring it")
+            return Dat()
 
     dat = Dat()
-    try:
-        root = ET.fromstring(text)
-    except ET.ParseError:
-        log.warning("DAT is neither valid XML nor ClrMamePro; ignoring it")
-        return dat
-
     header = root.find("header")
     if header is not None:
         dat.name = (header.findtext("name") or "").strip()
         dat.version = (header.findtext("version") or "").strip()
 
-    for node in root.iter("game"):
+    game_nodes = list(root.iter("game"))
+    ids = {(node.get("id") or "").strip(): (node.get("name") or "").strip()
+           for node in game_nodes if (node.get("id") or "").strip()
+           and (node.get("name") or "").strip()}
+    for node in game_nodes:
         name = (node.get("name") or "").strip()
         if not name:
             continue
@@ -469,8 +481,10 @@ def parse_dat(body: str) -> Dat:
                 dat._by_md5.setdefault(rom.md5, (name, rom))
             if rom.size:
                 dat._sizes.setdefault(rom.size, name)
-        dat.games[name] = Game(name=name, roms=tuple(roms),
-                               cloneof=(node.get("cloneof") or "").strip())
+        parent = (node.get("cloneof") or "").strip()
+        if not parent:
+            parent = ids.get((node.get("cloneofid") or "").strip(), "")
+        dat.games[name] = Game(name=name, roms=tuple(roms), cloneof=parent)
     return dat
 
 

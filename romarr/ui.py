@@ -682,6 +682,7 @@ const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>
 // Library counts here run to six figures; grouped, they are readable at a
 // glance instead of a digit-counting exercise.
 const fmt=n=>Number(n||0).toLocaleString();
+const fmtBytes=n=>{let v=Number(n||0),u='B';for(const next of ['KiB','MiB','GiB','TiB']){if(v<1024)break;v/=1024;u=next;}return v.toFixed(v<10&&u!=='B'?1:0)+' '+u;};
 let PLATFORMS=[], SETTINGS={};
 
 function toast(msg){
@@ -2222,7 +2223,8 @@ RENDER.stats=async()=>{
         <select id="au-plat">${PLATFORMS.map(p=>
           `<option value="${esc(p.slug)}">${esc(p.name)}</option>`).join('')}</select>
         <button class="btn" id="au-go">Audit</button></div>
-      <div id="au-out" style="margin-top:10px"></div></div>
+      <div id="au-out" style="margin-top:10px"></div>
+      <div id="au-quarantine" style="margin-top:10px"></div></div>
     <div class="card"><h3>Shelf</h3><div class="st">
       <div><b>${(s.statuses||{}).playing||0}</b><span>Playing</span></div>
       <div><b>${(s.statuses||{}).completed||0}</b><span>Completed</span></div>
@@ -2244,30 +2246,83 @@ RENDER.stats=async()=>{
       ?`<b>${esc(b.game)}</b> <span class="help">(${esc(b.platform)})</span>`
       :`<span class="help">${esc(b.error||'Nothing to pick from yet.')}</span>`;};
 
+  const refreshQuarantine=async()=>{
+    const node=$('#au-quarantine'); if(!node) return;
+    const q=await j('/api/v1/audit/quarantine').catch(()=>({manifests:[]}));
+    const pending=(q.manifests||[]).flatMap(m=>
+      (m.entries||[]).filter(e=>e.status!=='restored').map(e=>({manifest:m,entry:e})));
+    node.innerHTML=pending.length?'<h4>Quarantined files</h4>'+pending.map(x=>
+      '<div class="row" style="justify-content:space-between"><span class="help">'
+      +esc(x.entry.original)+' · '+esc(x.entry.sha1||'')+'</span><button class="btn ghost au-restore" '
+      +'data-manifest="'+esc(x.manifest.manifest_id)+'" data-entry="'+esc(x.entry.id)+'">Restore</button></div>'
+    ).join(''):'';
+    node.querySelectorAll('.au-restore').forEach(btn=>btn.onclick=async()=>{
+      btn.disabled=true;
+      const result=await j('/api/v1/audit/restore',{method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({manifest_id:btn.dataset.manifest,entry_id:btn.dataset.entry})});
+      if(result.error){toast(result.error);btn.disabled=false;return;}
+      toast('Restored '+result.file); refreshQuarantine();
+    });
+  };
+  let auditDuplicateOffset=0;
+  const selectedDuplicateFiles=new Set();
   const paintAudit=a=>{
-    // Guard the node: this is called from a fetch .then() and a poll timer,
-    // both of which can resolve after the user has left the Stats page.
-    // Writing to a #au-out that no longer exists is the "Cannot set
-    // innerHTML of null" a late audit response used to throw.
     const out=$('#au-out'); if(!out) return;
-    if(!a||!a.status||a.status==='never run'){out.innerHTML='';return;}
+    if(!a||!a.status||a.status==='never run'){out.innerHTML='';refreshQuarantine();return;}
+    const allDupes=a.duplicates||[];
+    const pageSize=200;
+    if(auditDuplicateOffset>=allDupes.length)auditDuplicateOffset=Math.max(0,allDupes.length-pageSize);
+    const dupes=allDupes.slice(auditDuplicateOffset,auditDuplicateOffset+pageSize);
     out.innerHTML=`<p class="help">
       <b>${esc(a.platform||'')}</b> — ${esc(a.status)} ·
       ${a.scanned||0} scanned · ${a.verified||0} verified ·
       <b style="color:${a.bad?'var(--bad)':'inherit'}">${a.bad||0} bad</b> ·
-      ${a.unknown||0} unknown · ${(a.duplicates||[]).length} duplicate(s)</p>
+      ${a.unknown||0} unknown · ${allDupes.length} duplicate(s)</p>
       ${(a.bad_files||[]).length?`<details><summary class="help"
         style="cursor:pointer;margin:0">Bad dumps</summary>
         <div style="color:var(--dim);font-size:12px">${a.bad_files.map(f=>
           esc(f.file)+' — '+esc(f.detail)).join('<br>')}</div></details>`:''}
-      ${(a.duplicates||[]).length?`<details><summary class="help"
-        style="cursor:pointer;margin:0">Duplicates (byte-identical)</summary>
-        <div style="color:var(--dim);font-size:12px">${a.duplicates.map(d=>
-          esc(d.file)+' = '+esc(d.same_as)).join('<br>')}</div></details>`:''}`;
+      ${dupes.length?`<details open><summary class="help"
+        style="cursor:pointer;margin:0">Exact duplicate preview — ${fmtBytes(allDupes.reduce((n,d)=>n+(d.size||0),0))} recoverable · showing ${auditDuplicateOffset+1}–${Math.min(auditDuplicateOffset+dupes.length,allDupes.length)} of ${allDupes.length}</summary>
+        <div style="color:var(--dim);font-size:12px">${dupes.map(d=>
+          '<label style="display:block"><input type="checkbox" class="au-dup" data-file="'+esc(d.file)+'" '
+          +(selectedDuplicateFiles.has(d.file)?'checked':'')+'> '
+          +esc(d.file)+' = '+esc(d.same_as)+' · '+fmtBytes(d.size||0)+'</label>').join('')}</div>
+        <div class="row"><button class="btn ghost" id="au-prev" ${auditDuplicateOffset===0?'disabled':''}>Previous</button>
+        <button class="btn ghost" id="au-next" ${auditDuplicateOffset+pageSize>=allDupes.length?'disabled':''}>Next</button>
+        <button class="btn ghost" id="au-quarantine-go" disabled>Select duplicates below to quarantine</button></div></details>`:''}`;
+    if(dupes.length){
+      const checks=[...out.querySelectorAll('.au-dup')], go=$('#au-quarantine-go');
+      const update=()=>{const selected=selectedDuplicateFiles.size;
+        if(go){go.disabled=a.status!=='done'||!selected;
+          go.textContent=selected?'Quarantine '+selected+' selected':'Select duplicates below to quarantine';}};
+      checks.forEach(c=>c.onchange=()=>{if(c.checked)selectedDuplicateFiles.add(c.dataset.file);
+        else selectedDuplicateFiles.delete(c.dataset.file);update();});
+      update();
+      const prev=$('#au-prev'), next=$('#au-next');
+      if(prev)prev.onclick=()=>{auditDuplicateOffset=Math.max(0,auditDuplicateOffset-pageSize);paintAudit(a);};
+      if(next)next.onclick=()=>{auditDuplicateOffset=Math.min(allDupes.length-1,auditDuplicateOffset+pageSize);paintAudit(a);};
+      if(go)go.onclick=async()=>{
+        const chosen=[...selectedDuplicateFiles].map(file=>({file}));
+        if(!confirm('Move '+chosen.length+' exact duplicate file(s) into quarantine? They can be restored later.'))return;
+        go.disabled=true;
+        const result=await j('/api/v1/audit/quarantine/move',{method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({platform:a.platform,files:chosen})});
+        if(result.error){toast(result.error);update();return;}
+        toast('Quarantined '+result.entries.length+' duplicate file(s)');
+        selectedDuplicateFiles.clear();
+        await refreshQuarantine();
+        out.innerHTML='<p class="help">Quarantine complete. Run Audit again to refresh the duplicate preview.</p>';
+      };
+    }
+    refreshQuarantine();
   };
   j('/api/v1/audit').then(paintAudit).catch(()=>{});
   let auditTimer=null;
   $('#au-go').onclick=async()=>{
+    selectedDuplicateFiles.clear(); auditDuplicateOffset=0;
     const a=await j('/api/v1/audit',{method:'POST',
       headers:{'content-type':'application/json'},
       body:JSON.stringify({platform:$('#au-plat').value})});
@@ -3617,6 +3672,8 @@ RENDER.getstarted=async()=>{
 
 RENDER.collections=async()=>{
   const st=await j('/api/v1/collection').catch(()=>({dats:[],batches:[]}));
+  const sourceState=await j('/api/v1/collection/source').catch(()=>({torrents:[],jobs:[]}));
+  const sourceTorrents=sourceState.torrents||[];
   const dats=st.dats||[];
   $('#page').innerHTML='<div class="card"><h3>Plan a set</h3>'
     +(dats.length
@@ -3661,6 +3718,21 @@ RENDER.collections=async()=>{
        +'Point DAT_PATH at a directory of No-Intro or Redump DATs. Without one '
        +'there is no list of what a complete set contains.</div>')
     +'<div id="cres" style="margin-top:16px"></div></div>'
+    +'<div class="card" style="margin-top:16px"><h3>Acquire missing files from a set torrent</h3>'
+    +(sourceState.errors||[]).map(error=>'<div class="panel-note panel-warn">'+esc(error)+'</div>').join('')
+    +(sourceTorrents.length&&dats.length
+      ?'<p class="help">Preview a DAT plan against one existing qBittorrent torrent. ROMarr selects only matching missing files, stages one budgeted batch at a time, verifies each staged set against the DAT, then restores the torrent’s original file priorities and paused state. The cap limits ROMarr staging copies; downloaded torrent files remain in qBittorrent and need separate source storage.</p>'
+       +'<div class="row" style="flex-wrap:wrap">'
+       +'<select id="csrc-torrent">'+sourceTorrents.map(t=>
+         '<option value="'+esc(t.hash)+'" data-client="'+esc(t.client_id)+'">'
+         +esc(t.client_name+' · '+t.name+' · '+t.state)+'</option>').join('')+'</select>'
+       +'<label class="help">Staging cap (GiB) <input id="csrc-cap" type="number" min="0.01" step="1" value="100" style="width:90px"></label>'
+       +'<button class="btn" id="csrc-plan">Preview source plan</button></div>'
+       +'<div id="csrc-out" style="margin-top:10px"></div>'
+      :(sourceTorrents.length
+        ?'<p class="help">Load a DAT before previewing missing collection files.</p>'
+        :'<p class="help">Enable a qBittorrent download client to use this workflow.</p>'))
+    +'<div id="csrc-jobs" style="margin-top:10px"></div></div>'
     +'<div class="card" style="margin-top:16px"><h3>Batches</h3>'
     +'<div id="cbatch"></div></div>';
 
@@ -3703,6 +3775,92 @@ RENDER.collections=async()=>{
     });
   };
   drawBatches();
+
+  const drawSourceJobs=async()=>{
+    const node=$('#csrc-jobs'); if(!node)return;
+    const state=await j('/api/v1/collection/source').catch(()=>({jobs:[]}));
+    const jobs=state.jobs||[];
+    node.innerHTML=jobs.length?'<h4>Selective torrent jobs</h4>'+jobs.map(x=>
+      '<div class="row" style="justify-content:space-between;border-top:1px solid var(--line);padding:7px 0">'
+      +'<span class="help">'+esc(x.torrent_name)+' · '+esc(x.status)+' · batch '
+      +(x.batch||1)+'/'+(x.batches||1)+' · '+(x.done||0)+'/'+(x.total||0)+'</span>'
+      +(x.status==='running'?'<span class="row"><button class="btn ghost csrc-step" data-id="'
+       +esc(x.id)+'">Run next</button><button class="btn ghost csrc-cancel" data-id="'
+       +esc(x.id)+'">Cancel</button></span>'
+       :x.status==='restore-needed'?'<button class="btn ghost csrc-restore" data-id="'
+       +esc(x.id)+'">Restore torrent priorities</button>':'')
+      +'</div>').join(''):'';
+    node.querySelectorAll('.csrc-step').forEach(btn=>btn.onclick=async()=>{
+      btn.disabled=true;
+      const r=await j('/api/v1/collection/source/step',{method:'POST',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify({id:btn.dataset.id})});
+      if(r.error)toast(r.error);
+      drawSourceJobs();
+    });
+    node.querySelectorAll('.csrc-restore').forEach(btn=>btn.onclick=async()=>{
+      btn.disabled=true;
+      const r=await j('/api/v1/collection/source/control',{method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({id:btn.dataset.id,action:'restore'})});
+      if(r.error)toast(r.error);
+      drawSourceJobs();
+    });
+    node.querySelectorAll('.csrc-cancel').forEach(btn=>btn.onclick=async()=>{
+      if(!confirm('Cancel acquisition and restore the torrent’s original file priorities?'))return;
+      btn.disabled=true;
+      const r=await j('/api/v1/collection/source/control',{method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({id:btn.dataset.id,action:'cancel'})});
+      if(r.error)toast(r.error);
+      drawSourceJobs();
+    });
+  };
+  drawSourceJobs();
+  const sourceSelect=$('#csrc-torrent');
+  const sourcePlanButton=$('#csrc-plan');
+  const sourcePlatform=$('#cplat');
+  const invalidateSourcePreview=()=>{
+    const out=$('#csrc-out');
+    if(out)out.innerHTML='<p class="help">Selection changed. Preview the source plan again before starting.</p>';
+  };
+  [sourcePlatform,$('#cdat'),sourceSelect,$('#csrc-cap')].filter(Boolean)
+    .forEach(input=>input.addEventListener('change',invalidateSourcePreview));
+  if(sourceSelect&&sourcePlanButton)sourcePlanButton.onclick=async()=>{
+    const opt=sourceSelect.selectedOptions[0];
+    const cap=Math.floor((parseFloat($('#csrc-cap').value)||0)*1024*1024*1024);
+    const request={client_id:opt.dataset.client,torrent_hash:opt.value,
+      dat:$('#cdat').value,platform:$('#cplat').value,cap_bytes:cap};
+    const out=$('#csrc-out');
+    out.innerHTML='<div class="empty">Reading source file list…</div>';
+    const d=await j('/api/v1/collection/source/plan',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify(request)});
+    if(d.error){out.innerHTML='<div class="panel-note panel-warn">'+esc(d.error)+'</div>';return;}
+    const groups=(d.batches||[]).flatMap((b,n)=>
+      (b.groups||[]).map(g=>'<li>Batch '+(n+1)+': '+esc(g.title)+' · '
+       +g.files.length+' file(s) · '+fmtBytes(g.size)+'</li>')).join('');
+    out.innerHTML='<p class="help">'+d.matched_titles+' missing title(s) matched in '
+      +(d.batches||[]).length+' batch(es); '+fmtBytes(d.total_bytes)
+      +' staged payload plus '+fmtBytes(d.reserve_bytes)+' piece reserve.</p>'
+      +'<ul>'+groups+'</ul>'
+      +(d.skipped||[]).map(x=>'<p class="help">'+esc(x.title)+': '+esc(x.reason)+'</p>').join('')
+      +((d.unmatched||[]).length?'<details><summary class="help">Unmatched titles ('+
+        d.unmatched.length+')</summary><div class="help">'+d.unmatched.map(x=>
+        esc(x.title)+' — '+esc(x.reason)).join('<br>')+'</div></details>':'')
+      +'<button class="btn" id="csrc-start"'+(sourcePlatform.value.trim()?'':' disabled')+'>Start selective acquisition</button>';
+    const start=$('#csrc-start'); if(!start)return;
+    start.onclick=async()=>{
+      if(request.platform!==sourcePlatform.value.trim()
+          ||request.dat!==$('#cdat').value){invalidateSourcePreview();return;}
+      if(!request.platform){start.disabled=true;return;}
+      if(!confirm('Start this selective torrent workflow? ROMarr will temporarily change the selected torrent’s file priorities and restore their original values when the job ends or is cancelled.'))return;
+      start.disabled=true;
+      const r=await j('/api/v1/collection/source/start',{method:'POST',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify(request)});
+      if(r.error){toast(r.error);start.disabled=!request.platform;return;}
+      toast('Selective acquisition started');
+      drawSourceJobs();
+    };
+  };
 
   const planBtn=$('#cplan');
   if(!planBtn) return;

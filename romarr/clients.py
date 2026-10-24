@@ -12,6 +12,7 @@ import base64
 import datetime
 import json
 import logging
+import secrets
 import sys
 import threading
 import time
@@ -105,6 +106,10 @@ class QbitConfig:
     timeout: int = 30
 
 
+class QbitAuthenticationError(requests.RequestException):
+    """qBittorrent rejected configured credentials; no source list was read."""
+
+
 class QBittorrent:
     """Just enough of the WebUI API to add a torrent and watch it finish."""
 
@@ -121,6 +126,11 @@ class QBittorrent:
         self._config = config
         self._session = session or requests.Session()
         self._authed = False
+        self._added = threading.local()
+
+    @property
+    def last_job_id(self) -> str:
+        return getattr(self._added, "job_id", "")
 
     def _url(self, path: str) -> str:
         return f"{self._config.base_url.rstrip('/')}/api/v2/{path.lstrip('/')}"
@@ -170,14 +180,64 @@ class QBittorrent:
     def add(self, magnet_or_url: str, *, save_path: str | None = None) -> bool:
         if not self._authed:
             self.login()
-        data = {"urls": magnet_or_url, "category": self._config.category}
+        tag = "romarr-" + secrets.token_hex(12)
+        data = {"urls": magnet_or_url, "category": self._config.category,
+                "tags": tag}
         if save_path:
             data["savepath"] = save_path
         response = self._post("torrents/add", data=data, timeout=self._config.timeout)
         if not response.ok:
             log.warning("qbittorrent add failed: %s", response.status_code)
             return False
+        self._added.job_id = "qbit-tag:" + tag
         return True
+
+    def torrents(self) -> list[dict]:
+        """Return the client's torrent list for an explicit collection plan."""
+        if not self._authed and not self.login():
+            raise QbitAuthenticationError("qBittorrent authentication failed")
+        response = self._get("torrents/info", timeout=self._config.timeout)
+        response.raise_for_status()
+        return [row for row in response.json() if isinstance(row, dict)]
+
+    def torrent_files(self, torrent_hash: str) -> list[dict]:
+        if not self._authed and not self.login():
+            raise QbitAuthenticationError("qBittorrent authentication failed")
+        response = self._get("torrents/files",
+                             params={"hash": torrent_hash},
+                             timeout=self._config.timeout)
+        response.raise_for_status()
+        return [row for row in response.json() if isinstance(row, dict)]
+
+    def set_file_priorities(self, torrent_hash: str,
+                            priorities: dict[int, int]) -> bool:
+        """Set selected qBittorrent file priorities in compact API calls."""
+        for priority in sorted(set(int(v) for v in priorities.values())):
+            ids = [str(int(i)) for i, value in priorities.items()
+                   if int(value) == priority]
+            if not ids:
+                continue
+            response = self._post(
+                "torrents/filePrio",
+                data={"hash": torrent_hash, "id": "|".join(ids),
+                      "priority": str(priority)},
+                timeout=self._config.timeout,
+            )
+            if not response.ok:
+                return False
+        return True
+
+    def pause_torrent(self, torrent_hash: str) -> bool:
+        response = self._post("torrents/pause",
+                              data={"hashes": torrent_hash},
+                              timeout=self._config.timeout)
+        return bool(response.ok)
+
+    def resume_torrent(self, torrent_hash: str) -> bool:
+        response = self._post("torrents/resume",
+                              data={"hashes": torrent_hash},
+                              timeout=self._config.timeout)
+        return bool(response.ok)
 
     def reachable(self) -> bool:
         """Whether the download client answers at all.
