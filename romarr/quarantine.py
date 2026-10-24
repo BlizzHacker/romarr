@@ -1,33 +1,75 @@
 """Reversible quarantine for byte-identical library duplicates.
 
 Quarantine data and its manifest live under the library root, keeping every
-move on the same filesystem. Each move is preceded by an atomic manifest write
-and uses os.replace; interrupted actions can be inspected and safely retried.
+move on the same filesystem. A durable manifest precedes each quarantine move;
+restores never overwrite an existing name. Interrupted actions can be retried.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import uuid
 from pathlib import Path
 
-from .dat import hash_file
-
 ROOT_NAME = ".romarr-quarantine"
+
+
+def _fsync_dir(folder: Path) -> None:
+    # Windows does not expose directory handles through os.open.
+    if os.name == "nt":
+        return
+    fd = os.open(folder, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 def _atomic_json(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temp = path.with_name(path.name + "." + uuid.uuid4().hex + ".tmp")
-    with temp.open("w", encoding="utf-8") as handle:
-        json.dump(data, handle, indent=2, sort_keys=True)
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(temp, path)
+    try:
+        with temp.open("w", encoding="utf-8") as handle:
+            json.dump(data, handle, indent=2, sort_keys=True)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp, path)
+        _fsync_dir(path.parent)
+    finally:
+        # Preserve the original write failure if cleanup also fails.
+        try:
+            temp.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def raw_sha1(path: Path) -> str:
+    """Hash every byte, including copier headers ignored by DAT matching."""
+    digest = hashlib.sha1(usedforsecurity=False)
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _fingerprint(path: Path) -> tuple:
+    stat = path.stat()
+    return (stat.st_dev, stat.st_ino, stat.st_size,
+            stat.st_mtime_ns, stat.st_ctime_ns)
+
+
+def _verify_unchanged(path: Path, expected: str) -> tuple:
+    before = _fingerprint(path)
+    if raw_sha1(path) != expected or _fingerprint(path) != before:
+        raise ValueError(f"file changed since audit: {path.name}")
+    return before
 
 
 def _safe_file(root: Path, relative: str) -> Path:
     root = root.resolve()
+    if not relative or Path(relative).is_absolute():
+        raise ValueError("unsafe file path")
     raw = root / str(relative)
     current = root
     for part in Path(str(relative)).parts:
@@ -49,6 +91,7 @@ def _quarantine_root(library: Path) -> Path:
     if folder.is_symlink():
         raise ValueError("quarantine directory must not be a symlink")
     folder.mkdir(parents=True, exist_ok=True)
+    _fsync_dir(root)
     if folder.resolve().parent != root:
         raise ValueError("quarantine directory escaped the library")
     return folder
@@ -77,7 +120,11 @@ def manifests(library: Path) -> list[dict]:
     results = []
     for path in sorted(folder.glob("manifest-*.json")):
         try:
+            if path.is_symlink():
+                continue
             data = json.loads(path.read_text("utf-8"))
+            if not isinstance(data, dict):
+                continue
         except (OSError, ValueError):
             continue
         data["manifest_id"] = path.stem.removeprefix("manifest-")
@@ -96,6 +143,7 @@ def quarantine(library: Path, platform_root: Path, candidates: list[dict],
     object_dir = folder / ident
     manifest_path = folder / f"manifest-{ident}.json"
     entries = []
+    fingerprints = {}
     seen = set()
     for item in candidates:
         relative = str(item.get("file") or "")
@@ -112,10 +160,8 @@ def quarantine(library: Path, platform_root: Path, candidates: list[dict],
             raise ValueError("duplicate path is outside the audited platform")
         src = _safe_file(library, relative)
         keeper = _safe_file(library, keeper_rel)
-        digest = hash_file(src).get("sha1", "").lower()
-        keeper_digest = hash_file(keeper).get("sha1", "").lower()
-        if digest != expected or keeper_digest != expected:
-            raise ValueError(f"file changed since audit: {relative}")
+        fingerprints[relative] = _verify_unchanged(src, expected)
+        _verify_unchanged(keeper, expected)
         entries.append({
             "id": uuid.uuid4().hex,
             "original": str(Path(relative).relative_to(platform_root.name)),
@@ -127,15 +173,28 @@ def quarantine(library: Path, platform_root: Path, candidates: list[dict],
     data = {"version": 1, "platform": platform_root.name,
             "status": "moving", "entries": entries}
     object_dir.mkdir()
+    _fsync_dir(folder)
     _atomic_json(manifest_path, data)
     try:
         for entry in entries:
             src = _safe_file(platform_root, entry["original"])
             dest = folder / entry["object"]
             dest.parent.mkdir(parents=True, exist_ok=True)
-            if dest.exists():
+            if dest.exists() or dest.is_symlink():
                 raise ValueError("quarantine destination already exists")
+            # Rehash both immediately before each move: validating an entire
+            # selection first leaves a long mutation window on large libraries.
+            if _verify_unchanged(src, entry["sha1"]) != fingerprints[
+                    platform_root.name + "/" + entry["original"]]:
+                raise ValueError(f"file changed since audit: {entry['original']}")
+            keeper = _safe_file(platform_root, entry["keeper"])
+            _verify_unchanged(keeper, entry["sha1"])
+            if _fingerprint(src) != fingerprints[
+                    platform_root.name + "/" + entry["original"]]:
+                raise ValueError(f"file changed since audit: {entry['original']}")
             os.replace(src, dest)
+            _fsync_dir(dest.parent)
+            _fsync_dir(src.parent)
             entry["status"] = "quarantined"
             _atomic_json(manifest_path, data)
         data["status"] = "quarantined"
@@ -152,47 +211,88 @@ def restore(library: Path, manifest_id: str, entry_id: str) -> dict:
         raise ValueError("invalid manifest id")
     folder = _quarantine_root(library)
     manifest_path = folder / f"manifest-{manifest_id}.json"
+    if manifest_path.is_symlink():
+        raise ValueError("quarantine manifest must not be a symlink")
     data = json.loads(manifest_path.read_text("utf-8"))
+    if (not isinstance(data, dict) or not isinstance(data.get("entries"), list)
+            or any(not isinstance(e, dict) for e in data["entries"])):
+        raise ValueError("invalid quarantine manifest")
     entry = next((e for e in data.get("entries", [])
                   if e.get("id") == entry_id), None)
     if entry is None:
         raise ValueError("no such quarantined file")
     if entry.get("status") == "restored":
         return {"ok": True, "already_restored": True}
+    if not isinstance(entry.get("original"), str):
+        raise ValueError("unsafe original path in manifest")
     original = Path(entry["original"])
     if original.is_absolute() or ".." in original.parts:
         raise ValueError("unsafe original path in manifest")
     platform_name = str(data.get("platform") or "")
-    if not platform_name or Path(platform_name).name != platform_name:
+    if (not platform_name or platform_name in (".", "..")
+            or Path(platform_name).name != platform_name):
         raise ValueError("unsafe platform in quarantine manifest")
-    platform_root = library / platform_name
+    platform_root = library.resolve() / platform_name
+    if platform_root.is_symlink():
+        raise ValueError("restore platform must not be a symlink")
+    platform_root.mkdir(exist_ok=True)
+    _fsync_dir(platform_root.parent)
     destination = _safe_parent(platform_root, original)
-    source = folder / str(entry.get("object") or "")
+    object_path = Path(str(entry.get("object") or ""))
+    if (object_path.is_absolute() or len(object_path.parts) != 2
+            or object_path.parts[0] != manifest_id
+            or not object_path.parts[1].isalnum()):
+        raise ValueError("unsafe quarantine object path in manifest")
+    source = _safe_parent(folder, object_path)
+    if source.is_symlink():
+        raise ValueError("quarantine object must not be a symlink")
     if destination.exists():
-        if (not source.exists()
-                and hash_file(destination).get("sha1", "").lower()
-                == entry.get("sha1")):
-            entry["status"] = "restored"
-            _atomic_json(manifest_path, data)
-            return {"ok": True, "already_restored": True}
-        raise ValueError(f"restore destination already exists: {entry['original']}")
+        _fsync_dir(destination.parent)
+        # A crash after linking the restored name can leave both names. Only
+        # finish that operation when they still identify the same inode.
+        if source.exists() and source.samefile(destination):
+            if raw_sha1(destination) != entry.get("sha1"):
+                raise ValueError("quarantined file hash changed; refusing restore")
+            source.unlink()
+            _fsync_dir(source.parent)
+        elif not source.exists() and raw_sha1(destination) == entry.get("sha1"):
+            pass
+        else:
+            raise ValueError(f"restore destination already exists: {entry['original']}")
+        _record_restored(manifest_path, data, entry)
+        return {"ok": True, "already_restored": True}
     if not source.is_file():
         raise ValueError("quarantined file is missing")
-    if hash_file(source).get("sha1", "").lower() != entry.get("sha1"):
+    before = _fingerprint(source)
+    if raw_sha1(source) != entry.get("sha1"):
         raise ValueError("quarantined file hash changed; refusing restore")
+    if _fingerprint(source) != before:
+        raise ValueError("quarantined file changed during restore")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    os.replace(source, destination)
-    entry["status"] = "restored"
-    _atomic_json(manifest_path, data)
-    data["status"] = ("restored" if all(e.get("status") == "restored"
-                                         for e in data["entries"])
-                      else "quarantined")
-    _atomic_json(manifest_path, data)
+    # Creating the restored name must fail if another file appears after our
+    # collision check. Link then unlink keeps one durable copy throughout.
+    try:
+        os.link(source, destination)
+    except FileExistsError as err:
+        raise ValueError(f"restore destination already exists: {entry['original']}") from err
+    _fsync_dir(destination.parent)
+    source.unlink()
+    _fsync_dir(source.parent)
+    _record_restored(manifest_path, data, entry)
     return {"ok": True, "file": entry["original"]}
 
 
+def _record_restored(path: Path, data: dict, entry: dict) -> None:
+    entry["status"] = "restored"
+    data["status"] = ("restored" if all(e.get("status") == "restored"
+                                         for e in data["entries"])
+                      else "quarantined")
+    _atomic_json(path, data)
+
+
 def _safe_parent(root: Path, relative: Path) -> Path:
-    if relative.is_absolute() or ".." in relative.parts:
+    if (not relative.parts or relative.is_absolute()
+            or ".." in relative.parts):
         raise ValueError("unsafe restore path")
     root = root.resolve()
     current = root
@@ -201,5 +301,9 @@ def _safe_parent(root: Path, relative: Path) -> Path:
         if current.is_symlink():
             raise ValueError("restore path crosses a symlink")
         current.mkdir(exist_ok=True)
+        _fsync_dir(current.parent)
         current.resolve().relative_to(root)
-    return current / relative.name
+    destination = current / relative.name
+    if destination.is_symlink():
+        raise ValueError("restore path crosses a symlink")
+    return destination

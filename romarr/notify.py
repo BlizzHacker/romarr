@@ -89,10 +89,17 @@ def _post(url: str, *, data: bytes | None = None, headers: dict | None = None,
     except urllib.error.HTTPError as exc:
         detail = ""
         try:
-            payload = json.loads(exc.read(4096).decode("utf-8", "replace"))
+            text = exc.read(4096).decode("utf-8", "replace")
+            try:
+                payload = json.loads(text)
+            except ValueError:
+                payload = None
             if isinstance(payload, dict) and isinstance(payload.get("message"), str):
-                detail = " — " + " ".join(payload["message"].split())[:240]
-        except (ValueError, UnicodeError):
+                text = payload["message"] or text
+            text = " ".join(text.split())[:240]
+            if text:
+                detail = " — " + text
+        except (OSError, ValueError, UnicodeError):
             pass
         _last.reason = f"the endpoint answered HTTP {exc.code}{detail}"
         log.warning("notification to %s rejected: HTTP %s",

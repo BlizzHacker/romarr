@@ -106,11 +106,13 @@ def test_quarantine_and_restore_are_available_from_the_audit_result(tmp_path):
         {"file": state["duplicates"][0]["file"]}])
     assert moved["ok"]
     assert len(svc.duplicate_quarantine_state()["manifests"]) == 1
+    moved_path = shelf / moved["entries"][0]["original"]
+    assert not moved_path.exists()
 
     restored = svc.restore_duplicate(moved["manifest_id"],
                                     moved["entries"][0]["id"])
     assert restored["ok"]
-    assert (shelf / "Copy.zip").read_bytes() == body
+    assert moved_path.read_bytes() == body
 
 
 def test_audit_preview_keeps_all_duplicates_beyond_the_old_display_cap(
@@ -129,3 +131,22 @@ def test_audit_preview_keeps_all_duplicates_beyond_the_old_display_cap(
     state = _wait_done(svc)
     assert state["scanned"] == 206
     assert len(state["duplicates"]) == 205
+
+
+def test_audit_exact_duplicates_include_copier_header_bytes(tmp_path):
+    from romarr.dat import DatIndex, hash_file
+
+    svc = _svc(tmp_path)
+    svc.dats = DatIndex()
+    shelf = tmp_path / "lib" / "snes"
+    shelf.mkdir(parents=True)
+    body = b"R" * 32768
+    first = shelf / "first.smc"
+    second = shelf / "second.smc"
+    first.write_bytes(b"A" * 512 + body)
+    second.write_bytes(b"B" * 512 + body)
+    assert hash_file(first)["sha1"] == hash_file(second)["sha1"]
+    svc.audit_library("snes")
+    state = _wait_done(svc)
+    assert state["scanned"] == 2
+    assert state["duplicates"] == []

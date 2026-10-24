@@ -179,12 +179,12 @@ def test_qbittorrent_tag_matches_a_renamed_completed_torrent():
         "tags": "other, romarr-abc"}) is item
 
 
-def test_exact_size_fallback_matches_only_one_grabbed_row():
+def test_exact_size_alone_does_not_establish_download_identity():
     from romarr.downloaders import match_queue_item
     item = QueueItem("Tony Hawk 3", "ps2", "indexer release title", 0,
                      "grabbed", size=2731101058)
     assert match_queue_item([item], {
-        "name": "different torrent name", "total_size": "2731101058"}) is item
+        "name": "different torrent name", "total_size": "2731101058"}) is None
 
 
 def test_ambiguous_exact_size_does_not_claim_a_download():
@@ -204,3 +204,44 @@ def test_unmatched_romarr_category_completion_is_logged(tmp_path, caplog):
     with caplog.at_level("WARNING"):
         assert s.import_finished() == []
     assert "could not be matched to a ROMarr queue row" in caplog.text
+
+
+def test_qbittorrent_tag_takes_precedence_over_another_rows_title():
+    from romarr.downloaders import match_queue_item
+    tagged = QueueItem("A", "snes", "indexer release A", 0, "grabbed",
+                       download_id="qbit-tag:romarr-a")
+    named = QueueItem("B", "nes", "torrent name B", 0, "grabbed")
+    assert match_queue_item([named, tagged], {
+        "name": "torrent name B", "tags": "romarr-a"}) is tagged
+
+
+def test_conflicting_download_identity_cannot_claim_an_exact_title():
+    from romarr.downloaders import match_queue_item
+    rows_and_downloads = [
+        (QueueItem("A", "nes", "same title", 0, "grabbed",
+                   release_id=f"btih:{HASH}"), {"hash": "f" * 40}),
+        (QueueItem("A", "nes", "same title", 0, "grabbed",
+                   download_id="SABnzbd_nzo_one"), {"id": "SABnzbd_nzo_two"}),
+        (QueueItem("A", "nes", "same title", 0, "grabbed",
+                   download_id="qbit-tag:romarr-one"), {"tags": "romarr-two"}),
+    ]
+    for item, identity in rows_and_downloads:
+        assert match_queue_item([item], {"name": "same title", **identity}) is None
+
+
+def test_unrelated_hash_and_same_size_cannot_claim_a_grabbed_row():
+    from romarr.downloaders import match_queue_item
+    item = QueueItem("A", "nes", "release A", 0, "grabbed", size=123,
+                     release_id=f"btih:{HASH}")
+    assert match_queue_item([item], {
+        "name": "other", "hash": "f" * 40, "total_size": 123}) is None
+
+
+def test_ambiguous_qbittorrent_tags_cannot_claim_a_download():
+    from romarr.downloaders import match_queue_item
+    rows = [QueueItem("A", "nes", "release A", 0, "grabbed",
+                      download_id="qbit-tag:romarr-a"),
+            QueueItem("B", "nes", "release B", 0, "grabbed",
+                      download_id="qbit-tag:romarr-b")]
+    assert match_queue_item(rows, {
+        "name": "release A", "tags": "romarr-a,romarr-b"}) is None

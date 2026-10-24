@@ -50,7 +50,7 @@ from .libraries import (
     LIBRARY_TYPES, build_library, build_library_from_config, library_counts,
     load_backend_plugins, merge_library_secrets, redact_library, route_library,
 )
-from .clients import QBittorrent, QbitConfig, Romm, RommConfig
+from .clients import QBittorrent, QbitConfig, QbitAuthenticationError, Romm, RommConfig
 from . import hub  # ROM Hub bridge -- the Cartridge plugin layer
 from . import clamav
 from .dat import DatIndex, parse_dat
@@ -183,6 +183,12 @@ _DAT_SKIP_DIRS = frozenset({
     "saves", "savestates", "states", "media", "images", "videos",
     "manuals", "bios", "downloaded_media", "cache",
 })
+
+
+def _dat_version_key(version: str) -> tuple:
+    """Order numeric version components numerically, including dotted dates."""
+    return tuple((0, int(part)) if part.isdigit() else (1, part.casefold())
+                 for part in re.split(r"(\d+)", version or "") if part)
 
 
 def _find_dats(root: "Path") -> tuple[list["Path"], str]:
@@ -340,6 +346,7 @@ class ROMarr:
         self._candidates: dict[str, dict] = {}
         self._lock = threading.Lock()
         self._dat_reload_lock = threading.Lock()
+        self._collection_source_lock = threading.Lock()
         # Lets a configuration change wake the background refresh instead of
         # waiting out its interval. Created before reload_libraries, which sets
         # it.
@@ -2037,7 +2044,7 @@ class ROMarr:
                                     if parsed.games:
                                         key = parsed.name.casefold() or dat_name.casefold()
                                         previous = loaded_by_name.get(key)
-                                        if previous is None or parsed.version > previous.version:
+                                        if previous is None or _dat_version_key(parsed.version) > _dat_version_key(previous.version):
                                             loaded_by_name[key] = parsed
                     except (zipfile.BadZipFile, OSError) as zip_err:
                         log.warning("could not read zip %s: %s", path, zip_err)
@@ -2049,7 +2056,7 @@ class ROMarr:
                     if parsed.games:
                         key = parsed.name.casefold() or path.name.casefold()
                         previous = loaded_by_name.get(key)
-                        if previous is None or parsed.version > previous.version:
+                        if previous is None or _dat_version_key(parsed.version) > _dat_version_key(previous.version):
                             loaded_by_name[key] = parsed
             except (OSError, ValueError) as exc:
                 log.warning("could not read %s: %s", path, exc)
@@ -2711,7 +2718,7 @@ class ROMarr:
         return clients[0] if len(clients) == 1 else None
 
     def collection_source_torrents(self) -> dict:
-        rows = []
+        rows, errors = [], []
         for client in self.clients:
             if not isinstance(client, QBittorrent):
                 continue
@@ -2727,10 +2734,12 @@ class ROMarr:
                         "category": str(torrent.get("category") or ""),
                     })
             except Exception as err:  # noqa: BLE001 - report client status to UI
-                log.warning("could not list collection torrents from %s: %s",
-                            getattr(client, "romarr_name", "qBittorrent"),
-                            err.__class__.__name__)
-        return {"torrents": rows,
+                detail = ("authentication failed" if isinstance(err, QbitAuthenticationError)
+                          else err.__class__.__name__)
+                name = getattr(client, "romarr_name", "qBittorrent")
+                log.warning("could not list collection torrents from %s: %s", name, detail)
+                errors.append(f"{name}: {detail}")
+        return {"torrents": rows, "errors": errors,
                 "jobs": self.store.list_items("collection_sources")}
 
     def _collection_source_plan(self, client_id: str, torrent_hash: str,
@@ -2749,7 +2758,9 @@ class ROMarr:
                 return {"error": "source torrent no longer exists"}
             listing = client.torrent_files(torrent_hash)
         except Exception as err:  # noqa: BLE001 - client failures are actionable
-            return {"error": f"could not read the source torrent: {err.__class__.__name__}"}
+            detail = ("qBittorrent authentication failed"
+                      if isinstance(err, QbitAuthenticationError) else err.__class__.__name__)
+            return {"error": f"could not read the source torrent: {detail}"}
         plan = self.collection_plan(dat_name, platform, **policy_kw)
         if plan.get("error"):
             return plan
@@ -2772,12 +2783,33 @@ class ROMarr:
     def collection_source_start(self, client_id: str, torrent_hash: str,
                                 dat_name: str, platform: str,
                                 cap_bytes: int, **policy_kw) -> dict:
+        with self._collection_source_lock:
+            return self._collection_source_start(client_id, torrent_hash,
+                                                 dat_name, platform,
+                                                 cap_bytes, **policy_kw)
+
+    def _collection_source_start(self, client_id: str, torrent_hash: str,
+                                 dat_name: str, platform: str,
+                                 cap_bytes: int, **policy_kw) -> dict:
         import shutil
         import uuid
 
+        platform = str(platform or "").strip()
+        if not platform:
+            return {"error": "select a platform before starting source acquisition"}
+        selected_platform = resolve(platform)
+        if selected_platform is None:
+            return {"error": "select a valid platform before starting source acquisition"}
+        platform = selected_platform.slug
         client = self._source_client(client_id)
         if client is None:
             return {"error": "select one configured qBittorrent client"}
+        client_key = getattr(client, "romarr_id", "")
+        for existing in self.store.list_items("collection_sources"):
+            if (existing.get("client_id") == client_key
+                    and str(existing.get("torrent_hash") or "").lower() == torrent_hash.lower()
+                    and existing.get("status") in {"running", "restore-needed"}):
+                return {"error": "this torrent already has an active source job; finish or cancel it first"}
         plan = self._collection_source_plan(client_id, torrent_hash, dat_name,
                                             platform, cap_bytes, **policy_kw)
         if plan.get("error"):
@@ -4455,7 +4487,8 @@ class ROMarr:
 
         def run():
             from .dat import BAD_DUMP, VERIFIED, hash_file
-            seen: dict[str, str] = {}
+            from .quarantine import raw_sha1
+            seen: dict[tuple[str, int], str] = {}
             # Replace this platform's hashes rather than accumulating them,
             # so a re-audit after a cleanup does not leave netplay offering
             # dumps that are no longer on disk.
@@ -4492,13 +4525,21 @@ class ROMarr:
                         sha, verdict.game or path.stem, platform.slug,
                         verdict.status == VERIFIED,
                         str(path.relative_to(self.library)))
-                if sha in seen:
+                # DAT verification strips copier headers on some platforms.
+                # Quarantine candidates must match every physical byte instead.
+                try:
+                    raw_sha = raw_sha1(path)
+                    raw_size = path.stat().st_size
+                except OSError:
+                    continue
+                key = (raw_sha, raw_size)
+                if key in seen:
                     state["duplicates"].append({
                         "file": str(path.relative_to(self.library)),
-                        "same_as": seen[sha], "sha1": sha,
-                        "size": int(digest.get("size") or 0)})
-                elif sha:
-                    seen[sha] = str(path.relative_to(self.library))
+                        "same_as": seen[key], "sha1": raw_sha,
+                        "size": raw_size})
+                else:
+                    seen[key] = str(path.relative_to(self.library))
             self.hashes.save()
             state["status"] = "done"
             state["indexed"] = len(self.hashes)

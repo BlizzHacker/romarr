@@ -2291,7 +2291,7 @@ RENDER.stats=async()=>{
           +esc(d.file)+' = '+esc(d.same_as)+' · '+fmtBytes(d.size||0)+'</label>').join('')}</div>
         <div class="row"><button class="btn ghost" id="au-prev" ${auditDuplicateOffset===0?'disabled':''}>Previous</button>
         <button class="btn ghost" id="au-next" ${auditDuplicateOffset+pageSize>=allDupes.length?'disabled':''}>Next</button>
-        <button class="btn ghost" id="au-quarantine-go" ${a.status==='done'?'disabled':''}>Select duplicates below to quarantine</button></div></details>`:''}`;
+        <button class="btn ghost" id="au-quarantine-go" disabled>Select duplicates below to quarantine</button></div></details>`:''}`;
     if(dupes.length){
       const checks=[...out.querySelectorAll('.au-dup')], go=$('#au-quarantine-go');
       const update=()=>{const selected=selectedDuplicateFiles.size;
@@ -2299,6 +2299,7 @@ RENDER.stats=async()=>{
           go.textContent=selected?'Quarantine '+selected+' selected':'Select duplicates below to quarantine';}};
       checks.forEach(c=>c.onchange=()=>{if(c.checked)selectedDuplicateFiles.add(c.dataset.file);
         else selectedDuplicateFiles.delete(c.dataset.file);update();});
+      update();
       const prev=$('#au-prev'), next=$('#au-next');
       if(prev)prev.onclick=()=>{auditDuplicateOffset=Math.max(0,auditDuplicateOffset-pageSize);paintAudit(a);};
       if(next)next.onclick=()=>{auditDuplicateOffset=Math.min(allDupes.length-1,auditDuplicateOffset+pageSize);paintAudit(a);};
@@ -3718,8 +3719,9 @@ RENDER.collections=async()=>{
        +'there is no list of what a complete set contains.</div>')
     +'<div id="cres" style="margin-top:16px"></div></div>'
     +'<div class="card" style="margin-top:16px"><h3>Acquire missing files from a set torrent</h3>'
+    +(sourceState.errors||[]).map(error=>'<div class="panel-note panel-warn">'+esc(error)+'</div>').join('')
     +(sourceTorrents.length&&dats.length
-      ?'<p class="help">Preview a DAT plan against one existing qBittorrent torrent. ROMarr selects only matching missing files, stages one budgeted batch at a time, verifies each staged set against the DAT, then restores the torrent’s original file priorities and paused state.</p>'
+      ?'<p class="help">Preview a DAT plan against one existing qBittorrent torrent. ROMarr selects only matching missing files, stages one budgeted batch at a time, verifies each staged set against the DAT, then restores the torrent’s original file priorities and paused state. The cap limits ROMarr staging copies; downloaded torrent files remain in qBittorrent and need separate source storage.</p>'
        +'<div class="row" style="flex-wrap:wrap">'
        +'<select id="csrc-torrent">'+sourceTorrents.map(t=>
          '<option value="'+esc(t.hash)+'" data-client="'+esc(t.client_id)+'">'
@@ -3816,6 +3818,13 @@ RENDER.collections=async()=>{
   drawSourceJobs();
   const sourceSelect=$('#csrc-torrent');
   const sourcePlanButton=$('#csrc-plan');
+  const sourcePlatform=$('#cplat');
+  const invalidateSourcePreview=()=>{
+    const out=$('#csrc-out');
+    if(out)out.innerHTML='<p class="help">Selection changed. Preview the source plan again before starting.</p>';
+  };
+  [sourcePlatform,$('#cdat'),sourceSelect,$('#csrc-cap')].filter(Boolean)
+    .forEach(input=>input.addEventListener('change',invalidateSourcePreview));
   if(sourceSelect&&sourcePlanButton)sourcePlanButton.onclick=async()=>{
     const opt=sourceSelect.selectedOptions[0];
     const cap=Math.floor((parseFloat($('#csrc-cap').value)||0)*1024*1024*1024);
@@ -3837,14 +3846,17 @@ RENDER.collections=async()=>{
       +((d.unmatched||[]).length?'<details><summary class="help">Unmatched titles ('+
         d.unmatched.length+')</summary><div class="help">'+d.unmatched.map(x=>
         esc(x.title)+' — '+esc(x.reason)).join('<br>')+'</div></details>':'')
-      +'<button class="btn" id="csrc-start">Start selective acquisition</button>';
+      +'<button class="btn" id="csrc-start"'+(sourcePlatform.value.trim()?'':' disabled')+'>Start selective acquisition</button>';
     const start=$('#csrc-start'); if(!start)return;
     start.onclick=async()=>{
+      if(request.platform!==sourcePlatform.value.trim()
+          ||request.dat!==$('#cdat').value){invalidateSourcePreview();return;}
+      if(!request.platform){start.disabled=true;return;}
       if(!confirm('Start this selective torrent workflow? ROMarr will temporarily change the selected torrent’s file priorities and restore their original values when the job ends or is cancelled.'))return;
       start.disabled=true;
       const r=await j('/api/v1/collection/source/start',{method:'POST',
         headers:{'Content-Type':'application/json'},body:JSON.stringify(request)});
-      if(r.error){toast(r.error);start.disabled=false;return;}
+      if(r.error){toast(r.error);start.disabled=!request.platform;return;}
       toast('Selective acquisition started');
       drawSourceJobs();
     };

@@ -274,3 +274,23 @@ def test_test_button_shows_json_reason_from_a_403(monkeypatch):
     assert not ok
     assert "HTTP 403" in message
     assert "Unknown Webhook" in message
+
+
+@pytest.mark.parametrize("body, detail", [
+    (b"Webhook blocked: unauthorized sender\nContact the administrator",
+     "Webhook blocked: unauthorized sender Contact the administrator"),
+    (b'{"error":"signature required"}', '{"error":"signature required"}'),
+    (b"x" * 5000, "x" * 240),
+])
+def test_test_button_retains_bounded_webhook_failure_details(monkeypatch, body, detail):
+    import io
+    import urllib.error
+
+    def rejected(request, timeout):
+        raise urllib.error.HTTPError(
+            request.full_url, 403, "Forbidden", {}, io.BytesIO(body))
+    monkeypatch.setattr(notify.urllib.request, "urlopen", rejected)
+    ok, message = notify.send_test({
+        "type": "webhook", "url": "https://webhook.test/private"})
+    assert not ok
+    assert message == "Not delivered: the endpoint answered HTTP 403 — " + detail

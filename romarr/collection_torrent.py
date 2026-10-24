@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from pathlib import PurePosixPath
 
 
@@ -16,13 +17,8 @@ ROM_SUFFIXES = {
 
 
 def _normal(value: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "", str(value or "").casefold())
-
-
-def _core(value: str) -> str:
-    stem = PurePosixPath(str(value or "").replace(chr(92), "/")).stem
-    stem = re.split(r"[([]", stem, maxsplit=1)[0]
-    return _normal(stem)
+    return re.sub(r"\s+", " ", unicodedata.normalize(
+        "NFKC", str(value or "")).casefold()).strip()
 
 
 def plan_source(titles: list[str], dat, files: list[dict], cap_bytes: int,
@@ -57,18 +53,20 @@ def plan_source(titles: list[str], dat, files: list[dict], cap_bytes: int,
         if game is None:
             unmatched.append({"title": title, "reason": "title is absent from DAT"})
             continue
-        expected = {_normal(PurePosixPath(r.name).stem) for r in game.roms}
-        core = _core(title)
+        expected = {_normal(PurePosixPath(r.name.replace(chr(92), "/")).stem)
+                    for r in game.roms}
+        expected.add(_normal(title))
+        expected.discard("")
         hits = []
         for row in cooked:
             path = PurePosixPath(row["name"])
             base = _normal(path.stem)
-            if base in expected or _core(row["name"]) == core:
+            if base and base in expected:
                 hits.append(row)
         if hits:
             parents = {PurePosixPath(r["name"]).parent for r in hits}
             stems = {PurePosixPath(r["name"]).stem.casefold() for r in hits}
-            # Add only recognized disc sidecars that share a base or sit beside
+            # Add only recognized disc sidecars that share a base with
             # one of the DAT-named tracks. This keeps unrelated documentation
             # and neighboring games out of the transfer plan.
             sidecars = {".cue", ".ccd", ".sub", ".img", ".bin", ".iso",
@@ -77,8 +75,7 @@ def plan_source(titles: list[str], dat, files: list[dict], cap_bytes: int,
             for row in cooked:
                 path = PurePosixPath(row["name"])
                 if (path.parent in parents and path.suffix.casefold() in sidecars
-                        and (path.stem.casefold() in stems
-                             or _core(row["name"]) == core)):
+                        and path.stem.casefold() in stems):
                     hits.append(row)
         hits = list({r["index"]: r for r in hits}.values())
         if not hits:

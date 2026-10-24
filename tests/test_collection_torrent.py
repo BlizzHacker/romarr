@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from romarr.app import ROMarr
-from romarr.clients import QBittorrent, QbitConfig
+from romarr.clients import QBittorrent, QbitConfig, QbitAuthenticationError
 from romarr.collection_torrent import plan_source
 from romarr.dat import DatIndex, parse_dat
 
@@ -174,3 +174,92 @@ def test_active_job_state_can_resume_after_service_restart(tmp_path, monkeypatch
     result = restarted.collection_source_step(started["id"])
     assert result["status"] == "done"
     assert result["done"] == 1
+
+
+@pytest.mark.parametrize("title", [
+    "Dr. Mario (USA)", "(USA)", "日本語 (Japan)", "★ (USA)",
+])
+def test_source_matches_full_title_without_losing_punctuation_or_unicode(title):
+    from xml.sax.saxutils import escape
+
+    dat = parse_dat('<datafile><game name="' + escape(title, {'"': '&quot;'})
+                    + '"><rom name="different track.bin" size="8" crc="aa"/>'
+                    + '</game></datafile>')
+    out = plan_source([title], dat, [
+        {"index": 0, "name": title + ".zip", "size": 8},
+        {"index": 1, "name": "別タイトル (Japan).zip", "size": 8},
+        {"index": 2, "name": "☆ (USA).zip", "size": 8},
+        {"index": 3, "name": "Dr (USA).zip", "size": 8},
+        {"index": 4, "name": "(Europe).zip", "size": 8},
+    ], 8 * 1024 * 1024)
+    assert [row["index"] for row in out["batches"][0]["groups"][0]["files"]] == [0]
+
+
+def test_source_keeps_region_revision_and_disc_siblings_separate():
+    dat = parse_dat("""<datafile>
+      <game name="Game (USA)"><rom name="Game (USA).bin" size="8" crc="aa"/></game>
+      <game name="Game (Europe)"><rom name="Game (Europe).bin" size="8" crc="ab"/></game>
+      </datafile>""")
+    out = plan_source(["Game (USA)", "Game (Europe)"], dat, [
+        {"index": 0, "name": "Game (USA).zip", "size": 8},
+        {"index": 1, "name": "Game (Europe).zip", "size": 8},
+        {"index": 2, "name": "Game (USA) (Beta).zip", "size": 8},
+        {"index": 3, "name": "Game (USA) (Disc 2).bin", "size": 8},
+        {"index": 4, "name": "Game (USA).cue", "size": 8},
+    ], 8 * 1024 * 1024)
+    groups = out["batches"][0]["groups"]
+    assert {f["index"] for f in groups[0]["files"]} == {0, 4}
+    assert {f["index"] for f in groups[1]["files"]} == {1}
+    assert out["unmatched"] == []
+
+
+@pytest.mark.parametrize("platform", ["", "   ", "not-a-platform"])
+def test_source_rejects_invalid_platform_before_reading_or_changing_torrent(
+        tmp_path, monkeypatch, platform):
+    svc = _service(tmp_path, monkeypatch)
+    monkeypatch.setattr(svc, "_source_client", lambda *_:
+                        pytest.fail("invalid platform must not access torrent client"))
+    result = svc.collection_source_start(
+        "q1", "a" * 40, "Test System", platform, 8 * 1024 * 1024)
+    assert "platform" in result["error"]
+    assert not svc.store.list_items("collection_sources")
+
+
+@pytest.mark.parametrize("status", ["running", "restore-needed"])
+def test_source_rejects_second_active_job_for_same_torrent(
+        tmp_path, monkeypatch, status):
+    svc = _service(tmp_path, monkeypatch)
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "Game (USA).zip").write_bytes(b"source")
+    qbit = FakeQbit(source)
+    svc.clients = [qbit]
+    svc.store.put_item("collection_sources", {
+        "id": "existing", "client_id": "q1", "torrent_hash": "A" * 40,
+        "status": status,
+    })
+    result = svc.collection_source_start(
+        "q1", "a" * 40, "Test System", "snes", 8 * 1024 * 1024)
+    assert "already has an active" in result["error"]
+    assert qbit.priority_calls == []
+    assert qbit.pauses == qbit.resumes == 0
+
+
+def test_failed_qbit_login_is_reported_instead_of_an_empty_torrent_list(
+        tmp_path, monkeypatch):
+    svc = _service(tmp_path, monkeypatch)
+    qbit = QBittorrent(QbitConfig(base_url="http://qbit", username="user"))
+    qbit.romarr_id = "q1"
+    qbit.romarr_name = "Test qBittorrent"
+    monkeypatch.setattr(qbit, "login", lambda: False)
+    svc.clients = [qbit]
+    with pytest.raises(QbitAuthenticationError, match="authentication failed"):
+        qbit.torrents()
+    with pytest.raises(QbitAuthenticationError, match="authentication failed"):
+        qbit.torrent_files("a" * 40)
+    state = svc.collection_source_torrents()
+    assert state["torrents"] == []
+    assert state["errors"] == ["Test qBittorrent: authentication failed"]
+    result = svc._collection_source_plan(
+        "q1", "a" * 40, "Test System", "snes", 8 * 1024 * 1024)
+    assert "authentication failed" in result["error"]

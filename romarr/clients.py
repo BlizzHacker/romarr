@@ -106,6 +106,10 @@ class QbitConfig:
     timeout: int = 30
 
 
+class QbitAuthenticationError(requests.RequestException):
+    """qBittorrent rejected configured credentials; no source list was read."""
+
+
 class QBittorrent:
     """Just enough of the WebUI API to add a torrent and watch it finish."""
 
@@ -191,14 +195,14 @@ class QBittorrent:
     def torrents(self) -> list[dict]:
         """Return the client's torrent list for an explicit collection plan."""
         if not self._authed and not self.login():
-            return []
+            raise QbitAuthenticationError("qBittorrent authentication failed")
         response = self._get("torrents/info", timeout=self._config.timeout)
         response.raise_for_status()
         return [row for row in response.json() if isinstance(row, dict)]
 
     def torrent_files(self, torrent_hash: str) -> list[dict]:
         if not self._authed and not self.login():
-            return []
+            raise QbitAuthenticationError("qBittorrent authentication failed")
         response = self._get("torrents/files",
                              params={"hash": torrent_hash},
                              timeout=self._config.timeout)
