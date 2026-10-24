@@ -319,13 +319,17 @@ class Dat:
 
         order = [r.lower() for r in regions]
 
-        def rank(game: Game) -> tuple[int, int, str]:
+        def rank(game: Game) -> tuple[int, int, int, str]:
             found = _regions_in(game.name)
             best = min((order.index(r) for r in found if r in order),
                        default=len(order))
             # Prefer the parent on a tie: No-Intro makes the canonical dump
             # the parent, so it is the right answer when nothing else decides.
-            return (best, 0 if not game.cloneof else 1, game.name)
+            # Non-retail variants must not win an alphabetical tie in DATs
+            # without cloneof relationships. Keep promo/debug-only games.
+            variant = bool(re.search(r"[\(\[][^)\]]*\b(debug|promo)\b",
+                                     game.name, re.IGNORECASE))
+            return (best, int(variant), 0 if not game.cloneof else 1, game.name)
 
         return {min(members, key=rank).name: min(members, key=rank)
                 for members in groups.values()}

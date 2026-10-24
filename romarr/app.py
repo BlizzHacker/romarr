@@ -4446,7 +4446,7 @@ class ROMarr:
             return {"error": "no DATs loaded -- set the DAT directory under "
                              "Settings -> Media Management first"}
 
-        root = self.library / platform.slug
+        root = platform_dir(self.library, platform)
         state = {"status": "running", "platform": platform.slug,
                  "scanned": 0, "verified": 0, "bad": 0, "unknown": 0,
                  "bad_files": [], "duplicates": [],

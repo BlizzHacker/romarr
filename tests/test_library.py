@@ -316,7 +316,7 @@ def test_sanitiser_redacts_keys_for_logs():
 def test_request_rejects_an_unknown_platform(tmp_path):
     from romarr.app import ROMarr
     svc = ROMarr(env={"ROMARR_DATA": str(tmp_path / "r.json")})
-    out = svc.request("Super Mario World", "PlayStation 5")
+    out = svc.request("Super Mario World", "PlayStation 6")
     assert not out["ok"]
     assert "unknown platform" in out["error"]
 

@@ -902,6 +902,8 @@ class Romm:
         older /api/scan is gone and returned 404, which looked like a broken
         service rather than a moved endpoint.
         """
+        from .platforms import romm_fs_slug
+        platform_slug = romm_fs_slug(platform_slug) if platform_slug else None
         base = self._config.base_url.rstrip("/")
         response = None
         # RomM 5.4 stopped running `scan_library` on demand through the

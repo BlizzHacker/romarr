@@ -188,8 +188,8 @@ def test_an_unresolvable_platform_is_reported_rather_than_silently_ignored(tmp_p
     to a console generation nothing in this project can acquire or play.
     """
     svc = ROMarr({"ROMARR_DATA": str(tmp_path / "s.json")})
-    out = svc.search("Astro Bot", "playstation 5")
-    assert out["unknown_platform"] == "playstation 5"
+    out = svc.search("Astro Bot", "playstation 6")
+    assert out["unknown_platform"] == "playstation 6"
     assert out["platform"] is None
 
     known = svc.search("Super Metroid", "snes")
