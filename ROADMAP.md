@@ -1,6 +1,6 @@
 # ROMarr roadmap
 
-This is a working list of priorities, updated **2026-10-24**. Shipped features are separated from proposals so you can tell what an update will actually give you. There are no promised delivery dates; scope and validation can change the order.
+This is a working list of priorities, updated **2026-10-25**. Shipped features are separated from proposals so you can tell what an update will actually give you. There are no promised delivery dates; scope and validation can change the order.
 
 ## Available in v1.7.0
 
@@ -14,14 +14,14 @@ This is a working list of priorities, updated **2026-10-24**. Shipped features a
 
 The fixes are in [v1.7.0](https://github.com/BlizzHacker/romarr/releases/tag/v1.7.0). See the release's checks and evidence for that build rather than assuming every integration has been tested on your hardware.
 
-## In this onboarding update
+## Available in v1.8.0
 
 - **[Setup Guide (#77)](https://github.com/BlizzHacker/romarr/issues/77)**: a skippable sequence for library, downloads, sources, DATs and plugins, with links back to existing configuration forms.
 - **[Clearer documentation and plugin discovery (#81)](https://github.com/BlizzHacker/romarr/issues/81)**: a short README, an existing-ROM path that does not require Prowlarr, and a separate plugin guide.
-- **[Windows starter (#78)](https://github.com/BlizzHacker/romarr/issues/78)**: a native WinForms `ROMarr.exe` in a portable Windows x64 ZIP, with a bundled backend/runtime and ROM Hub. No user Python, PowerShell or .NET installation is needed. The native window controls the server and contains the full interface in its own embedded WebView2 window. Windows runtime/package checks must pass before publication; service/auto-start packaging is separate future work.
+- **[Windows app (#78)](https://github.com/BlizzHacker/romarr/issues/78)**: a native WinForms `ROMarr.exe` in a portable Windows x64 ZIP, with a bundled backend/runtime and ROM Hub. No user Python, PowerShell or .NET installation is needed. The native window controls the server and contains the full interface in its own embedded WebView2 window. Windows runtime/package checks must pass before publication; service/auto-start packaging is separate future work.
 - **[Canonical names on import (#79)](https://github.com/BlizzHacker/romarr/issues/79)**: verified single-file imports can use the DAT ROM filename when Rename on import is enabled. Source files are preserved; unknown filenames are retained. This does not rename an existing library in place.
 
-These changes are being reviewed separately from v1.7.0. Check their merged PR/release before expecting them in a pulled image.
+These changes ship in [v1.8.0](https://github.com/BlizzHacker/romarr/releases/tag/v1.8.0). The native ZIP runs independently of Docker; the unsigned MSIX is for Store preparation and still needs the real Partner Center identity and certification.
 
 ## Next priorities
 
