@@ -47,7 +47,7 @@ public sealed class MainWindow : Form
         file.DropDownItems.Add("View desktop log", null, (_,_) => { if (File.Exists(logPath)) OpenExternal(logPath); });
         file.DropDownItems.Add("Exit", null, (_,_) => Close());
         var companion = new ToolStripMenuItem("Cartridge");
-        companion.DropDownItems.Add("Get Cartridge for Windows", null, (_,_) => OpenExternal("https://github.com/BlizzHacker/RommForDesktop/releases/latest"));
+        companion.DropDownItems.Add("Get Cartridge for Windows", null, (_,_) => OpenExternal("https://github.com/BlizzHacker/romarr/releases/download/v1.8.0/Cartridge-Windows-Portable-0.2.0-x64.exe"));
         companion.DropDownItems.Add("Get Cartridge for Xbox", null, (_,_) => OpenExternal("https://apps.microsoft.com/detail/9MXC51W17LH4"));
         var help = new ToolStripMenuItem("Help");
         help.DropDownItems.Add("Getting started", null, (_,_) => OpenExternal("https://github.com/BlizzHacker/romarr/blob/main/docs/GETTING-STARTED.md"));
