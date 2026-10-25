@@ -21,12 +21,12 @@ permissions:
   contents: read
 
 jobs:
-  portable-proof:
+  download-approved-draft:
     if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: windows-latest
     timeout-minutes: 8
-    # Draft release assets require push access, even for downloads.
-    # The token is passed only to the download step, never to the tested app.
+    # GitHub requires push access to download an unpublished release asset.
+    # This job never executes the binary or checks out source.
     permissions:
       contents: write
     steps:
@@ -54,21 +54,49 @@ jobs:
           $actual = (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($actual -ne $env:EXPECTED_SHA256.ToLowerInvariant()) { throw 'The downloaded binary does not match the approved SHA256.' }
           $identity = [ordered]@{ repository = $env:GITHUB_REPOSITORY; assetId = $env:ASSET_ID; assetName = $env:ASSET_NAME; sha256 = $actual; size = (Get-Item -LiteralPath $binary).Length }
-          $proof = Join-Path $env:RUNNER_TEMP ('Cartridge Windows proof ' + [guid]::NewGuid().ToString('N'))
-          [IO.Directory]::CreateDirectory($proof) | Out-Null
           [IO.File]::WriteAllText((Join-Path $root 'binary-identity.json'),($identity | ConvertTo-Json))
           "CARTRIDGE_BINARY=$binary" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "CARTRIDGE_PROOF=$proof" | Out-File -FilePath $env:GITHUB_ENV -Append
           "CARTRIDGE_IDENTITY=$(Join-Path $root 'binary-identity.json')" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Hand the verified binary to the token-free proof job
+        uses: actions/upload-artifact@v4
+        with:
+          name: Cartridge-approved-portable
+          path: |
+            ${{ env.CARTRIDGE_BINARY }}
+            ${{ env.CARTRIDGE_IDENTITY }}
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
+
+  portable-proof:
+    needs: download-approved-draft
+    runs-on: windows-latest
+    timeout-minutes: 8
+    permissions: {}
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          name: Cartridge-approved-portable
+          path: ${{ runner.temp }}/cartridge-approved-binary
       - name: Run the real portable app and inspect its proof
         shell: pwsh
+        env:
+          ASSET_NAME: ${{ inputs.asset_name }}
+          EXPECTED_SHA256: ${{ inputs.expected_sha256 }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $proof = $env:CARTRIDGE_PROOF
+          $root = Join-Path $env:RUNNER_TEMP 'cartridge-approved-binary'
+          $binary = Join-Path $root $env:ASSET_NAME
+          $actual = (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $env:EXPECTED_SHA256.ToLowerInvariant()) { throw 'The transferred binary does not match the approved SHA256.' }
+          $proof = Join-Path $env:RUNNER_TEMP ('Cartridge Windows proof ' + [guid]::NewGuid().ToString('N'))
+          [IO.Directory]::CreateDirectory($proof) | Out-Null
+          "CARTRIDGE_PROOF=$proof" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "CARTRIDGE_IDENTITY=$(Join-Path $root 'binary-identity.json')" | Out-File -FilePath $env:GITHUB_ENV -Append
           $passed = Join-Path $proof 'smoke-passed.json'
           $failed = Join-Path $proof 'smoke-failed.txt'
           $owned = [Collections.Generic.Dictionary[int,Diagnostics.Process]]::new()
-          $process = Start-Process -FilePath $env:CARTRIDGE_BINARY -ArgumentList @('"' + '--smoke-test=' + $proof + '"') -PassThru -WindowStyle Hidden
+          $process = Start-Process -FilePath $binary -ArgumentList @('"' + '--smoke-test=' + $proof + '"') -PassThru -WindowStyle Hidden
           $owned[$process.Id] = $process
           try {
             $deadline = [DateTime]::UtcNow.AddSeconds(150)
