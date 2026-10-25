@@ -57,6 +57,10 @@ def svc(tmp_path, dat: DatIndex) -> ROMarr:
                 "LIBRARY_KIND": "folder",
                 "LIBRARY_PATH": str(tmp_path / "roms")})
     s.dats = dat
+    # These tests pin down import-time fulfilment; keep the reconcile sweep
+    # (separate change) out of the picture so they are deterministic either
+    # way.
+    s.store.settings["reconcile_after_import"] = False
     return s
 
 
@@ -125,15 +129,32 @@ def test_exact_substring_match_still_fulfilled(tmp_path):
 
 
 def test_a_verified_import_does_not_fulfil_another_platform(tmp_path):
-    """A wanted entry on a *different* platform must not be touched by a verified
-    import landing on SNES -- the platform guard stays intact."""
+    """A verified SNES import fulfils its SNES Wanted entry and leaves a GBA
+    Wanted entry for the same title untouched -- the platform guard is what
+    keeps them apart."""
     dat = dat_for("Dragon Ball Z - Super Butouden (Japan)")
     s = svc(tmp_path, dat)
     run_import(s, tmp_path, dat, wanted_title="Dragon Ball Z: Super Butouden",
-               wanted_platform="gba",
-               client_name="DBZ - Super Butouden JP.smc")
-    assert len(s.store.wanted) == 1
-    assert s.store.wanted[0].platform == "gba"
+               wanted_platform="snes",
+               client_name="DBZ - Super Butouden JP.smc",
+               other_wanted=("Dragon Ball Z: Super Butouden", "gba"))
+    # The SNES import clears the SNES entry; the GBA entry remains, proving the
+    # platform guard in import_finished actually ran (a GBA import of a .smc
+    # would have failed before reaching it).
+    assert [(w.game, w.platform) for w in s.store.wanted] == [
+        ("Dragon Ball Z: Super Butouden", "gba")]
+
+
+def test_a_short_title_does_not_fulfil_a_superstring_game(tmp_path):
+    """Wanted `Sonic 3` must never be fulfilled by a verified `Sonic 3D Blast`
+    import. Matching is whole-word (not bare-substring), else the shorter title
+    would wrongly clear when the longer one imports (Regress coderabbit)."""
+    dat = dat_for("Sonic 3D Blast")
+    s = svc(tmp_path, dat)
+    run_import(s, tmp_path, dat, wanted_title="Sonic 3",
+               wanted_platform="snes",
+               client_name="Sonic 3D Blast.smc")
+    assert [(w.game, w.platform) for w in s.store.wanted] == [("Sonic 3", "snes")]
 
 
 def test_word_order_change_needs_hash_identity_and_is_out_of_scope(tmp_path):

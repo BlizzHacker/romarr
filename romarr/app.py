@@ -282,17 +282,33 @@ def _archive_tool_path() -> str:
         return ""
 
 
-def _title_key(value: str) -> str:
-    """A normalised key for comparing a wanted title to what an import verified.
+_WORD = re.compile(r"[a-z0-9]+")
 
-    Strips punctuation and case so that a wanted title like ``Dragon Ball Z:
-    Super Butouden`` can be recognised inside a verified DAT name like
-    ``Dragon Ball Z - Super Butouden (Japan)`` -- no-intro writes `` - `` where
-    a human title writes ``:``, and region tags add a suffix. Anything that is
-    not a letter or digit is dropped, so the comparison never trips on
-    spacing, punctuation or word-boundary differences.
+
+def _title_key(value: str) -> str:
+    """Normalised phrase for comparing a wanted title to what an import verified.
+
+    Lowercases and reduces the title to alphanumeric runs joined by single
+    spaces, so ``Dragon Ball Z: Super Butouden`` and
+    ``Dragon Ball Z - Super Butouden (Japan)`` share the comparable phrase
+    ``dragon ball z super butouden japan``. Keeping whole words (rather than
+    concatenating) lets the containment test stay word-boundary aware --
+    ``Sonic 3`` must not match ``Sonic 3D Blast``.
     """
-    return "".join(ch for ch in str(value or "").lower() if ch.isalnum())
+    return " ".join(_WORD.findall(str(value or "").lower()))
+
+
+def _phrase_contains(phrase: str, within: str) -> bool:
+    """Whether ``phrase`` appears in ``within`` on whole-word boundaries.
+
+    `Sonic 3` -> ``sonic 3`` is not a whole-word phrase inside ``sonic 3d
+    blast`` (``3`` is part of ``3d``), so an import of ``Sonic 3D Blast`` never
+    fulfils a wanted ``Sonic 3``. `Dragon Ball Z: Super Butouden` -> ``dragon
+    ball z super butouden`` IS inside ``dragon ball z super butouden japan``.
+    """
+    if not phrase or not within:
+        return False
+    return bool(re.search(rf"(?<![a-z0-9]){re.escape(phrase)}(?![a-z0-9])", within))
 
 
 def _fulfil_identities(name: str, outcomes) -> set[str]:
@@ -317,7 +333,11 @@ def _fulfil_identities(name: str, outcomes) -> set[str]:
             identities.add(_title_key(game))
         dest = getattr(outcome, "destination", None)
         if dest is not None:
-            identities.add(_title_key(Path(str(dest)).stem))
+            # A multi-file set lands as a directory named for the game; its
+            # *name* is the identity, not ``Path(...).stem`` (which of
+            # ``Mr. Driller (USA)`` is ``Mr``).
+            destination_name = dest.name if dest.is_dir() else dest.stem
+            identities.add(_title_key(destination_name))
     return identities
 
 
@@ -5462,7 +5482,7 @@ class ROMarr:
                     # bytes *are* is known by hash verification, so match the
                     # wanted title against the verified identities as well as
                     # the client-reported download name.
-                    if any(wanted_key in identity
+                    if any(_phrase_contains(wanted_key, identity)
                            for identity in _fulfil_identities(name, outcomes)):
                         self.store.fulfil(w.game, w.platform)
             results.append({"name": name, "ok": any_ok,
