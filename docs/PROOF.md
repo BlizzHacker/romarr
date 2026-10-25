@@ -1,7 +1,17 @@
-# Proof
+# Validation records
 
-Every marketing sentence in the README, with the evidence behind it. Last
-full pass: **2026-08-10**, against the maintainer's production install
+## October 2026 update
+
+The backend suite passed **2,504 tests** at commit `29996e7`, with four skips and one deselection. [Docker validation](https://github.com/BlizzHacker/romarr/actions/runs/40122556390) passed tests, standard-image smoke/builds, and browser-image smoke/builds.
+
+[The native Windows run](https://github.com/BlizzHacker/romarr/actions/runs/40122556333) built the self-contained ZIP and unsigned MSIX, then launched the packaged `ROMarr.exe` with external Python and Git removed from PATH. It verified the native window, embedded sign-in and Setup Guide, protected API, bundled ROM Hub catalogue and real plugin installation, and settings after a backend restart. Its artifacts contain the screenshot, JSON proof, build provenance and checksums. The source helper also passed on Python 3.11 and 3.13.
+
+The active production site was updated and inspected through its normal sign-in. The Setup Guide and plugin page rendered against the existing configuration. This does not establish that every external service or game works on every system. Microsoft Store certification and physical Xbox testing remain separate checks.
+
+## Historical integration checks
+
+The following older records describe the environment and scope tested then.
+Their counts and screenshots are dated. Historical full pass: **2026-08-10**, against the maintainer's production install
 (166,578-game RomM library, ten live indexers, qBittorrent + SABnzbd), at
 commit `a56a72f`. Regenerate the screenshots any time with
 [docs/screenshots.py](screenshots.py) pointed at your own install.

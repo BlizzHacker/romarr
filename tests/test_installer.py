@@ -30,12 +30,20 @@ UPDATE = ROOT / "proxmox" / "ct" / "update.sh"
 README = ROOT / "README.md"
 
 
+def _documented_proxmox_install():
+    """Follow the README link to the install command a user actually sees."""
+    assert "docs/INSTALL.md#proxmox-lxc" in README.read_text(encoding="utf-8")
+    guide = (ROOT / "docs" / "INSTALL.md").read_text(encoding="utf-8")
+    section = guide.split("## Proxmox LXC", 1)[1].split("\n## ", 1)[0]
+    return section
+
+
 def test_the_installer_exists_where_the_readme_says_it_does():
     """The whole of issue #2 in one assertion, at the level we control."""
     command = re.search(
         r"raw\.githubusercontent\.com/([\w.-]+/[\w.-]+)/([\w.-]+)/(\S+?\.sh)",
-        README.read_text(encoding="utf-8"))
-    assert command, "README no longer documents a raw installer URL"
+        _documented_proxmox_install())
+    assert command, "Linked install guide no longer documents a raw installer URL"
     repo, branch, path = command.groups()
     assert repo == "BlizzHacker/romarr", f"README points at {repo}"
     assert branch == "main"
@@ -141,9 +149,9 @@ def test_the_documented_command_resolves():
     """
     import urllib.request
 
-    text = README.read_text(encoding="utf-8")
+    text = _documented_proxmox_install()
     url = re.search(r"https://raw\.githubusercontent\.com/\S+?\.sh", text)
-    assert url, "README no longer documents an installer URL"
+    assert url, "Linked install guide no longer documents an installer URL"
     with urllib.request.urlopen(url.group(0), timeout=20) as response:
         assert response.status == 200
         assert b"ROMarr" in response.read()

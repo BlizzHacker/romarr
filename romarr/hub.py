@@ -193,6 +193,9 @@ def _plugin_env() -> dict:
     env = {name: os.environ[name] for name in _ENV_PASSTHROUGH
            if name in os.environ}
     env["ROM_HUB_HOME"] = str(HOME)
+    # CLI diagnostics and plugin names must round-trip on Windows too.
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
     ok, why = sandbox_state()
     if not ok:
         # Asked for, never assumed. ROMarr used to set this unconditionally on

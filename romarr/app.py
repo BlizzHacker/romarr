@@ -530,8 +530,10 @@ class ROMarr:
         # verifies the request came *through* it, learns who the user is, and
         # can require a group.
         self.limiter = RateLimiter()
-        self.reload_dats(e.get("DAT_PATH", "")
-                         or self.store.settings.get("dat_path", ""))
+        # The environment seeds a new install. An explicit saved selection
+        # (including the Setup Guide) must survive the next restart.
+        self.reload_dats(self.store.settings.get("dat_path", "")
+                         or e.get("DAT_PATH", ""))
         self.reload_metadata()
         self.reload_policy()
         self.sso = None
@@ -1219,6 +1221,67 @@ class ROMarr:
                        "_oidc_client_secret"):
             out.pop(secret, None)
         return out
+
+    def setup_status(self) -> dict:
+        """A quick setup checklist, without probing services or returning secrets."""
+        def rows(key):
+            return [{"id": str(row.get("id") or ""),
+                     "name": str(row.get("name") or row.get("type") or "Unnamed"),
+                     "type": str(row.get("type") or ""),
+                     "enabled": bool(row.get("enable", True))}
+                    for row in self.store.list_items(key)]
+
+        libraries = rows("libraries")
+        clients = rows("download_clients")
+        indexers = rows("indexers")
+        guide = self.store.settings.get("_setup_guide") or {}
+        established = bool(libraries or clients or indexers
+                           or self.store.events or self.store.wanted)
+        return {
+            "suggested": not established and not bool(guide.get("dismissed")),
+            "dismissed": bool(guide.get("dismissed")),
+            "mode": guide.get("mode", "organize"),
+            "library_path": str(self.library),
+            "libraries": libraries,
+            "download_clients": clients,
+            "indexers": indexers,
+            "dat_path": str(self.store.settings.get("dat_path") or ""),
+            "dat_loaded": len(self.dats.dats),
+            "dat_games": sum(len(dat.games) for dat in self.dats.dats),
+            "hub_available": hub.available(),
+        }
+
+    def finish_setup_guide(self, mode: str = "organize") -> dict:
+        """Remember Skip or Finish; the guide remains available in Settings."""
+        self.store.settings["_setup_guide"] = {
+            "dismissed": True,
+            "mode": mode if mode in {"organize", "download"} else "organize",
+        }
+        self.store.save()
+        return {"ok": True}
+
+    def setup_dats(self, directory: str) -> dict:
+        """Validate the optional DAT folder and explain an empty result."""
+        directory = str(directory or "").strip()
+        if not directory:
+            return {"ok": False, "error": "Choose the folder containing your DAT files."}
+        if not Path(directory).is_dir():
+            return {"ok": False,
+                    "error": "That folder is not available to ROMarr. Check the path and, "
+                             "if you use Docker, its folder mount."}
+        with self._dat_reload_lock:
+            result = self._reload_dats(directory, preserve_on_empty=True)
+            if result.get("error") or not result.get("loaded"):
+                # A rejected candidate was never published to active readers.
+                if result.get("error"):
+                    return {"ok": False, **result}
+                return {"ok": False, **result,
+                        "error": "No readable DATs were found. Choose a folder containing "
+                                 "No-Intro or Redump .dat, .xml, or .zip files."}
+            self.store.save()
+            return {"ok": True, **result,
+                    "message": f"Loaded {result['loaded']} DAT(s). You can now verify files "
+                               "and compare your collection."}
 
     # --- inbound webhooks -------------------------------------------------
 
@@ -2001,7 +2064,7 @@ class ROMarr:
         with self._dat_reload_lock:
             return self._reload_dats(directory)
 
-    def _reload_dats(self, directory: str = "") -> dict:
+    def _reload_dats(self, directory: str = "", *, preserve_on_empty: bool = False) -> dict:
         """Load every DAT under `directory`.
 
         Optional and quiet. An operator with no DATs is the common case on
@@ -2014,13 +2077,17 @@ class ROMarr:
         """
         import zipfile
 
-        self.store.settings["dat_path"] = str(directory or "")
         if not directory:
+            if preserve_on_empty:
+                return {"loaded": 0, "path": ""}
+            self.store.settings["dat_path"] = ""
             self.dats = DatIndex()
             return {"loaded": 0, "path": ""}
         root = Path(directory)
         if not root.is_dir():
-            self.dats = DatIndex()
+            if not preserve_on_empty:
+                self.store.settings["dat_path"] = str(directory)
+                self.dats = DatIndex()
             log.warning("DAT_PATH %s is not a directory", root)
             return {"loaded": 0, "path": str(root),
                     "error": f"{root} is not a directory"}
@@ -2063,14 +2130,20 @@ class ROMarr:
         index = DatIndex()
         for parsed in loaded_by_name.values():
             index.add(parsed)
-        self.dats = index
-        log.info("loaded %d DAT(s) from %s", len(index.dats), root)
         result = {"loaded": len(index.dats), "path": str(root),
                   "examined": len(found)}
         if stopped:
             result["truncated"] = stopped
             log.warning("DAT scan stopped early: %s", stopped)
         
+        # Build the candidate index entirely off to the side. Setup may reject
+        # an empty/unreadable selection without exposing it to import readers.
+        if preserve_on_empty and not index.dats:
+            return result
+        self.store.settings["dat_path"] = str(directory)
+        self.dats = index
+        log.info("loaded %d DAT(s) from %s", len(index.dats), root)
+
         # Also initialize TitleDB for Switch validation
         self.reload_titled()
         
@@ -2417,6 +2490,7 @@ class ROMarr:
         outcomes = import_rom(source, platform, self.library_root(target_cfg),
                               dats=self.dats,
                               require_verified=require_verified,
+                              rename=bool(self.store.settings.get("rename_on_import", True)),
                               layout=self.library_layout(target_cfg),
                               translation=is_translation(source.name))
 
@@ -5284,6 +5358,8 @@ class ROMarr:
 
             outcomes = import_rom(
                 path, platform, self.library_root(target_cfg),
+                dats=self.dats,
+                rename=bool(self.store.settings.get("rename_on_import", True)),
                 layout=self.library_layout(target_cfg),
                 translation=is_translation(name))
             if not outcomes:
@@ -5368,6 +5444,26 @@ def make_handler(service: ROMarr):
 
         def _json(self, code: int, payload):
             self._send(code, json.dumps(payload).encode(), "application/json")
+
+        def _install_hub_source(self, url: str):
+            try:
+                got = check_source(url, service.store.settings.get("plugin_hosts") or None)
+            except ValueError:
+                return self._json(400, {
+                    "ok": False, "error": "That repository URL is not valid. Check the address and try again."})
+            if not got.ok:
+                return self._json(400, {"ok": False, "error": got.reason})
+            parsed = urlparse(got.url)
+            if parsed.username or parsed.password:
+                return self._json(400, {
+                    "ok": False,
+                    "error": "Use a repository URL without a username or password."})
+            result = dict(hub.install(got.url))
+            if not result.get("ok"):
+                result["error"] = (result.get("error") or result.get("err")
+                                   or result.get("reason")
+                                   or "The plugin could not be installed. Check ROM Hub availability and try again.")
+            return self._json(200 if result.get("ok") else 500, result)
 
         def _guard(self, handler):
             """Turn an unhandled failure into a reply instead of a dead socket.
@@ -5960,6 +6056,8 @@ def make_handler(service: ROMarr):
                     redact_library(lib) for lib in service.store.list_items("libraries")]})
             if route.path == "/api/v1/library/schema":
                 return self._json(200, {"types": LIBRARY_TYPES})
+            if route.path == "/api/v1/setup/status":
+                return self._json(200, service.setup_status())
             if route.path == "/api/v1/config":
                 return self._json(200, service.safe_settings())
             if route.path == "/api/v1/system/status":
@@ -6710,6 +6808,12 @@ def make_handler(service: ROMarr):
                                 "platform": platform.slug if platform else "",
                                 "unresolved": platform is None})
                 return self._json(200, {"items": out, "total": len(entries)})
+            if route.path == "/api/v1/setup/complete":
+                return self._json(200, service.finish_setup_guide(
+                    str(body.get("mode") or "organize")))
+            if route.path == "/api/v1/setup/dats":
+                result = service.setup_dats(str(body.get("directory") or ""))
+                return self._json(200 if result.get("ok") else 400, result)
             if route.path == "/api/v1/setup":
                 # First-run claim. Open only while unclaimed, and it closes the
                 # moment it succeeds -- so this is a one-shot, not a standing
@@ -6806,6 +6910,8 @@ def make_handler(service: ROMarr):
                     "note": "ROMarr does not post this for you. Open the link "
                             "to review and submit it yourself.",
                 })
+            if route.path == "/api/v1/hub/source/install":
+                return self._install_hub_source(str(body.get("url") or ""))
             if route.path == "/api/v1/hub/source/check":
                 got = check_source(
                     str(body.get("url") or ""),
@@ -6819,6 +6925,8 @@ def make_handler(service: ROMarr):
                 action = (body.get("action") or "").strip()
                 if not slug or action not in ("install", "enable", "disable", "uninstall"):
                     return self._json(400, {"error": "slug and a valid action are required"})
+                if action == "install" and not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", slug):
+                    return self._install_hub_source(slug)
                 fn = {"install": hub.install, "enable": hub.enable,
                       "disable": hub.disable, "uninstall": hub.uninstall}[action]
                 result = fn(slug)
@@ -7076,7 +7184,9 @@ def serve(port: int = 6868, env: dict[str, str] | None = None):
     except Exception:
         log.exception("integration recovery skipped (non-fatal)")
 
-    httpd = ThreadingHTTPServer(("0.0.0.0", port), make_handler(service))
+    bind_env = env if env is not None else os.environ
+    host = str(bind_env.get("ROMARR_HOST") or "0.0.0.0")
+    httpd = ThreadingHTTPServer((host, port), make_handler(service))
 
     # Native HTTPS, for installs with no reverse proxy in front. Both
     # variables or neither: half a cert is a typo, and refusing to boot over
@@ -7097,6 +7207,6 @@ def serve(port: int = 6868, env: dict[str, str] | None = None):
             log.error("could not load ROMARR_SSL_CERT/ROMARR_SSL_KEY (%s); "
                       "serving plain HTTP", err)
 
-    log.info("ROMarr listening on %s://0.0.0.0:%d, library=%s",
-             scheme, port, service.library)
+    log.info("ROMarr listening on %s://%s:%d, library=%s",
+             scheme, host, port, service.library)
     httpd.serve_forever()

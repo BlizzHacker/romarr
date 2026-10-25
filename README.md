@@ -1,1085 +1,130 @@
-<div align="center">
+# ROMarr
 
-# 🎮 ROMarr
+The *arr for games.
 
-### The *arr for games.
+Find games, verify ROMs, and import them into your library.
 
-**Ask for a game. ROMarr finds the best copy, downloads it, verifies it and files it into your library — automatically.**<br>
-If Radarr does your movies and Sonarr does your TV, ROMarr is the one that was missing.
+[![Tests and images](https://github.com/BlizzHacker/romarr/actions/workflows/docker.yml/badge.svg)](https://github.com/BlizzHacker/romarr/actions/workflows/docker.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-[![CI](https://github.com/BlizzHacker/romarr/actions/workflows/docker.yml/badge.svg)](https://github.com/BlizzHacker/romarr/actions/workflows/docker.yml)
-[![Docker](https://img.shields.io/badge/docker-ghcr.io-2496ed?logo=docker&logoColor=white)](https://github.com/BlizzHacker/romarr/pkgs/container/romarr)
-[![platforms](https://img.shields.io/badge/arch-amd64%20%7C%20arm64%20%7C%20armv7-lightgrey)](#docker)
-[![licence MIT](https://img.shields.io/badge/licence-MIT-blue)](LICENSE)
-[![GitHub stars](https://img.shields.io/github/stars/BlizzHacker/romarr?style=social)](https://github.com/BlizzHacker/romarr/stargazers)
+**[Install](#install)** · **[First setup](docs/GETTING-STARTED.md)** · **[Plugins](docs/PLUGINS.md)** · **[Roadmap](ROADMAP.md)** · **[Releases](https://github.com/BlizzHacker/romarr/releases)**
 
-**[🚀 Install in 60 seconds](#-install-in-60-seconds)** · **[📸 See it in action](#-see-it-in-action)** · **[🧑‍💻 Build with us](#-build-with-us)** · **[📖 Full docs](#contents)**
+![ROMarr interactive search, with scores and reasons beside each result](docs/img/interactive-search-live.png)
 
-![Interactive search on a live install: 51 releases scored, the verified dump on top, every rejection explained](docs/img/interactive-search-live.png)
+## What can I use it for?
 
-<sub>A real search on a live install: 51 releases scored, the verified dump on top, and every rejection explained.</sub>
-
-</div>
-
-## ✨ Why people use ROMarr
-
-| | |
-|---|---|
-| 🔎 **Smart search** | Searches all your indexers at once and scores every release, so verified clean dumps win and romhacks or wrong-platform files are rejected, with the reason shown. |
-| 📥 **Hands-off downloads** | Works with qBittorrent, Transmission, Deluge, rTorrent, uTorrent, Flood, Aria2, SABnzbd, NZBGet, Synology and Real-Debrid, then imports and renames for you. |
-| 📚 **Your library, organised** | Files into RomM, Gaseous or Retrom, and keeps a Wanted list that it re-searches on a schedule until every game is found. |
-| 🛡️ **Safe by default** | Optional ClamAV virus scan before import; bad releases are blocklisted and replaced automatically. |
-| 🧩 **Endless sources** | Add new sources with [ROM Hub](https://github.com/BlizzHacker/rom-hub) plugins, right from the Hub tab. |
-| 👥 **Better with friends** | Share libraries, browse a friend's shelf, set up netplay, and track what you're playing (with a roulette for your backlog). |
-
-## 🚀 Install in 60 seconds
-
-```bash
-docker run -d --name romarr --restart unless-stopped \
-  -p 6868:6868 -v /srv/romarr/config:/config \
-  ghcr.io/blizzhacker/romarr:latest
-```
-
-Open **http://localhost:6868**, set a password, and connect your indexers.
-Prefer something else? [Docker Compose](#docker-compose) · [Proxmox LXC one-liner](#proxmox-lxc) · [Home Assistant add-on](#home-assistant) · [From source](#from-source)
-
-## 📸 See it in action
-
-| Your library | Plugins from ROM Hub |
-|---|---|
-| ![Library](docs/img/library.png) | ![Hub plugins](docs/img/hub-plugins.png) |
-| **Stats and your shelf** | **Friends and shared libraries** |
-| ![Stats](docs/img/stats.png) | ![Friends](docs/img/friends.png) |
-
-[Take the full tour →](#the-tour)
-
-## 🧑‍💻 Build with us
-
-ROMarr is MIT-licensed and contributions are welcome, from a typo fix to a whole new download client.
-
-- **Add a game source** without touching ROMarr: write a [ROM Hub plugin](https://github.com/BlizzHacker/rom-hub/blob/master/CONTRIBUTING.md).
-- **Integrate your app** through the REST API. Every route is described at `/api/v1/openapi.json` on your install.
-- **Pick up an issue**: [open issues](https://github.com/BlizzHacker/romarr/issues). Questions and ideas are welcome there too.
-- **Run it locally**: `python -m romarr` from a clone, and `pytest` runs 2,300+ tests. See [Development](#development).
-
-```
-Move Weight
-└─ Yarr.It ................ one front door for a self-hosted media library
-   └─ Cartridge ........... tools for self-hosting a retro game library
-      └─ ROMarr ........... you are here
-         └─ ROM Hub ....... ROMarr's plugin engine
-```
-
-ROMarr runs perfectly well on its own; nothing above it is required.
-
-## 🆕 What's new
-
-- **🎲 Backlog roulette.** Can't choose? *Stats → Shelf → Pick my next game* draws one from your Shelved or Playing games.
-- **🛡️ Virus scanning before import.** Point ROMarr at ClamAV and every finished download is scanned; an infected release is refused, blocklisted and replaced automatically.
-- **🔗 Integration API that actually works.** External apps such as Cartridge frontends can request games and poll their status, and retries never download twice.
-- **🖥️ Proxmox installer fixed for every CPU.** The one-line LXC installer now picks the right template for your host (amd64 or arm64).
-
----
-
-## Contents
-
-- [How it works](#how-it-works)
-- [The tour](#the-tour) — every feature, what it is for, and what it looks like
-- [Requirements](#requirements)
-- [Installation](#installation) — [Docker](#docker) · [Docker Compose](#docker-compose) · [Proxmox LXC](#proxmox-lxc) · [Home Assistant](#home-assistant) · [Source](#from-source)
-  - **[The full install guide](docs/INSTALL.md)** — every variable, backup, upgrade, rollback, troubleshooting
-- [Signing in](#signing-in)
-- [Configuration](#configuration)
-- [Usage](#usage)
-- [Plugins](#plugins)
-- [Multiple libraries](#multiple-libraries)
-- [Troubleshooting](#troubleshooting)
-- [Cartridge ecosystem](#cartridge-ecosystem)
-
----
-
-## How it works
-
-One request, end to end:
-
-```
-you: "Chrono Trigger, SNES"
-  │
-  ▼
-SEARCH     every indexer at once, via Prowlarr or directly
-  │          two queries per source — the bare title and the qualified one —
-  │          because indexers match whole strings and recall wins
-  ▼
-SCORE      every release, with written reasons
-  │          + seeders, + right region, + carries a .smc, + verified dump
-  │          − hack/beta/repack, − wrong platform named, − too big to be real
-  ▼
-GRAB       the winner goes to whichever client speaks its protocol
-  │          torrent → 13 daemons, 8 debrid services, or a watched folder
-  │          usenet  → SABnzbd/NZBGet/NZBVortex, or a watched folder
-  │          ROM site → a plain GET, or a real browser click where the site
-  │                     has no fetchable URL
-  ▼
-IMPORT     within a minute of completion, on the clock
-  │          the actual ROM picked out of the archive (zip/7z/rar, zip-slip safe)
-  │          multi-track discs kept together as a set
-  ▼
-VERIFY     checksummed against your No-Intro / Redump DATs
-  │          verified · bad dump · unknown — and only bad dumps are refused
-  ▼
-FILE       into RomM / Gaseous / Retrom / Gameyfin / a plain folder
-  │          per-platform routing if you run more than one
-  ▼
-RESCAN     your library server is told; the game appears with art
-```
-
-Nothing in that pipeline needs you after the first line — and with lists,
-connected accounts and RSS, it doesn't even need the first line.
-
-## The tour
-
-Everything below is real: each screenshot comes from the maintainer's
-production install (166,578 games, ten live indexers), and every claim links
-to its evidence in [docs/PROOF.md](docs/PROOF.md).
-
-### Ask for a game, argue with the ranking
-
-**Add New** takes a title and a platform and does the whole pipeline.
-**Interactive Search** is for when you want to see the machine think: every
-release your indexers returned, scored, with the reasoning written next to
-it, a link to the release's page on its indexer, and a Grab button for when
-you disagree. A manual grab flows through the same queue and history as an
-automatic one.
-
-The scoring knows things a film downloader can't: that a 40GB "SNES" result
-is a romset or a PC port (every platform declares a hardware ceiling), that
-"Super Nintendo Entertainment System" containing "Nintendo Entertainment
-System" is a trap (longest alias wins, unknown platforms are refused, never
-guessed), and that a Wii Virtual Console WAD is not a Genesis cartridge.
-
-### Proof, not vibes: DAT verification
-
-The one thing no other *arr can do. There is no canonical hash for a movie —
-but No-Intro (cartridges) and Redump (discs) publish the CRC32/MD5/SHA1 of
-every known-good dump. ROMarr checksums every import against your DATs:
-
-- **verified** — byte-for-byte the published dump. Shown as `[!]` everywhere.
-- **bad dump** — right size, wrong hash. The case worth catching; refused
-  unless you explicitly force it.
-- **unknown** — not in your DAT. *Not treated as bad*: homebrew,
-  translations and romhacks live here and import without ceremony.
-
-Copier headers are handled (the reason naive hashers match nothing on
-NES/SNES), discs verify per-track, and **a verified dump automatically
-upgrades an unverified copy** — the only upgrade rule in this category that
-is a fact about bytes rather than a taste in bitrates.
-
-### The clock
-
-![The Tasks page: the scheduled jobs with their intervals and last results](docs/img/tasks.png)
-
-Six jobs run without you: completed downloads import **every minute**;
-the Wanted list is re-searched every 12 hours with a **per-title backoff
-ladder** (4h → 7 days, so a game that isn't dumped yet doesn't get your
-tracker account banned); indexer **RSS feeds are watched hourly** in
-between, so a release that appears an hour after you asked is grabbed
-within the hour; lists sync every 6; dead downloads are retired every 15
-minutes (below); and once a day ROMarr asks GitHub if a newer version
-exists — and *tells* you, because an *arr that updates itself is an *arr
-that restarts mid-import. Every RSS match goes through the same
-scorer as a search: the feed can never grab what a search would refuse.
-Intervals are editable live; zero disables a job.
-
-### When a download dies
-
-A stalled torrent used to be a loop. The Blocklist existed, nothing ever
-added to it, and `best_release` is deterministic — so pulling the dead
-torrent out of your client and waiting for the next sweep scored the same
-results the same way and grabbed **the same dead file again**.
-
-Now a download the client refused, one that finished with no ROM in it, or
-one still unfinished past `stalled_timeout_minutes` (default three hours) is
-blocklisted **with the reason attached**, the game goes back on Wanted, and
-the next best release is grabbed in its place. Capped at three replacement
-grabs per sweep, because each one costs a full indexer search and twenty at
-once is how a tracker decides you are a scraper.
-
-What is deliberately *not* blocklisted: `no download client configured`.
-That failure is your install's, not the release's — and a blocklist full of
-good torrents blocked because a client was missing is worse than no
-blocklist at all.
-
-And a request you no longer want can now simply be dropped: **Remove** on
-any Wanted row, or `DELETE /api/v1/wanted/missing`. Until now the only way
-off that list was an import, so a typo went on costing an indexer search on
-every sweep and every RSS pass, forever, for a game that does not exist.
-
-### Scanned before it reaches the library
-
-Point ROMarr at a ClamAV daemon (**Media Management → Scan downloads with
-ClamAV**, address `tcp://clamav:3310` or a socket path) and every finished
-download is streamed to it before anything is imported. An infected one is
-refused with the signature named, and counted as the release's fault, so the
-blocklist retires it and the next best release is grabbed. While clamd cannot
-be reached, finished downloads **wait** rather than going in unscanned.
-System → Status shows whether it answers.
-
-One limit is clamd's own: it refuses a stream longer than its
-`StreamMaxLength`. Such a file is imported unscanned and logged by name, since
-refusing it would leave every large disc image unimportable. Raise the limit
-in `clamd.conf` if you want those scanned too.
-
-### Lists, and the accounts that feed them
-
-![Import Lists: a synced top-100 and the connected-accounts table](docs/img/lists.png)
-
-Paste a numbered "top 100" article exactly as you copied it — rank numbers,
-`# comments` and `Title<TAB>platform` lines all parse. Point at a URL that
-re-syncs on the clock. Every title feeds Wanted **once, ever** — a ledger
-per list means a fulfilled game is never re-downloaded by its own list.
-
-**Connect the stores you already own games on**, two ways:
-
-| Route | Covers | What it needs |
+| I want to… | Start here | What you need |
 |---|---|---|
-| **Remote libraries** — list types | Steam, GOG | *nothing but a public profile name* |
-| | Xbox, PlayStation, itch.io | a token you paste once |
-| | **Epic, EA, Battle.net** | one paste from a page you are already signed in to |
-| **Local launchers** — a script on your gaming PC | everything *installed*, any store | *no credential at all* |
+| Import ROMs I already have | **Manual Import** | A destination folder and access to the source files. No indexer or download client needed. |
+| Find and download a particular game | **Add New** or **Interactive Search** | A search source, a matching download client, and a destination folder. |
+| Check what a collection is missing | **Collections** | A No-Intro or Redump DAT and your local library. |
+| Reclaim space taken by exact duplicates | **Stats → Audit** | A local library; review the preview before moving duplicates to quarantine. Restore is available. |
+| Add another game source | **Hub → Plugins** | ROM Hub, included in the Windows app and amd64/arm64 Docker images. [Details](docs/PLUGINS.md). |
 
-An earlier version of this README claimed EA, Battle.net and Epic "have no
-API" and could not be connected. **That was wrong**, and Playnite and
-LaunchBox were the standing counter-example — they have pulled *owned*
-libraries from all three for years. Each does have a web API; what none of
-them has is an application key you can request, so they authenticate with
-the browser session you already have. ROMarr now uses exactly the same
-routes Playnite does: Epic's launcher OAuth, EA's entitlements API, and
-Blizzard's own account games list. One click opens the page, one paste
-connects it, and Epic's is a one-time code traded for a refresh token so
-later syncs are silent.
+You can use a plain **folder** as your library. RomM, Gaseous, Retrom and other library integrations are optional. Your emulator or frontend plays the games; ROMarr handles finding, checking and importing files.
 
-The local scan is a complement, not a substitute: it catches everything
-*installed* regardless of store, and needs no credential at all.
+Imports can be checked against DAT checksums. The result is **verified**, **bad dump**, or **unknown**. Without a matching DAT, a file is unknown; that does not mean it is damaged. **Rename on import** can use a verified single-file ROM's DAT name while keeping its source extension; unknown filenames are retained and existing files are not overwritten. A bulk, in-place rename planner for existing libraries is on the [roadmap](ROADMAP.md).
 
-Nintendo is the one honest exception: no web API, and nothing written to a
-PC to read. It says so on the page.
+## Install
 
-### Collections: whole sets and 1G1R
+### Choose a method
 
-![Collections: a DAT diffed against the shelf, acquisition in batches](docs/img/collections.png)
+| Method | Best fit | Guide |
+|---|---|---|
+| **Docker Compose** | Most servers, NAS hosts, or Docker Desktop | [Quick start below](#docker-compose-quick-start) |
+| **Proxmox LXC** | A Proxmox host | [LXC installer](docs/INSTALL.md#proxmox-lxc) |
+| **Windows app** | Windows 10/11 on x64 | [Download the Windows ZIP](docs/INSTALL.md#windows-app), extract it and double-click **ROMarr.exe**. No Python, PowerShell or .NET installation required. |
+| **Linux/macOS source checkout** | Development or an existing Python host | [Source instructions](docs/INSTALL.md#from-source) |
+| **Home Assistant add-on** | A Home Assistant installation | [Add-on instructions](docs/INSTALL.md#home-assistant); this packaging needs more field testing. |
 
-Load a DAT, and ROMarr can answer "what does a complete set look like, and
-how far off am I?" — full sets or **one-game-one-ROM** with your region
-ladder, diffed against what's actually on disk, acquired in resumable
-batches. A 3,000-title set is not an all-or-nothing operation: pause it,
-resume it, retry the failures.
+For Docker, have Docker Engine or Docker Desktop with Compose installed. Reserve port **6868** and choose where settings, downloads, and ROMs will live. ROMs and download space are usually much larger than the app itself.
 
-### The library is also a shelf
+### Docker Compose quick start
 
-![The library grid on a live install](docs/img/library.png)
-
-Click any tile: **playing / completed / shelved**, a 0–10 rating, and
-notes. Wanted and owned are deliberately *derived* (from the wanted list
-and the library) so nothing drifts. **Discover** adds the three storefront
-shelves — popular, new, upcoming — browsable onto a Request button, and the
-**Stats** page turns the history into numbers:
-
-![Statistics from the live install: 860 grabs across ten indexers](docs/img/stats.png)
-
-### Notifications that explain themselves
-
-Discord, Slack, Telegram, Pushover, Gotify, ntfy, plain webhooks, and
-Apprise (which unlocks ~100 more). Every other tool sends "Grabbed: Chrono
-Trigger". ROMarr's message carries **what the scorer weighed** —
-`+50 verified good dump [!], +40 region usa, +40 30 seeders` — so you can
-tell a good pick from a lucky one without opening the UI.
-
-### Boring, load-bearing
-
-![The live process log, tailed in the browser](docs/img/logs.png)
-
-Auth is on by default (password + optional TOTP, API keys, ForwardAuth SSO
-behind Authentik/Authelia); native HTTPS via `ROMARR_SSL_CERT`/`KEY`; the
-**Logs** page tails the actual process log live; backups strip credentials
-before they leave; Prometheus metrics and an OpenAPI spec for everything;
-remote path mapping for clients on other hosts; and history, wanted, the
-download queue, shelf and settings all survive restarts. Prowlarr's API
-keys never reach a browser or a log, archives cannot zip-slip out of the
-library root, and an existing ROM is never silently overwritten.
-
-## Requirements
-
-| | |
-|---|---|
-| **Indexer** | Prowlarr, or any Torznab / Newznab indexer, or a plain torrent RSS feed |
-| **Download client** | 26 of them — qBittorrent, Transmission, Deluge, rTorrent, Synology DS, aria2, Flood, Freebox, Hadouken, uTorrent, porla, Vuze, BiglyBT; Real-Debrid, AllDebrid, Premiumize, TorBox, Debrid-Link, Offcloud, put.io, Linksnappy; SABnzbd, NZBGet, NZBVortex; or a torrent/usenet blackhole folder for anything not on the list. ROM-site plugins need none of them — see [Downloading from a ROM site](#downloading-from-a-rom-site) |
-| **Game library** | RomM, Gaseous, Retrom, or a directory on disk |
-| **Runtime** | Docker, Home Assistant, or Python 3.11+ |
-
----
-
-## Installation
-
-**[docs/INSTALL.md](docs/INSTALL.md) is the full guide** — every install path,
-every environment variable with its default and what a wrong value does, where
-your data lives, backup, upgrade, rollback, and a troubleshooting section built
-from failures that actually happened. What follows is the short version.
-
-### Docker
-
-Enough to see the UI. No library or downloads volume on purpose — nothing can
-land in the wrong place while you are still deciding where things go.
+These commands are for a Linux or macOS shell, or an SSH terminal on your Docker host. They create a new folder library. If you already use RomM or another library, mount its real ROM directory instead of `./roms`.
 
 ```bash
-docker run -d --name romarr \
-  --restart unless-stopped \
-  -p 6868:6868 \
-  -e PUID=1000 -e PGID=1000 -e UMASK=002 -e TZ=Etc/UTC \
-  -v /srv/romarr/config:/config \
-  ghcr.io/blizzhacker/romarr:latest
+mkdir -p romarr/config romarr/roms romarr/downloads
+cd romarr
 ```
 
-Open `http://localhost:6868` and set a password.
+Save this as `compose.yaml` in that directory:
 
-`--restart unless-stopped` is not decoration: without it ROMarr does not come
-back after a host reboot, and the first sign is a week of missed scheduled
-searches. Use an **absolute** path for `/config` — Docker Engine below 23
-rejects a relative bind source as an invalid volume name.
+```yaml
+services:
+  romarr:
+    image: ghcr.io/blizzhacker/romarr:latest
+    container_name: romarr
+    restart: unless-stopped
+    ports:
+      - "6868:6868"
+    environment:
+      PUID: 1000
+      PGID: 1000
+      UMASK: "002"
+      TZ: Etc/UTC
+      LIBRARY_KIND: folder
+      LIBRARY_PATH: /roms
+    volumes:
+      - ./config:/config
+      - ./roms:/roms
+      - ./downloads:/downloads
+```
 
-To actually import anything, use compose.
-
-> **Upgrading from 0.6.x?** The default port changed from **7878 to 6868**.
-> 7878 is Radarr's port, and running both is the normal case rather than the
-> exception, so ROMarr was colliding with it on a default install. 6868 sits in
-> the gap the \*arr family left between Bazarr (6767) and Whisparr (6969).
->
-> If you pinned the port yourself — `ROMARR_PORT`, or a `7878:7878` mapping —
-> nothing changes until you remove the pin. If you relied on the default,
-> update your port mapping to `6868:6868`, or set `ROMARR_PORT=7878` to keep
-> the old one.
-
-Images are published for `linux/amd64`, `linux/arm64` and `linux/arm/v7`. The
-armv7 leg is built in CI and has never been booted by the maintainer — see
-[INSTALL.md](docs/INSTALL.md#which-tag-to-use).
-
-### Docker Compose
-
-The recommended install. A [`docker-compose.yml`](docker-compose.yml) with every
-setting commented ships in the repo:
+Set `PUID` and `PGID` to the numeric owner/group of your ROM and download folders (`id -u` and `id -g` on Linux), then start:
 
 ```bash
-mkdir -p /srv/romarr && cd /srv/romarr
-curl -O https://raw.githubusercontent.com/BlizzHacker/romarr/main/docker-compose.yml
-printf 'ROMARR_ROMS=/mnt/roms\nROMARR_DOWNLOADS=/mnt/downloads\n' > .env
 docker compose up -d
 ```
 
-Those two paths have no defaults and compose refuses to start without them.
-That is deliberate: Docker creates a missing bind-mount source, so a
-placeholder like `/path/to/roms` produced a container that started, reported
-healthy, and filed ROMs into a directory no library server had ever scanned —
-with every indicator green. Everything else in the file can be wrong and the
-Settings page will say so; those two could only be wrong silently.
+Open **http://localhost:6868** on that computer, or **http://YOUR-SERVER-IP:6868** from another device. Set a password, then follow **Settings → Setup Guide** (`/#setup`). You can skip steps you do not need and reopen the guide later.
 
-### Proxmox LXC
+Already have a download client? Its completed files must be visible to ROMarr. If the client reports `/downloads`, both containers should use that path for the same files. A client in a different container is reached by its Docker service name on a shared network, or by its host's address; `localhost` inside ROMarr means ROMarr itself. [Path examples and troubleshooting](docs/GETTING-STARTED.md#paths-that-need-to-agree).
 
-```bash
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/BlizzHacker/romarr/main/proxmox/ct/romarr.sh)"
-```
+The image includes archive tools. **ROM Hub is included on amd64/arm64; it is unavailable in the armv7 image.** [Image tags, permissions, backup and updates](docs/INSTALL.md).
 
-It waits for `/api/health` to answer before claiming success, refuses to deploy
-a build without `romarr/auth.py`, and prints the version it installed. Update
-later with
-[`proxmox/ct/update.sh`](proxmox/ct/update.sh), which reports the version it
-moved you from and to and puts the old build back if the new one will not
-start.
+## Get your first result
 
-### Home Assistant
+**Already have ROMs?** Put one file in the mounted downloads folder, open **Manual Import**, and scan `/downloads`. Check the platform and verification result before pressing **Import**. [Walkthrough](docs/GETTING-STARTED.md#import-a-rom-you-already-have).
 
-Settings → Add-ons → Add-on Store → ⋮ → Repositories, add
-`https://github.com/BlizzHacker/romarr`, install **ROMarr**. Options set on
-the add-on page become ROMarr's environment — see
-[homeassistant/romarr](homeassistant/romarr/README.md).
+**Want automatic downloads?** Add a library, a download client and a search source in **Setup Guide**. Use **Interactive Search** for your first game so you can inspect the results before grabbing one. Follow it through **Queue** and **History**. [Walkthrough](docs/GETTING-STARTED.md#find-and-download-a-game).
 
-### From source
+**Want plugins?** Open **Hub → Plugins**, choose a plugin, click **Install**, and add a **ROM Hub** download client for searchable plugins. ROM Hub is the plugin host; each plugin adds a particular source or capability. [Available examples and exact steps](docs/PLUGINS.md).
 
-```bash
-git clone https://github.com/BlizzHacker/romarr.git && cd romarr
-pip install -r requirements.txt
-cp .env.example .env          # edit it
-set -a; . ./.env; set +a
-python -m romarr
-```
+## What else is included?
 
-### Volume notes
+- Wanted lists and scheduled searches, with the reason shown when a release is rejected.
+- Prowlarr, Torznab/Newznab and torrent RSS sources; torrent, Usenet and plugin download clients.
+- DAT collection comparison, region/1G1R selection, and staged acquisition from an existing qBittorrent set torrent.
+- Exact duplicate audit, quarantine and restore; a preview comes before any move.
+- Multiple library destinations, notifications, import lists and frontend exports.
+- PS4, PS5 and PS Vita search/import formats, with [explicit playback and installation limits](docs/MODERN-CONSOLES.md).
 
-| Volume | Notes |
+Source access, available files, credentials and platform support vary. Check the result and the task history; a configured connection does not guarantee a particular game is available.
+
+## Play with Cartridge
+
+[Cartridge for Windows](https://github.com/BlizzHacker/romarr/releases/download/v1.8.0/Cartridge-Windows-Portable-0.2.0-x64.exe) and [Cartridge for Xbox](https://github.com/BlizzHacker/RommForXbox) are optional players for a RomM library. Choose the app for your device. ROMarr manages acquisition and imports; Cartridge connects to RomM to browse and play. You can keep using your existing frontend instead. The Windows app's **Cartridge** menu and the Setup Guide link to both.
+
+## Help and documentation
+
+| Need | Read |
 |---|---|
-| `/config` | Settings, history, the API key and the password hash — `romarr.json` here **is** the install. Back it up. |
-| `/roms` | Your library root. Must be the same tree your library server scans. |
-| `/downloads` | **The container-side path must match what your download client reports.** qBittorrent: Options → Downloads → "Save path". SABnzbd: Config → Folders → "Completed Download Folder". If they cannot match, set a mapping under Settings → Media Management. |
+| First setup and a successful import | [Getting started](docs/GETTING-STARTED.md) |
+| Installation, Windows, backups, updates and environment variables | [Install guide](docs/INSTALL.md) |
+| Plugin availability and installation | [ROM Hub guide](docs/PLUGINS.md) |
+| API, library routing, players and browser downloads | [Feature reference](docs/FEATURES.md) |
+| Current work and requested features | [Roadmap](ROADMAP.md) |
+| Test evidence and known validation gaps | [Proof notes](docs/PROOF.md) — dated records, not a guarantee for every integration |
 
-`PUID`/`PGID` set the ownership of imported ROMs — use the same numeric IDs as
-your library application. `UMASK=002` makes new files group-writable. Only
-`/config` is chowned, recursively; existing library and download files are
-never chmod'd or chown'd.
+If something fails, [open an issue](https://github.com/BlizzHacker/romarr/issues/new) with your ROMarr version, install method, the action you tried, and the relevant error or log. Remove passwords, API keys and webhook URLs. Existing-install settings are changed in the UI; most connection environment variables only seed the first run.
 
-> **The one rule that catches everyone.** Environment variables seed the
-> configuration on the *first* run. After that the Settings page is the
-> authority and the environment is ignored — so editing `QBITTORRENT_URL` in
-> compose and restarting changes nothing, with no error and no warning. Change
-> it on the Settings page instead.
-> [Why, and which variables are exempt.](docs/INSTALL.md#the-rule-that-catches-everyone)
+## Contribute
 
----
+Bug reports, documentation fixes and integration field reports are welcome. For code changes, install the [source environment](docs/INSTALL.md#from-source), install `pytest`, and run `python -m pytest tests/ -q`. The [CI workflow](.github/workflows/docker.yml) runs the suite and image smoke checks.
 
-## Signing in
+Source plugins live in [ROM Hub](https://github.com/BlizzHacker/rom-hub); see its [contribution guide](https://github.com/BlizzHacker/rom-hub/blob/master/CONTRIBUTING.md). ROMarr's API schema is available at `/api/v1/openapi.json` on your own install.
 
-ROMarr requires a credential. There is no open mode you can fall into by
-forgetting to configure something.
+Thanks to the library, emulator and preservation projects ROMarr works with, and to [Radarr](https://github.com/Radarr/Radarr), [Sonarr](https://github.com/Sonarr/Sonarr), [Questarr](https://github.com/Doezer/Questarr) and [gamarr](https://github.com/JeremiahM37/gamarr) for ideas and familiar workflows.
 
-**The first time you open the web UI**, it asks you to set a password. That is
-the whole of first-run setup — there is no key to go and find first. Once set,
-the install is claimed, that screen becomes a normal sign-in, and the password
-survives restarts.
-
-Your browser then holds a signed session cookie, so the key is never kept in
-the page.
-
-**To skip the setup screen entirely**, claim the install from its environment
-before it starts. This is what a container template should do, because it
-leaves no window in which an unclaimed ROMarr is reachable:
-
-```bash
--e ROMARR_PASSWORD=choose-something-long
-```
-
-**For scripts and other *arrs**, use the API key. One is generated on first run
-and shown under *Settings → General*; set `ROMARR_API_KEY` to pin it to a value
-you choose. Present it any of three ways:
-
-```bash
-curl -H "X-Api-Key: $KEY"          http://localhost:6868/api/v1/game
-curl -H "Authorization: Bearer $KEY" http://localhost:6868/api/v1/game
-curl "http://localhost:6868/api/v1/game?apikey=$KEY"
-```
-
-An API key also signs a browser in, via *Use an API key instead* on the
-sign-in screen — which is how you get back in if the password is lost: set
-`ROMARR_API_KEY`, restart, and sign in with it.
-
-### Authentication variables
-
-| Variable | Description |
-|---|---|
-| `ROMARR_PASSWORD` | Claims the install at startup. No setup screen is shown. |
-| `ROMARR_API_KEY` | Pins the API key. Setting it also counts as claiming the install. |
-| `ROMARR_AUTH` | `forward` for SSO, or `disabled` to turn the gate off. Unset means normal password/key auth. |
-| `ROMARR_SSO_PROVIDER` | `authentik` (default), `authelia`, `cloudflare`, `oauth2-proxy`. |
-| `ROMARR_TRUSTED_PROXIES` | **Required for `forward`.** CIDRs allowed to assert identity. |
-| `ROMARR_SSO_USER_HEADER` / `_GROUPS_HEADER` | Override the provider's default headers. |
-| `ROMARR_SSO_GROUP` | Require membership of this group. |
-
-Two-factor (TOTP) is enrolled from *Settings → General* and applies to
-interactive sign-in. It deliberately does not gate the API key: a script cannot
-be prompted, and a key is already a high-entropy secret.
-
-`ROMARR_AUTH=disabled` means anything that reaches the port is in, including a
-request that bypassed your proxy. If a proxy already authenticates, prefer
-`ROMARR_AUTH=forward`, which keeps the proxy as the authority but verifies the
-request actually came through it.
-
-## Configuration
-
-### Environment variables
-
-| Variable | Required | Description |
-|---|---|---|
-| `PROWLARR_URL` / `PROWLARR_API_KEY` | recommended | Prowlarr instance for searching |
-| `LIBRARY_KIND` | no | `romm` (default), `gaseous`, `retrom` or `folder` |
-| `LIBRARY_URL` | yes¹ | Library server base URL |
-| `LIBRARY_USERNAME` / `LIBRARY_PASSWORD` | yes¹ | Library credentials |
-| `LIBRARY_API_KEY` | — | Alternative to username/password |
-| `LIBRARY_PATH` | yes | Library root **as ROMarr sees it** (`/roms` in Docker) |
-| `QBITTORRENT_URL` / `_USER` / `_PASS` | — | Torrent client |
-| `SABNZBD_URL` / `SABNZBD_API_KEY` | — | Usenet client |
-| `NZBGET_URL` / `NZBGET_USER` / `NZBGET_PASS` | — | Usenet client |
-| `QBITTORRENT_CATEGORY` etc. | no | Download category per client (default `romarr`) |
-| `GGREQUESTZ_URL` | no | Request front-end, shown on the status page |
-| `STREAM_SERVER_URL` | no | Headless RetroArch stream server. Read-only; it is asked which platforms it can play, so PS2, GameCube, Wii, Dreamcast and 3DS are reported as playable rather than download-only |
-| `RETROARCH_NCI_HOST` / `RETROARCH_NCI_PORT` | no | A real RetroArch's Network Control Interface — stock RetroArch has no HTTP API. UDP, port `55355` by default, and off until `network_cmd_enable = "true"` in retroarch.cfg. Read-only by allowlist (`VERSION`, `GET_STATUS`, `GET_CONFIG_PARAM`); it reports what is *loaded*, never which cores are installed, so it grants a stream route only to the platform whose game is running right now |
-| `MOONLIGHT_HOST` | no | A Wolf, Sunshine or Steam Headless machine, e.g. `192.168.0.50`. Probed with the unauthenticated `/serverinfo`; reported on the status page |
-| `MOONLIGHT_KIND` | no | `wolf` (default), `sunshine` or `steam-headless`. Not sniffed — `/serverinfo` cannot tell them apart |
-| `MOONLIGHT_USER` / `MOONLIGHT_PASS` | no | Sunshine/Steam Headless admin credentials, so ROMarr can read the app list and relay a pairing PIN. Never written to the state file |
-| `WOLF_SOCKET_PATH` / `WOLF_API_URL` | no | Wolf's API is a UNIX socket. Give ROMarr a mounted `wolf.sock`, or the URL of the nginx proxy Wolf's own docs describe |
-| `STEAM_HEADLESS_URL` | no | The container's noVNC/neko desktop, surfaced as a link |
-| `ROMARR_PLAYERS` | no | Which browser players to offer, best first: `emulatorjs,ruffle,jsdos,emularity`. All four when unset; `none` turns every browser route off |
-| `ROMARR_JSDOS_URL` / `ROMARR_EMULARITY_URL` | no | Where your own js-dos and Emularity live. Without one, ROMarr reports that the player *would* run a file and names the setting that would let it link there |
-| `ROMARR_DATA` | no | Path to the state file |
-| `DAT_PATH` | no | Directory of No-Intro / Redump DATs. Loose `.dat`/`.xml` files **and** the ZIP archives No-Intro distributes are read, including one level down beside the platform they describe. Point it at a DAT directory, not at your ROM library |
-| `COMPRESSATORIUM_URL` | no | A [Compressatorium](https://github.com/pacnpal/compressatorium) service, for the Decompress task: batch decompress a compressed library, verify every output against the DATs, and delete only the originals that verified. The library must be mounted into both containers at the same path |
-| `COMPRESSATORIUM_API_KEY` | no | Bearer token, when Compressatorium has `COMPRESSATORIUM_ENABLE_AUTH=true` |
-| `TITLED_NAMES` | no | `1` loads Switch title names from TitleDB — a 65-95MB region file, cached on disk, costing seconds of parse and a few hundred MB of RAM. Off by default; the 1.7MB ID catalogue loads either way |
-| `TITLED_REGION` | no | Which TitleDB region file `TITLED_NAMES=1` loads (default `US.en`) |
-| `PUID` / `PGID` / `UMASK` / `TZ` | Docker | Process user, group, new-file permission mask, timezone |
-
-¹ Not required for `LIBRARY_KIND=folder`, which needs only `LIBRARY_PATH`.
-
-Legacy `ROMM_*` variables are still read, so existing installs need no changes.
-
-### Backends
-
-| Backend | Import | Scan | Metadata | Artwork | Collections |
-|---|:-:|:-:|:-:|:-:|:-:|
-| **RomM** | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Gaseous** | ✅ | ✅ | — | — | — |
-| **Retrom** | ✅ | ✅ | ✅ | ✅ | — |
-| **Folder** | ✅ | n/a | — | — | — |
-
-`folder` covers Batocera, RetroPie, Recalbox, EmulationStation, ES-DE, EmuDeck,
-Pegasus, Lakka, muOS, ArkOS, LaunchBox, Playnite and Steam ROM Manager — they read
-ROMs from a directory laid out by platform, which is what ROMarr writes. No URL, no
-account, no API key:
-
-```
-LIBRARY_KIND=folder
-LIBRARY_PATH=/mnt/roms
-```
-
-### Supported platforms
-
-58 platforms. The bar for inclusion is a real play route — a core in RomM's
-base EmulatorJS map, or one installed on a stream server.
-
-**Cartridge** — NES, Famicom, Famicom Disk System, SNES, Super Famicom, Game
-Boy / Color / Advance, N64, Genesis / Mega Drive, Sega 32X, Master System,
-Game Gear, Atari 2600 / 5200 / 7800, Lynx, Jaguar, TurboGrafx-16, SuperGrafx,
-ColecoVision, Intellivision, Vectrex, WonderSwan / Color, Neo Geo Pocket /
-Color, Neo Geo AES / MVS, Arcade, Virtual Boy, Nintendo DS, Nintendo 3DS.
-
-**Disc** — PlayStation, PlayStation 2, PSP, Saturn, Sega CD / Mega-CD,
-Dreamcast, GameCube, Wii, 3DO, Philips CD-i, PC-FX, TurboGrafx-CD / PC Engine
-CD, Amiga CD32, Neo Geo CD, Atari Jaguar CD.
-
-**Home computer** — Commodore 64 / 128 / VIC-20, Amiga, Amstrad CPC, ZX
-Spectrum, MSX / MSX2, Sharp X68000, MS-DOS.
-
-For Arcade, Neo Geo and DOS the archive **is** the ROM — MAME, FBNeo and
-dosbox_pure open the `.zip` themselves and expect its internal layout, so
-ROMarr imports it whole instead of unpacking a romset into loose chip dumps.
-
-Disc images are multi-file. A `.cue` is a few hundred bytes of text naming
-tracks, and importing it on its own gives you a library entry with a title, a
-cover and no game — so ROMarr reads the sheet, takes every track it names, and
-files the set as a directory, which is the layout RomM's scanner treats as one
-multi-part ROM. `.7z` and `.rar` are read as well as `.zip`, because that is
-what disc releases actually ship as.
-
-### How each platform plays
-
-**System → Platforms** answers this per platform for your own install. There
-are four routes and the last one is not a failure:
-
-| Route | What it is |
-|---|---|
-| **EmulatorJS** | In the browser, from your library server. Covers nine optical systems on a stock RomM: PlayStation, PSP, Saturn, Sega CD, 3DO, CD-i, PC-FX, TurboGrafx-CD and Amiga CD32. |
-| **Stream** | Something else renders and sends video. Two kinds answer here. A headless RetroArch server, which is how PS2, GameCube, Wii, Dreamcast, 3DS and Neo Geo CD play — set `STREAM_SERVER_URL`. Or a **Moonlight host** (Wolf, Sunshine, Steam Headless) — set `MOONLIGHT_HOST`. |
-| **Archive.org** | Their in-page emulator, which is Emularity. Real for cartridge and home-computer systems; Archive.org does **not** emulate disc systems, so ROMarr does not claim it for them. |
-| **Download** | Always — for a file that is actually here. |
-
-### Which player, per file
-
-"In the browser" is four different programs, and which of them can open a row
-is decided by the **file**, not the platform. `GET /api/v1/players` lists them
-and `GET /api/v1/play?file=…&platform=…` answers for one file.
-
-| Player | Runs | Does not run |
-|---|---|---|
-| **EmulatorJS** | libretro cores — the 40-odd machines above. Unpacks `.zip`, `.7z` and `.rar` itself, by magic bytes. | Flash. GameCube, Wii, Dreamcast, PS2 — no core exists. `dosbox_pure`, `ppsspp` and `azahar` need `SharedArrayBuffer`, so the library server must send COOP + COEP or the player draws a frame and never starts. |
-| **Ruffle** | `.swf` — ActionScript 1, 2 and 3. Their own numbers: AVM 1 at 99% of the language and 82% of the API, AVM 2 at 90% and 82%. | Flash **projector `.exe`** files — a projector is an executable with the movie inside a player stub, and Ruffle has no projector reader ([#11539](https://github.com/ruffle-rs/ruffle/issues/11539), open). Nor Shockwave, Unity Web Player, Silverlight or Java applets, all of which live in the same archives. |
-| **js-dos** | DOS and Windows 9x on DOSBox / DOSBox-X, from a `.jsdos` or `.zip` bundle. | Anything that is not a PC. You host it — set `ROMARR_JSDOS_URL`. |
-| **Emularity** | Archive.org's loader: MAME, EM-DOSBOX, Scripted Amiga Emulator. It is also how Flash plays on a `/details/` page, via Ruffle. | Disc systems — Archive.org's own `emulator` field returns 0 items for PlayStation, Saturn and 3DO. |
-
-All four are on by default and any of them can be turned off with
-`ROMARR_PLAYERS`, best first. Turn **Ruffle** off if your RomM runs with
-`DISABLE_RUFFLE_RS`, so ROMarr stops promising a button that will not be
-there. Turn **Emularity** off if you would rather nobody was sent off your
-install to play something. Where more than one player can open a file, ROMarr
-offers them in your order and names the reason for each; where one *could* and
-is not configured, it says which setting fixes that rather than saying nothing.
-
-### "No file on the library server" is not "unsupported"
-
-A library server can hold a row for a game it does not have the bytes for —
-RomM calls it `missing_from_fs`, and on the maintainer's install that is
-**94,428 of 166,548 rows**. Asking for the content of one returns 404.
-
-Nothing plays those. Nothing streams them. Nothing *downloads* them either,
-which is why reporting them as "download only" was worse than saying nothing:
-it named a route that 404s. ROMarr says the file is not here, says what would
-play it once ROMarr has fetched it, and keeps the Archive.org route where it
-applies — because that is somebody else's copy, and it is the reason a
-catalogued row was catalogued in the first place.
-
-**A Moonlight host is a desktop, not a platform router, and ROMarr says so.**
-Wolf, Sunshine and Steam Headless all answer `/serverinfo` with no credential,
-so ROMarr can always tell you the host is alive. What they *cannot* be asked
-is what a given application will open — there is no endpoint for it in any of
-the three. So a host earns a platform a stream route only when its app list
-names an emulator for exactly one machine (PCSX2, Dolphin, flycast). A
-RetroArch or a Steam earns nothing, because a RetroArch with no cores and a
-RetroArch with forty look identical from outside the container. And **pairing
-is manual by design**: the PIN is generated by your Moonlight client, on your
-device, so ROMarr can be the box you type it into and nothing more. The whole
-account is in [docs/design/streaming-hosts.md](docs/design/streaming-hosts.md),
-including a list of what has never been run against real hardware.
-
-**What still cannot play, and why.** ROMarr says this per platform on the
-Platforms page rather than making you find out at the point of clicking play.
-
-- **Atari Jaguar CD** — no emulator plays it. `virtualjaguar` is the only
-  Jaguar core in libretro and declares `j64|jag|rom|abs|cof|bin|prg`:
-  cartridges, no `cue`, no `chd`. MAME's own source marks its `jaguarcd`
-  driver `MACHINE_NOT_WORKING`. Jaguar *cartridges* play fine.
-- **Sharp X68000** — `px68k` is installed and needs Sharp's `iplrom.dat` and
-  `cgrom.dat`, which you supply from your own hardware. There is no free
-  equivalent the way C-BIOS exists for MSX.
-
-Everything else on the list plays.
-
-Everything else plays. Where a stream server has the core but not the
-firmware it says *that*, because a core with no BIOS does not fail loudly: it
-draws an error screen and streams it at a perfectly healthy 30 fps.
-
-Nothing is refused on these grounds — cataloguing a platform you play
-elsewhere is a legitimate thing to want. ROMarr tells you which route applies
-before the grab instead of leaving you to find out at the point of clicking
-play, and where a platform has no player it says what would fix it. If your
-stream server has the core but not the firmware, it says *that*, because a
-core with no BIOS does not fail loudly: it draws an error screen and streams
-it at a perfectly healthy 30 fps.
-
----
-
-## Usage
-
-### Requesting a game
-
-**Library → Add New.** Enter a title, pick a platform, click *Search & Grab*.
-ROMarr searches, scores, grabs and imports.
-
-### Interactive search
-
-**Library → Interactive Search.** Every release is returned scored, with the
-reasoning shown:
-
-```
-+40  20 seeders
-+60  carries a Super Nintendo ROM extension
-+25  region (USA)
--120 looks like a hack, beta or repack ('hack')
-```
-
-Rejected releases are listed greyed out with the reason. Grab whichever you want —
-a manual grab goes through the same queue, history and wanted handling.
-
-### API
-
-| Endpoint | Description |
-|---|---|
-| `GET /api/v1/game` | The library |
-| `GET /api/v1/wanted/missing` | Requested, not yet imported |
-| `GET /api/v1/queue` | In flight |
-| `GET /api/v1/history` | What happened |
-| `GET /api/v1/release?game=…&platform=…` | Scored release list |
-| `POST /api/v1/release/grab` | Grab a release by id |
-| `POST /api/request` | Request one game |
-| `POST /api/v1/command` | Run a task |
-| `POST /api/v1/webhook` | Accept a request event from a front-end |
-| `GET /api/v1/system/status` | Health of every dependency |
-
-Download URLs are never returned to a client: Prowlarr's `downloadUrl` carries its
-API key, so releases are grabbed by the id issued with the search and the URL is
-resolved server-side.
-
-### GG Requestz
-
-GG Requestz pushes approved requests to ROMarr. It is not a `rom-hub webhook`
-command inside the ROMarr container. Open **System → GG Requestz requests** to
-build the exact setting, or configure this in the **GG Requestz container**:
-
-```env
-REQUEST_WEBHOOK_URL=http://romarr:6868/api/v1/webhook/ggrequestz?apikey=<ROMARR_API_KEY>
-```
-
-`http://romarr:6868` works when both containers share a Docker network. On
-Unraid or separate networks, replace it with ROMarr's LAN or HTTPS URL as seen
-from inside GG Requestz. Restart GG Requestz after changing its environment.
-
-`GGREQUESTZ_URL` goes the other direction: it only lets ROMarr show and ping the
-GG Requestz page. A green status there proves the page is reachable; it does
-not prove the outbound webhook is configured.
-
-GG Requestz 1.5 and newer dispatches when a request becomes **approved**, not
-when a pending request is first submitted. Enable `request.auto_approve` or
-approve the request manually. ROMarr answers an accepted request with HTTP 202;
-an invalid event or unknown platform receives HTTP 422 so GG Requestz records a
-real delivery failure instead of treating the request as sent.
-
-The finished webhook URL contains ROMarr's API key. Treat it like a password,
-keep it on a trusted Docker network or HTTPS, and do not paste it into public
-logs.
-
----
-
-## Plugins
-
-**Hub → Plugins.** ROMarr's sources are [ROM Hub](https://github.com/BlizzHacker/rom-hub)
-plugins — install, enable and disable them from the UI.
-
-![ROMarr Hub plugins tab](docs/img/hub-plugins.png)
-
-| Capability | Plugins | Examples |
-|---|:-:|---|
-| `search` | 10 | Internet Archive, No-Intro, Demozoo, Aminet, IF Archive, itch.io, ScummVM |
-| `importer` | 10 | the same sources, importing the exact file |
-| `metadata` | 12 | Hasheous, OpenVGDB, libretro DAT/Thumbnails, RetroAchievements, Ludusavi |
-| `cores` | 2 | standalone emulators, libretro buildbot cores |
-| `assets` | 3 | RetroArch controller profiles, overlays, cheats |
-| `firmware` | 1 | Open BIOS (clean-room, openly licensed) |
-| `stream` | 3 | resolve an item to a playable URL |
-| `census` | 1 | enumerate a whole source into a local catalogue |
-
-Install ROM Hub **into ROMarr's own environment** to enable the tab. On the
-Proxmox LXC or a source install that is `/opt/romarr/.venv`, and it needs `git`:
-
-```bash
-apt-get install -y git
-/opt/romarr/.venv/bin/pip install "rom-hub @ git+https://github.com/BlizzHacker/rom-hub@master"
-systemctl restart romarr
-```
-
-A `pip install` into the system Python or into a different venv is invisible
-to ROMarr.
-
-Plugins requiring an API key (e.g. RetroAchievements) are marked in the UI.
-
-Plugins are third-party and sandboxed by the host — install only ones you trust.
-
-**API:** `GET /api/v1/hub/plugins`, `POST /api/v1/hub/plugin` (`install`, `enable`,
-`disable`, `uninstall`).
-
-### Downloading from a ROM site
-
-Sites that serve files over plain HTTP have no torrent and no NZB, so ROMarr
-fetches them itself. Two download clients on the **Download Clients** page
-cover it, and a plugin declares which one its site needs:
-
-| Client | Protocol | For |
-|---|---|---|
-| **Direct HTTP** | `direct` | The site publishes a file URL. A GET fetches it. No dependencies. Prefer this. |
-| **Headless Browser** | `browser` | The download is a form the site's own page submits, or a link its JavaScript builds. |
-
-**Why the browser mode exists, and what it is not.** A few sites have no
-fetchable URL at all — Vimm's Lair's download is a POST carrying a `mediaId`,
-and the GET-shaped URL that appears in two published catalogues returns HTTP
-400, because it was guessed rather than observed. The only honest way to fetch
-from a site like that is to be on the page: a real headless Chromium opens the
-real page and clicks the real download control, so every header that goes out,
-`Referer` included, is one the browser genuinely produced. That is automating
-a user action. It is *not* a bot-detection bypass, and it will not become one:
-
-* CAPTCHAs are not answered.
-* A Cloudflare (or any other) challenge ends the fetch, by name, with the
-  reason reported to you.
-* No stealth plugin, no fingerprint spoofing, no `navigator.webdriver`
-  patching, no forged headers, and no signing in anywhere.
-* `robots.txt` is honoured including `Crawl-delay`, one file is fetched at a
-  time, 429 and 503 are waited out, and a 403 stops that site for good.
-
-A site that can only be downloaded from by doing one of those is reported as
-**unavailable, with the reason**, and its plugin stays catalogue-only. That is
-the finished answer for such a site. `tests/test_site_downloader.py` asserts
-the absence of the evasion machinery, so the promise fails the build rather
-than eroding quietly.
-
-**Installing the browser mode.** It is deliberately not a ROMarr dependency —
-Chromium is 867MB and 236 packages on Debian, which is not something to put in
-a 1GB container that will never use it. Direct downloads work without any of
-this, and the Download Clients page says so rather than failing obscurely.
-
-```bash
-# On the machine that will run the browser:
-pip install playwright && playwright install --with-deps chromium
-```
-
-**Running ROMarr in Docker or Unraid?** The default image is Alpine (musl), and
-Playwright publishes only glibc wheels, so `pip install playwright` inside it
-fails with *"No matching distribution found"* and always will. Use the browser
-edition instead, which is the same app on Debian with the Playwright client
-(and no Chromium) preinstalled:
-
-```
-ghcr.io/blizzhacker/romarr:browser
-```
-
-On Unraid, set the container's **Repository** to that, or pick the `browser`
-tag in the template. Then run the browser itself in a second container and set
-**Browser Host** to it:
-
-```bash
-docker run -d --name playwright --restart unless-stopped -p 3000:3000 \
-  --init --ipc=host mcr.microsoft.com/playwright:v1.62.0-noble \
-  npx -y playwright@1.62.0 run-server --port 3000 --host 0.0.0.0
-# Browser Host: ws://<that-host>:3000
-```
-
-The client and the server must be the same Playwright version (the image ships
-1.62.0).
-
-Then either leave **Browser Host** blank to launch Chromium beside ROMarr, or
-— better for a small container — run the browser somewhere else:
-
-```bash
-# On the browser's host:
-playwright run-server --host 0.0.0.0 --port 3000
-```
-
-and point ROMarr at `ws://<host>:3000`. The driver runs there, so the finished
-file streams back over the same socket and the two need no shared directory.
-(An `http://` endpoint — a bare `chromium --remote-debugging-port` — works too,
-but that Chromium saves onto its own disk, so it needs a directory both can
-see plus a remote path mapping.)
-
-**API:** `GET /api/v1/downloadclient/browser` reports whether the lane can run
-here and why not when it cannot.
-
-**Proof:** `python scripts/prove_site_download.py` fetches the same Archive.org
-file through both modes and checks the SHA-256 matches.
-
----
-
-## Multiple libraries
-
-**Settings → Libraries.** Each entry has its own address, credentials and filesystem
-path; one is marked default.
-
-Routing is by platform — a library with platform rules receives only those
-platforms, everything else goes to the default. "N64 goes to Retrom" is one row on
-that page rather than a second ROMarr instance.
-
-![ROMarr libraries](docs/img/libraries.png)
-
-Each server needs its own path **as ROMarr sees it**. The Libraries page flags a
-server that answers while its path is missing locally — usually a volume that was
-never mounted into ROMarr.
-
-**Gaseous** has no scan trigger in its API and picks up files through its own
-background tasks (`TitleIngestor` every minute over the *Import* directory;
-`LibraryScan` every 1440 minutes over library paths). Point that library's path at
-Gaseous's Import directory, or lower the `LibraryScan` interval.
-
-**RomM** requires the account ROMarr uses to have permission to run tasks, or the
-rescan is refused with a 403.
-
----
-
-## Troubleshooting
-
-The full list, including every way an install can fail to start, is in
-**[docs/INSTALL.md](docs/INSTALL.md#troubleshooting)**. The ones people hit most:
-
-| Symptom | Cause | Fix |
-|---|---|---|
-| "Download path does not exist" | The client reports a path ROMarr cannot see | Match the container-side download path, or set a mapping under Settings → Media Management |
-| Results found then refused | No download client for that protocol | Add a client for torrent and/or usenet — the Download Clients page names the gap |
-| Any environment change has no effect | The environment seeds on first run only; the Settings page is the authority after that | Change it on the Settings page |
-| Container exits 1 with "romarr.json exists but cannot be read" | The state file is owned by a user the container does not run as | `chown -R` your PUID:PGID on the directory mounted at `/config` — do not delete the file |
-| Imported ROM never appears | Library rescan refused | RomM: grant the account task permission. Gaseous: see above |
-| ROM imports but will not play | Platform has no emulator core in the library's web player | Expected — the ROM is catalogued, not playable in-browser |
-| Hub tab empty | ROM Hub not installed in ROMarr's venv | `/opt/romarr/.venv/bin/pip install "rom-hub @ git+https://github.com/BlizzHacker/rom-hub@master"` (needs `git`), then `systemctl restart romarr` |
-| A ROM-site release is refused with "no download client configured for direct" | The site plugin fetches over HTTP and no Direct HTTP client exists | Add one — Download Clients → Add → Direct HTTP |
-| "Browser mode is not configured" on the Download Clients page | No Chromium the browser lane can drive | Expected unless you installed one; see [Downloading from a ROM site](#downloading-from-a-rom-site). Direct downloads are unaffected |
-
-### Remote path mapping
-
-```json
-"remote_path_mappings": [
-  { "remote": "/downloads", "local": "/mnt/downloads" }
-]
-```
-
-Longest matching prefix wins. The log records both the path the client reported and
-what ROMarr resolved it to.
-
----
-
-## Security
-
-- Prowlarr API keys are never returned to a browser or written to a log.
-- Archive entries resolving outside the library root are dropped (zip-slip).
-- Existing ROMs are never silently overwritten.
-- Use a dedicated library account, not an administrator one.
-
-## Development
-
-```bash
-python -m pytest tests/ -q
-```
-
-Release selection, ROM identification and archive-entry safety are pure functions
-and are tested directly.
-
-## State of the project
-
-An honest map of what is solid, what is thin, and where a contribution
-lands hardest. 1,170+ tests run on every push; the numbers below are per
-area, and "tested against fakes" means the protocol conversation is
-asserted but no live server was in the loop.
-
-| Area | Confidence | Why |
-|---|---|---|
-| Release scoring & selection | **High** — 100+ tests | Pure functions; every scoring rule has a test naming the incident that motivated it |
-| DAT verification (No-Intro/Redump) | **High** — 28 tests + live use | Copier headers, multi-track discs, bad-dump detection all covered; runs daily against a 166k-game library |
-| Import pipeline (zip/7z/rar, zip-slip, multi-ROM sets) | **High** — 70+ tests | Includes the disc formats and the header-sniffing fallback |
-| Auth (password, TOTP, API key, ForwardAuth SSO) | **High** — 100+ tests | HTTP-level tests: every route checked for the 401 it must return |
-| Indexers (Prowlarr, Torznab, Newznab, RSS) | **High** — 66 tests, live use | Runs against a dozen live trackers daily |
-| qBittorrent / SABnzbd / NZBGet | **High** — live use | The clients the maintainer runs |
-| Transmission / Deluge / rTorrent | **High** — proven against live daemons | `scripts/live_proof.py`: 9/9 against real Transmission 4.1, Deluge 2.2 and rTorrent 0.9.8 — auth handshakes, adds, labels, listings |
-| Synology DS / Real-Debrid | **Medium** — tested against fakes | The two that need hardware or a paid account. Protocol conversations asserted; `scripts/live_proof.py` extends to them the day someone runs it with either. **Reports welcome.** |
-| The other 16 clients — aria2, Flood, Freebox, Hadouken, uTorrent, porla, Vuze, BiglyBT, NZBVortex, AllDebrid, Premiumize, TorBox, Debrid-Link, Offcloud, put.io, Linksnappy | **Medium** — tested against fakes | Written from each service's own API documentation and asserted call-by-call against recorded shapes: the auth handshake, the add, the completion read. No live daemon or paid account was in the loop for any of them. **Field reports wanted — an issue saying which one you run and what it did is worth more than another test.** |
-| Torrent / Usenet Blackhole | **High** — filesystem only | There is no API to get wrong. What is tested is what can be: the release name becomes the filename, a title cannot escape the folder, magnets are written as `.magnet`, and nothing is imported until it has stopped changing |
-| Scheduler, RSS sync, import lists | **Medium-high** — 40+ tests, new | Shipped 2026-08-10; live on the maintainer's install |
-| Steam / GOG / Xbox / PSN / itch.io list sources | **Medium** — tested against fakes | Credential-gated, so only an account holder can prove them live: `python scripts/account_proof.py <service>` does it in one command. **Run it, open an issue, get your name on the row.** |
-| Library backends: RomM, folder | **High** — live use | |
-| Library backends: Gaseous, Retrom, Gameyfin | **Medium** — tested against fakes/disk | Gaseous confirmed against a test instance; Retrom and Gameyfin **need field reports** |
-| Frontend exports (LaunchBox, ES-DE, Playnite) | **Medium** — output asserted, apps not driven | The XML/JSON is tested; nobody has scripted LaunchBox itself |
-| `contrib/` Playnite extension | **High** — runtime-proven | `scripts/playnite_proof.ps1`: runs against the real Playnite SDK 6.11 and a live export — 200 games imported as real SDK objects, dedupe verified |
-| `contrib/` LaunchBox plugin | **Medium-high** — compiled + logic executed | `scripts/launchbox_proof/`: compiles clean, `Import()` runs against a live export with dedupe and platform auto-creation. The un-testable inch: LaunchBox's DLL is not redistributable, so the compile is against a reconstruction of its API |
-| Home Assistant add-on | **New, lightly tested** | The options→environment bridge is tested; the add-on lifecycle needs HA users |
-| armv7 Docker | **Degraded by design** | ROM Hub plugins unavailable there (no pydantic musl wheel); core works |
-
-**Where help lands hardest:** field reports for the medium-confidence
-download clients and library backends; a .NET owner for the contrib
-plugins; Home Assistant users for the add-on; DAT sources for platforms
-beyond No-Intro/Redump coverage; and issues — a report with a log line is
-usually fixed the same week. Open issues:
-[github.com/BlizzHacker/romarr/issues](https://github.com/BlizzHacker/romarr/issues).
-
----
-
-## Cartridge ecosystem
-
-ROMarr is the acquisition component of **Cartridge**, a self-hosted retro-gaming
-stack by MoveWeight.
-
-| | Project | Purpose |
-|---|---|---|
-| **Acquire** | [ROMarr](https://github.com/BlizzHacker/romarr) | Request, find, grab, file |
-| | [ROM Hub](https://github.com/BlizzHacker/rom-hub) | Plugin host — the sources ROMarr searches |
-| **Play** | [Desktop](https://github.com/BlizzHacker/RommForDesktop) · [Xbox](https://github.com/BlizzHacker/RommForXbox) · [Roku](https://github.com/BlizzHacker/RommForRoku) | Clients |
-| | [Stream Server](https://github.com/BlizzHacker/RommStreamServer) | Remote play |
-| **Above** | [Yarr.It](https://github.com/BlizzHacker/yarr-it) — [yarrit.com](https://yarrit.com) | The front door for a self-hosted media library. Ad-free torrent streaming that plays in the browser. |
-
-Brand and naming: [BRAND.md](https://github.com/BlizzHacker/rom-hub/blob/master/BRAND.md).
-
-## 🌐 More from Move Weight
-
-ROMarr is part of a family of open, self-hostable projects built by
-**[Move Weight](https://moveweight.com)**. Use one, or plug them all together.
-
-| Project | What it is |
-|---|---|
-| 🏴‍☠️ **[Yarr.It](https://yarrit.com)** | One front door for your whole media library: search, stream in the browser, and watch on your TV. |
-| 🎮 **[ROMarr](https://github.com/BlizzHacker/romarr)** | The *arr for games: request a title, and it's found, downloaded and filed into your library. |
-| 🧩 **[ROM Hub](https://github.com/BlizzHacker/rom-hub)** | The plugin engine behind ROMarr: new game sources, box art and metadata for RomM, Gaseous and Retrom. |
-| ⚔️ **[CrypticRealm](https://crypticrealm.com)** | An open-world fantasy RPG that plays right in your browser, with FPS and RTS modes. |
-| 🔥 **[Forgeverse](https://forgeverse.org)** | Creative studio apps for game makers: characters, textures and more, with bring-your-own AI. |
-| 🥊 **[Galaxy Kombat](https://gk.moveweight.com)** | A 3D fighting game that runs in the browser. |
-
-If one of these is useful to you, a ⭐ on GitHub is the easiest way to help.
-
-## Acknowledgements
-
-**[Questarr](https://github.com/Doezer/Questarr)** by Doezer (GPL-3.0).
-Several ROMarr features landed after Questarr proved the demand for them in
-a game *arr: the scheduled search / RSS-sync clock, per-game status,
-ratings and notes, the stats page, the wider download-client roster
-(Transmission, Deluge, rTorrent, Synology Download Station), native SSL,
-and Home Assistant packaging. No code was taken — Questarr is TypeScript
-and ROMarr is Python — but the case for those features was made there
-first, and saying so costs nothing. As of August 2026 every capability on
-their feature list and published roadmap has a ROMarr equivalent, and the
-acquisitions here come with the one thing no title-parsing pipeline can
-add: a checksum against the published dump.
-
-**[gamarr](https://github.com/JeremiahM37/gamarr)** by JeremiahM37 (MIT).
-Several features here exist because gamarr had them first and its README made
-the case for them plainly: the blocklist, release profiles, quality profiles,
-notification connections, tags, manual import, and Prometheus metrics. No code
-was taken — gamarr is Go and ROMarr is Python, and every implementation here
-was written from scratch — but the feature set was informed by theirs, and
-saying so is the least that is owed.
-
-**Radarr and Sonarr**, for the shape of the whole category: indexer and
-download-client registries rendered from field definitions, quality and
-release profiles, remote path mappings, and Manual Import.
-
-### The ecosystem ROMarr stands on
-
-ROMarr acquires ROMs and files them — nothing more. It stores no library,
-serves no player, publishes no DAT, indexes no tracker, runs no download.
-**Every one of those is somebody else's work, and without them there is
-nothing here to automate.** The same list, with an install command for each
-where one exists, is on the app's **System → Ecosystem** page — because
-respect that is also a convenience is worth more than a paragraph.
-
-**Library servers** — where your games actually live:
-[RomM](https://github.com/rommapp/romm) ([romm.app](https://romm.app)),
-[Gaseous](https://github.com/gaseous-project/gaseous-server),
-[Retrom](https://github.com/JMBeresford/retrom),
-[Gameyfin](https://github.com/gameyfin/gameyfin). RomM in particular is the
-project ROMarr was built beside, and its EmulatorJS core map is the basis of
-the playability routing.
-
-**Players** — how a library is played:
-[EmulatorJS](https://github.com/EmulatorJS/EmulatorJS)
-([emulatorjs.org](https://emulatorjs.org)),
-[RetroArch / libretro](https://www.libretro.com),
-[Moonlight](https://moonlight-stream.org),
-[Wolf](https://github.com/games-on-whales/wolf),
-[Sunshine](https://github.com/LizardByte/Sunshine),
-[Steam Headless](https://github.com/Steam-Headless/docker-steam-headless),
-[ES-DE](https://es-de.org), [Batocera](https://batocera.org),
-[Playnite](https://playnite.link),
-[LaunchBox](https://www.launchbox-app.com).
-
-**Acquisition** — the rest of the request pipeline:
-[GG Requestz](https://github.com/XTREEMMAK/ggrequestz) by XTREEMMAK (the
-Overseerr of games — ROMarr takes its requests),
-[Prowlarr](https://prowlarr.com), and
-[qBittorrent](https://www.qbittorrent.org).
-
-**Preservation** — what makes verification real at all:
-**[No-Intro](https://no-intro.org)** and **[Redump](http://redump.org)**,
-whose DATs are the only reason ROMarr can say a file is correct rather than
-just plausible.
-
-
-## Licence
-
-MIT — see [LICENSE](LICENSE).
-
-Unofficial. Not affiliated with or endorsed by the RomM, Gaseous or Retrom projects.
-
-### PS4, PS5 and PS Vita
-
-ROMarr recognizes PS4/PS5 package libraries and PS Vita VPK/PKG/ZIP libraries
-for configured-source search and import. See [modern-console support and
-limits](docs/MODERN-CONSOLES.md). Playback and installation happen outside
-ROMarr; these targets do not add browser emulation.
-
-Genesis keeps its existing ROMarr identifier but new imports and RomM rescans
-use the RomM filesystem slug `genesis`. Existing folders are not moved
-automatically; operators with `genesis-slash-megadrive` folders should either
-keep their explicit RomM mapping or plan a folder migration before switching.
+MIT — [LICENSE](LICENSE). ROMarr is an independent project and is not endorsed by its integrations.

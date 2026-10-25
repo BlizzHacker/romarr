@@ -1,0 +1,115 @@
+name: Cartridge Windows binary proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      asset_id:
+        description: Numeric release asset ID of the approved Cartridge portable EXE
+        required: true
+        type: string
+      asset_name:
+        description: Exact portable EXE filename
+        required: true
+        default: Cartridge-Windows-Portable-0.2.0-x64.exe
+        type: string
+      expected_sha256:
+        description: SHA256 independently verified before upload
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  portable-proof:
+    if: github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: windows-latest
+    timeout-minutes: 8
+    steps:
+      - name: Download the approved binary and verify its identity
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ASSET_ID: ${{ inputs.asset_id }}
+          ASSET_NAME: ${{ inputs.asset_name }}
+          EXPECTED_SHA256: ${{ inputs.expected_sha256 }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($env:ASSET_ID -notmatch '^\d+$') { throw 'asset_id must be a numeric GitHub release asset ID.' }
+          if ($env:EXPECTED_SHA256 -notmatch '^[a-fA-F0-9]{64}$') { throw 'A complete expected SHA256 is required.' }
+          if ($env:ASSET_NAME -notmatch '^[A-Za-z0-9][A-Za-z0-9 ._-]*\.exe$') { throw 'asset_name must be a plain EXE filename.' }
+          $root = Join-Path $env:RUNNER_TEMP 'cartridge-approved-binary'
+          [IO.Directory]::CreateDirectory($root) | Out-Null
+          $url = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/assets/$env:ASSET_ID"
+          $headers = @{ Authorization = "Bearer $env:GH_TOKEN"; Accept = 'application/vnd.github+json' }
+          $metadata = Invoke-RestMethod -Uri $url -Headers $headers
+          if ($metadata.name -ne $env:ASSET_NAME) { throw 'The asset ID does not match the approved filename.' }
+          $binary = Join-Path $root $env:ASSET_NAME
+          $headers.Accept = 'application/octet-stream'
+          Invoke-WebRequest -Uri $url -Headers $headers -OutFile $binary -MaximumRetryCount 2 -RetryIntervalSec 2
+          $actual = (Get-FileHash -LiteralPath $binary -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $env:EXPECTED_SHA256.ToLowerInvariant()) { throw 'The downloaded binary does not match the approved SHA256.' }
+          $identity = [ordered]@{ repository = $env:GITHUB_REPOSITORY; assetId = $env:ASSET_ID; assetName = $env:ASSET_NAME; sha256 = $actual; size = (Get-Item -LiteralPath $binary).Length }
+          $proof = Join-Path $env:RUNNER_TEMP ('Cartridge Windows proof ' + [guid]::NewGuid().ToString('N'))
+          [IO.Directory]::CreateDirectory($proof) | Out-Null
+          [IO.File]::WriteAllText((Join-Path $root 'binary-identity.json'),($identity | ConvertTo-Json))
+          "CARTRIDGE_BINARY=$binary" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "CARTRIDGE_PROOF=$proof" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "CARTRIDGE_IDENTITY=$(Join-Path $root 'binary-identity.json')" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Run the real portable app and inspect its proof
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $proof = $env:CARTRIDGE_PROOF
+          $passed = Join-Path $proof 'smoke-passed.json'
+          $failed = Join-Path $proof 'smoke-failed.txt'
+          $owned = [Collections.Generic.Dictionary[int,Diagnostics.Process]]::new()
+          $process = Start-Process -FilePath $env:CARTRIDGE_BINARY -ArgumentList @('"' + '--smoke-test=' + $proof + '"') -PassThru -WindowStyle Hidden
+          $owned[$process.Id] = $process
+          try {
+            $deadline = [DateTime]::UtcNow.AddSeconds(150)
+            while ([DateTime]::UtcNow -lt $deadline) {
+              if (Test-Path -LiteralPath $failed) { throw (Get-Content -LiteralPath $failed -Raw) }
+              if (Test-Path -LiteralPath $passed) { break }
+              # A portable Electron launcher may exit before its child finishes.
+              # Retain handles only for descendants of this test's own processes.
+              $parents = @($owned.Keys)
+              $children = @(Get-CimInstance Win32_Process | Where-Object { $_.ParentProcessId -in $parents })
+              foreach ($child in $children) {
+                if (-not $owned.ContainsKey([int]$child.ProcessId)) {
+                  $handle = Get-Process -Id $child.ProcessId -ErrorAction SilentlyContinue
+                  if ($handle) { $owned[[int]$child.ProcessId] = $handle }
+                }
+              }
+              Start-Sleep -Milliseconds 500
+            }
+            if (-not (Test-Path -LiteralPath $passed)) { throw 'The portable app did not produce passing proof before timeout.' }
+            $result = Get-Content -LiteralPath $passed -Raw | ConvertFrom-Json
+            foreach ($field in @('nativeWindow','setup','remoteConsole','remoteIpcDenied','unsafeUrlDenied','plaintextPasswordAbsent')) {
+              if ($result.$field -ne $true) { throw "Portable proof is missing: $field" }
+            }
+            if ($result.optionalRetroArch -ne $false) { throw 'The proof must show that optional RetroArch is not required.' }
+            $screenshot = Join-Path $proof 'setup.png'
+            if (-not (Test-Path -LiteralPath $screenshot) -or (Get-Item -LiteralPath $screenshot).Length -eq 0) {
+              throw 'The actual native setup screenshot is missing.'
+            }
+            Get-Content -LiteralPath $passed
+          } finally {
+            foreach ($handle in $owned.Values) {
+              try { if (-not $handle.HasExited) { $handle.Kill($true); $null = $handle.WaitForExit(10000) } }
+              catch [InvalidOperationException] { }
+              finally { $handle.Dispose() }
+            }
+          }
+      - name: Upload proof without the binary or browser profile
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Cartridge-Windows-portable-proof
+          path: |
+            ${{ env.CARTRIDGE_IDENTITY }}
+            ${{ env.CARTRIDGE_PROOF }}/smoke-passed.json
+            ${{ env.CARTRIDGE_PROOF }}/smoke-failed.txt
+            ${{ env.CARTRIDGE_PROOF }}/setup.png
+          if-no-files-found: warn
+          retention-days: 14

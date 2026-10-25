@@ -46,6 +46,16 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "/api/v1/setup": ("POST", "First-run claim: set the admin password on an "
                               "install that has none. Open only while "
                               "unclaimed, and answers 409 once it is."),
+    "/api/v1/setup/status": ("GET", "Optional Setup Guide checklist: configured "
+                                     "names and counts without credentials or "
+                                     "connection probes. Established installs "
+                                     "are not sent through the guide."),
+    "/api/v1/setup/complete": ("POST", "Dismiss or finish the optional Setup Guide. "
+                                        "Stores the organize/download choice; "
+                                        "the guide remains available in Settings."),
+    "/api/v1/setup/dats": ("POST", "Check and load an optional No-Intro or Redump "
+                                    "DAT folder visible to ROMarr. Reports missing "
+                                    "folders and unreadable DATs with a useful error."),
     "/api/v1/game": ("GET", "The library. `totals` splits it into files on "
                             "disk here, entries catalogued but streamed from "
                             "elsewhere, and the sum; `grand_total` is only how "
@@ -139,6 +149,10 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "/api/v1/hub/plugin": ("POST", "Install, enable, disable or uninstall a plugin."),
     "/api/v1/hub/source/check": ("POST", "Whether a repository URL may be "
                                          "installed from."),
+    "/api/v1/hub/source/install": ("POST", "Validate a repository against configured "
+                                           "plugin source hosts, then install it "
+                                           "through ROM Hub. Reports the actual "
+                                           "installer outcome; requires authentication."),
     "/api/v1/hub/submit": ("POST", "Validate a catalogue submission and return "
                                    "a link. ROMarr does not post it."),
     "/api/v1/capture": ("POST", "Catalogue rows captured by the browser "
@@ -364,12 +378,67 @@ def _operation(path: str, method: str, summary: str) -> dict:
     }
 
 
+def _guide_contracts(paths: dict) -> None:
+    """Describe the guide's small JSON inputs and outcomes for API clients."""
+    inputs = {
+        "/api/v1/setup/complete": (
+            {"mode": {"type": "string", "enum": ["organize", "download"],
+                      "default": "organize"}}, []),
+        "/api/v1/setup/dats": (
+            {"directory": {"type": "string", "minLength": 1,
+                           "description": "DAT folder as seen by the ROMarr process."}},
+            ["directory"]),
+        "/api/v1/hub/source/install": (
+            {"url": {"type": "string", "format": "uri",
+                     "description": "HTTPS repository on an allowed plugin source host."}},
+            ["url"]),
+    }
+    for path, (properties, required) in inputs.items():
+        operation = paths[path]["post"]
+        operation["requestBody"] = {
+            "required": bool(required),
+            "content": {"application/json": {"schema": {
+                "type": "object", "properties": properties, "required": required,
+            }}},
+        }
+        if required:
+            operation["responses"]["400"] = {
+                "description": "The folder or repository is invalid; error explains the fix."}
+    paths["/api/v1/hub/source/install"]["post"]["responses"]["500"] = {
+        "description": "ROM Hub could not install the plugin; error contains the reason."}
+    checklist_row = {
+        "type": "object",
+        "properties": {
+            "id": {"type": "string"}, "name": {"type": "string"},
+            "type": {"type": "string"}, "enabled": {"type": "boolean"},
+        },
+        "required": ["id", "name", "type", "enabled"],
+        "additionalProperties": False,
+    }
+    paths["/api/v1/setup/status"]["get"]["responses"]["200"] = {
+        "description": "Safe setup checklist; connection credentials are never returned.",
+        "content": {"application/json": {"schema": {
+            "type": "object",
+            "properties": {
+                "suggested": {"type": "boolean"}, "dismissed": {"type": "boolean"},
+                "mode": {"type": "string", "enum": ["organize", "download"]},
+                "library_path": {"type": "string"}, "dat_path": {"type": "string"},
+                "dat_loaded": {"type": "integer"}, "dat_games": {"type": "integer"},
+                "hub_available": {"type": "boolean"},
+                **{key: {"type": "array", "items": checklist_row}
+                   for key in ("libraries", "download_clients", "indexers")},
+            },
+        }}},
+    }
+
+
 def spec(version: str = "0.0.0", *, base_url: str = "") -> dict:
     """The document served at /api/v1/openapi.json."""
     paths: dict[str, dict] = {}
     for path in sorted(DESCRIPTIONS):
         method, summary = DESCRIPTIONS[path]
         paths[path] = _operation(path, method, summary)
+    _guide_contracts(paths)
 
     return {
         "openapi": VERSION,

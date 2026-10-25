@@ -1,11 +1,8 @@
 # Installing ROMarr
 
-Everything needed to go from nothing to a working install, without reading
-source. If a step here needs knowledge that is not on this page, that is a bug
-in this page — please open an issue.
+Use the [README quick start](../README.md#docker-compose-quick-start) for a small folder-based install, or choose a method below. After it starts, follow [Getting started](GETTING-STARTED.md) and the in-app **Settings → Setup Guide**.
 
-Written to the same standard as [PROOF.md](PROOF.md): where this says something
-works, it was run. Where it has never been run, it says so.
+ROMarr can import files you already have with only a destination folder. Searching and downloading new files also needs a usable source and a matching download client. RomM and other library servers are optional.
 
 ## Contents
 
@@ -15,6 +12,8 @@ works, it was run. Where it has never been run, it says so.
 - [Proxmox LXC](#proxmox-lxc)
 - [Home Assistant](#home-assistant)
 - [From source](#from-source)
+- [Windows app](#windows-app)
+- [Windows source install](#windows-source-install)
 - [First run: claiming the install](#first-run-claiming-the-install)
 - [The rule that catches everyone](#the-rule-that-catches-everyone)
 - [Configuration reference](#configuration-reference)
@@ -29,21 +28,15 @@ works, it was run. Where it has never been run, it says so.
 
 ## What ROMarr needs
 
-ROMarr does not store a library, run an emulator or index anything itself. It
-sits between three things you already run:
+ROMarr can start before any external service is configured.
 
-| | What it does | Required? |
-|---|---|---|
-| **An indexer** — Prowlarr, or a Torznab/Newznab URL, or a torrent RSS feed | Finds releases | To search for anything. Without it ROMarr runs and finds nothing. |
-| **A download client** — any of the [26 below](#download-clients), plus a plain-HTTP and a headless-browser lane for ROM sites | Fetches the release | To grab anything. A release found with no client that speaks its protocol is ranked and then refused. |
-| **A game library** — RomM, Gaseous, Retrom, or just a directory | Receives the ROM | `folder` needs nothing but a path, so effectively no. |
+| Goal | Requirements |
+|---|---|
+| Import an existing ROM | Source files ROMarr can read and a destination folder it can write |
+| Search and download | A search source, a client matching its protocol, and a destination |
+| Verify or compare a set | A DAT covering the selected system and access to your local files |
 
-Everything else — DAT verification, import lists, streaming hosts, the browser
-players, plugins — is optional and off until configured.
-
-**ROMarr starts and serves its UI with none of the three reachable.** The
-Settings pages name what is missing. A first run is never a blank failure, so
-it is fine to start it before the rest of the stack is ready.
+A folder destination works on its own. You can instead connect RomM, Gaseous, Retrom or another supported library backend. DATs, plugins, lists, notifications and players can be added later. [Plugin availability and setup](PLUGINS.md).
 
 ### What it needs from you
 
@@ -194,21 +187,13 @@ nothing to drop to and no authority to chown with.
 
 | Tag | What it is |
 |---|---|
-| `latest` | **Main.** Every push to the default branch that passed the test suite. This is the one that gets fixes. |
-| `0.8`, `0` | The latest image built from a `v0.8.x` / `v0.x` git tag. |
-| `0.8.0` | Exactly the commit tagged `v0.8.0`. |
-| `sha-5cb6a75` | One specific commit. Every build publishes one. |
+| `latest` | The most recent successful main-branch image build; it can be ahead of the latest release. |
+| `1.7.0` | The build for release `v1.7.0`. Pin a version when you want to choose when updates happen. |
+| `1.7`, `1` | Moving aliases for the newest published release in that minor/major series. |
+| `sha-<commit>` | A specific build, useful when comparing or rolling back. |
+| `browser`, `<version>-browser` | Debian edition with the Playwright client for browser downloads; it still needs a browser host. |
 
-Two things worth knowing before you pin:
-
-- **`latest` is main, not a release.** It is ahead of `0.8.0`, and the version
-  string does not change between releases, so `0.8.0` and `latest` can both
-  report `0.8.0` while being different builds. `docker image inspect` on the
-  digest is the only reliable comparison.
-- Pinning `0.8.0` means you stop receiving fixes until the next tag. For a
-  service that reaches out to your indexers, `latest` is the recommended
-  default; use a `sha-` tag when you need to sit on a known-good build, and
-  see [Rolling back](#rolling-back).
+Check the [latest release](https://github.com/BlizzHacker/romarr/releases) before choosing a fixed version. The version string alone may not identify a main-branch build; use its image digest/revision when reporting a problem. [Rollback instructions](#rolling-back).
 
 The image is published for `linux/amd64`, `linux/arm64` and `linux/arm/v7`.
 **The armv7 leg has never been booted by the maintainer** — it is built in CI
@@ -313,24 +298,80 @@ them.
 
 ## From source
 
-Python 3.11 or newer. Dependencies are `requests` plus, on Linux, `pyseccomp`.
+Python 3.11 or newer and Git are required. These commands use a Linux/macOS shell and keep the app's state inside the checkout:
 
 ```bash
-git clone https://github.com/BlizzHacker/romarr.git && cd romarr
-python -m venv .venv && . .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env          # edit it
-set -a; . ./.env; set +a      # nothing loads .env for you -- no dotenv dependency
+git clone https://github.com/BlizzHacker/romarr.git
+cd romarr
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -r requirements.txt
+mkdir -p config roms downloads
+export ROMARR_DATA="$PWD/config/romarr.json"
+export ROM_HUB_HOME="$PWD/config/rom-hub"
+export LIBRARY_KIND=folder
+export LIBRARY_PATH="$PWD/roms"
 python -m romarr
 ```
 
-State goes to `/opt/romarr/romarr.json` unless you set `ROMARR_DATA`. On a
-laptop you almost certainly want to.
+Open <http://localhost:6868>. This runs in the foreground; Ctrl+C stops it. Keep the same environment variables when starting it again. To run unattended, configure your operating system's service manager with those paths and the virtual-environment interpreter.
 
-Install `bsdtar` (`libarchive-tools` on Debian/Ubuntu, `libarchive` on Alpine
-and Arch, `brew install libarchive` on macOS) or every disc-platform import
-fails on a format it cannot open — the PlayStation, PS2 and Wii sets ship
-almost entirely as `.7z`, and busybox/GNU `tar` is not a substitute.
+ZIP handling is built in. Install `bsdtar` for supported `.7z` and `.rar` archives (`libarchive-tools` on Debian/Ubuntu, `libarchive` on Alpine/Arch, or `brew install libarchive` on macOS). GNU/BusyBox tar is not a substitute. ROM Hub is optional and has [separate installation instructions](PLUGINS.md#add-rom-hub-to-a-source-or-lxc-installation).
+
+`.env.example` documents additional environment options. Python does not automatically load a `.env` file; source it or supply an environment file through your service manager. Configure connections in the UI after first startup.
+
+## Windows app
+
+Download the portable **Windows 10/11 x64** app. The package contains the native Windows window, embedded WebView2 interface, Python backend, ROM Hub and Git. No Python, PowerShell, Docker, .NET or separate browser installation is required to use it.
+
+1. Open [ROMarr releases](https://github.com/BlizzHacker/romarr/releases/latest) and download **`ROMarr-1.8.0-win-x64.zip`** (choose the matching version on later releases).
+2. Extract the **whole ZIP** to a folder you own. Keep `ROMarr.exe`, `backend`, `browser` and `git` together. Do not open the EXE from inside the ZIP.
+3. Double-click **ROMarr.exe**. Choose your data folder and ROM library folder, then click **Start ROMarr**.
+4. Set your ROMarr password in the embedded interface. Follow **Settings -> Setup Guide**. Choose **I already have ROMs** to start with an existing collection.
+5. Add your connections and plugins when needed. The **Cartridge** menu offers separate optional downloads for Windows and Xbox players; neither is required for ROMarr.
+
+The app listens on `127.0.0.1:6868` by default. Its native window has folder pickers, Start/Stop, a port setting, data/log access and help links. Closing it stops the backend it started. It does not run as a Windows service or start automatically with Windows.
+
+The default data folder is `%LOCALAPPDATA%\ROMarr`; the desktop preferences file is `%LOCALAPPDATA%\ROMarr\desktop.json`. The default ROM folder is `%USERPROFILE%\Games\ROMs`. Select another drive before starting if that is where your collection belongs. Changing the data folder selects a separate installation's settings; it does not move existing data.
+
+To update, close ROMarr, extract the new release into a fresh application folder and open its `ROMarr.exe` with your existing data and library paths. Keep those data/library folders. Back up the data folder before an update. Fixed WebView2 is included and updates with the application package.
+
+Windows checks build the actual app and run it with external Python and Git removed from `PATH`. They check the native window, embedded sign-in/setup guide, API protection, bundled plugin installation and settings after restart. Check the release's linked run and proof for its exact results; real hardware and every external integration need their own field reports.
+
+The **unsigned MSIX** is for development and Store preparation. It is not a certified Microsoft Store release or a normal unsigned installation option. [Build and Store submission details](../desktop/windows/BUILDING.md).
+
+## Windows source install
+
+This is the advanced source route. For normal use, choose the [Windows app](#windows-app) above. The source checkout includes a foreground PowerShell helper and requires Python 3.11+ and Git. Docker Desktop is another option if you already use it.
+
+1. Install Python **3.11 or newer** and Git. Confirm `py -3 --version` and `git --version` work in PowerShell.
+2. Clone the repository into a folder where you want the checkout and virtual environment to live.
+3. Run the launcher. The example keeps state and ROMs on `D:`; choose existing locations appropriate for your PC.
+
+```powershell
+git clone https://github.com/BlizzHacker/romarr.git
+cd romarr
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\start-windows.ps1 -DataDirectory D:\ROMarr\config -LibraryPath D:\Games\roms -OpenBrowser
+```
+
+The first launch creates `.venv-windows` in the checkout and installs the requirements. Later launches reuse it unless requirements change or you pass `-UpdateDependencies`. ROMarr listens on **127.0.0.1:6868** by default; open <http://127.0.0.1:6868> if a browser does not open. Keep that terminal running; **Ctrl+C** stops the app.
+
+| Option | Purpose |
+|---|---|
+| `-DataDirectory` | State/settings directory; defaults to `%LOCALAPPDATA%\ROMarr` |
+| `-LibraryPath` | Initial folder-library path; defaults to `roms` below the data directory |
+| `-VenvDirectory` | Store the Python environment somewhere other than `.venv-windows` |
+| `-PythonPath` | Select a particular Python executable |
+| `-Port` | Use another local port |
+| `-CheckOnly` | Prepare and check the environment without starting the server |
+| `-OpenBrowser` | Open the local UI when launching |
+| `-UpdateDependencies` | Refresh Python dependencies |
+
+Use the same data directory for later launches. After setup, change the saved library destination under **Settings → Media Management/Libraries**; passing a different startup path does not silently replace a saved setting. The launcher prints where the state file lives.
+
+ZIP imports need no extra archive program. `.7z`/`.rar` imports require a working `bsdtar` executable on `PATH`; test one small archive before importing a collection. Optional ROM Hub installation and Windows confinement limits are documented in the [plugin guide](PLUGINS.md).
+
+The Windows CI smoke job is provided to check startup, authentication and state persistence on Windows; consult its result for the revision you use. It does not prove every external client, archive tool or filesystem share works on your PC. Use **Manual Import** for an existing library, and check one imported file before adding a whole collection.
 
 ---
 
@@ -339,10 +380,11 @@ almost entirely as `.7z`, and busybox/GNU `tar` is not a substitute.
 ROMarr requires a credential. There is no open mode you can fall into by
 forgetting to configure something.
 
-A fresh install is **unclaimed**. The first visit to the web UI asks you to set
-a password; that is the whole of first-run setup. Once set, the install is
-claimed, that screen becomes a normal sign-in, and the password survives
-restarts. Your browser then holds an HMAC-signed, `HttpOnly`, `SameSite=Strict`
+A fresh install is **unclaimed**. The first visit asks you to set a password.
+Once set, the install is claimed and later visits use the sign-in screen.
+The password survives restarts. New installs then offer **Setup Guide**, where
+you can choose existing-ROM import or automatic acquisition. Reopen it under
+**Settings → Setup Guide** (`/#setup`) whenever needed. Your browser then holds an HMAC-signed, `HttpOnly`, `SameSite=Strict`
 session cookie, so the credential is never kept in the page.
 
 `POST /api/v1/setup` is open only while unclaimed and answers `409` afterwards
@@ -397,9 +439,8 @@ This is deliberate — a decision you saved in the UI must not be silently undon
 by a restart — but it means:
 
 ```bash
-# edit QBITTORRENT_URL in docker-compose.yml
-docker compose up -d
-# ...and nothing changes. No error. No warning.
+# For an established install, edit the connection in the web UI:
+# Settings -> Download Clients -> your qBittorrent connection
 ```
 
 Measured, not assumed: with a state file already written, starting the
@@ -690,13 +731,9 @@ docker compose up -d
 Your `/config` volume carries settings, history and credentials across. Nothing
 in the image is stateful.
 
-If you track `latest`, that is main — every push that passed the suite. An
-image pulled at a bad moment is rolled back the same way as anything else, see
-below.
-
-Running Watchtower or similar? It will update ROMarr whenever `latest` moves.
-That is a defensible choice for a service on your own LAN and a bad one if you
-need to know what changed; pin a `sha-` tag if you would rather decide.
+`latest` tracks successful main-branch image builds. Pin a release version or
+specific build when you want to choose when to update. Automatic container
+updaters follow whichever moving tag you selected; back up `/config` first.
 
 ### Proxmox LXC
 

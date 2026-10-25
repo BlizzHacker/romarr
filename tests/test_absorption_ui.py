@@ -1,5 +1,7 @@
 """The Questarr-absorption surfaces, as the rendered page carries them."""
 
+import pytest
+
 from romarr.ui import page
 
 
@@ -104,11 +106,29 @@ def test_the_library_serves_organised_pages_not_the_first_100(tmp_path):
     assert len(beyond["items"]) == 15, "pagination reaches past any one page"
 
 
-def test_a_failing_list_records_why_on_the_list_itself(tmp_path):
+@pytest.mark.parametrize(("failure", "expected"), [
+    (ValueError("Refresh your PlayStation ssocookie token."),
+     "Refresh your PlayStation ssocookie token."),
+    (ConnectionError("private upstream connection details"),
+     "ConnectionError talking to the store"),
+])
+def test_a_failing_list_records_why_on_the_list_itself(tmp_path, monkeypatch,
+                                                     failure, expected):
     from romarr.app import ROMarr
     svc = ROMarr(env={"ROMARR_DATA": str(tmp_path / "s.json")})
+    svc.scheduler.stop()
     svc.store.put_item("import_lists", {
         "name": "dead", "type": "psn", "npsso": "EXPIRED"})
-    svc.list_sync()
+
+    def refuse(cfg):
+        assert cfg["name"] == "dead"
+        raise failure
+
+    # This tests persistence of connector errors, not Sony's live availability.
+    # A real request could outlast the scheduler tick and overwrite last_sync.
+    monkeypatch.setattr("romarr.lists.fetch_entries", refuse)
+    result = svc.list_sync()
     stored = svc.store.list_items("import_lists")[0]
-    assert "ssocookie" in stored["last_sync"]["error"]
+    assert stored["last_sync"]["error"] == expected
+    assert result["failed_lists"] == 1
+    assert result["failures"][0]["reason"] == expected

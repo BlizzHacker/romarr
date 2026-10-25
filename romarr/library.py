@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import shutil
 import subprocess
 import zipfile
@@ -327,7 +328,8 @@ def platform_dir(library_root: Path, platform: "Platform | str", *,
 def import_rom(download: Path, platform: Platform, library_root: Path, *,
                overwrite: bool = False, dats=None,
                require_verified: bool = False,
-               layout: str = "flat", translation: bool = False) -> list[ImportResult]:
+               layout: str = "flat", translation: bool = False,
+               rename: bool = False) -> list[ImportResult]:
     """Place every ROM from a finished download into the library.
 
     A cartridge zip may hold several games (a 3-in-1 collection, a bundle)
@@ -338,6 +340,8 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
     `layout` picks the directory shape (see `platform_dir`); `translation`
     files the set in the platform's Translations subfolder, for the
     keep-both case where a T-En patch sits beside the original dump.
+    The rename option uses verified DAT names for single-file ROMs, retaining
+    the physical extension. Multi-file members keep their reference names.
     """
     if not download.exists():
         msg = (
@@ -374,7 +378,8 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
 
         if not chosen.is_multi_file:
             target_dir.mkdir(parents=True, exist_ok=True)
-            destination = target_dir / Path(chosen.primary).name
+            name = _import_name(chosen.primary, verdict, rename=rename)
+            destination = target_dir / name
             if destination.exists() and not overwrite:
                 results.append(
                     ImportResult(False, destination, "already in the library"))
@@ -419,6 +424,28 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
                                         verification=verdict))
 
     return results
+
+
+
+def _import_name(primary: str, verdict: Match, *, rename: bool) -> str:
+    """Use a verified DAT name without changing the source format or disc refs."""
+    original = Path(primary.replace(chr(92), "/")).name
+    if not rename or verdict.status != VERIFIED or verdict.rom is None:
+        return original
+    canonical = str(verdict.rom.name or "")
+    if (not canonical or re.search(r'[<>:"/\\|?*\x00-\x1f]', canonical)
+            or canonical.endswith((" ", "."))):
+        return original
+    stem = Path(canonical).stem
+    # Windows reserves device names even before multiple suffixes (NUL.tar.gz)
+    # and recognizes superscript digits in COM/LPT device names as well.
+    device = canonical.split(".", 1)[0].rstrip()
+    if (not stem or stem in (".", "..")
+            or re.fullmatch(r"(?i:CON|PRN|AUX|NUL|CONIN\$|CONOUT\$|COM[1-9¹²³]|LPT[1-9¹²³])", device)):
+        return original
+    # Hash normalization can equate .smc/.sfc dumps. A title change must not
+    # relabel the physical format, so retain the source file extension.
+    return stem + Path(original).suffix
 
 
 def _set_name(primary: str) -> str:

@@ -1,0 +1,32 @@
+name: Local Linux proof
+on:
+  push:
+    branches: [main, codex/community-polish]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: cartridge-linux
+    timeout-minutes: 30
+    env:
+      PROOF: /opt/repos/ai-state/wadei/gitea-ci/artifacts/romarr-${{ github.run_id }}
+    steps:
+      - uses: https://github.com/actions/checkout@v4
+      - name: Test the checked-out revision on the local server
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$PROOF"
+          python3 -m venv .ci-venv
+          .ci-venv/bin/python -m pip install -r requirements.txt pytest
+          .ci-venv/bin/python -m pytest tests/ -q --junitxml="$PROOF/pytest.xml" 2>&1 | tee "$PROOF/pytest.log"
+          .ci-venv/bin/python -m compileall -q romarr
+          git rev-parse HEAD > "$PROOF/revision.txt"
+          printf 'Linux test proof only; this job does not execute Windows binaries.\n' > "$PROOF/scope.txt"
+      - name: Keep the small test report in Gitea
+        if: always()
+        uses: https://github.com/actions/upload-artifact@v3
+        with:
+          name: romarr-linux-proof
+          path: /opt/repos/ai-state/wadei/gitea-ci/artifacts/romarr-${{ github.run_id }}
+          retention-days: 7
