@@ -282,7 +282,7 @@ def _archive_tool_path() -> str:
         return ""
 
 
-_WORD = re.compile(r"[a-z0-9]+")
+_WORD = re.compile(r"[^\W_]+", re.UNICODE)
 
 
 def _title_key(value: str) -> str:
@@ -308,7 +308,7 @@ def _phrase_contains(phrase: str, within: str) -> bool:
     """
     if not phrase or not within:
         return False
-    return bool(re.search(rf"(?<![a-z0-9]){re.escape(phrase)}(?![a-z0-9])", within))
+    return bool(re.search(rf"(?<![^\W_]){re.escape(phrase)}(?![^\W_])", within))
 
 
 def _fulfil_identities(name: str, outcomes) -> set[str]:

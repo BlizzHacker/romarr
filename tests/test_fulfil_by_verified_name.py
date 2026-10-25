@@ -145,6 +145,18 @@ def test_a_verified_import_does_not_fulfil_another_platform(tmp_path):
         ("Dragon Ball Z: Super Butouden", "gba")]
 
 
+def test_japanese_wanted_title_kept_after_fix(tmp_path):
+    """A Japanese wanted title must survive `_title_key` (previously stripped to
+    an empty key by the ASCII-only `[a-z0-9]+` tokenizer) and still fulfil once
+    the hash-verified DAT name matches (Regress coderabbit non-ASCII finding)."""
+    dat = dat_for("スーパーマリオワールド (Japan)")
+    s = svc(tmp_path, dat)
+    run_import(s, tmp_path, dat, wanted_title="スーパーマリオワールド",
+               wanted_platform="snes",
+               client_name="SMW JP.smc")
+    assert s.store.wanted == []
+
+
 def test_a_short_title_does_not_fulfil_a_superstring_game(tmp_path):
     """Wanted `Sonic 3` must never be fulfilled by a verified `Sonic 3D Blast`
     import. Matching is whole-word (not bare-substring), else the shorter title
