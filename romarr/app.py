@@ -281,6 +281,46 @@ def _archive_tool_path() -> str:
     except Exception:  # noqa: BLE001
         return ""
 
+
+def _title_key(value: str) -> str:
+    """A normalised key for comparing a wanted title to what an import verified.
+
+    Strips punctuation and case so that a wanted title like ``Dragon Ball Z:
+    Super Butouden`` can be recognised inside a verified DAT name like
+    ``Dragon Ball Z - Super Butouden (Japan)`` -- no-intro writes `` - `` where
+    a human title writes ``:``, and region tags add a suffix. Anything that is
+    not a letter or digit is dropped, so the comparison never trips on
+    spacing, punctuation or word-boundary differences.
+    """
+    return "".join(ch for ch in str(value or "").lower() if ch.isalnum())
+
+
+def _fulfil_identities(name: str, outcomes) -> set[str]:
+    """Every normalised identity a finished download turned out to be.
+
+    A download is known by the name the client reported (``name``), but what
+    it *actually is* is decided by hash verification: ``outcome.verification``
+    is the DAT ``Match`` for the bytes that landed, whose ``.game`` is the
+    canonical DAT name, and ``outcome.destination`` is where it was filed
+    (renamed to that canonical name when ``rename_on_import`` is on). Matching
+    wanted titles against all three is how a game that arrived under a
+    release-style filename -- or a wanted title with different punctuation --
+    still clears the Missing tab.
+    """
+    identities = {_title_key(name)}
+    for outcome in outcomes or []:
+        if not getattr(outcome, "ok", False):
+            continue
+        verification = getattr(outcome, "verification", None)
+        game = getattr(verification, "game", "") or ""
+        if game:
+            identities.add(_title_key(game))
+        dest = getattr(outcome, "destination", None)
+        if dest is not None:
+            identities.add(_title_key(Path(str(dest)).stem))
+    return identities
+
+
 class ROMarr:
     """The service. Holds config, clients, and the in-flight queue."""
 
@@ -5411,7 +5451,19 @@ class ROMarr:
                                 assets=imported_paths,
                                 status="available")
                 for w in list(self.store.wanted):
-                    if w.platform == platform.slug and w.game.lower() in name.lower():
+                    if w.platform != platform.slug:
+                        continue
+                    wanted_key = _title_key(w.game)
+                    if not wanted_key:
+                        continue
+                    # A wanted title may not substring-match the release it
+                    # arrived under (punctuation, region tags, or a short
+                    # IGDB/GG title versus the full no-intro name). What the
+                    # bytes *are* is known by hash verification, so match the
+                    # wanted title against the verified identities as well as
+                    # the client-reported download name.
+                    if any(wanted_key in identity
+                           for identity in _fulfil_identities(name, outcomes)):
                         self.store.fulfil(w.game, w.platform)
             results.append({"name": name, "ok": any_ok,
                             "reason": "" if any_ok else str(outcomes[0].reason),
