@@ -530,8 +530,10 @@ class ROMarr:
         # verifies the request came *through* it, learns who the user is, and
         # can require a group.
         self.limiter = RateLimiter()
-        self.reload_dats(e.get("DAT_PATH", "")
-                         or self.store.settings.get("dat_path", ""))
+        # The environment seeds a new install. An explicit saved selection
+        # (including the Setup Guide) must survive the next restart.
+        self.reload_dats(self.store.settings.get("dat_path", "")
+                         or e.get("DAT_PATH", ""))
         self.reload_metadata()
         self.reload_policy()
         self.sso = None

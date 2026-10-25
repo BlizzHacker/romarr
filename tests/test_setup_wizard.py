@@ -225,3 +225,23 @@ def test_failed_optional_dat_candidate_is_never_published(tmp_path, monkeypatch,
 
     assert svc.setup_dats(str(rejected))["ok"] is False
     assert publications == [], "failed index/path must never become active, even temporarily"
+
+
+def test_explicit_dat_selection_survives_environment_default_on_restart(tmp_path):
+    seed, chosen = tmp_path / "environment-dats", tmp_path / "chosen-dats"
+    for folder, name in [(seed, "Seed"), (chosen, "Chosen")]:
+        folder.mkdir()
+        (folder / "test.dat").write_text(
+            '<datafile><header><name>' + name + '</name></header>'
+            '<game name="Game"><rom name="Game.bin" size="1" crc="aa"/>'
+            '</game></datafile>')
+    env = {"ROMARR_DATA": str(tmp_path / "state.json"),
+           "ROMARR_API_KEY": "testkey", "DAT_PATH": str(seed)}
+    svc = ROMarr(env)
+    svc.scheduler.stop()
+    assert svc.dats.dats[0].name == "Seed"
+    assert svc.setup_dats(str(chosen))["ok"]
+    restarted = ROMarr(env)
+    restarted.scheduler.stop()
+    assert restarted.store.settings["dat_path"] == str(chosen)
+    assert restarted.dats.dats[0].name == "Chosen"
