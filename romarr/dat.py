@@ -145,6 +145,55 @@ def hash_bytes(data: bytes, *, suffix: str = "") -> dict:
     }
 
 
+class _Digest:
+    """crc32 + md5 + sha1 + size, fed a block at a time."""
+
+    def __init__(self) -> None:
+        self.crc = 0
+        self.md5 = hashlib.md5(usedforsecurity=False)
+        self.sha1 = hashlib.sha1(usedforsecurity=False)
+        self.size = 0
+
+    def update(self, block: bytes) -> None:
+        self.crc = zlib.crc32(block, self.crc)
+        self.md5.update(block)
+        self.sha1.update(block)
+        self.size += len(block)
+
+    def result(self) -> dict:
+        return {"size": self.size, "crc": f"{self.crc & 0xFFFFFFFF:08x}",
+                "md5": self.md5.hexdigest(), "sha1": self.sha1.hexdigest()}
+
+
+def hash_stream(stream, *, suffix: str = "", chunk: int = 1024 * 1024) -> dict:
+    """`hash_bytes` for a readable stream, without holding it in memory.
+
+    For an archive member piped out of `bsdtar` the length is not known until
+    the stream ends, and `header_size` needs the length (the SMC rule is
+    arithmetic). So the body is hashed twice in one pass: once from byte 0 and
+    once past the only header this suffix could have. The length then picks
+    which of the two is the answer. Memory stays at one chunk either way.
+    """
+    suffix = str(suffix or "").lower()
+    candidate = _FIXED_HEADERS.get(suffix) or (
+        _SMC_HEADER if suffix in _SMC_SUFFIXES else 0)
+    whole = _Digest()
+    past_header = _Digest() if candidate else None
+    seen = 0
+    while True:
+        block = stream.read(chunk)
+        if not block:
+            break
+        whole.update(block)
+        if past_header is not None and seen + len(block) > candidate:
+            past_header.update(block[max(0, candidate - seen):])
+        seen += len(block)
+    start = header_size(suffix, seen)
+    if start and past_header is not None:
+        return past_header.result()
+    return whole.result()
+
+
 def hash_file(path, *, chunk: int = 1024 * 1024) -> dict:
     """`hash_bytes` for a file on disk, read in chunks.
 
