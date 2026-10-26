@@ -85,3 +85,40 @@ def test_verify_set_does_not_read_members_whole(tmp_path: Path):
     verify_set(_NoWholeReads(tmp_path), ["Game (USA).cue", "Game (USA).bin"], dats)
     assert [h["size"] for h in dats.seen] == [
         len('FILE "Game (USA).bin" BINARY\n'), 4096]
+
+
+def _fake_bsdtar(tmp_path: Path, body: str) -> str:
+    tool = tmp_path / "fake-bsdtar"
+    tool.write_text("#!/bin/sh\n" + body + "\n")
+    tool.chmod(0o755)
+    return str(tool)
+
+
+def test_stalled_bsdtar_is_killed_and_reported_unknown(tmp_path: Path):
+    """A bsdtar that stops producing output must not hang verification."""
+    import time
+
+    tool = _fake_bsdtar(tmp_path, "printf 'partial'; exec sleep 60")
+    src = library._BsdtarSource(tmp_path / "game.7z", tool)
+    src.STALL_TIMEOUT = 1
+
+    started = time.monotonic()
+    with pytest.raises(TimeoutError):
+        src.hash("game.iso", ".iso")
+    assert verify_set(src, ["game.iso"], object()).status == UNKNOWN
+    assert time.monotonic() - started < 15
+
+
+def test_slow_but_steady_bsdtar_is_not_a_stall(tmp_path: Path):
+    """Only silence counts: a stream that keeps trickling is left alone."""
+    tool = _fake_bsdtar(tmp_path, "for i in 1 2 3 4; do printf 'abcd'; sleep 0.6; done")
+    src = library._BsdtarSource(tmp_path / "game.7z", tool)
+    src.STALL_TIMEOUT = 1
+    assert src.hash("game.bin", ".bin") == hash_bytes(b"abcd" * 4)
+
+
+def test_failing_bsdtar_raises(tmp_path: Path):
+    tool = _fake_bsdtar(tmp_path, "exit 3")
+    src = library._BsdtarSource(tmp_path / "game.7z", tool)
+    with pytest.raises(subprocess.CalledProcessError):
+        src.hash("game.bin", ".bin")

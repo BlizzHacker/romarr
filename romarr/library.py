@@ -18,6 +18,8 @@ import os
 import re
 import shutil
 import subprocess
+import threading
+import time
 import zipfile
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -182,6 +184,7 @@ class _ZipSource(_Source):
             shutil.copyfileobj(src, dst)
 
     def hash(self, name, suffix=""):
+        """Hash one member as it decompresses, a chunk at a time."""
         with zipfile.ZipFile(self.path) as archive, archive.open(name) as src:
             return hash_stream(src, suffix=suffix)
 
@@ -216,15 +219,54 @@ class _BsdtarSource(_Source):
             subprocess.run([self.tool, "-xOf", str(self.path), name],
                            stdout=dst, check=True, timeout=600)
 
+    #: Seconds `bsdtar` may go without producing a byte before `hash` gives
+    #: up on the member. Not a deadline on the whole read: a 40 GB disc off a
+    #: spinning array legitimately takes longer than `_run`'s 600 seconds, and
+    #: failing it would undo the point of streaming. A stall is what hangs.
+    STALL_TIMEOUT = 600
+
     def hash(self, name, suffix=""):
+        """Hash one member as `bsdtar` streams it out of the archive.
+
+        A watchdog kills `bsdtar` if it produces nothing for `STALL_TIMEOUT`
+        seconds; the stall surfaces as `TimeoutError`, which `verify_set`
+        reports as UNKNOWN rather than blocking the import forever.
+        """
+        stalled = threading.Event()
+        finished = threading.Event()
+        last_byte = [time.monotonic()]
         with subprocess.Popen([self.tool, "-xOf", str(self.path), name],
                               stdout=subprocess.PIPE,
                               stderr=subprocess.DEVNULL) as proc:
+
+            class _Progress:
+                """`proc.stdout` that records when data last arrived."""
+
+                def read(self, size):
+                    block = proc.stdout.read1(size)
+                    last_byte[0] = time.monotonic()
+                    return block
+
+            def watchdog():
+                while not finished.wait(1):
+                    if time.monotonic() - last_byte[0] > self.STALL_TIMEOUT:
+                        stalled.set()
+                        proc.kill()
+                        return
+
+            guard = threading.Thread(target=watchdog, daemon=True)
+            guard.start()
             try:
-                hashes = hash_stream(proc.stdout, suffix=suffix)
+                hashes = hash_stream(_Progress(), suffix=suffix)
             except BaseException:
                 proc.kill()
                 raise
+            finally:
+                finished.set()
+                guard.join()
+        if stalled.is_set():
+            raise TimeoutError(f"bsdtar produced nothing for {self.STALL_TIMEOUT}s "
+                               f"while extracting {name!r}")
         if proc.returncode:
             raise subprocess.CalledProcessError(proc.returncode, proc.args)
         return hashes
@@ -250,6 +292,7 @@ class _PathSource(_Source):
             return None
 
     def hash(self, name, suffix=""):
+        """Hash the file a chunk at a time; None if it can't be opened."""
         target = self.path if self.path.is_file() else self.path / name
         try:
             with open(target, "rb") as handle:

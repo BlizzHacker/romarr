@@ -155,12 +155,14 @@ class _Digest:
         self.size = 0
 
     def update(self, block: bytes) -> None:
+        """Fold one block into every digest."""
         self.crc = zlib.crc32(block, self.crc)
         self.md5.update(block)
         self.sha1.update(block)
         self.size += len(block)
 
     def result(self) -> dict:
+        """The hashes in the shape `lookup(**hashes)` takes."""
         return {"size": self.size, "crc": f"{self.crc & 0xFFFFFFFF:08x}",
                 "md5": self.md5.hexdigest(), "sha1": self.sha1.hexdigest()}
 
