@@ -86,6 +86,9 @@ jobs:
           platforms: linux/amd64
           load: true
           tags: romarr:smoke
+          # Tag -> image, so the running build can state its own version.
+          build-args: |
+            ROMARR_VERSION=${{ steps.meta.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false
@@ -156,6 +159,9 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Tag -> image, so the running build can state its own version.
+          build-args: |
+            ROMARR_VERSION=${{ steps.meta.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           # Provenance attestations add manifest entries that several self-host
@@ -202,6 +208,9 @@ jobs:
           platforms: linux/amd64
           load: true
           tags: romarr:browser-smoke
+          # Tag -> image, so the running build can state its own version.
+          build-args: |
+            ROMARR_VERSION=${{ steps.meta.outputs.version }}
           cache-from: type=gha,scope=browser
           cache-to: type=gha,scope=browser,mode=max
           provenance: false
@@ -227,6 +236,9 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Tag -> image, so the running build can state its own version.
+          build-args: |
+            ROMARR_VERSION=${{ steps.meta.outputs.version }}
           cache-from: type=gha,scope=browser
           cache-to: type=gha,scope=browser,mode=max
           provenance: false

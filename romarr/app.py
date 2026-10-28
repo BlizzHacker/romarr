@@ -105,10 +105,14 @@ from .store import Event, QueueItem, SeerrRequest, Store
 from .ui import page as ui_page
 from .ui import link_page as ui_link_page
 from .ui import login_page as ui_login_page
+from .version import derive_version, is_unknown
 
 log = logging.getLogger(__name__)
 
-VERSION = "1.6.0"
+# Derived, never typed here. A number that has to be retyped on every release is
+# how v1.7.0 shipped calling itself 1.6.0 while the Update page offered an
+# upgrade to the build already running. See version.py.
+VERSION = derive_version()
 
 # What ROMarr labels its own downloads with, so its jobs are distinguishable
 # from everything else in a shared client -- the same reason Radarr and Sonarr
@@ -4847,8 +4851,12 @@ class ROMarr:
                        f"{applied.get('error', '')}")
             return {"ok": True, "latest": latest, "update_available": True,
                     "message": message}
-        message = (f"{latest} is available (running {VERSION})" if newer
-                   else f"up to date ({VERSION})")
+        if is_unknown(VERSION):
+            message = (f"latest is {latest}; this build does not know its own "
+                       f"version, so it cannot say whether it is behind")
+        else:
+            message = (f"{latest} is available (running {VERSION})" if newer
+                       else f"up to date ({VERSION})")
         return {"ok": True, "latest": latest, "update_available": newer,
                 "message": message}
 
