@@ -4824,11 +4824,32 @@ class ROMarr:
         if not latest:
             return {"ok": False, "message": "github.com answered without a tag"}
 
+        if is_unknown(VERSION):
+            # Refuse before any side effect, never after. Every real release
+            # outranks 0.0.0+unknown, so this build would otherwise report a
+            # permanent update, notify once per release about news it cannot
+            # verify, and -- with auto_update on -- start an update from a
+            # version it cannot name. Record "no update" so a stale banner from
+            # a previous build clears, and say plainly why nothing was done.
+            self.store.settings["_latest_version"] = latest
+            self.store.settings["_update_available"] = False
+            self.store.save()
+            return {"ok": True, "latest": latest, "update_available": False,
+                    "indeterminate": True,
+                    "message": (f"latest is {latest}; this build does not know its "
+                                f"own version, so it cannot say whether it is "
+                                f"behind, and nothing was changed")}
+
         def parts(version: str) -> tuple:
-            try:
-                return tuple(int(p) for p in version.split("."))
-            except ValueError:
+            # v1.7.0, 1.7.0 and 1.7.0.post1 all belong to the same release: only
+            # the numeric prefix decides order. Returning (0,) for anything else
+            # is why a build that cannot name itself must never get this far --
+            # see the guard above.
+            found = re.match(r"\s*v?(\d+(?:\.\d+)*)", str(version or ""),
+                             re.IGNORECASE)
+            if not found:
                 return (0,)
+            return tuple(int(p) for p in found.group(1).split("."))
 
         newer = parts(latest) > parts(VERSION)
         self.store.settings["_latest_version"] = latest
@@ -4851,12 +4872,8 @@ class ROMarr:
                        f"{applied.get('error', '')}")
             return {"ok": True, "latest": latest, "update_available": True,
                     "message": message}
-        if is_unknown(VERSION):
-            message = (f"latest is {latest}; this build does not know its own "
-                       f"version, so it cannot say whether it is behind")
-        else:
-            message = (f"{latest} is available (running {VERSION})" if newer
-                       else f"up to date ({VERSION})")
+        message = (f"{latest} is available (running {VERSION})" if newer
+                   else f"up to date ({VERSION})")
         return {"ok": True, "latest": latest, "update_available": newer,
                 "message": message}
 

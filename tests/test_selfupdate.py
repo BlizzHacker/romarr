@@ -332,6 +332,9 @@ def test_update_status_reports_the_shape_and_settings(tmp_path, monkeypatch):
 
 def test_check_update_applies_when_auto_update_is_on(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
+    # A real, parseable version: a build that cannot name itself is deliberately
+    # never compared against a release (see test_unknown_build_...).
+    monkeypatch.setattr("romarr.app.VERSION", "1.6.0")
     svc.store.settings["auto_update"] = True
     svc.store.settings["_latest_version"] = ""
     monkeypatch.setattr(svc, "notify", lambda m: [])
@@ -359,6 +362,7 @@ def test_check_update_applies_when_auto_update_is_on(tmp_path, monkeypatch):
 
 def test_check_update_does_not_apply_when_auto_update_is_off(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
+    monkeypatch.setattr("romarr.app.VERSION", "1.6.0")
     monkeypatch.setattr(svc, "notify", lambda m: [])
     applied = []
     monkeypatch.setattr(svc, "apply_update", lambda: applied.append(1))
@@ -386,3 +390,84 @@ def test_settings_default_to_safe(tmp_path):
     assert DEFAULT_SETTINGS["auto_update_plugins"] is False
     assert DEFAULT_SETTINGS["update_channel"] == "stable"
     assert DEFAULT_SETTINGS["update_check"] is True
+
+
+def test_unknown_build_never_notifies_or_applies(tmp_path, monkeypatch):
+    """A build that cannot name itself must not announce -- or act on -- an update.
+
+    Every real tag outranks 0.0.0+unknown, so without this guard the check would
+    report a permanent update, notify once per release about news it cannot
+    verify, and with auto_update on start an update from an unnamed version.
+    """
+    svc = _svc(tmp_path)
+    svc.store.settings["auto_update"] = True
+    monkeypatch.setattr("romarr.app.VERSION", "0.0.0+unknown")
+    told, applied = [], []
+    monkeypatch.setattr(svc, "notify", lambda m: told.append(m) or [])
+    monkeypatch.setattr(svc, "apply_update", lambda: applied.append(1))
+
+    class FakeResponse:
+        status_code = 200
+        headers = {}
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"tag_name": "v99.0.0", "html_url": "https://x"}
+
+    import requests as _requests
+    monkeypatch.setattr(_requests, "get", lambda *a, **kw: FakeResponse())
+    out = svc.check_update()
+    assert out["ok"] is True
+    assert out.get("indeterminate") is True
+    assert out["update_available"] is False
+    assert "does not know its own version" in out["message"]
+    assert told == [] and applied == []
+    assert svc.store.settings["_update_available"] is False
+    assert svc.store.settings.get("_update_notified") != "99.0.0"
+
+
+def test_version_parser_treats_tag_and_postfix_forms_as_one_release(tmp_path, monkeypatch):
+    """v1.7.0, 1.7.0 and 1.7.0.post1 are one release, not three."""
+    svc = _svc(tmp_path)
+    told = []
+    monkeypatch.setattr(svc, "notify", lambda m: told.append(m) or [])
+
+    class FakeResponse:
+        status_code = 200
+        headers = {}
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"tag_name": "v1.7.0.post1", "html_url": "https://x"}
+
+    import requests as _requests
+    monkeypatch.setattr(_requests, "get", lambda *a, **kw: FakeResponse())
+    monkeypatch.setattr("romarr.app.VERSION", "1.7.0")
+    out = svc.check_update()
+    assert out["update_available"] is False
+    assert told == []
+
+
+def test_version_parser_still_notices_a_genuinely_newer_release(tmp_path, monkeypatch):
+    svc = _svc(tmp_path)
+    monkeypatch.setattr(svc, "notify", lambda m: [])
+
+    class FakeResponse:
+        status_code = 200
+        headers = {}
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"tag_name": "v1.7.1", "html_url": "https://x"}
+
+    import requests as _requests
+    monkeypatch.setattr(_requests, "get", lambda *a, **kw: FakeResponse())
+    monkeypatch.setattr("romarr.app.VERSION", "1.7.0")
+    assert svc.check_update()["update_available"] is True
+

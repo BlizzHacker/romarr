@@ -147,6 +147,7 @@ def test_a_disabled_list_is_left_alone(tmp_path):
 
 def test_update_check_notices_a_newer_release(tmp_path, monkeypatch):
     s = svc(tmp_path)
+    monkeypatch.setattr("romarr.app.VERSION", "1.6.0")
     told = []
     monkeypatch.setattr(s, "notify", lambda m: told.append(m) or [])
 

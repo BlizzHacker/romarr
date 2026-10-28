@@ -30,6 +30,14 @@ import os
 UNKNOWN_VERSION = "0.0.0+unknown"
 
 
+def _clean(text: object) -> str:
+    """Trim, and drop a leading v: a tag says v1.7.0, the release says 1.7.0."""
+    value = str(text or "").strip()
+    if value[:1] in ("v", "V"):
+        value = value[1:].strip()
+    return value
+
+
 def _from_metadata() -> str:
     """The installed distribution's version, for a packaged install."""
     try:
@@ -37,7 +45,7 @@ def _from_metadata() -> str:
     except ImportError:  # pragma: no cover - Python 3.7 and older
         return ""
     try:
-        return str(version("romarr")).strip()
+        return _clean(version("romarr"))
     except PackageNotFoundError:
         return ""
     except Exception:  # pragma: no cover - broken metadata must not stop boot
@@ -50,11 +58,11 @@ def _from_file() -> str:
         from ._version import __version__
     except Exception:
         return ""
-    return str(__version__).strip()
+    return _clean(__version__)
 
 
 def _from_env() -> str:
-    return str(os.environ.get("ROMARR_VERSION") or "").strip()
+    return _clean(os.environ.get("ROMARR_VERSION"))
 
 
 def derive_version() -> str:
