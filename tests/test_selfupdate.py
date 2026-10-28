@@ -428,8 +428,8 @@ def test_unknown_build_never_notifies_or_applies(tmp_path, monkeypatch):
     assert svc.store.settings.get("_update_notified") != "99.0.0"
 
 
-def test_version_parser_treats_tag_and_postfix_forms_as_one_release(tmp_path, monkeypatch):
-    """v1.7.0, 1.7.0 and 1.7.0.post1 are one release, not three."""
+def test_version_parser_treats_a_tag_and_a_bare_version_as_one_release(tmp_path, monkeypatch):
+    """v1.7.0 and 1.7.0 are one release; a .post release is the next one."""
     svc = _svc(tmp_path)
     told = []
     monkeypatch.setattr(svc, "notify", lambda m: told.append(m) or [])
@@ -442,7 +442,7 @@ def test_version_parser_treats_tag_and_postfix_forms_as_one_release(tmp_path, mo
             pass
 
         def json(self):
-            return {"tag_name": "v1.7.0.post1", "html_url": "https://x"}
+            return {"tag_name": "v1.7.0", "html_url": "https://x"}
 
     import requests as _requests
     monkeypatch.setattr(_requests, "get", lambda *a, **kw: FakeResponse())

@@ -105,7 +105,7 @@ from .store import Event, QueueItem, SeerrRequest, Store
 from .ui import page as ui_page
 from .ui import link_page as ui_link_page
 from .ui import login_page as ui_login_page
-from .version import derive_version, is_unknown
+from .version import compare_key, derive_version, is_unknown
 
 log = logging.getLogger(__name__)
 
@@ -4840,18 +4840,9 @@ class ROMarr:
                                 f"own version, so it cannot say whether it is "
                                 f"behind, and nothing was changed")}
 
-        def parts(version: str) -> tuple:
-            # v1.7.0, 1.7.0 and 1.7.0.post1 all belong to the same release: only
-            # the numeric prefix decides order. Returning (0,) for anything else
-            # is why a build that cannot name itself must never get this far --
-            # see the guard above.
-            found = re.match(r"\s*v?(\d+(?:\.\d+)*)", str(version or ""),
-                             re.IGNORECASE)
-            if not found:
-                return (0,)
-            return tuple(int(p) for p in found.group(1).split("."))
-
-        newer = parts(latest) > parts(VERSION)
+        # compare_key pads trailing zeros, ranks a final release above its
+        # prereleases, and ranks a .post release above the release it patches.
+        newer = compare_key(latest) > compare_key(VERSION)
         self.store.settings["_latest_version"] = latest
         self.store.settings["_update_available"] = newer
         if newer and self.store.settings.get("_update_notified") != latest:

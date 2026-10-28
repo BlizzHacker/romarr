@@ -24,6 +24,7 @@ update notice that can never be satisfied. ``is_unknown`` is that test.
 from __future__ import annotations
 
 import os
+import re
 
 # Not a real release and never will be: PEP 440 local segment, sorts below
 # everything, and reads as "unknown" to a human on a settings page.
@@ -72,6 +73,52 @@ def derive_version() -> str:
         if found and found != UNKNOWN_VERSION:
             return found
     return UNKNOWN_VERSION
+
+
+_RELEASE_RE = re.compile(r"\s*v?(\d+(?:\.\d+)*)", re.IGNORECASE)
+_POST_RE = re.compile(r"\.?post\.?(\d+)", re.IGNORECASE)
+_PRE_RE = re.compile(r"[.\-_]?(a|b|c|rc|alpha|beta|pre|preview|dev)\.?(\d*)",
+                     re.IGNORECASE)
+# dev < alpha < beta < release-candidate < final. A collapsed "is it a
+# prerelease" flag cannot order these: beta would come out ahead of rc.
+_PRE_RANK = {"dev": 1, "a": 2, "alpha": 2, "b": 3, "beta": 3,
+             "c": 4, "rc": 4, "pre": 4, "preview": 4}
+_RANK_FINAL = 5
+
+
+def compare_key(value: object) -> tuple:
+    """Order two version strings the way a release actually orders them.
+
+    A tuple of ints off ``split(".")`` lies in three ways, and each one has been
+    seen in the wild:
+
+      * ``1.7`` vs ``1.7.0`` -- Python calls the longer tuple newer, so the same
+        release offers itself as an update. Padding fixes it.
+      * ``1.7.0-rc.1`` vs ``1.7.0`` -- both parse to the same numbers, so the
+        final release is never offered to a prerelease build.
+      * ``1.7.0`` vs ``1.7.0.post1`` -- a post release is a follow-up fix, so it
+        must sort *above* the release it patches.
+
+    Anything without a numeric release at all sorts below everything: such a
+    build cannot be compared, which is why ``check_update`` refuses an unknown
+    version before it ever reaches a comparison.
+    """
+    core = _clean(value).split("+", 1)[0]
+    found = _RELEASE_RE.match(core)
+    if not found:
+        return ((0, 0, 0, 0), 0, 0, 0)
+    numbers = [int(p) for p in found.group(1).split(".")]
+    release = tuple((numbers + [0, 0, 0, 0])[:4])
+    rest = core[found.end():]
+    post = _POST_RE.search(rest)
+    pre = _PRE_RE.search(rest)
+    post_no = int(post.group(1)) if post else 0
+    rank, pre_no = _RANK_FINAL, 0
+    if pre:
+        rank = _PRE_RANK.get(pre.group(1).lower(), _RANK_FINAL - 1)
+        digits = pre.group(2) or ""
+        pre_no = int(digits) if digits.isdigit() and digits else 0
+    return (release, post_no, rank, pre_no)
 
 
 def is_unknown(value: object) -> bool:
