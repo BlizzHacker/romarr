@@ -110,6 +110,10 @@ class QbitAuthenticationError(requests.RequestException):
     """qBittorrent rejected configured credentials; no source list was read."""
 
 
+QBITTORRENT_ADD_CONFIRM_TIMEOUT = 10.0
+QBITTORRENT_ADD_POLL_INTERVAL = 0.25
+
+
 class QBittorrent:
     """Just enough of the WebUI API to add a torrent and watch it finish."""
 
@@ -191,6 +195,59 @@ class QBittorrent:
             return False
         self._added.job_id = "qbit-tag:" + tag
         return True
+
+    def add_torrent_file(self, torrent: bytes, *,
+                         save_path: str | None = None) -> bool:
+        """Upload a locally fetched .torrent and confirm qBittorrent added it.
+
+        Prowlarr links are only reachable from ROMarr's network and carry its
+        API key. The file upload path keeps that URL and key on this host.
+        """
+        if not torrent:
+            return False
+        if not self._authed:
+            self.login()
+        tag = "romarr-" + secrets.token_hex(12)
+        self._added.job_id = ""
+        data = {"category": self._config.category, "tags": tag}
+        if save_path:
+            data["savepath"] = save_path
+        try:
+            response = self._post(
+                "torrents/add", data=data,
+                files={"torrents": ("romarr.torrent", torrent,
+                                    "application/x-bittorrent")},
+                timeout=self._config.timeout)
+        except requests.RequestException as err:
+            log.warning("qbittorrent torrent upload failed: %s",
+                        err.__class__.__name__)
+            return False
+        if not response.ok:
+            log.warning("qbittorrent torrent upload failed: %s",
+                        response.status_code)
+            return False
+
+        deadline = time.monotonic() + QBITTORRENT_ADD_CONFIRM_TIMEOUT
+        while True:
+            try:
+                response = self._get(
+                    "torrents/info", params={"tag": tag},
+                    timeout=self._config.timeout)
+                rows = response.json() if response.ok else []
+            except (requests.RequestException, ValueError):
+                rows = []
+            if isinstance(rows, list) and any(
+                    tag in (set(value.strip() for value in row.get("tags", "").split(","))
+                            if isinstance(row.get("tags"), str)
+                            else set(str(value) for value in (row.get("tags") or [])))
+                    for row in rows if isinstance(row, dict)):
+                self._added.job_id = "qbit-tag:" + tag
+                return True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                log.warning("qbittorrent did not confirm the uploaded torrent")
+                return False
+            time.sleep(min(QBITTORRENT_ADD_POLL_INTERVAL, remaining))
 
     def torrents(self) -> list[dict]:
         """Return the client's torrent list for an explicit collection plan."""
