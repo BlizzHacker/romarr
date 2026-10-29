@@ -245,3 +245,48 @@ def test_explicit_dat_selection_survives_environment_default_on_restart(tmp_path
     restarted.scheduler.stop()
     assert restarted.store.settings["dat_path"] == str(chosen)
     assert restarted.dats.dats[0].name == "Chosen"
+
+
+def test_get_started_reads_current_client_and_indexer_shapes_and_legacy_status(tmp_path):
+    import shutil
+    import subprocess
+    from romarr import ui
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js needed for the guide interaction check")
+    start = ui.JS.index("RENDER.getstarted=async()=>{")
+    end = ui.JS.index("\nRENDER.collections=", start)
+    harness = r"""
+const assert=require('assert');
+const RENDER={},nodes={},responses={};
+const $=selector=>nodes[selector]||(nodes[selector]={innerHTML:''});
+const j=async url=>responses[url]||{};
+const esc=x=>String(x??''); const fmt=x=>String(x);
+async function render(status,setup){
+ responses['/api/v1/system/status']=status;
+ responses['/api/v1/setup/status']=setup;
+ responses['/api/v1/library']={items:[]};
+ responses['/api/platforms']={platforms:[]};
+ await RENDER.getstarted();
+ return $('#page').innerHTML;
+}
+"""
+    checks = r"""
+(async()=>{
+ const current=await render(
+   {clients:[{configured:true,ok:true}],prowlarr:false},
+   {download_clients:[{enabled:true}],indexers:[{type:'torznab',enabled:true}]});
+ assert(current.split('>ready</span>').length-1===2,current);
+ const legacy=await render(
+   {qbittorrent:true,prowlarr:true,download_clients:0,indexers:0},{});
+ assert(legacy.split('>ready</span>').length-1===2,legacy);
+ const offline=await render(
+   {clients:[{configured:true,ok:false}],prowlarr:false},
+   {download_clients:[{enabled:true}],indexers:[{type:'torznab',enabled:false}]});
+ assert(!offline.includes('>ready</span>'),offline);
+})().catch(error=>{console.error(error);process.exitCode=1;});
+"""
+    result = subprocess.run([node, "-e", harness + ui.JS[start:end] + checks],
+                            text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
