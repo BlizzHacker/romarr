@@ -74,6 +74,15 @@ RUN if [ "$TARGETARCH" = "amd64" ]; then \
 
 WORKDIR /app
 COPY romarr/ /app/romarr/
+
+# The version this build reports about itself, baked from the release tag by CI.
+# An empty value means "unknown", which romarr/version.py turns into a sentinel
+# that the update check refuses to compare against latest -- a build that cannot
+# say what it is must not advertise somebody else's release number, and must not
+# claim to be behind either. See romarr/version.py for the whole chain.
+ARG ROMARR_VERSION=""
+RUN printf '__version__ = "%s"\n' "${ROMARR_VERSION:-0.0.0+unknown}" \
+    > /app/romarr/_version.py
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh && mkdir -p /config /roms
 

@@ -18,12 +18,14 @@ import os
 import re
 import shutil
 import subprocess
+import threading
+import time
 import zipfile
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
-from .dat import BAD_DUMP, UNKNOWN, VERIFIED, Match, hash_bytes
+from .dat import BAD_DUMP, UNKNOWN, VERIFIED, Match, hash_bytes, hash_stream
 from .platforms import Platform, romm_fs_slug
 from .selection import pick_all_rom_sets, pick_rom_set
 
@@ -152,6 +154,17 @@ class _Source:
     def copy(self, name: str, destination: Path) -> None:
         raise NotImplementedError
 
+    def hash(self, name: str, suffix: str = "") -> dict | None:
+        """`hash_bytes` for one member, streamed rather than read whole.
+
+        Verifying a disc set used to `read` every member into memory: a PS3
+        image is tens of gigabytes, and a multi-disc archive took a 92 GB host
+        to its OOM killer. The shapes below stream; this fallback keeps any
+        other `_Source` working as before.
+        """
+        data = self.read(name)
+        return None if data is None else hash_bytes(data, suffix=suffix)
+
 
 class _ZipSource(_Source):
     def __init__(self, path: Path):
@@ -169,6 +182,11 @@ class _ZipSource(_Source):
         with zipfile.ZipFile(self.path) as archive, \
                 archive.open(name) as src, open(destination, "wb") as dst:
             shutil.copyfileobj(src, dst)
+
+    def hash(self, name, suffix=""):
+        """Hash one member as it decompresses, a chunk at a time."""
+        with zipfile.ZipFile(self.path) as archive, archive.open(name) as src:
+            return hash_stream(src, suffix=suffix)
 
 
 class _BsdtarSource(_Source):
@@ -201,6 +219,78 @@ class _BsdtarSource(_Source):
             subprocess.run([self.tool, "-xOf", str(self.path), name],
                            stdout=dst, check=True, timeout=600)
 
+    #: Seconds `bsdtar` may go without producing a byte before `hash` gives
+    #: up on the member. Not a deadline on the whole read: a 40 GB disc off a
+    #: spinning array legitimately takes longer than `_run`'s 600 seconds, and
+    #: failing it would undo the point of streaming. A stall is what hangs.
+    STALL_TIMEOUT = 600
+
+    def hash(self, name, suffix=""):
+        """Hash one member as `bsdtar` streams it out of the archive.
+
+        A watchdog kills `bsdtar` if it produces nothing for `STALL_TIMEOUT`
+        seconds; the stall surfaces as `TimeoutError`, which `verify_set`
+        reports as UNKNOWN rather than blocking the import forever.
+        """
+        stalled = threading.Event()
+        finished = threading.Event()
+        last_byte = [time.monotonic()]
+        with subprocess.Popen([self.tool, "-xOf", str(self.path), name],
+                              stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL) as proc:
+
+            class _Progress:
+                """`proc.stdout` that records when data last arrived."""
+
+                def read(self, size):
+                    block = proc.stdout.read1(size)
+                    last_byte[0] = time.monotonic()
+                    return block
+
+            def watchdog():
+                while not finished.wait(1):
+                    if time.monotonic() - last_byte[0] > self.STALL_TIMEOUT:
+                        stalled.set()
+                        if proc.poll() is None:
+                            try:
+                                proc.kill()
+                            except OSError:
+                                # It may have exited between poll() and kill().
+                                pass
+                        return
+
+            guard = threading.Thread(target=watchdog, daemon=True)
+            guard.start()
+            exited_after_eof = False
+            try:
+                hashes = hash_stream(_Progress(), suffix=suffix)
+                try:
+                    # EOF only means stdout closed. Keep the child bounded too:
+                    # a broken helper can close stdout and then hang forever.
+                    proc.wait(timeout=self.STALL_TIMEOUT)
+                except subprocess.TimeoutExpired:
+                    exited_after_eof = True
+                    if proc.poll() is None:
+                        proc.kill()
+                    proc.wait()
+            except BaseException:
+                if proc.poll() is None:
+                    proc.kill()
+                proc.wait()
+                raise
+            finally:
+                finished.set()
+                guard.join()
+        if exited_after_eof:
+            raise TimeoutError(f"bsdtar did not exit within {self.STALL_TIMEOUT}s "
+                               f"after finishing {name!r}")
+        if stalled.is_set():
+            raise TimeoutError(f"bsdtar produced nothing for {self.STALL_TIMEOUT}s "
+                               f"while extracting {name!r}")
+        if proc.returncode:
+            raise subprocess.CalledProcessError(proc.returncode, proc.args)
+        return hashes
+
 
 class _PathSource(_Source):
     """A bare ROM file, or a directory the download client already unpacked."""
@@ -218,6 +308,15 @@ class _PathSource(_Source):
         target = self.path if self.path.is_file() else self.path / name
         try:
             return target.read_bytes()
+        except OSError:
+            return None
+
+    def hash(self, name, suffix=""):
+        """Hash the file a chunk at a time; None if it can't be opened."""
+        target = self.path if self.path.is_file() else self.path / name
+        try:
+            with open(target, "rb") as handle:
+                return hash_stream(handle, suffix=suffix)
         except OSError:
             return None
 
@@ -280,14 +379,14 @@ def verify_set(source, members, dats) -> Match:
         return Match(UNKNOWN)
     verdicts = []
     for member in members:
+        suffix = Path(member.replace("\\", "/")).suffix
         try:
-            data = source.read(member)
+            hashes = source.hash(member, suffix)
         except Exception:
             return Match(UNKNOWN, detail=f"could not read {member!r} to verify")
-        if data is None:
+        if hashes is None:
             return Match(UNKNOWN, detail=f"could not read {member!r} to verify")
-        suffix = Path(member.replace("\\", "/")).suffix
-        verdicts.append(dats.lookup(**hash_bytes(data, suffix=suffix)))
+        verdicts.append(dats.lookup(**hashes))
 
     if not verdicts:
         return Match(UNKNOWN)

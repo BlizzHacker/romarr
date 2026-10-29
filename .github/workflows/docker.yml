@@ -86,6 +86,11 @@ jobs:
           platforms: linux/amd64
           load: true
           tags: romarr:smoke
+          # The release tag, not the image tag: metadata-action gives the browser
+          # build 1.7.0-browser and a branch build "latest", and neither parses
+          # as a version. A non-tag build states that it does not know.
+          build-args: |
+            ROMARR_VERSION=${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '0.0.0+unknown' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false
@@ -156,6 +161,11 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # The release tag, not the image tag: metadata-action gives the browser
+          # build 1.7.0-browser and a branch build "latest", and neither parses
+          # as a version. A non-tag build states that it does not know.
+          build-args: |
+            ROMARR_VERSION=${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '0.0.0+unknown' }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           # Provenance attestations add manifest entries that several self-host
@@ -202,6 +212,11 @@ jobs:
           platforms: linux/amd64
           load: true
           tags: romarr:browser-smoke
+          # The release tag, not the image tag: metadata-action gives the browser
+          # build 1.7.0-browser and a branch build "latest", and neither parses
+          # as a version. A non-tag build states that it does not know.
+          build-args: |
+            ROMARR_VERSION=${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '0.0.0+unknown' }}
           cache-from: type=gha,scope=browser
           cache-to: type=gha,scope=browser,mode=max
           provenance: false
@@ -227,6 +242,11 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # The release tag, not the image tag: metadata-action gives the browser
+          # build 1.7.0-browser and a branch build "latest", and neither parses
+          # as a version. A non-tag build states that it does not know.
+          build-args: |
+            ROMARR_VERSION=${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '0.0.0+unknown' }}
           cache-from: type=gha,scope=browser
           cache-to: type=gha,scope=browser,mode=max
           provenance: false
