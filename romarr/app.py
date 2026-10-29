@@ -3944,9 +3944,19 @@ class ROMarr:
         if not sha1:
             return
         from .dat import VERIFIED
+        path = ""
+        if destination:
+            try:
+                routed = self.library_for(platform)
+                root = self.library_root(routed[0]) if routed else self.library
+                path = Path(destination).resolve().relative_to(
+                    Path(root).resolve()).as_posix()
+            except (OSError, ValueError):
+                # Keep an unusable external path out of the library index.
+                path = ""
         self.hashes.add(sha1, getattr(verdict, "game", "") or fallback,
                         platform, getattr(verdict, "status", "") == VERIFIED,
-                        str(destination or ""))
+                        path)
         self.hashes.save()
 
     #: Progress of the background hash seed, so the UI can show it moving
@@ -4659,6 +4669,35 @@ class ROMarr:
         except (OSError, ValueError) as err:
             return {"error": str(err)}
 
+    def _library_rename_target(self, platform_slug: str):
+        """Resolve the same routed library and layout for every rename step."""
+        configured = getattr(self, "game_libraries", None) or []
+        if not configured:
+            return Path(self.library).resolve(), "flat", ""
+        routed = self.library_for(platform_slug)
+        if routed is None:
+            raise ValueError("no library is configured for this platform")
+        cfg, _backend = routed
+        return (self.library_root(cfg).resolve(), self.library_layout(cfg),
+                str(cfg.get("id") or ""))
+
+    def _library_rename_roots(self) -> list[Path]:
+        roots = [Path(self.library)]
+        roots.extend(self.library_root(cfg)
+                     for cfg, _backend in (getattr(self, "game_libraries", None)
+                                           or []))
+        previous = getattr(self, "_library_rename_root", None)
+        if previous is not None:
+            roots.append(Path(previous))
+        unique = {}
+        for root in roots:
+            try:
+                resolved = Path(root).resolve()
+            except OSError:
+                continue
+            unique[str(resolved)] = resolved
+        return list(unique.values())
+
     def preview_library_renames(self, platform_slug: str, *,
                                 scope: str = "", offset: int = 0) -> dict:
         """Build a DAT-verified, read-only preview in a background thread."""
@@ -4670,11 +4709,16 @@ class ROMarr:
         platform = resolve(platform_slug)
         if platform is None:
             return {"error": f"unknown platform: {platform_slug!r}"}
-        if self.dats is None:
+        if (self.dats is None
+                or not getattr(self.dats, "dats", None)):
             return {"error": "load DATs under Settings -> Media Management first"}
-        library_root = Path(self.library).resolve()
+        try:
+            library_root, layout, library_id = self._library_rename_target(platform.slug)
+        except (OSError, ValueError) as err:
+            return {"error": str(err)}
         dats = self.dats
         state = {"status": "running", "platform": platform.slug,
+                 "library_id": library_id, "layout": layout,
                  "scanned": 0, "entries": []}
         self._library_rename_root = library_root
         self._library_rename_state = state
@@ -4683,7 +4727,7 @@ class ROMarr:
             try:
                 from .library_rename import plan
                 state.update(plan(library_root, platform.slug, dats,
-                                   scope=scope, offset=offset))
+                                   scope=scope, offset=offset, layout=layout))
             except (OSError, ValueError) as err:
                 state.update(status="failed", error=str(err))
 
@@ -4694,47 +4738,108 @@ class ROMarr:
 
     def library_rename_state(self) -> dict:
         from .library_rename import manifests
+        all_manifests = []
+        for root in self._library_rename_roots():
+            all_manifests.extend(manifests(root))
+        all_manifests.sort(
+            key=lambda item: str(item.get("created_at") or
+                                 item.get("timestamp") or ""), reverse=True)
         return {"preview": dict(getattr(self, "_library_rename_state", {}) or
                                 {"status": "never run"}),
-                "manifests": manifests(self.library)}
+                "manifests": all_manifests[:10]}
 
     def apply_library_renames(self, platform_slug: str,
                               files: list[str]) -> dict:
-        from .library_rename import apply
+        import uuid as _uuid
+        from .library_rename import apply, manifest_for
         state = getattr(self, "_library_rename_state", {}) or {}
         if state.get("status") != "done" or state.get("platform") != platform_slug:
             return {"error": "run a completed preview for this platform first"}
         preview_root = getattr(self, "_library_rename_root", None)
-        if preview_root is None or Path(self.library).resolve() != preview_root:
+        if preview_root is None:
             return {"error": "library path changed since preview; run a new preview"}
+        manifest_id = _uuid.uuid4().hex
         try:
+            current_root, current_layout, current_id = self._library_rename_target(platform_slug)
+            if (current_root != Path(preview_root).resolve()
+                    or current_layout != state.get("layout", "flat")
+                    or current_id != state.get("library_id", "")):
+                return {"error": "library route or layout changed since preview; run a new preview"}
             result = apply(preview_root, platform_slug, files,
-                           state.get("entries") or [])
+                           state.get("entries") or [], manifest_id=manifest_id)
             self.hashes.move_paths({
                 entry["original"]: entry["target"]
-                for entry in result.get("entries", [])})
+                for entry in result.get("entries", [])
+                if entry.get("status") == "moved"},
+                root=preview_root)
             self._library_rename_state = {
                 "status": "applied", "platform": platform_slug,
+                "library_id": current_id, "layout": current_layout,
                 "entries": result.get("entries", [])}
             ROMarr._audit_state = {
                 "status": "stale", "platform": platform_slug,
                 "error": "The library changed; run Audit again to refresh it."}
             return result
         except (OSError, ValueError) as err:
+            partial = manifest_for(preview_root, manifest_id)
+            moved = [entry for entry in (partial or {}).get("entries", [])
+                     if entry.get("status") == "moved"]
+            if moved:
+                self.hashes.move_paths({
+                    entry["original"]: entry["target"] for entry in moved},
+                    root=preview_root)
+                self._library_rename_state = {
+                    "status": "failed", "platform": platform_slug,
+                    "error": str(err), "entries": moved}
+                ROMarr._audit_state = {
+                    "status": "stale", "platform": platform_slug,
+                    "error": "The library changed; run Audit again to refresh it."}
+                return {"error": str(err), "manifest_id": manifest_id,
+                        "entries": moved}
             return {"error": str(err)}
 
     def rollback_library_renames(self, manifest_id: str) -> dict:
-        from .library_rename import rollback
+        from .library_rename import rollback, manifest_for, ROOT_NAME
+        matches = []
+        for root in self._library_rename_roots():
+            path = root / ROOT_NAME / f"manifest-{manifest_id}.json"
+            if path.is_file() and not path.is_symlink():
+                matches.append(root)
+        if len(matches) != 1:
+            return {"error": "rename journal is unavailable or ambiguous"}
+        library_root = matches[0]
+        journal = manifest_for(library_root, manifest_id) or {}
+        platform_slug = str(journal.get("platform") or "")
         try:
-            result = rollback(self.library, manifest_id)
+            result = rollback(library_root, manifest_id)
+            restored = [entry for entry in result.get("entries", [])
+                        if entry.get("status") == "rolled_back"]
             self.hashes.move_paths({
-                entry["target"]: entry["original"]
-                for entry in result.get("entries", [])
-                if entry.get("status") == "rolled_back"})
+                entry["target"]: entry["original"] for entry in restored},
+                root=library_root)
             self._library_rename_state = {
                 "status": "rolled_back", "entries": result.get("entries", [])}
+            if restored:
+                ROMarr._audit_state = {
+                    "status": "stale",
+                    "platform": platform_slug,
+                    "error": "The library changed; run Audit again to refresh it."}
             return result
         except (OSError, ValueError) as err:
+            partial = manifest_for(library_root, manifest_id)
+            restored = [entry for entry in (partial or {}).get("entries", [])
+                        if entry.get("status") == "rolled_back"]
+            if restored:
+                self.hashes.move_paths({
+                    entry["target"]: entry["original"] for entry in restored},
+                    root=library_root)
+                self._library_rename_state = {
+                    "status": "failed", "error": str(err), "entries": restored}
+                ROMarr._audit_state = {
+                    "status": "stale",
+                    "platform": (partial or {}).get("platform", ""),
+                    "error": "The library changed; run Audit again to refresh it."}
+                return {"error": str(err), "entries": restored}
             return {"error": str(err)}
 
     def search_missing(self, *, auto: bool = False) -> dict:

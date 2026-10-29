@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import os
 import shlex
+import threading
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .quarantine import (_atomic_json, _fingerprint, _fsync_dir, _safe_file,
@@ -12,6 +14,16 @@ from .quarantine import (_atomic_json, _fingerprint, _fsync_dir, _safe_file,
 ROOT_NAME = ".romarr-renames"
 MAX_FILES = 50_000
 PAGE_SIZE = 5000
+_JOURNAL_LOCKS_GUARD = threading.Lock()
+_JOURNAL_LOCKS: dict[tuple[str, str], threading.RLock] = {}
+
+
+def _journal_lock(library: Path, manifest_id: str):
+    key = (str(Path(library).resolve()), str(manifest_id))
+    with _JOURNAL_LOCKS_GUARD:
+        return _JOURNAL_LOCKS.setdefault(key, threading.RLock())
+
+
 DISC_SUFFIXES = {".cue", ".gdi", ".m3u", ".ccd", ".sub", ".mds",
                  ".mdf", ".iso", ".chd", ".cso", ".pbp", ".pkg",
                  ".nsp", ".xci", ".nca", ".nsz", ".xcz"}
@@ -53,8 +65,9 @@ def _reference_paths(platform_root: Path) -> set[Path]:
     for manifest in manifests:
         try:
             lines = manifest.read_text(encoding="utf-8-sig", errors="replace").splitlines()
-        except OSError:
-            continue
+        except OSError as err:
+            raise ValueError(
+                f"Could not read reference manifest {manifest.name}: {err}") from err
         for line in lines:
             line = line.strip()
             candidate = ""
@@ -77,8 +90,9 @@ def _reference_paths(platform_root: Path) -> set[Path]:
                 try:
                     nested = ref.read_text(encoding="utf-8-sig",
                                            errors="replace").splitlines()
-                except OSError:
-                    nested = []
+                except OSError as err:
+                    raise ValueError(
+                        f"Could not read referenced set manifest {ref.name}: {err}") from err
                 for record in nested:
                     try:
                         fields = shlex.split(record.strip())
@@ -92,25 +106,31 @@ def _reference_paths(platform_root: Path) -> set[Path]:
     return protected
 
 
-def _exact_matches(dat_index, sha1: str):
-    found = []
+def _sha1_index(dat_index) -> dict[str, list]:
+    """Index every DAT match once; uniqueness still considers all DATs."""
+    index: dict[str, list] = {}
     for dat in getattr(dat_index, "dats", ()):
         for game in getattr(dat, "games", {}).values():
             for rom in getattr(game, "roms", ()):
-                if str(getattr(rom, "sha1", "") or "").lower() == sha1:
-                    found.append((dat, game, rom))
-    return found
+                key = str(getattr(rom, "sha1", "") or "").lower()
+                if key:
+                    index.setdefault(key, []).append((dat, game, rom))
+    return index
 
 
 def plan(library: Path, platform_slug: str, dat_index, *,
          scope: str = "", offset: int = 0,
-         page_size: int = 500) -> dict:
+         page_size: int = 500, layout: str = "flat") -> dict:
     """Hash one platform subtree and propose safe, paged single-file renames."""
     library = Path(library).resolve()
     if not _valid_slug(str(platform_slug or "")):
         raise ValueError("invalid platform")
     if offset < 0 or page_size < 1 or page_size > PAGE_SIZE:
         raise ValueError("invalid preview page")
+    if str(layout or "flat").strip().lower() != "flat":
+        raise ValueError(
+            "Safe renames currently support flat library layouts. "
+            "Switch this library to flat or keep its current names.")
     root = library / platform_slug
     if root.is_symlink() or not root.is_dir() or root.resolve().parent != library:
         raise ValueError("platform directory is unavailable or unsafe")
@@ -156,6 +176,7 @@ def plan(library: Path, platform_slug: str, dat_index, *,
 
     entries = []
     claims: dict[str, list[dict]] = {}
+    exact = _sha1_index(dat_index)
     for path in page:
         rel = path.relative_to(library).as_posix()
         try:
@@ -171,6 +192,7 @@ def plan(library: Path, platform_slug: str, dat_index, *,
 
         reason = ""
         target_name = ""
+        raw_checksum = ""
         lookup = dat_index.lookup(**digest)
         if path.suffix.lower() in DISC_SUFFIXES:
             reason = "Disc images and their sets are left in place."
@@ -179,11 +201,15 @@ def plan(library: Path, platform_slug: str, dat_index, *,
         elif lookup.status != VERIFIED or not lookup.rom:
             reason = "DAT could not verify this file exactly."
         else:
-            matches = _exact_matches(dat_index, sha1)
+            matches = exact.get(sha1, [])
             if (len(matches) != 1 or len(getattr(matches[0][1], "roms", ())) != 1
                     or matches[0][2] != lookup.rom):
                 reason = "The DAT identity is ambiguous or belongs to a multi-file set."
             else:
+                try:
+                    raw_checksum = raw_sha1(path)
+                except OSError as err:
+                    reason = f"Could not read file: {err}"
                 canonical = str(lookup.rom.name or "")
                 try:
                     if Path(canonical).name != canonical or "/" in canonical or chr(92) in canonical:
@@ -202,7 +228,7 @@ def plan(library: Path, platform_slug: str, dat_index, *,
                 reason = "The destination already exists (including a case-insensitive path match)."
         row = {"file": rel,
                "target": target.relative_to(library).as_posix() if target else "",
-               "sha1": sha1, "size": size, "fingerprint": fingerprint,
+               "sha1": raw_checksum or sha1, "size": size, "fingerprint": fingerprint,
                "eligible": not reason, "reason": reason}
         entries.append(row)
         if row["eligible"]:
@@ -221,8 +247,10 @@ def plan(library: Path, platform_slug: str, dat_index, *,
             "eligible": eligible, "blocked": len(entries) - eligible,
             "offset": offset, "next_offset": next_offset,
             "has_more": has_more, "truncated": truncated, "entries": entries,
-            "message": ("Scan reached the 50,000-file limit. Set a subfolder "
-                        "scope to continue in a smaller section." if truncated else "")}
+            "message": ("Scan stopped at the 50,000-file limit. Files beyond "
+                        "this preview remain untouched; a folder scope only "
+                        "scans that folder and cannot reach omitted files "
+                        "elsewhere." if truncated else "")}
 
 
 def _safe_destination(root: Path, relative: str) -> Path:
@@ -265,31 +293,105 @@ def _link_then_unlink(source: Path, target: Path, expected: str,
         target.unlink()
         _fsync_dir(target.parent)
         raise ValueError(f"file changed during rename: {source.name}")
-    source.unlink()
+    # Move the source path to a unique sibling atomically, then verify the
+    # object that actually left that path. A pathname check followed by
+    # unlink() can delete a concurrent atomic replacement between the two.
+    recovered = source.with_name(f"ROMarr-Recovery-{uuid.uuid4().hex}")
+    try:
+        os.rename(source, recovered)
+    except OSError as err:
+        raise ValueError(
+            f"could not safely remove source path {source.name}: {err}") from err
+    recovered_fingerprint = list(_fingerprint(recovered))
+    if (recovered_fingerprint[:4] != before[:4]
+            or recovered.is_symlink() or raw_sha1(recovered) != expected):
+        if not recovered.is_symlink() and not source.exists() and not source.is_symlink():
+            try:
+                os.link(recovered, source)
+                recovered.unlink()
+                _fsync_dir(source.parent)
+            except OSError as err:
+                raise ValueError(
+                    f"source changed; preserved the replacement at {recovered}") from err
+            raise ValueError(
+                f"source changed during rename: {source.name}; "
+                "the replacement was restored and the verified target was kept")
+        raise ValueError(
+            f"source changed during rename: preserved the replacement at {recovered}")
+    staged_target = list(_fingerprint(target))
+    if (staged_target[:4] != before[:4] or raw_sha1(target) != expected):
+        if not source.exists() and not source.is_symlink():
+            try:
+                os.link(recovered, source)
+                recovered.unlink()
+                _fsync_dir(source.parent)
+            except OSError as err:
+                raise ValueError(
+                    f"destination changed; preserved source at {recovered}") from err
+        raise ValueError(
+            f"destination changed during rename: preserved source at {recovered}")
+    recovered.unlink()
     _fsync_dir(source.parent)
 
 
-def manifests(library: Path) -> list[dict]:
+def manifest_for(library: Path, manifest_id: str) -> dict | None:
+    """Read one valid journal without following links."""
     import json
+    if not str(manifest_id).isalnum():
+        return None
+    folder = Path(library) / ROOT_NAME
+    path = folder / f"manifest-{manifest_id}.json"
+    if folder.is_symlink() or path.is_symlink() or not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text("utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    data["manifest_id"] = str(manifest_id)
+    return data
+
+
+def manifests(library: Path) -> list[dict]:
     folder = Path(library) / ROOT_NAME
     if folder.is_symlink() or not folder.is_dir():
         return []
     out = []
-    for path in sorted(folder.glob("manifest-*.json")):
+    for path in folder.glob("manifest-*.json"):
         if path.is_symlink():
             continue
-        try:
-            data = json.loads(path.read_text("utf-8"))
-            if isinstance(data, dict):
-                data["manifest_id"] = path.stem.removeprefix("manifest-")
-                out.append(data)
-        except (OSError, ValueError):
+        ident = path.stem.removeprefix("manifest-")
+        data = manifest_for(library, ident)
+        if data is None:
             continue
-    return out
+        # Older journals did not record a creation time; retain a stable,
+        # useful ordering by using their filesystem timestamp.
+        if not data.get("created_at"):
+            try:
+                data["created_at"] = datetime.fromtimestamp(
+                    path.stat().st_mtime, timezone.utc).isoformat()
+            except OSError:
+                data["created_at"] = ""
+        out.append(data)
+    out.sort(key=lambda item: str(item.get("created_at") or
+                                  item.get("timestamp") or ""), reverse=True)
+    return out[:10]
 
 
 def apply(library: Path, platform_slug: str, selected: list[str],
-          planned_entries: list[dict]) -> dict:
+          planned_entries: list[dict], *, manifest_id: str | None = None) -> dict:
+    library = Path(library).resolve()
+    ident = str(manifest_id or uuid.uuid4().hex)
+    if not ident.isalnum():
+        raise ValueError("invalid rename journal id")
+    with _journal_lock(library, ident):
+        return _apply_locked(library, platform_slug, selected,
+                             planned_entries, ident)
+
+
+def _apply_locked(library: Path, platform_slug: str, selected: list[str],
+                  planned_entries: list[dict], ident: str) -> dict:
     if not selected or len(selected) != len(set(map(str, selected))):
         raise ValueError("select one or more unique files")
     library = Path(library).resolve()
@@ -318,14 +420,16 @@ def apply(library: Path, platform_slug: str, selected: list[str],
     if any(not item["original"].startswith(platform_slug + "/")
            or not item["target"].startswith(platform_slug + "/") for item in chosen):
         raise ValueError("selected paths are outside the chosen platform")
-    ident = uuid.uuid4().hex
     folder = library / ROOT_NAME
     if folder.is_symlink():
         raise ValueError("rename journal directory must not be a symlink")
     folder.mkdir(parents=True, exist_ok=True)
     _fsync_dir(library)
     manifest_path = folder / f"manifest-{ident}.json"
+    if manifest_path.exists() or manifest_path.is_symlink():
+        raise ValueError("rename journal already exists")
     data = {"version": 1, "platform": platform_slug, "status": "moving",
+            "created_at": datetime.now(timezone.utc).isoformat(),
             "entries": chosen}
     _atomic_json(manifest_path, data)
     try:
@@ -348,6 +452,14 @@ def apply(library: Path, platform_slug: str, selected: list[str],
 
 
 def rollback(library: Path, manifest_id: str) -> dict:
+    library = Path(library).resolve()
+    if not str(manifest_id).isalnum():
+        raise ValueError("invalid rename journal id")
+    with _journal_lock(library, manifest_id):
+        return _rollback_locked(library, manifest_id)
+
+
+def _rollback_locked(library: Path, manifest_id: str) -> dict:
     import json
     if not str(manifest_id).isalnum():
         raise ValueError("invalid rename journal id")
@@ -368,7 +480,10 @@ def rollback(library: Path, manifest_id: str) -> dict:
         orig_exists = original.exists()
         target_exists = target.exists()
         if orig_exists and target_exists:
-            if raw_sha1(original) != expected or raw_sha1(target) != expected:
+            expected_fingerprint = list(entry.get("fingerprint") or [])
+            if (raw_sha1(original) != expected or raw_sha1(target) != expected
+                    or len(expected_fingerprint) < 4
+                    or list(_fingerprint(target))[:4] != expected_fingerprint[:4]):
                 raise ValueError("restore collision: a file changed or appeared")
             target.unlink()
             _fsync_dir(target.parent)

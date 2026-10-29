@@ -46,6 +46,24 @@ def normalise(title: str) -> str:
     return _NOISE.sub(" ", text).strip()
 
 
+def _relative_library_path(value: str, root: str | Path | None = None) -> str:
+    text = str(value or "").replace(chr(92), "/")
+    path = Path(text)
+    if root is not None:
+        base = Path(root).resolve()
+        if not path.is_absolute():
+            path = base / path
+        try:
+            return path.resolve(strict=False).relative_to(base).as_posix()
+        except ValueError:
+            return path.as_posix()
+    return path.as_posix()
+
+
+def _library_path_key(value: str, root: str | Path | None = None) -> str:
+    return _relative_library_path(value, root).casefold()
+
+
 @dataclass
 class Entry:
     """One file, as netplay needs to see it."""
@@ -90,14 +108,22 @@ class HashIndex:
                     self._by_game[key] = sha1
         return entry
 
-    def move_paths(self, moves: dict[str, str]) -> int:
-        """Update saved paths after a verified filesystem rename."""
+    def move_paths(self, moves: dict[str, str], *,
+                   root: str | Path | None = None) -> int:
+        """Update saved paths after a verified filesystem rename.
+
+        Older entries may contain absolute import paths while audit paths and
+        rename journals are library-relative. Normalize both sides at this
+        boundary and persist the portable relative form after the move.
+        """
+        normalized = {_library_path_key(source, root): target
+                      for source, target in moves.items()}
         changed = 0
         with self._lock:
             for entry in self._by_sha1.values():
-                target = moves.get(entry.path)
+                target = normalized.get(_library_path_key(entry.path, root))
                 if target:
-                    entry.path = target
+                    entry.path = _relative_library_path(target, root)
                     changed += 1
         if changed:
             self.save()

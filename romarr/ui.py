@@ -2241,7 +2241,7 @@ RENDER.stats=async()=>{
       <p class="help">ROMarr suggests canonical names only for files it verifies
         against an exact, single-file DAT entry. Review the old and new path,
         select what you want, then confirm. Disc sets and ambiguous matches stay put.
-        Files in a subfolder move to the platform folder; empty folders are left alone.</p>
+        In flat layouts, files in a subfolder move to the platform folder; empty folders are left alone. Nested layouts are left untouched with an explanation.</p>
       <div class="row"><select id="rn-plat">${PLATFORMS.map(p=>
         '<option value="'+esc(p.slug)+'">'+esc(p.name)+'</option>').join('')}</select>
         <input id="rn-scope" placeholder="Optional subfolder (leave blank for all)" aria-label="Optional folder inside the platform">
@@ -2382,20 +2382,18 @@ RENDER.stats=async()=>{
         (a.offset>0||a.has_more?'<div class="row">'+
           '<button class="btn ghost" id="rn-prev-page" '+(a.offset===0?'disabled':'')+'>Previous batch</button>'+
           '<button class="btn ghost" id="rn-next-page" '+(!a.has_more||(a.truncated&&a.next_offset>=a.candidate_count)?'disabled':'')+'>Next batch</button></div>':'')+
-        (a.truncated?'<p class="help">This folder reached the 50,000-file cap. Enter a subfolder above to scan the remaining files.</p>':'')+
         (a.message?'<p class="help">'+esc(a.message)+'</p>':'')+
-        (eligible.length?'<h4>Suggested changes</h4><div style="max-height:320px;overflow:auto">'+eligible.slice(0,200).map(x=>
+        (eligible.length?'<h4>Suggested changes</h4><div style="max-height:320px;overflow:auto">'+eligible.map(x=>
           '<label style="display:block"><input type="checkbox" class="rn-file" value="'+esc(x.file)+'"> <code>'+
           esc(x.file)+'</code> &rarr; <code>'+esc(x.target)+'</code></label>').join('')+'</div>':'')+
-        (eligible.length>200?'<p class="help">Only the first 200 suggestions are shown. Narrow the platform folder to select more.</p>':'')+
         (blocked.length?'<details><summary class="help" style="cursor:pointer">Why '+blocked.length+
           ' file(s) were skipped</summary><div style="max-height:260px;overflow:auto;font-size:12px;color:var(--dim)">'+
           blocked.slice(0,300).map(x=>'<div><code>'+esc(x.file)+'</code> - '+esc(x.reason||'Not safe to rename')+'</div>').join('')+
           '</div></details>':'')+
         (eligible.length?'<p><button class="btn" id="rn-apply">Rename selected files</button></p>':'');
       const prevPage=$('#rn-prev-page'), nextPage=$('#rn-next-page');
-      if(prevPage)prevPage.onclick=()=>startRenamePreview(Math.max(0,a.offset-500));
-      if(nextPage)nextPage.onclick=()=>startRenamePreview(a.next_offset||0);
+      if(prevPage)prevPage.onclick=()=>startRenamePreview(Math.max(0,a.offset-500),a.platform,a.scope);
+      if(nextPage)nextPage.onclick=()=>startRenamePreview(a.next_offset||0,a.platform,a.scope);
       const applyButton=$('#rn-apply');
       if(applyButton)applyButton.onclick=async()=>{
         const files=[...rnOut.querySelectorAll('.rn-file:checked')].map(x=>x.value);
@@ -2412,7 +2410,7 @@ RENDER.stats=async()=>{
     }else{
       rnOut.innerHTML='<p class="help">No preview yet. Choose a platform with DATs loaded under Settings, then preview.</p>';
     }
-    const journals=(data.manifests||[]).filter(m=>m.status!=='rolled_back').slice(-10).reverse();
+    const journals=(data.manifests||[]).filter(m=>m.status!=='rolled_back').slice(0,10);
     rnJournals.innerHTML=journals.length?'<h4>Rename history</h4>'+journals.map(m=>
       '<div class="row" style="justify-content:space-between"><span class="help">'+
       esc(m.status)+' - '+(m.entries||[]).length+' file(s) - <code>'+esc(m.manifest_id||'')+
@@ -2430,12 +2428,11 @@ RENDER.stats=async()=>{
     });
   };
   j('/api/v1/audit/renames').then(paintRenameState).catch(()=>{});
-  const startRenamePreview=async(offset=0)=>{
+  const startRenamePreview=async(offset=0,platform=$('#rn-plat').value,scope=$('#rn-scope').value)=>{
     clearInterval(rnTimer);
     const started=await j('/api/v1/audit/renames/preview',{method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({platform:$('#rn-plat').value,
-        scope:$('#rn-scope').value,offset})});
+      body:JSON.stringify({platform,scope,offset})});
     if(started.error){toast(started.error);return;}
     paintRenameState({preview:started,manifests:[]});
     rnTimer=setInterval(async()=>{
