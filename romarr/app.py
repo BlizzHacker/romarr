@@ -61,7 +61,7 @@ from .downloaders import (
     hand_off_with_id, match_queue_item, merge_secrets, pick_client, redact,
 )
 from .indexers import INDEXER_TYPES, build_indexer, merge_indexer_secrets, redact_indexer
-from .indexers import Prowlarr, ProwlarrConfig
+from .indexers import Prowlarr, ProwlarrConfig, ProwlarrDownloadError
 from .library import import_rom, map_remote_path, platform_dir
 from .collections import is_translation
 from .auth import DISABLED as AUTH_DISABLED
@@ -1761,15 +1761,37 @@ class ROMarr:
         if (external_request_id
                 and not self.store.mark_seerr_dispatching(external_request_id)):
             return {"ok": False, "error": "the request was cancelled"}
-        ok, download_id = hand_off_with_id(client, pick.download_url,
-                                           name=pick.title)
+        failure_detail = f"{client.name} rejected the release"
+        release_fault = True
+        local_fetch = getattr(self.prowlarr, "is_prowlarr_download_url", None)
+        if (isinstance(client, QBittorrent) and callable(local_fetch)
+                and local_fetch(pick.download_url)):
+            # Prowlarr's authenticated URL is LAN-only and contains its API
+            # key. Fetch it here, then upload only the .torrent bytes to the
+            # download client; never give qBittorrent that URL.
+            try:
+                torrent = self.prowlarr.fetch_torrent(pick.download_url)
+            except ProwlarrDownloadError as err:
+                ok, download_id = False, ""
+                release_fault = False
+                failure_detail = str(err)
+            else:
+                ok = client.add_torrent_file(torrent)
+                download_id = client.last_job_id if ok else ""
+                release_fault = False
+                if not ok:
+                    failure_detail = (
+                        "qBittorrent did not confirm the uploaded torrent")
+        else:
+            ok, download_id = hand_off_with_id(client, pick.download_url,
+                                               name=pick.title)
         item = QueueItem(game, platform_slug, pick.title, pick.seeders,
                          "grabbed" if ok else "failed",
-                         "" if ok else f"{client.name} rejected the release",
+                         "" if ok else failure_detail,
                          release_id=release_id(pick),
                          indexer=getattr(pick, "indexer", ""),
                          size=getattr(pick, "size", 0),
-                         release_fault=not ok,
+                         release_fault=release_fault if not ok else False,
                          external_request_id=external_request_id,
                          download_id=download_id)
         self.store.enqueue(item)
@@ -1798,7 +1820,10 @@ class ROMarr:
             if external_request_id:
                 self.store.update_seerr_request(external_request_id,
                                                 error=item.detail, status="failed")
-        return {"ok": ok, "release": pick.title, "seeders": pick.seeders}
+        result = {"ok": ok, "release": pick.title, "seeders": pick.seeders}
+        if not ok:
+            result["error"] = failure_detail
+        return result
 
     # -- interactive search -------------------------------------------------
     #

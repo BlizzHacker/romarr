@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from urllib.parse import urlencode
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 import requests
 
@@ -29,6 +29,106 @@ log = logging.getLogger(__name__)
 
 # Newznab category ids sent with every search. Console + PC games only.
 SEARCH_CATEGORIES = (1000, 4050)
+
+# A .torrent metainfo file is small compared with the ROMs it describes. Keep
+# the local proxy bounded so a broken or hostile indexer cannot fill RAM.
+MAX_TORRENT_BYTES = 32 * 1024 * 1024
+MAX_BENCODE_TOKENS = 500_000
+MAX_BENCODE_DEPTH = 64
+
+
+class ProwlarrDownloadError(ValueError):
+    """A Prowlarr torrent could not be fetched safely."""
+
+
+def _close_response(response) -> None:
+    close = getattr(response, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception:
+            pass
+
+
+def _read_bencoded_string(data: bytes, pos: int) -> tuple[bytes, int]:
+    colon = data.find(b":", pos)
+    if colon < 0:
+        raise ValueError("missing string length")
+    length_text = data[pos:colon]
+    if (not length_text or not length_text.isdigit()
+            or (len(length_text) > 1 and length_text.startswith(b"0"))):
+        raise ValueError("invalid string length")
+    length = int(length_text)
+    end = colon + 1 + length
+    if end > len(data):
+        raise ValueError("string runs past end")
+    return data[colon + 1:end], end
+
+
+def _skip_bencoded(data: bytes, pos: int, *, depth: int,
+                   budget: list[int]) -> int:
+    """Validate and skip one bencode value without building a ROM-sized tree."""
+    if depth > MAX_BENCODE_DEPTH:
+        raise ValueError("bencode nesting is too deep")
+    budget[0] -= 1
+    if budget[0] < 0 or pos >= len(data):
+        raise ValueError("bencode is too large or incomplete")
+    marker = data[pos]
+    if 48 <= marker <= 57:
+        _, end = _read_bencoded_string(data, pos)
+        return end
+    if marker == ord("i"):
+        end = data.find(b"e", pos + 1)
+        if end < 0:
+            raise ValueError("unterminated integer")
+        value = data[pos + 1:end]
+        digits = value[1:] if value.startswith(b"-") else value
+        if (not digits or not digits.isdigit()
+                or value.startswith(b"+")
+                or (len(digits) > 1 and digits.startswith(b"0"))
+                or value == b"-0"):
+            raise ValueError("invalid integer")
+        return end + 1
+    if marker in (ord("l"), ord("d")):
+        is_dict = marker == ord("d")
+        pos += 1
+        while pos < len(data) and data[pos] != ord("e"):
+            if is_dict:
+                budget[0] -= 1
+                if budget[0] < 0:
+                    raise ValueError("bencode has too many values")
+                _, pos = _read_bencoded_string(data, pos)
+                if pos >= len(data) or data[pos] == ord("e"):
+                    raise ValueError("dictionary has no value")
+            pos = _skip_bencoded(data, pos, depth=depth + 1,
+                                 budget=budget)
+        if pos >= len(data):
+            raise ValueError("unterminated collection")
+        return pos + 1
+    raise ValueError("invalid bencode marker")
+
+
+def _is_torrent_payload(data: bytes) -> bool:
+    """Require a complete bencoded dictionary with a dictionary-valued info."""
+    if not isinstance(data, bytes) or len(data) < 8 or data[:1] != b"d":
+        return False
+    pos = 1
+    found_info = False
+    budget = [MAX_BENCODE_TOKENS]
+    try:
+        while pos < len(data) and data[pos] != ord("e"):
+            budget[0] -= 1
+            if budget[0] < 0:
+                return False
+            key, pos = _read_bencoded_string(data, pos)
+            if key == b"info":
+                if pos >= len(data) or data[pos] != ord("d"):
+                    return False
+                found_info = True
+            pos = _skip_bencoded(data, pos, depth=1, budget=budget)
+        return found_info and pos == len(data) - 1 and data[pos:] == b"e"
+    except (ValueError, OverflowError):
+        return False
 
 
 # Trackers merged into a rebuilt magnet. An infoHash alone is enough only if
@@ -174,6 +274,117 @@ class Prowlarr:
         response.raise_for_status()
         privacy = self._private_ids()
         return [self._to_release(row, privacy) for row in response.json()]
+
+    def is_prowlarr_download_url(self, url: str) -> bool:
+        """Whether a result URL points back to this configured Prowlarr host.
+
+        Only URLs on this explicitly configured origin are eligible for local
+        fetching. A result cannot make ROMarr request an arbitrary LAN target.
+        """
+        try:
+            target = urlsplit(str(url))
+            base = urlsplit(self._config.base_url)
+            if (target.username is not None or target.password is not None
+                    or base.username is not None or base.password is not None
+                    or target.scheme.lower() not in ("http", "https")
+                    or base.scheme.lower() not in ("http", "https")
+                    or not target.hostname or not base.hostname):
+                return False
+            target_port = target.port or (443 if target.scheme.lower() == "https" else 80)
+            base_port = base.port or (443 if base.scheme.lower() == "https" else 80)
+            return (target.scheme.lower() == base.scheme.lower()
+                    and target.hostname.lower() == base.hostname.lower()
+                    and target_port == base_port)
+        except (TypeError, ValueError):
+            return False
+
+    @staticmethod
+    def _without_api_key(url: str) -> str:
+        parts = urlsplit(url)
+        query = [(key, value) for key, value in
+                 parse_qsl(parts.query, keep_blank_values=True)
+                 if key.lower() != "apikey"]
+        return urlunsplit((parts.scheme, parts.netloc, parts.path,
+                           urlencode(query, doseq=True), ""))
+
+    def fetch_torrent(self, download_url: str) -> bytes:
+        """Fetch a Prowlarr torrent locally without exposing its URL to qBittorrent.
+
+        Redirects stay on the configured Prowlarr origin. In particular, a
+        redirect cannot send the API key to an indexer or another host.
+        """
+        if not self.is_prowlarr_download_url(download_url):
+            raise ProwlarrDownloadError(
+                "Prowlarr returned a download outside its configured host")
+        current = download_url
+        for _ in range(6):
+            if not self.is_prowlarr_download_url(current):
+                raise ProwlarrDownloadError(
+                    "Prowlarr redirected the download outside its configured host")
+            try:
+                response = self._session.get(
+                    self._without_api_key(current),
+                    headers={"X-Api-Key": self._config.api_key},
+                    timeout=self._config.timeout, stream=True,
+                    allow_redirects=False)
+            except requests.RequestException as err:
+                raise ProwlarrDownloadError(
+                    "could not fetch the torrent from Prowlarr") from err
+            if response.status_code in (301, 302, 303, 307, 308):
+                location = (getattr(response, "headers", {}) or {}).get("Location", "")
+                if not location:
+                    _close_response(response)
+                    raise ProwlarrDownloadError(
+                        "Prowlarr redirected the download without a location")
+                current = urljoin(current, location)
+                _close_response(response)
+                continue
+            if not response.ok:
+                _close_response(response)
+                raise ProwlarrDownloadError(
+                    f"Prowlarr torrent request failed with HTTP {response.status_code}")
+            length = (getattr(response, "headers", {}) or {}).get("Content-Length")
+            if length:
+                try:
+                    declared_size = int(length)
+                except (TypeError, ValueError):
+                    _close_response(response)
+                    raise ProwlarrDownloadError(
+                        "Prowlarr returned an invalid torrent size")
+                if declared_size < 0:
+                    _close_response(response)
+                    raise ProwlarrDownloadError(
+                        "Prowlarr returned an invalid torrent size")
+                if declared_size > MAX_TORRENT_BYTES:
+                    _close_response(response)
+                    raise ProwlarrDownloadError(
+                        "Prowlarr torrent exceeds the 32 MiB safety limit")
+            chunks = []
+            total = 0
+            try:
+                for chunk in response.iter_content(chunk_size=64 * 1024):
+                    if not chunk:
+                        continue
+                    total += len(chunk)
+                    if total > MAX_TORRENT_BYTES:
+                        raise ProwlarrDownloadError(
+                            "Prowlarr torrent exceeds the 32 MiB safety limit")
+                    chunks.append(chunk)
+            except ProwlarrDownloadError:
+                _close_response(response)
+                raise
+            except Exception as err:
+                _close_response(response)
+                raise ProwlarrDownloadError(
+                    "could not read the torrent response from Prowlarr") from err
+            payload = b"".join(chunks)
+            _close_response(response)
+            if not _is_torrent_payload(payload):
+                raise ProwlarrDownloadError(
+                    "Prowlarr did not return a valid torrent file")
+            return payload
+        raise ProwlarrDownloadError(
+            "Prowlarr returned too many redirects for the torrent")
 
     @staticmethod
     def _to_release(row: dict, privacy: dict[int, bool] | None = None) -> Release:
