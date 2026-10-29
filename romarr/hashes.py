@@ -90,6 +90,19 @@ class HashIndex:
                     self._by_game[key] = sha1
         return entry
 
+    def move_paths(self, moves: dict[str, str]) -> int:
+        """Update saved paths after a verified filesystem rename."""
+        changed = 0
+        with self._lock:
+            for entry in self._by_sha1.values():
+                target = moves.get(entry.path)
+                if target:
+                    entry.path = target
+                    changed += 1
+        if changed:
+            self.save()
+        return changed
+
     def clear_platform(self, platform: str) -> int:
         """Forget one platform, so re-auditing it replaces rather than adds."""
         slug = str(platform or "").lower()

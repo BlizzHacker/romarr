@@ -108,7 +108,7 @@ from .ui import login_page as ui_login_page
 
 log = logging.getLogger(__name__)
 
-VERSION = "1.6.0"
+VERSION = "1.8.0"
 
 # What ROMarr labels its own downloads with, so its jobs are distinguishable
 # from everything else in a shared client -- the same reason Radarr and Sonarr
@@ -4659,6 +4659,84 @@ class ROMarr:
         except (OSError, ValueError) as err:
             return {"error": str(err)}
 
+    def preview_library_renames(self, platform_slug: str, *,
+                                scope: str = "", offset: int = 0) -> dict:
+        """Build a DAT-verified, read-only preview in a background thread."""
+        import threading as _threading
+
+        active = getattr(self, "_library_rename_thread", None)
+        if active is not None and active.is_alive():
+            return dict(self._library_rename_state)
+        platform = resolve(platform_slug)
+        if platform is None:
+            return {"error": f"unknown platform: {platform_slug!r}"}
+        if self.dats is None:
+            return {"error": "load DATs under Settings -> Media Management first"}
+        library_root = Path(self.library).resolve()
+        dats = self.dats
+        state = {"status": "running", "platform": platform.slug,
+                 "scanned": 0, "entries": []}
+        self._library_rename_root = library_root
+        self._library_rename_state = state
+
+        def run():
+            try:
+                from .library_rename import plan
+                state.update(plan(library_root, platform.slug, dats,
+                                   scope=scope, offset=offset))
+            except (OSError, ValueError) as err:
+                state.update(status="failed", error=str(err))
+
+        self._library_rename_thread = _threading.Thread(
+            target=run, name="romarr-library-rename-preview", daemon=True)
+        self._library_rename_thread.start()
+        return dict(state)
+
+    def library_rename_state(self) -> dict:
+        from .library_rename import manifests
+        return {"preview": dict(getattr(self, "_library_rename_state", {}) or
+                                {"status": "never run"}),
+                "manifests": manifests(self.library)}
+
+    def apply_library_renames(self, platform_slug: str,
+                              files: list[str]) -> dict:
+        from .library_rename import apply
+        state = getattr(self, "_library_rename_state", {}) or {}
+        if state.get("status") != "done" or state.get("platform") != platform_slug:
+            return {"error": "run a completed preview for this platform first"}
+        preview_root = getattr(self, "_library_rename_root", None)
+        if preview_root is None or Path(self.library).resolve() != preview_root:
+            return {"error": "library path changed since preview; run a new preview"}
+        try:
+            result = apply(preview_root, platform_slug, files,
+                           state.get("entries") or [])
+            self.hashes.move_paths({
+                entry["original"]: entry["target"]
+                for entry in result.get("entries", [])})
+            self._library_rename_state = {
+                "status": "applied", "platform": platform_slug,
+                "entries": result.get("entries", [])}
+            ROMarr._audit_state = {
+                "status": "stale", "platform": platform_slug,
+                "error": "The library changed; run Audit again to refresh it."}
+            return result
+        except (OSError, ValueError) as err:
+            return {"error": str(err)}
+
+    def rollback_library_renames(self, manifest_id: str) -> dict:
+        from .library_rename import rollback
+        try:
+            result = rollback(self.library, manifest_id)
+            self.hashes.move_paths({
+                entry["target"]: entry["original"]
+                for entry in result.get("entries", [])
+                if entry.get("status") == "rolled_back"})
+            self._library_rename_state = {
+                "status": "rolled_back", "entries": result.get("entries", [])}
+            return result
+        except (OSError, ValueError) as err:
+            return {"error": str(err)}
+
     def search_missing(self, *, auto: bool = False) -> dict:
         """Retry Wanted, the way *arr's missing search does.
 
@@ -6122,6 +6200,8 @@ def make_handler(service: ROMarr):
                                   or {"status": "never run"})
             if route.path == "/api/v1/audit/quarantine":
                 return self._json(200, service.duplicate_quarantine_state())
+            if route.path == "/api/v1/audit/renames":
+                return self._json(200, service.library_rename_state())
             if route.path == "/api/v1/stats":
                 return self._json(200, service.stats())
             if route.path == "/api/v1/integration/info":
@@ -6706,6 +6786,18 @@ def make_handler(service: ROMarr):
                 return self._json(200, service.quarantine_duplicates(
                     str(body.get("platform") or ""),
                     list(body.get("files") or [])))
+            if route.path == "/api/v1/audit/renames/preview":
+                return self._json(200, service.preview_library_renames(
+                    str(body.get("platform") or ""),
+                    scope=str(body.get("scope") or ""),
+                    offset=max(0, int(body.get("offset") or 0))))
+            if route.path == "/api/v1/audit/renames/apply":
+                return self._json(200, service.apply_library_renames(
+                    str(body.get("platform") or ""),
+                    list(body.get("files") or [])))
+            if route.path == "/api/v1/audit/renames/rollback":
+                return self._json(200, service.rollback_library_renames(
+                    str(body.get("manifest_id") or "")))
             if route.path == "/api/v1/audit/restore":
                 return self._json(200, service.restore_duplicate(
                     str(body.get("manifest_id") or ""),
