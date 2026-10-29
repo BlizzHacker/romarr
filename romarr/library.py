@@ -251,19 +251,39 @@ class _BsdtarSource(_Source):
                 while not finished.wait(1):
                     if time.monotonic() - last_byte[0] > self.STALL_TIMEOUT:
                         stalled.set()
-                        proc.kill()
+                        if proc.poll() is None:
+                            try:
+                                proc.kill()
+                            except OSError:
+                                # It may have exited between poll() and kill().
+                                pass
                         return
 
             guard = threading.Thread(target=watchdog, daemon=True)
             guard.start()
+            exited_after_eof = False
             try:
                 hashes = hash_stream(_Progress(), suffix=suffix)
+                try:
+                    # EOF only means stdout closed. Keep the child bounded too:
+                    # a broken helper can close stdout and then hang forever.
+                    proc.wait(timeout=self.STALL_TIMEOUT)
+                except subprocess.TimeoutExpired:
+                    exited_after_eof = True
+                    if proc.poll() is None:
+                        proc.kill()
+                    proc.wait()
             except BaseException:
-                proc.kill()
+                if proc.poll() is None:
+                    proc.kill()
+                proc.wait()
                 raise
             finally:
                 finished.set()
                 guard.join()
+        if exited_after_eof:
+            raise TimeoutError(f"bsdtar did not exit within {self.STALL_TIMEOUT}s "
+                               f"after finishing {name!r}")
         if stalled.is_set():
             raise TimeoutError(f"bsdtar produced nothing for {self.STALL_TIMEOUT}s "
                                f"while extracting {name!r}")

@@ -9,8 +9,10 @@ streamed path to the exact answers `hash_bytes` gives, headers included.
 from __future__ import annotations
 
 import io
+import os
 import shutil
 import subprocess
+import time
 import zipfile
 from pathlib import Path
 
@@ -94,10 +96,9 @@ def _fake_bsdtar(tmp_path: Path, body: str) -> str:
     return str(tool)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="fake bsdtar helper uses a POSIX shell")
 def test_stalled_bsdtar_is_killed_and_reported_unknown(tmp_path: Path):
     """A bsdtar that stops producing output must not hang verification."""
-    import time
-
     tool = _fake_bsdtar(tmp_path, "printf 'partial'; exec sleep 60")
     src = library._BsdtarSource(tmp_path / "game.7z", tool)
     src.STALL_TIMEOUT = 1
@@ -109,6 +110,7 @@ def test_stalled_bsdtar_is_killed_and_reported_unknown(tmp_path: Path):
     assert time.monotonic() - started < 15
 
 
+@pytest.mark.skipif(os.name == "nt", reason="fake bsdtar helper uses a POSIX shell")
 def test_slow_but_steady_bsdtar_is_not_a_stall(tmp_path: Path):
     """Only silence counts: a stream that keeps trickling is left alone."""
     tool = _fake_bsdtar(tmp_path, "for i in 1 2 3 4; do printf 'abcd'; sleep 0.6; done")
@@ -117,8 +119,21 @@ def test_slow_but_steady_bsdtar_is_not_a_stall(tmp_path: Path):
     assert src.hash("game.bin", ".bin") == hash_bytes(b"abcd" * 4)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="fake bsdtar helper uses a POSIX shell")
 def test_failing_bsdtar_raises(tmp_path: Path):
     tool = _fake_bsdtar(tmp_path, "exit 3")
     src = library._BsdtarSource(tmp_path / "game.7z", tool)
     with pytest.raises(subprocess.CalledProcessError):
         src.hash("game.bin", ".bin")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="fake bsdtar helper uses a POSIX shell")
+def test_bsdtar_that_closes_stdout_but_hangs_returns_unknown(tmp_path: Path):
+    """EOF must not let a still-running bsdtar hang verification."""
+    tool = _fake_bsdtar(tmp_path, "exec 1>&-; exec sleep 60")
+    src = library._BsdtarSource(tmp_path / "game.7z", tool)
+    src.STALL_TIMEOUT = 1
+
+    started = time.monotonic()
+    assert verify_set(src, ["game.iso"], object()).status == UNKNOWN
+    assert time.monotonic() - started < 15
