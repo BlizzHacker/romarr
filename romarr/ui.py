@@ -2238,6 +2238,17 @@ RENDER.stats=async()=>{
         <button class="btn" id="au-go">Audit</button></div>
       <div id="au-out" style="margin-top:10px"></div>
       <div id="au-quarantine" style="margin-top:10px"></div></div>
+    <div class="card"><h3>Fix existing filenames</h3>
+      <p class="help">ROMarr suggests canonical names only for files it verifies
+        against an exact, single-file DAT entry. Review the old and new path,
+        select what you want, then confirm. Disc sets and ambiguous matches stay put.
+        In flat layouts, files in a subfolder move to the platform folder; empty folders are left alone. Nested layouts are left untouched with an explanation.</p>
+      <div class="row"><select id="rn-plat">${PLATFORMS.map(p=>
+        '<option value="'+esc(p.slug)+'">'+esc(p.name)+'</option>').join('')}</select>
+        <input id="rn-scope" placeholder="Optional subfolder (leave blank for all)" aria-label="Optional folder inside the platform">
+        <button class="btn" id="rn-preview">Preview safe renames</button></div>
+      <div id="rn-out" style="margin-top:10px"></div>
+      <div id="rn-journals" style="margin-top:10px"></div></div>
     <div class="card"><h3>Shelf</h3><div class="st">
       <div><b>${(s.statuses||{}).playing||0}</b><span>Playing</span></div>
       <div><b>${(s.statuses||{}).completed||0}</b><span>Completed</span></div>
@@ -2349,6 +2360,90 @@ RENDER.stats=async()=>{
       if(s&&s.status!=='running') clearInterval(auditTimer);
     },2000);
   };
+
+  const rnOut=$('#rn-out'), rnJournals=$('#rn-journals');
+  let rnTimer=null;
+  const paintRenameState=data=>{
+    if(!rnOut||!rnJournals)return;
+    const a=data.preview||{status:'never run'};
+    if(a.status==='running'){
+      rnOut.innerHTML='<p class="help">Checking files against the loaded DATs. This can take a while on a large platform.</p>';
+    }else if(a.status==='failed'||a.error){
+      rnOut.innerHTML='<p class="help">'+esc(a.error||'Preview failed')+'</p>';
+    }else if(a.status==='applied'){
+      rnOut.innerHTML='<p class="help">Selected names updated. Check the rename history below to restore the originals if needed. Run another preview to continue.</p>';
+    }else if(a.status==='rolled_back'){
+      rnOut.innerHTML='<p class="help">Original names restored. Run a new preview to check the library again.</p>';
+    }else if(a.status==='done'){
+      const rows=a.entries||[], eligible=rows.filter(x=>x.eligible);
+      const blocked=rows.filter(x=>!x.eligible);
+      rnOut.innerHTML='<p class="help">'+(a.candidate_count||a.scanned||0)+' candidate file(s) in this scope; '+
+        'showing '+(a.scanned?(a.offset+1):0)+'-'+(a.offset+a.scanned)+'; '+
+        (a.eligible||0)+' safe suggestion(s), '+(a.blocked||0)+' left untouched.</p>'+
+        (a.offset>0||a.has_more?'<div class="row">'+
+          '<button class="btn ghost" id="rn-prev-page" '+(a.offset===0?'disabled':'')+'>Previous batch</button>'+
+          '<button class="btn ghost" id="rn-next-page" '+(!a.has_more||(a.truncated&&a.next_offset>=a.candidate_count)?'disabled':'')+'>Next batch</button></div>':'')+
+        (a.message?'<p class="help">'+esc(a.message)+'</p>':'')+
+        (eligible.length?'<h4>Suggested changes</h4><div style="max-height:320px;overflow:auto">'+eligible.map(x=>
+          '<label style="display:block"><input type="checkbox" class="rn-file" value="'+esc(x.file)+'"> <code>'+
+          esc(x.file)+'</code> &rarr; <code>'+esc(x.target)+'</code></label>').join('')+'</div>':'')+
+        (blocked.length?'<details><summary class="help" style="cursor:pointer">Why '+blocked.length+
+          ' file(s) were skipped</summary><div style="max-height:260px;overflow:auto;font-size:12px;color:var(--dim)">'+
+          blocked.slice(0,300).map(x=>'<div><code>'+esc(x.file)+'</code> - '+esc(x.reason||'Not safe to rename')+'</div>').join('')+
+          '</div></details>':'')+
+        (eligible.length?'<p><button class="btn" id="rn-apply">Rename selected files</button></p>':'');
+      const prevPage=$('#rn-prev-page'), nextPage=$('#rn-next-page');
+      if(prevPage)prevPage.onclick=()=>startRenamePreview(Math.max(0,a.offset-500),a.platform,a.scope);
+      if(nextPage)nextPage.onclick=()=>startRenamePreview(a.next_offset||0,a.platform,a.scope);
+      const applyButton=$('#rn-apply');
+      if(applyButton)applyButton.onclick=async()=>{
+        const files=[...rnOut.querySelectorAll('.rn-file:checked')].map(x=>x.value);
+        if(!files.length){toast('Select at least one file to rename.');return;}
+        if(!confirm('Rename '+files.length+' verified file(s) to the paths shown? ROMarr will keep a journal so you can roll this back.'))return;
+        applyButton.disabled=true;
+        const result=await j('/api/v1/audit/renames/apply',{method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({platform:a.platform,files})});
+        if(result.error){toast(result.error);applyButton.disabled=false;return;}
+        toast('Renamed '+result.entries.length+' file(s).');
+        paintRenameState(await j('/api/v1/audit/renames').catch(()=>data));
+      };
+    }else{
+      rnOut.innerHTML='<p class="help">No preview yet. Choose a platform with DATs loaded under Settings, then preview.</p>';
+    }
+    const journals=(data.manifests||[]).filter(m=>m.status!=='rolled_back').slice(0,10);
+    rnJournals.innerHTML=journals.length?'<h4>Rename history</h4>'+journals.map(m=>
+      '<div class="row" style="justify-content:space-between"><span class="help">'+
+      esc(m.status)+' - '+(m.entries||[]).length+' file(s) - <code>'+esc(m.manifest_id||'')+
+      '</code></span><button class="btn ghost rn-rollback" data-id="'+esc(m.manifest_id||'')+'">Restore original names</button></div>'
+    ).join(''):'';
+    rnJournals.querySelectorAll('.rn-rollback').forEach(button=>button.onclick=async()=>{
+      if(!confirm('Restore the original names? ROMarr will refuse to overwrite a file that appeared in the meantime.'))return;
+      button.disabled=true;
+      const result=await j('/api/v1/audit/renames/rollback',{method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({manifest_id:button.dataset.id})});
+      if(result.error){toast(result.error);button.disabled=false;return;}
+      toast('Original names restored.');
+      paintRenameState(await j('/api/v1/audit/renames').catch(()=>data));
+    });
+  };
+  j('/api/v1/audit/renames').then(paintRenameState).catch(()=>{});
+  const startRenamePreview=async(offset=0,platform=$('#rn-plat').value,scope=$('#rn-scope').value)=>{
+    clearInterval(rnTimer);
+    const started=await j('/api/v1/audit/renames/preview',{method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({platform,scope,offset})});
+    if(started.error){toast(started.error);return;}
+    paintRenameState({preview:started,manifests:[]});
+    rnTimer=setInterval(async()=>{
+      if(!$('#rn-out')){clearInterval(rnTimer);return;}
+      const current=await j('/api/v1/audit/renames').catch(()=>null);
+      if(current)paintRenameState(current);
+      if(current&&current.preview&&current.preview.status!=='running')clearInterval(rnTimer);
+    },2000);
+  };
+  $('#rn-preview').onclick=()=>startRenamePreview(0);
 };
 
 RENDER.queue=async()=>{

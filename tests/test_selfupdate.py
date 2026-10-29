@@ -494,4 +494,3 @@ def test_check_update_offers_final_release_to_prerelease_build(tmp_path, monkeyp
     assert out["update_available"] is True
     assert out["latest"] == "1.7.0"
     assert len(told) == 1
-

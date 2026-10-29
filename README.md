@@ -97,6 +97,7 @@ The image includes archive tools. **ROM Hub is included on amd64/arm64; it is un
 - Prowlarr, Torznab/Newznab and torrent RSS sources; torrent, Usenet and plugin download clients.
 - DAT collection comparison, region/1G1R selection, and staged acquisition from an existing qBittorrent set torrent.
 - Exact duplicate audit, quarantine and restore; a preview comes before any move.
+- Preview-first renaming for DAT-verified single files already in a library, with a saved restore journal.
 - Multiple library destinations, notifications, import lists and frontend exports.
 - PS4, PS5 and PS Vita search/import formats, with [explicit playback and installation limits](docs/MODERN-CONSOLES.md).
 
@@ -111,6 +112,7 @@ Source access, available files, credentials and platform support vary. Check the
 | Need | Read |
 |---|---|
 | First setup and a successful import | [Getting started](docs/GETTING-STARTED.md) |
+| Safely rename existing library files | [Preview, selection and rollback guide](docs/EXISTING-LIBRARY-RENAME.md) |
 | Installation, Windows, backups, updates and environment variables | [Install guide](docs/INSTALL.md) |
 | Plugin availability and installation | [ROM Hub guide](docs/PLUGINS.md) |
 | API, library routing, players and browser downloads | [Feature reference](docs/FEATURES.md) |

@@ -20,7 +20,7 @@ Open **Settings → Libraries**. Choose **Folder** if you want ROMs saved to a d
 
 If you use RomM, Gaseous or Retrom, choose that integration and enter its address and credentials. The library's files must also be mounted into ROMarr; a working API connection alone does not give ROMarr filesystem access. Use the library test and confirm the destination is correct.
 
-**Settings → Media Management** contains folder layout options. Check these against your frontend's own platform folder names before importing a collection. Folder support does not promise that every frontend uses identical names. Existing folders are not automatically renamed or migrated.
+**Settings → Media Management** contains folder layout options. Check these against your frontend's own platform folder names before importing a collection. Folder support does not promise that every frontend uses identical names. For an existing collection, use the preview-first [safe rename guide](EXISTING-LIBRARY-RENAME.md); it only moves files after you review and select them.
 
 ## Import a ROM you already have
 
@@ -31,7 +31,7 @@ If you use RomM, Gaseous or Retrom, choose that integration and enter its addres
 5. Read the DAT result, then click **Import** on that row.
 6. Check **History** and the destination folder. If you connected a library server, check its scan result too.
 
-For a verified single-file import, **Rename on import** uses the DAT's canonical name while retaining the source extension when enabled. Unknown files retain their source filename, and existing destination files are not overwritten. This is different from changing an entire collection in place: a bulk rename and folder-migration preview is on the [roadmap](../ROADMAP.md).
+For a verified single-file import, **Rename on import** uses the DAT's canonical name while retaining the source extension when enabled. Unknown files retain their source filename, and existing destination files are not overwritten. This is different from cleaning up files that are already in a library. See the [existing-library rename guide](EXISTING-LIBRARY-RENAME.md) for the preview, limits and rollback steps.
 
 Try a copy of one file first when working with an existing collection. Multi-track discs need their track files as well as a `.cue`; an empty cue sheet alone is not a complete game.
 

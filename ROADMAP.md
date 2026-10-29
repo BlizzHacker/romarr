@@ -19,7 +19,8 @@ The fixes are in [v1.7.0](https://github.com/BlizzHacker/romarr/releases/tag/v1.
 - **[Setup Guide (#77)](https://github.com/BlizzHacker/romarr/issues/77)**: a skippable sequence for library, downloads, sources, DATs and plugins, with links back to existing configuration forms.
 - **[Clearer documentation and plugin discovery (#81)](https://github.com/BlizzHacker/romarr/issues/81)**: a short README, an existing-ROM path that does not require Prowlarr, and a separate plugin guide.
 - **[Windows app (#78)](https://github.com/BlizzHacker/romarr/issues/78)**: a native WinForms `ROMarr.exe` in a portable Windows x64 ZIP, with a bundled backend/runtime and ROM Hub. No user Python, PowerShell or .NET installation is needed. The native window controls the server and contains the full interface in its own embedded WebView2 window. Windows runtime/package checks must pass before publication; service/auto-start packaging is separate future work.
-- **[Canonical names on import (#79)](https://github.com/BlizzHacker/romarr/issues/79)**: verified single-file imports can use the DAT ROM filename when Rename on import is enabled. Source files are preserved; unknown filenames are retained. This does not rename an existing library in place.
+- **[Canonical names on import (#79)](https://github.com/BlizzHacker/romarr/issues/79)**: verified single-file imports can use the DAT ROM filename when Rename on import is enabled. Source files are preserved; unknown filenames are retained.
+- **[Existing-library rename preview (#80)](https://github.com/BlizzHacker/romarr/issues/80)**: Stats shows DAT-verified single-file suggestions, old/new paths, collisions and skip reasons. You choose each batch; ROMarr journals the changes and can restore them. Disc sets, ambiguous matches and unknown files stay untouched. Nested files are proposed for the platform folder, and empty folders are kept. [Read the limits and recovery steps](docs/EXISTING-LIBRARY-RENAME.md).
 
 These changes ship in [v1.8.0](https://github.com/BlizzHacker/romarr/releases/tag/v1.8.0). The native ZIP runs independently of Docker; the unsigned MSIX is for Store preparation and still needs the real Partner Center identity and certification.
 
@@ -27,7 +28,6 @@ These changes ship in [v1.8.0](https://github.com/BlizzHacker/romarr/releases/ta
 
 | Priority | Work | What completion needs to mean |
 |---|---|---|
-| 1 | [Existing-library rename and folder migration preview (#80)](https://github.com/BlizzHacker/romarr/issues/80) | Show every proposed old/new name, platform folder, collision and ambiguous DAT match before changing anything. Preserve a recoverable record; do not quietly reorganize a collection. |
 | 1 | Better platform-folder guidance for ES-DE and similar frontends | Show the output layout for the selected destination, explain frontend mappings, and make a missing-files comparison easy to find. |
 | 1 | Windows installation experience | Field-test the native package with real collections and archive tools, document permissions and upgrades, then assess installer/service packaging. |
 | 2 | Integration field reports | Expand live validation for library backends, download clients, Home Assistant packaging and smaller hardware. Record test conditions and remaining gaps. |
@@ -43,7 +43,7 @@ These changes ship in [v1.8.0](https://github.com/BlizzHacker/romarr/releases/ta
 The [r/ARR community thread](https://www.reddit.com/r/ARR/comments/1x9abzl/) raised concrete gaps in the experience:
 
 - [Setup, platform folders, ES-DE and missing games](https://www.reddit.com/r/ARR/comments/1x9abzl/comment/phqpinw/) → Setup Guide, folder/path explanations and the missing-collection walkthrough.
-- [Reorganizing and renaming existing files without Prowlarr](https://www.reddit.com/r/ARR/comments/1x9abzl/comment/19rjgioltvemd/) → separate local-import instructions now; a safe bulk rename/migration planner next.
+- [Reorganizing and renaming existing files without Prowlarr](https://www.reddit.com/r/ARR/comments/1x9abzl/comment/19rjgioltvemd/) - the preview-first single-file rename workflow is in v1.8.0; disc sets and ambiguous files are deliberately skipped.
 - [Native Windows use](https://www.reddit.com/r/ARR/comments/1x9abzl/comment/19rjhvwh3yg1s/) → native portable app and Windows CI, with installer/service work still open.
 - [Roadmap and deduplication](https://www.reddit.com/r/ARR/comments/1x9abzl/comment/phlnak1/) → this page and the shipped duplicate quarantine workflow.
 - [Where plugins are](https://www.reddit.com/r/ARR/comments/1x9abzl/comment/phmlahe/) and [LXC installation](https://www.reddit.com/r/ARR/comments/1x9abzl/comment/phlgsc8/) → verified catalogue links, architecture limits and correct-environment install commands.
