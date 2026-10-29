@@ -267,15 +267,24 @@ public sealed class MainWindow : Form
             await StartBackend();
             if (!IsHandleCreated || browser.CoreWebView2 is null) throw new Exception("The native window or embedded browser was not created.");
             await browser.ExecuteScriptAsync("document.getElementById('usekey').click(); document.getElementById('apikey').value=" + JsonSerializer.Serialize(key) + "; document.getElementById('f').requestSubmit();");
-            var interfaceReady = false;
+            var interfaceLoaded = false;
             for (var i = 0; i < 120; i++)
             {
                 var result = await browser.ExecuteScriptAsync("!!document.getElementById('page') && typeof RENDER !== 'undefined'");
-                if (result == "true") { interfaceReady = true; break; }
+                if (result == "true") { interfaceLoaded = true; break; }
                 await Task.Delay(250);
             }
-            if (!interfaceReady) throw new Exception("The embedded interface did not sign in.");
-            browser.CoreWebView2.Navigate(origin + "/#setup");
+            if (!interfaceLoaded) throw new Exception("The embedded interface did not load after sign-in.");
+            await browser.ExecuteScriptAsync("window.__romarrSmokeAuthProbe='pending'; fetch('/api/v1/config',{cache:'no-store'}).then(r=>window.__romarrSmokeAuthProbe=r.ok?'ok':'denied').catch(()=>window.__romarrSmokeAuthProbe='failed');");
+            var authenticated = false;
+            for (var i = 0; i < 120; i++)
+            {
+                var result = await browser.ExecuteScriptAsync("window.__romarrSmokeAuthProbe === 'ok'");
+                if (result == "true") { authenticated = true; break; }
+                await Task.Delay(250);
+            }
+            if (!authenticated) throw new Exception("The embedded interface did not authenticate its API session.");
+            await browser.ExecuteScriptAsync("location.hash='setup'");
             var guideReady = false;
             for (var i = 0; i < 80; i++)
             {
