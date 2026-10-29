@@ -128,6 +128,9 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "/api/v1/collection/step": ("POST", "Request the next slice of a batch."),
     "/api/v1/collection/control": ("POST", "pause, resume, retry or cancel a "
                                            "batch."),
+    "/api/v1/collection/reconcile": ("POST", "Fulfil Wanted titles whose "
+                                             "verified dump is already in the "
+                                             "library for a platform."),
     "/api/v1/collection/source": ("GET", "List qBittorrent set torrents and selective-acquisition jobs."),
     "/api/v1/collection/source/plan": ("POST", "Preview missing DAT files from a set torrent within a staging budget."),
     "/api/v1/collection/source/start": ("POST", "Select only the planned qBittorrent files and start a persistent staged acquisition."),

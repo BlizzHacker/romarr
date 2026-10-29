@@ -285,6 +285,91 @@ def _archive_tool_path() -> str:
     except Exception:  # noqa: BLE001
         return ""
 
+
+_WORD = re.compile(r"[a-z0-9]+")
+
+
+def _title_key(value: str) -> str:
+    """Normalise a title to lowercase alphanumeric words for comparison.
+
+    Keeping tokens separate makes sequel numbers distinct (for example, 3 is
+    not part of 3D).
+    """
+    return " ".join(_WORD.findall(str(value or "").lower()))
+
+
+
+def _fulfil_identities(name: str, outcomes) -> set[str]:
+    """Return raw names for the completed download and verified import.
+
+    Keep separators so matching can distinguish a delimited subtitle from a
+    sequel number.
+    """
+    identities = {str(name or "")}
+    for outcome in outcomes or []:
+        if not getattr(outcome, "ok", False):
+            continue
+        verification = getattr(outcome, "verification", None)
+        game = getattr(verification, "game", "") or ""
+        if game:
+            identities.add(str(game))
+        dest = getattr(outcome, "destination", None)
+        if dest is not None:
+            destination_name = dest.name if dest.is_dir() else dest.stem
+            identities.add(str(destination_name))
+    return identities
+
+
+
+_REGION_TAG = re.compile(r"\([^)]*\)")
+_TITLE_STOPWORDS = {"the"}
+
+
+def _significant_tokens(title: str) -> list[str]:
+    """Meaningful words of a title: region/lang tags stripped, stopwords out."""
+    cleaned = _REGION_TAG.sub(" ", title or "")
+    return [t for t in re.findall(r"[a-z0-9]+", cleaned.lower())
+            if t not in _TITLE_STOPWORDS]
+
+
+def _subtitle_prefix_matches(short_title: str, full_title: str) -> bool:
+    """Match a short title only when the full name marks a subtitle boundary.
+
+    An ordinary following word can be a sequel marker (World 2), so a
+    whole-word substring alone is not enough to clear a Wanted entry.
+    """
+    short_key = _title_key(_REGION_TAG.sub(" ", short_title or ""))
+    if len(_significant_tokens(short_title)) < 2:
+        return False
+    cleaned = _REGION_TAG.sub(" ", full_title or "").strip()
+    parts = re.split(r"\s+[-–—]\s+|:\s+", cleaned, maxsplit=1)
+    if len(parts) != 2 or _title_key(parts[0]) != short_key:
+        return False
+    suffix = _title_key(parts[1]).split()
+    return bool(suffix) and not suffix[0].isdigit()
+
+
+def _titles_are_same(title_a: str, title_b: str) -> bool:
+    """Compare game titles without treating a sequel or series name as its game.
+
+    Region tags and punctuation do not matter. Short catalog names may match a
+    longer DAT name when a dash or colon explicitly starts a subtitle, while
+    reordered aliases require the same significant words on both sides.
+    """
+    a = _title_key(_REGION_TAG.sub(" ", title_a or ""))
+    b = _title_key(_REGION_TAG.sub(" ", title_b or ""))
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    if (_subtitle_prefix_matches(title_a, title_b)
+            or _subtitle_prefix_matches(title_b, title_a)):
+        return True
+    return sorted(_significant_tokens(title_a)) == sorted(
+        _significant_tokens(title_b))
+
+
+
 class ROMarr:
     """The service. Holds config, clients, and the in-flight queue."""
 
@@ -2694,6 +2779,65 @@ class ROMarr:
 
     def dat_names(self) -> list[str]:
         return [d.name for d in self.dats.dats if d.name]
+
+    def reconcile_platform(self, platform_slug: str = "") -> dict:
+        """Drop Wanted entries whose verified dump is already in the library.
+
+        Closes the aliasing gap (#85/#87): a wanted title can differ from the
+        imported file's name in punctuation, word order or region tags, so it
+        survives every import and stays on the Missing tab even though the
+        bytes are present and hash-verified. Walks the platform's library dir,
+        verifies each file against the loaded DATs, and fulfils any
+        same-platform wanted title that maps to a verified dump. Runs after
+        each import (scoped to the importing platform) and via
+        ``POST /api/v1/collection/reconcile``.
+        """
+        from .library import _source_for
+        from .dat import VERIFIED as _VERIFIED, hash_bytes as _hash_bytes
+
+        platform = resolve(platform_slug)
+        if platform is None:
+            return {"ok": False,
+                    "error": f"unknown platform {platform_slug!r}",
+                    "platform": platform_slug, "dropped": 0}
+
+        verified_titles: set[str] = set()
+        for cfg, _ in self.game_libraries:
+            folder = platform_dir(self.library_root(cfg), platform_slug,
+                                  layout=self.library_layout(cfg))
+            if not folder.is_dir():
+                continue
+            for path in folder.rglob("*"):
+                if not path.is_file():
+                    continue
+                try:
+                    source = _source_for(path, platform)
+                    for member in source.names():
+                        data = source.read(member)
+                        if data is None:
+                            continue
+                        match = self.dats.lookup(**_hash_bytes(
+                            data,
+                            suffix=Path(member.replace("\\", "/")).suffix))
+                        if match.status == _VERIFIED and match.game:
+                            verified_titles.add(match.game)
+                except Exception:  # noqa: BLE001 - one bad file must not stop it
+                    continue
+
+        dropped: list[list[str]] = []
+        for w in list(self.store.wanted):
+            if w.platform != platform_slug:
+                continue
+            wanted_key = _title_key(w.game)
+            if not wanted_key:
+                continue
+            if any(_titles_are_same(w.game, vt) for vt in verified_titles):
+                self.store.fulfil(w.game, w.platform)
+                dropped.append([w.game, w.platform])
+        self.store.save()
+        return {"ok": True, "platform": platform_slug,
+                "verified": len(verified_titles), "dropped": dropped,
+                "count": len(dropped)}
 
     def collection_plan(self, dat_name: str = "", platform: str = "",
                         **policy_kw) -> dict:
@@ -5670,8 +5814,30 @@ class ROMarr:
                                 assets=imported_paths,
                                 status="available")
                 for w in list(self.store.wanted):
-                    if w.platform == platform.slug and w.game.lower() in name.lower():
+                    if w.platform != platform.slug:
+                        continue
+                    wanted_key = _title_key(w.game)
+                    if not wanted_key:
+                        continue
+                    # A wanted title may not substring-match the release it
+                    # arrived under (punctuation, region tags, or a short
+                    # IGDB/GG title versus the full no-intro name). What the
+                    # bytes *are* is known by hash verification, so match the
+                    # wanted title against the verified identities as well as
+                    # the client-reported download name.
+                    if any(_titles_are_same(w.game, identity)
+                           for identity in _fulfil_identities(name, outcomes)):
                         self.store.fulfil(w.game, w.platform)
+                # Close the aliasing gap on this platform: drop wanted titles
+                # that are already present and verified in the library but were
+                # never fulfilled (word-order/alias titles, pre-existing stale
+                # entries). Gated by setting so the hash walk can be disabled.
+                if self.store.settings.get("reconcile_after_import", True):
+                    try:
+                        self.reconcile_platform(platform.slug)
+                    except Exception:  # noqa: BLE001
+                        log.warning("reconcile after import failed for %s",
+                                    platform.slug, exc_info=True)
             results.append({"name": name, "ok": any_ok,
                             "reason": "" if any_ok else str(outcomes[0].reason),
                             "library": label})
@@ -6701,6 +6867,9 @@ def make_handler(service: ROMarr):
             if route.path == "/api/v1/collection/control":
                 return self._json(200, service.collection_control(
                     str(body.get("id") or ""), str(body.get("action") or "")))
+            if route.path == "/api/v1/collection/reconcile":
+                return self._json(200, service.reconcile_platform(
+                    str(body.get("platform") or "")))
             if route.path == "/api/v1/manualimport":
                 # The action half of Manual Import. GET scans and reports;
                 # this adopts one file the operator picked, with their
