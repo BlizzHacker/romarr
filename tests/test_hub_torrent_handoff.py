@@ -183,6 +183,35 @@ def test_a_non_magnet_source_id_is_not_resolved(monkeypatch):
     assert _FakeProc.calls == 0
 
 
+def test_a_minerva_row_resolves_its_collection_magnet_from_extra(monkeypatch):
+    _wire(monkeypatch)
+    _FakeProc.answer = _FakeSource(
+        "magnet:?xt=urn:btih:c5c78ab0432dcc14fec568ba5daad2d9cc98f4dc"
+        "&tr=udp://tracker.opentrackr.org:1337/announce",
+        "c5c78ab0432dcc14fec568ba5daad2d9cc98f4dc")
+    row = _row(
+        source_id="minerva-row:823208:abc123",
+        extra={"id": "823208", "so_id": "29812",
+               "path": "./TOSEC/Nintendo/Chrono Trigger.zip",
+               "torrent_magnet": "magnet:?xt=urn:btih:c5c78ab0432dcc14fec568ba5daad2d9cc98f4dc"})
+    out = hub.resolve_torrents([row])
+    assert out[0]["magnet"].startswith("magnet:")
+    assert out[0]["extra"]["path"] == "./TOSEC/Nintendo/Chrono Trigger.zip"
+    assert _FakeProc.calls == 1
+
+
+def test_a_minerva_resolution_error_never_uses_the_unvalidated_raw_magnet(
+        monkeypatch):
+    _wire(monkeypatch)
+    _FakeProc.answer = RuntimeError("source refused")
+    row = _row(
+        source_id="minerva-row:823208:abc123",
+        extra={"path": "./TOSEC/Nintendo/Chrono Trigger.zip",
+               "torrent_magnet": "magnet:?xt=urn:btih:abc"})
+    out = hub.resolve_torrents([row])
+    assert "magnet" not in out[0]
+
+
 def test_a_refusal_falls_back_to_the_raw_magnet(monkeypatch):
     # The search row already carries a working magnet; a resolve failure
     # degrades to DHT-only rather than losing the result entirely.
@@ -231,7 +260,9 @@ def test_a_resolved_magnet_row_becomes_a_torrent_release(tmp_path, monkeypatch):
     from romarr.selection import Release
 
     svc = ROMarr(env={"ROMARR_DATA": str(tmp_path / "s.json")})
-    row = _row()
+    row = _row(extra={"path": "./TOSEC/Nintendo/Chrono Trigger.zip",
+                      "torrent_magnet": "magnet:?xt=urn:btih:"
+                      "c5c78ab0432dcc14fec568ba5daad2d9cc98f4dc"})
     row["magnet"] = ("magnet:?xt=urn:btih:c5c78ab0432dcc14fec568ba5daad2d9cc98f4dc"
                      "&tr=udp://tracker.opentrackr.org:1337/announce")
     monkeypatch.setattr(svc, "_hub_enabled", lambda: True)
@@ -246,6 +277,21 @@ def test_a_resolved_magnet_row_becomes_a_torrent_release(tmp_path, monkeypatch):
     assert rel.download_url.startswith("magnet:")
     assert rel.indexer == "hub:minerva-archive"
     assert rel.info_url.endswith("/rom?id=823208")
+    assert rel.torrent_file_path == "./TOSEC/Nintendo/Chrono Trigger.zip"
+    assert rel.file_selection_required is True
+
+
+def test_minerva_row_without_exact_path_is_not_offered_as_a_torrent(
+        tmp_path, monkeypatch):
+    from romarr.app import ROMarr
+
+    svc = ROMarr(env={"ROMARR_DATA": str(tmp_path / "s.json")})
+    row = _row()
+    row["magnet"] = "magnet:?xt=urn:btih:abc"
+    monkeypatch.setattr(svc, "_hub_enabled", lambda: True)
+    monkeypatch.setattr(hub, "search", lambda *a, **k: ([row], ""))
+    monkeypatch.setattr(hub, "resolve_torrents", lambda rows: rows)
+    assert svc._hub_releases("chrono trigger", None) == []
 
 
 def test_an_unresolved_hub_row_still_rides_the_hub_lane(tmp_path, monkeypatch):

@@ -438,27 +438,13 @@ def search(query: str, platform: str | None = None, limit: int = 25,
 
 
 def resolve_torrents(rows: list[dict]) -> list[dict]:
-    """Give every magnet-bearing row its plugin-resolved magnet, in place.
+    """Resolve plugin torrent rows through the plugin's validated capability.
 
-    Some sources distribute by torrent only -- MiNERVA Archive is one -- and
-    their magnets arrive bare: an info-hash with no trackers, which is a
-    DHT-only download that never starts on networks that block it. The Hub's
-    `torrent` capability exists for exactly this: the plugin describes the
-    torrent (`TorrentSource`), the host validates it against the plugin's own
-    manifest allowlist (`check_magnet`, which gates every `tr=` by hostname)
-    and hands it over.
-
-    This is the general half of that handoff on ROMarr's side: nothing here
-    knows which plugin produced the row or what site it came from. Rows are
-    grouped by plugin so one sandboxed subprocess resolves all of a plugin's
-    rows -- spawning one per result would be absurd -- and every failure
-    degrades to the row's own raw magnet rather than losing the result: a
-    DHT-only download that starts slowly beats no download at all.
-
-    A resolved magnet rides in the row's `magnet` key. `_hub_releases` reads
-    that key and builds a `protocol="torrent"` Release, so the grab goes to
-    the operator's torrent client exactly like an indexer magnet; rows
-    without it keep riding the `hub://` FetchPlan lane.
+    Rows are grouped by plugin so one sandboxed subprocess handles a batch.
+    Legacy plugins whose source id is itself a magnet keep their DHT-only
+    fallback if resolution fails. Collection rows keep the magnet in extra
+    metadata and fail closed when the plugin cannot validate it, so an
+    unapproved magnet never reaches qBittorrent.
     """
     if not rows:
         return rows
@@ -471,9 +457,17 @@ def resolve_torrents(rows: list[dict]) -> list[dict]:
         log.warning("torrent resolution unavailable: %s", exc)
         return rows
 
+    def raw_magnet(row: dict) -> str:
+        source_id = str(row.get("source_id") or "")
+        if source_id.startswith("magnet:"):
+            return source_id
+        extra = row.get("extra")
+        return (str(extra.get("torrent_magnet") or "")
+                if isinstance(extra, dict) else "")
+
     by_plugin: dict[str, list[dict]] = {}
     for row in rows:
-        if str(row.get("source_id") or "").startswith("magnet:"):
+        if raw_magnet(row).startswith("magnet:"):
             by_plugin.setdefault(str(row.get("plugin") or ""), []).append(row)
     if not by_plugin:
         return rows
@@ -499,7 +493,7 @@ def resolve_torrents(rows: list[dict]) -> list[dict]:
                         fetcher=fetcher, timeout=90.0,
                         allow_unsandboxed=_unsandboxed()) as proc:
                     for row in plugin_rows:
-                        raw = str(row.get("source_id") or "")
+                        raw = raw_magnet(row)
                         try:
                             result = SearchResult(**{
                                 k: v for k, v in row.items() if k != "magnet"})
@@ -512,15 +506,19 @@ def resolve_torrents(rows: list[dict]) -> list[dict]:
                                 row["magnet"] = magnet
                         except Exception as exc:
                             log.warning(
-                                "%s could not resolve its torrent for %r: %s "
-                                "-- falling back to the bare magnet",
+                                "%s could not resolve its torrent for %r: %s",
                                 slug, row.get("title", "")[:60], exc)
-                            row.setdefault("magnet", raw)
+                            # Old plugins use the source_id itself as a bare
+                            # magnet. New collection rows keep the magnet in
+                            # extra and must not bypass the host's allowlist.
+                            if str(row.get("source_id") or "").startswith("magnet:"):
+                                row.setdefault("magnet", raw)
             except Exception as exc:
                 log.warning("torrent plugin %r failed to run: %s", slug, exc)
                 for row in plugin_rows:
-                    row.setdefault("magnet",
-                                   str(row.get("source_id") or ""))
+                    source_id = str(row.get("source_id") or "")
+                    if source_id.startswith("magnet:"):
+                        row.setdefault("magnet", source_id)
     finally:
         fetcher.close()
     return rows

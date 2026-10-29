@@ -112,6 +112,36 @@ class QbitAuthenticationError(requests.RequestException):
 
 QBITTORRENT_ADD_CONFIRM_TIMEOUT = 10.0
 QBITTORRENT_ADD_POLL_INTERVAL = 0.25
+QBITTORRENT_FILE_METADATA_TIMEOUT = 120.0
+QBITTORRENT_FILE_METADATA_POLL_INTERVAL = 0.25
+
+
+def _normalise_torrent_path(value: str) -> str:
+    """Return a safe, comparable relative torrent path or an empty string."""
+    import posixpath
+
+    raw = str(value or "").strip().replace("\\", "/")
+    while raw.startswith("./"):
+        raw = raw[2:]
+    if (not raw or raw.startswith("/") or
+            (len(raw) >= 2 and raw[1] == ":")):
+        return ""
+    parts = raw.split("/")
+    if any(part in ("", ".", "..") for part in parts):
+        return ""
+    normal = posixpath.normpath(raw)
+    if normal in ("", ".", "..") or normal.startswith("../"):
+        return ""
+    return normal.casefold()
+
+
+def _row_has_tag(row: dict, tag: str) -> bool:
+    tags = row.get("tags", "")
+    if isinstance(tags, str):
+        return tag in {part.strip() for part in tags.split(",")}
+    if isinstance(tags, (list, tuple, set)):
+        return tag in {str(part).strip() for part in tags}
+    return False
 
 
 class QBittorrent:
@@ -135,6 +165,10 @@ class QBittorrent:
     @property
     def last_job_id(self) -> str:
         return getattr(self._added, "job_id", "")
+
+    @property
+    def last_error(self) -> str:
+        return getattr(self._added, "error", "")
 
     def _url(self, path: str) -> str:
         return f"{self._config.base_url.rstrip('/')}/api/v2/{path.lstrip('/')}"
@@ -249,6 +283,191 @@ class QBittorrent:
                 return False
             time.sleep(min(QBITTORRENT_ADD_POLL_INTERVAL, remaining))
 
+    def add_magnet_selective(self, magnet: str, file_path: str, *,
+                             save_path: str | None = None) -> bool:
+        """Add a magnet paused, select one exact file, then resume it.
+
+        Failure never falls back to an ordinary add: a newly-created torrent
+        is removed while paused whenever ROMarr can identify it by its unique
+        tag. This is intended for collection-backed sources such as MiNERVA,
+        whose search rows identify one file inside a much larger torrent.
+        """
+        self._added.job_id = ""
+        self._added.error = ""
+        if not str(magnet or "").startswith("magnet:"):
+            self._added.error = "file selection requires a magnet link"
+            return False
+        wanted_path = _normalise_torrent_path(file_path)
+        if not wanted_path:
+            self._added.error = "the source did not provide a safe relative file path"
+            return False
+        try:
+            if not self._authed and not self.login():
+                self._added.error = "qBittorrent authentication failed"
+                return False
+        except requests.RequestException:
+            self._added.error = "qBittorrent authentication failed"
+            return False
+
+        tag = "romarr-" + secrets.token_hex(12)
+        data = {"urls": magnet, "category": self._config.category,
+                "tags": tag, "paused": "true"}
+        if save_path:
+            data["savepath"] = save_path
+        try:
+            response = self._post(
+                "torrents/add", data=data, timeout=self._config.timeout)
+        except requests.RequestException as err:
+            self._added.error = (
+                f"qBittorrent did not accept a paused magnet ({err.__class__.__name__})")
+            return False
+        if not response.ok or response.text.strip().lower() not in ("", "ok."):
+            self._added.error = "qBittorrent did not accept the paused magnet"
+            return False
+
+        request_timeout = min(max(int(self._config.timeout), 1), 5)
+        deadline = time.monotonic() + QBITTORRENT_ADD_CONFIRM_TIMEOUT
+        owned_hash = ""
+        while time.monotonic() < deadline:
+            try:
+                response = self._get("torrents/info", params={"tag": tag},
+                                     timeout=request_timeout)
+                rows = response.json() if response.ok else []
+            except (requests.RequestException, ValueError):
+                rows = []
+            tagged = [row for row in rows
+                      if isinstance(row, dict) and _row_has_tag(row, tag)]
+            if len(tagged) > 1:
+                self._added.error = "qBittorrent returned multiple torrents for the new tag"
+                return False
+            if tagged:
+                owned_hash = str(tagged[0].get("hash") or "")
+                state = str(tagged[0].get("state") or "")
+                if not owned_hash:
+                    break
+                # A successful add request is not enough: require qBittorrent
+                # to report the new torrent paused before touching its files.
+                if state not in {"pausedDL", "pausedUP"}:
+                    self._added.error = (
+                        "qBittorrent did not confirm the new torrent is paused")
+                    try:
+                        self.delete_torrent(owned_hash)
+                    except requests.RequestException:
+                        log.warning("could not remove unpaused Minerva torrent %s",
+                                    owned_hash[:12])
+                    return False
+                break
+            time.sleep(min(QBITTORRENT_ADD_POLL_INTERVAL,
+                           max(0.0, deadline - time.monotonic()))
+                       )
+        if not owned_hash:
+            self._added.error = (
+                "qBittorrent did not confirm the new paused torrent")
+            return False
+
+        def fail(message: str) -> bool:
+            self._added.error = message
+            try:
+                if not self.delete_torrent(owned_hash):
+                    log.warning("could not remove paused unselected torrent %s",
+                                owned_hash[:12])
+            except requests.RequestException:
+                log.warning("could not remove paused unselected torrent %s",
+                            owned_hash[:12])
+            return False
+
+        def still_paused() -> bool:
+            try:
+                response = self._get(
+                    "torrents/info", params={"tag": tag},
+                    timeout=request_timeout)
+                rows = response.json() if response.ok else []
+            except (requests.RequestException, ValueError):
+                return False
+            tagged_rows = [row for row in rows
+                           if isinstance(row, dict) and _row_has_tag(row, tag)]
+            return (len(tagged_rows) == 1
+                    and str(tagged_rows[0].get("hash") or "") == owned_hash
+                    and str(tagged_rows[0].get("state") or "")
+                    in {"pausedDL", "pausedUP"})
+
+        metadata_deadline = time.monotonic() + QBITTORRENT_FILE_METADATA_TIMEOUT
+        files = []
+        while time.monotonic() < metadata_deadline:
+            try:
+                response = self._get(
+                    "torrents/files", params={"hash": owned_hash},
+                    timeout=request_timeout)
+                if response.ok:
+                    body = response.json()
+                    files = ([row for row in body if isinstance(row, dict)]
+                             if isinstance(body, list) else [])
+                    if files:
+                        break
+                elif response.status_code not in (404, 409):
+                    return fail("qBittorrent could not list torrent files")
+            except (requests.RequestException, ValueError):
+                pass
+            time.sleep(min(QBITTORRENT_FILE_METADATA_POLL_INTERVAL,
+                           max(0.0, metadata_deadline - time.monotonic())))
+        if not files:
+            return fail("qBittorrent did not provide torrent metadata in time")
+
+        matches = [
+            row for row in files
+            if _normalise_torrent_path(str(row.get("name") or "")) == wanted_path
+        ]
+        if len(matches) != 1:
+            return fail(
+                "the selected Minerva path did not match exactly one qBittorrent file")
+        # Reassert and verify the paused state immediately before changing
+        # priorities; another controller could have resumed it during metadata
+        # lookup.
+        try:
+            if not self.pause_torrent(owned_hash) or not still_paused():
+                return fail("qBittorrent did not stay paused for file selection")
+            selected_id = int(matches[0]["index"])
+            file_ids = [int(row["index"]) for row in files]
+        except (KeyError, TypeError, ValueError):
+            return fail("qBittorrent returned an invalid torrent file list")
+        if len(set(file_ids)) != len(file_ids) or selected_id not in file_ids:
+            return fail("qBittorrent returned ambiguous file indexes")
+
+        priorities = {file_id: (1 if file_id == selected_id else 0)
+                      for file_id in file_ids}
+        try:
+            if not self.set_file_priorities(owned_hash, priorities):
+                return fail("qBittorrent refused the exact file selection")
+            # Verify the server accepted the all-off-then-one-on selection
+            # before resuming. A 200 response alone is not proof.
+            verify = self.torrent_files(owned_hash)
+        except (requests.RequestException, ValueError):
+            return fail("qBittorrent could not verify the exact file selection")
+        verify_ids = [str(row.get("index", "")) for row in verify]
+        if (len(verify_ids) != len(verify)
+                or any(not value.isdigit() for value in verify_ids)
+                or len(set(verify_ids)) != len(verify_ids)):
+            return fail("qBittorrent returned ambiguous file indexes")
+        try:
+            verified = {
+                int(row["index"]): int(row.get("priority", -1))
+                for row in verify
+            }
+        except (TypeError, ValueError):
+            return fail("qBittorrent returned invalid file priorities")
+        if verified != priorities:
+            return fail("qBittorrent did not apply the exact file priorities")
+        try:
+            if not still_paused():
+                return fail("qBittorrent left the paused state before selection completed")
+            if not self.resume_torrent(owned_hash):
+                return fail("qBittorrent refused to resume the selected file")
+        except requests.RequestException:
+            return fail("qBittorrent failed while resuming the selected file")
+        self._added.job_id = "qbit-tag:" + tag
+        self._added.error = ""
+        return True
+
     def torrents(self) -> list[dict]:
         """Return the client's torrent list for an explicit collection plan."""
         if not self._authed and not self.login():
@@ -284,16 +503,32 @@ class QBittorrent:
                 return False
         return True
 
+    def delete_torrent(self, torrent_hash: str) -> bool:
+        """Remove a ROMarr-tagged torrent without deleting downloaded data."""
+        response = self._post(
+            "torrents/delete",
+            data={"hashes": torrent_hash, "deleteFiles": "false"},
+            timeout=self._config.timeout)
+        return bool(response.ok)
+
     def pause_torrent(self, torrent_hash: str) -> bool:
         response = self._post("torrents/pause",
                               data={"hashes": torrent_hash},
                               timeout=self._config.timeout)
+        if response.status_code == 404:
+            response = self._post("torrents/stop",
+                                  data={"hashes": torrent_hash},
+                                  timeout=self._config.timeout)
         return bool(response.ok)
 
     def resume_torrent(self, torrent_hash: str) -> bool:
         response = self._post("torrents/resume",
                               data={"hashes": torrent_hash},
                               timeout=self._config.timeout)
+        if response.status_code == 404:
+            response = self._post("torrents/start",
+                                  data={"hashes": torrent_hash},
+                                  timeout=self._config.timeout)
         return bool(response.ok)
 
     def reachable(self) -> bool:

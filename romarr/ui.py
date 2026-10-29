@@ -1213,6 +1213,7 @@ RENDER.search=async()=>{
         <td>${esc(r.title)}${r.info_url?` <a href="${esc(r.info_url)}" target="_blank"
             rel="noopener noreferrer" title="Open on ${esc(r.indexer||'the indexer')}"
             style="text-decoration:none">&#8599;</a>`:''}
+          ${r.torrent_file_path?`<div class="help" title="Only this path is selected from the collection">File: <code>${esc(r.torrent_file_path)}</code></div>`:''}
           ${r.private?' <span class="pill">private</span>':''}
           ${r.protocol==='usenet'?' <span class="pill">usenet</span>':''}</td>
         <td style="white-space:nowrap">${mb(r.size)}</td>

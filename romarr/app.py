@@ -1549,25 +1549,17 @@ class ROMarr:
         return bool(hub.searchable_plugins())
 
     def _hub_releases(self, game: str, platform=None) -> list:
-        """ROM Hub plugin results as Releases, for the same pipeline.
+        """Turn ROM Hub search rows into releases for the shared grab flow.
 
-        Two lanes out of one row, decided by what the plugin's source
-        actually distributes:
+        Magnet rows from ordinary torrent plugins use the configured torrent
+        client. MiNERVA rows carry one exact path inside a collection torrent;
+        ROMarr preserves that path and requires qBittorrent to pause the new
+        torrent, verify the path, deselect every other file, and only then
+        resume. Rows missing the resolved magnet or exact path are omitted
+        rather than offered as a full-collection download.
 
-        * A row whose plugin resolved a **magnet** (`resolve_torrents` set
-          `row["magnet"]`) becomes a `protocol="torrent"` Release carrying
-          that magnet -- it is handed to the operator's torrent client like
-          any indexer magnet. Sources that distribute by torrent only, such
-          as MiNERVA Archive, ride this lane; without it their results were
-          ungrabbable, because the `hub://` fetch lane is HTTP-only by
-          design (the Hub is deliberately not a torrent client).
-        * Anything else keeps the **`hub://` lane**: the plugin's result row
-          rides base64-encoded inside the download_url -- the queue and the
-          client ledger only ever carry strings, and the row is what the
-          plugin needs to produce a FetchPlan later.
-
-        The plugin slug is the indexer either way, so Interactive Search
-        shows where a result came from without a special case.
+        Non-torrent plugin rows keep their hub download URL and are fetched
+        through ROM Hub's bounded FetchPlan lane.
         """
         if not self._hub_enabled():
             return []
@@ -1592,7 +1584,30 @@ class ROMarr:
         for row in rows:
             if not row.get("title"):
                 continue
+            plugin_slug = str(row.get("plugin") or "")
+            extra = row.get("extra") if isinstance(row.get("extra"), dict) else {}
+            is_minerva = plugin_slug == "minerva-archive"
             magnet = str(row.get("magnet") or "")
+            file_path = str(extra.get("path") or "")
+            if is_minerva:
+                # MiNERVA results are individual files in a collection
+                # torrent. If either the resolved magnet or exact source path
+                # is missing, omit the result rather than offer the whole set.
+                if not magnet.startswith("magnet:") or not file_path:
+                    continue
+                out.append(Release(
+                    title=row["title"],
+                    size=int(row.get("size_bytes") or 0),
+                    seeders=1,
+                    categories=(1000,),
+                    download_url=magnet,
+                    protocol="torrent",
+                    indexer=f"hub:{plugin_slug}",
+                    info_url=str(row.get("url") or ""),
+                    torrent_file_path=file_path,
+                    file_selection_required=True,
+                ))
+                continue
             if magnet.startswith("magnet:"):
                 out.append(Release(
                     title=row["title"],
@@ -1604,7 +1619,7 @@ class ROMarr:
                     categories=(1000,),
                     download_url=magnet,
                     protocol="torrent",
-                    indexer=f"hub:{row.get('plugin') or 'plugin'}",
+                    indexer=f"hub:{plugin_slug or 'plugin'}",
                     info_url=str(row.get("url") or ""),
                 ))
                 continue
@@ -1767,8 +1782,27 @@ class ROMarr:
             return {"ok": False, "error": "the request was cancelled"}
         failure_detail = f"{client.name} rejected the release"
         release_fault = True
+        required_file = bool(getattr(pick, "file_selection_required", False))
+        selected_file = str(getattr(pick, "torrent_file_path", "") or "")
         local_fetch = getattr(self.prowlarr, "is_prowlarr_download_url", None)
-        if (isinstance(client, QBittorrent) and callable(local_fetch)
+        if required_file and not selected_file:
+            ok, download_id = False, ""
+            release_fault = False
+            failure_detail = "the source did not provide the exact file path"
+        elif required_file and not isinstance(client, QBittorrent):
+            ok, download_id = False, ""
+            release_fault = False
+            failure_detail = (
+                "this collection source requires qBittorrent for exact file selection")
+        elif required_file:
+            ok = client.add_magnet_selective(
+                pick.download_url, selected_file)
+            download_id = client.last_job_id if ok else ""
+            release_fault = False
+            if not ok:
+                failure_detail = (client.last_error or
+                                  "qBittorrent could not select the exact file")
+        elif (isinstance(client, QBittorrent) and callable(local_fetch)
                 and local_fetch(pick.download_url)):
             # Prowlarr's authenticated URL is LAN-only and contains its API
             # key. Fetch it here, then upload only the .torrent bytes to the
@@ -1887,6 +1921,7 @@ class ROMarr:
                 # never carries a credential, so it is the one link the
                 # browser may have.
                 "info_url": getattr(r, "info_url", ""),
+                "torrent_file_path": getattr(r, "torrent_file_path", ""),
                 "score": verdict.points,
                 "accepted": verdict.accepted,
                 "reasons": verdict.why(),
