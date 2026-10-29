@@ -286,58 +286,33 @@ _WORD = re.compile(r"[a-z0-9]+")
 
 
 def _title_key(value: str) -> str:
-    """Normalised phrase for comparing a wanted title to what an import verified.
+    """Normalise a title to lowercase alphanumeric words for comparison.
 
-    Lowercases and reduces the title to alphanumeric runs joined by single
-    spaces, so ``Dragon Ball Z: Super Butouden`` and
-    ``Dragon Ball Z - Super Butouden (Japan)`` share the comparable phrase
-    ``dragon ball z super butouden japan``. Keeping whole words (rather than
-    concatenating) lets the containment test stay word-boundary aware --
-    ``Sonic 3`` must not match ``Sonic 3D Blast``.
+    Keeping tokens separate makes sequel numbers distinct (for example, 3 is
+    not part of 3D).
     """
     return " ".join(_WORD.findall(str(value or "").lower()))
 
 
-def _phrase_contains(phrase: str, within: str) -> bool:
-    """Whether ``phrase`` appears in ``within`` on whole-word boundaries.
-
-    `Sonic 3` -> ``sonic 3`` is not a whole-word phrase inside ``sonic 3d
-    blast`` (``3`` is part of ``3d``), so an import of ``Sonic 3D Blast`` never
-    fulfils a wanted ``Sonic 3``. `Dragon Ball Z: Super Butouden` -> ``dragon
-    ball z super butouden`` IS inside ``dragon ball z super butouden japan``.
-    """
-    if not phrase or not within:
-        return False
-    return bool(re.search(rf"(?<![a-z0-9]){re.escape(phrase)}(?![a-z0-9])", within))
-
 
 def _fulfil_identities(name: str, outcomes) -> set[str]:
-    """Every normalised identity a finished download turned out to be.
+    """Return raw names for the completed download and verified import.
 
-    A download is known by the name the client reported (``name``), but what
-    it *actually is* is decided by hash verification: ``outcome.verification``
-    is the DAT ``Match`` for the bytes that landed, whose ``.game`` is the
-    canonical DAT name, and ``outcome.destination`` is where it was filed
-    (renamed to that canonical name when ``rename_on_import`` is on). Matching
-    wanted titles against all three is how a game that arrived under a
-    release-style filename -- or a wanted title with different punctuation --
-    still clears the Missing tab.
+    Keep separators so matching can distinguish a delimited subtitle from a
+    sequel number.
     """
-    identities = {_title_key(name)}
+    identities = {str(name or "")}
     for outcome in outcomes or []:
         if not getattr(outcome, "ok", False):
             continue
         verification = getattr(outcome, "verification", None)
         game = getattr(verification, "game", "") or ""
         if game:
-            identities.add(_title_key(game))
+            identities.add(str(game))
         dest = getattr(outcome, "destination", None)
         if dest is not None:
-            # A multi-file set lands as a directory named for the game; its
-            # *name* is the identity, not ``Path(...).stem`` (which of
-            # ``Mr. Driller (USA)`` is ``Mr``).
             destination_name = dest.name if dest.is_dir() else dest.stem
-            identities.add(_title_key(destination_name))
+            identities.add(str(destination_name))
     return identities
 
 
@@ -353,23 +328,41 @@ def _significant_tokens(title: str) -> list[str]:
             if t not in _TITLE_STOPWORDS]
 
 
-def _titles_are_same(title_a: str, title_b: str) -> bool:
-    """True when two titles plausibly name the same game.
+def _subtitle_prefix_matches(short_title: str, full_title: str) -> bool:
+    """Match a short title only when the full name marks a subtitle boundary.
 
-    Exact or order-preserving whole-word match first (handles punctuation,
-    region tags). Then a token-overlap fallback that also handles word order --
-    ``Cotton - Fantastic Night Dreams`` vs ``Fantastic Night Dreams - Cotton
-    (Japan)`` -- guarded to be strict (>=3 tokens, every wanted token must
-    appear) so ``Golf`` is not matched by ``Super Golf (USA)``.
+    An ordinary following word can be a sequel marker (World 2), so a
+    whole-word substring alone is not enough to clear a Wanted entry.
     """
-    a, b = _title_key(title_a), _title_key(title_b)
+    short_key = _title_key(_REGION_TAG.sub(" ", short_title or ""))
+    if len(_significant_tokens(short_title)) < 2:
+        return False
+    cleaned = _REGION_TAG.sub(" ", full_title or "").strip()
+    parts = re.split(r"\s+[-–—]\s+|:\s+", cleaned, maxsplit=1)
+    if len(parts) != 2 or _title_key(parts[0]) != short_key:
+        return False
+    suffix = _title_key(parts[1]).split()
+    return bool(suffix) and not suffix[0].isdigit()
+
+
+def _titles_are_same(title_a: str, title_b: str) -> bool:
+    """Compare game titles without treating a sequel or series name as its game.
+
+    Region tags and punctuation do not matter. Short catalog names may match a
+    longer DAT name when a dash or colon explicitly starts a subtitle, while
+    reordered aliases require the same significant words on both sides.
+    """
+    a = _title_key(_REGION_TAG.sub(" ", title_a or ""))
+    b = _title_key(_REGION_TAG.sub(" ", title_b or ""))
     if not a or not b:
         return False
-    if a == b or _phrase_contains(a, b) or _phrase_contains(b, a):
+    if a == b:
         return True
-    wanted = _significant_tokens(title_a)
-    verified = set(_significant_tokens(title_b))
-    return len(wanted) >= 3 and all(t in verified for t in wanted)
+    if (_subtitle_prefix_matches(title_a, title_b)
+            or _subtitle_prefix_matches(title_b, title_a)):
+        return True
+    return sorted(_significant_tokens(title_a)) == sorted(
+        _significant_tokens(title_b))
 
 
 
@@ -2745,7 +2738,6 @@ class ROMarr:
                     "platform": platform_slug, "dropped": 0}
 
         verified_titles: set[str] = set()
-        verified_keys: set[str] = set()
         for cfg, _ in self.game_libraries:
             folder = platform_dir(self.library_root(cfg), platform_slug,
                                   layout=self.library_layout(cfg))
@@ -2764,7 +2756,6 @@ class ROMarr:
                             data,
                             suffix=Path(member.replace("\\", "/")).suffix))
                         if match.status == _VERIFIED and match.game:
-                            verified_keys.add(_title_key(match.game))
                             verified_titles.add(match.game)
                 except Exception:  # noqa: BLE001 - one bad file must not stop it
                     continue
@@ -2775,10 +2766,6 @@ class ROMarr:
                 continue
             wanted_key = _title_key(w.game)
             if not wanted_key:
-                continue
-            if any(_phrase_contains(wanted_key, vk) for vk in verified_keys):
-                self.store.fulfil(w.game, w.platform)
-                dropped.append([w.game, w.platform])
                 continue
             if any(_titles_are_same(w.game, vt) for vt in verified_titles):
                 self.store.fulfil(w.game, w.platform)
@@ -5579,7 +5566,7 @@ class ROMarr:
                     # bytes *are* is known by hash verification, so match the
                     # wanted title against the verified identities as well as
                     # the client-reported download name.
-                    if any(_phrase_contains(wanted_key, identity)
+                    if any(_titles_are_same(w.game, identity)
                            for identity in _fulfil_identities(name, outcomes)):
                         self.store.fulfil(w.game, w.platform)
                 # Close the aliasing gap on this platform: drop wanted titles

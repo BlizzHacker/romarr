@@ -157,15 +157,32 @@ def test_a_short_title_does_not_fulfil_a_superstring_game(tmp_path):
     assert [(w.game, w.platform) for w in s.store.wanted] == [("Sonic 3", "snes")]
 
 
-def test_word_order_change_needs_hash_identity_and_is_out_of_scope(tmp_path):
-    """Wanted `Cotton - Fantastic Night Dreams` is the same game as the verified
-    `Fantastic Night Dreams - Cotton (Japan)`, but word order is not fixable by
-    substring matching. It stays wanted -- this documents the boundary; closing
-    it needs a hash-to-wanted reconcile, deliberately not part of this fix."""
-    dat = dat_for("Fantastic Night Dreams - Cotton (Japan)")
+def test_wanted_title_does_not_match_a_sequel_subtitle(tmp_path):
+    """Importing Yoshi's Island must leave the original Super Mario World wanted."""
+    dat = dat_for("Super Mario World 2: Yoshi's Island (USA)")
     s = svc(tmp_path, dat)
-    run_import(s, tmp_path, dat, wanted_title="Cotton - Fantastic Night Dreams",
+    run_import(s, tmp_path, dat, wanted_title="Super Mario World",
+               wanted_platform="snes",
+               client_name="Super Mario World 2 Yoshi's Island.sfc")
+    assert [(w.game, w.platform) for w in s.store.wanted] == [
+        ("Super Mario World", "snes")]
+
+
+def test_wanted_series_name_does_not_match_a_game_in_the_series(tmp_path):
+    """Golf is a series name; importing Super Golf must not clear it."""
+    dat = dat_for("Super Golf (USA)")
+    s = svc(tmp_path, dat)
+    run_import(s, tmp_path, dat, wanted_title="Golf",
+               wanted_platform="snes", client_name="Super Golf.sfc")
+    assert [(w.game, w.platform) for w in s.store.wanted] == [("Golf", "snes")]
+
+
+def test_reordered_verified_alias_fulfils_wanted_title(tmp_path):
+    """A verified DAT identity clears a wanted title with the same words in a different order."""
+    dat = dat_for("Fantastic Night Dreams - Cotton (Japan)")
+    service = svc(tmp_path, dat)
+    run_import(service, tmp_path, dat,
+               wanted_title="Cotton - Fantastic Night Dreams",
                wanted_platform="snes",
                client_name="Cotton variant.smc")
-    assert len(s.store.wanted) == 1
-    assert s.store.wanted[0].game == "Cotton - Fantastic Night Dreams"
+    assert service.store.wanted == []

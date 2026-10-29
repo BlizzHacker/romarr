@@ -113,6 +113,27 @@ def test_reconcile_does_not_drop_a_title_with_no_verified_dump(tmp_path):
     assert [w.game for w in s.store.wanted] == ["Bust-A-Move 2"]
 
 
+def test_reconcile_keeps_sequels_and_series_games_wanted(tmp_path):
+    """A verified game must not clear a wanted sequel or shorter series name."""
+    cases = [
+        ("Super Mario World", "Super Mario World 2: Yoshi's Island (USA)"),
+        ("Golf", "Super Golf (USA)"),
+    ]
+    for index, (wanted, verified) in enumerate(cases):
+        case_dir = tmp_path / str(index)
+        case_dir.mkdir()
+        dat = dat_for(verified)
+        service = svc(case_dir, dat)
+        place_verified(case_dir, "verified.sfc")
+        service.store.want(wanted, "snes")
+
+        result = service.reconcile_platform("snes")
+
+        assert result["count"] == 0
+        assert [(row.game, row.platform) for row in service.store.wanted] == [
+            (wanted, "snes")]
+
+
 def test_reconcile_is_auto_invoked_after_a_verified_import(tmp_path):
     """With reconcile_after_import on (the default), a verified import on a
     platform also clears wanted aliases that were already present on disk --
