@@ -231,6 +231,10 @@ class Release:
     # a browser -- unlike download_url it never carries a credential, and the
     # Search page links it so "what is this release" has a one-click answer.
     info_url: str = ""
+    # A collection-backed result can name one exact file inside its torrent.
+    # Keep that path server-side with the release; it is never a download URL.
+    torrent_file_path: str = ""
+    file_selection_required: bool = False
 
 
 def is_game_release(release: Release) -> bool:
