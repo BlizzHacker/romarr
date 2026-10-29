@@ -188,8 +188,11 @@ class NZBGet:
     def add(self, url: str, *, name: str = "") -> bool:
         # append(NZBFilename, Content, Category, Priority, AddToTop, AddPaused,
         #        DupeKey, DupeScore, DupeMode, PPParameters)
+        filename = str(name or "romarr").strip() or "romarr"
+        if not filename.lower().endswith(".nzb"):
+            filename += ".nzb"
         result = self._rpc("append", [
-            name or "romarr.nzb", url, self._config.category, 0,
+            filename, url, self._config.category, 0,
             False, False, "", 0, "SCORE", [],
         ])
         # A new-enough NZBGet returns the new id; anything falsy is a refusal.
