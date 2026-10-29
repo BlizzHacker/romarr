@@ -4840,8 +4840,8 @@ class ROMarr:
                                 f"own version, so it cannot say whether it is "
                                 f"behind, and nothing was changed")}
 
-        # compare_key pads trailing zeros, ranks a final release above its
-        # prereleases, and ranks a .post release above the release it patches.
+        # compare_key normalizes trailing zeros, ranks a final release above
+        # its prereleases, and ranks .post releases after the release they patch.
         newer = compare_key(latest) > compare_key(VERSION)
         self.store.settings["_latest_version"] = latest
         self.store.settings["_update_available"] = newer

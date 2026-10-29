@@ -77,7 +77,7 @@ def derive_version() -> str:
 
 _RELEASE_RE = re.compile(r"\s*v?(\d+(?:\.\d+)*)", re.IGNORECASE)
 _POST_RE = re.compile(r"\.?post\.?(\d+)", re.IGNORECASE)
-_PRE_RE = re.compile(r"[.\-_]?(a|b|c|rc|alpha|beta|pre|preview|dev)\.?(\d*)",
+_PRE_RE = re.compile(r"[.\-_]?(alpha|beta|preview|pre|dev|rc|a|b|c)\.?(\d*)",
                      re.IGNORECASE)
 # dev < alpha < beta < release-candidate < final. A collapsed "is it a
 # prerelease" flag cannot order these: beta would come out ahead of rc.
@@ -93,7 +93,8 @@ def compare_key(value: object) -> tuple:
     seen in the wild:
 
       * ``1.7`` vs ``1.7.0`` -- Python calls the longer tuple newer, so the same
-        release offers itself as an update. Padding fixes it.
+        release offers itself as an update. Trimming trailing zero components
+        gives both spellings the same canonical release tuple.
       * ``1.7.0-rc.1`` vs ``1.7.0`` -- both parse to the same numbers, so the
         final release is never offered to a prerelease build.
       * ``1.7.0`` vs ``1.7.0.post1`` -- a post release is a follow-up fix, so it
@@ -108,7 +109,11 @@ def compare_key(value: object) -> tuple:
     if not found:
         return ((0, 0, 0, 0), 0, 0, 0)
     numbers = [int(p) for p in found.group(1).split(".")]
-    release = tuple((numbers + [0, 0, 0, 0])[:4])
+    # Canonicalize equivalent release spellings without truncating meaningful
+    # numeric components.
+    while len(numbers) > 1 and numbers[-1] == 0:
+        numbers.pop()
+    release = tuple(numbers)
     rest = core[found.end():]
     post = _POST_RE.search(rest)
     pre = _PRE_RE.search(rest)
@@ -118,7 +123,9 @@ def compare_key(value: object) -> tuple:
         rank = _PRE_RANK.get(pre.group(1).lower(), _RANK_FINAL - 1)
         digits = pre.group(2) or ""
         pre_no = int(digits) if digits.isdigit() and digits else 0
-    return (release, post_no, rank, pre_no)
+    # A post to a prerelease still precedes the final release; within the same
+    # prerelease, its post number follows that prerelease but precedes the next.
+    return (release, rank, pre_no, post_no)
 
 
 def is_unknown(value: object) -> bool:

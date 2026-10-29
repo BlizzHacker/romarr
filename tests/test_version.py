@@ -48,11 +48,12 @@ def test_is_unknown_recognises_the_sentinel_and_emptiness():
     assert version.is_unknown("1.7.0") is False
 
 
-def test_padding_stops_trailing_zeros_from_looking_newer():
+def test_normalizing_trailing_zeros_stops_false_update_notices():
     """1.7 and 1.7.0 are the same release; a tuple compare says otherwise."""
     assert version.compare_key("1.7") == version.compare_key("1.7.0")
     assert version.compare_key("v1.7") == version.compare_key("1.7.0")
     assert version.compare_key("1.7.0") < version.compare_key("1.7.1")
+    assert version.compare_key("1.7.0") < version.compare_key("1.7.0.1")
 
 
 def test_final_release_outranks_its_prerelease():
@@ -60,6 +61,10 @@ def test_final_release_outranks_its_prerelease():
     assert version.compare_key("1.7.0-rc.1") < version.compare_key("1.7.0")
     assert version.compare_key("1.7.0-rc.1") < version.compare_key("1.7.0-rc.2")
     assert version.compare_key("1.7.0-beta.2") < version.compare_key("1.7.0-rc.1")
+    assert version.compare_key("1.7.0-alpha.1") < version.compare_key("1.7.0-alpha.2")
+    assert version.compare_key("1.7.0-beta.1") < version.compare_key("1.7.0-beta.2")
+    assert version.compare_key("1.7.0rc1") < version.compare_key("1.7.0rc1.post1")
+    assert version.compare_key("1.7.0rc1.post1") < version.compare_key("1.7.0")
 
 
 def test_post_release_sorts_above_the_release_it_patches():

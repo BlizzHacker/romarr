@@ -471,3 +471,27 @@ def test_version_parser_still_notices_a_genuinely_newer_release(tmp_path, monkey
     monkeypatch.setattr("romarr.app.VERSION", "1.7.0")
     assert svc.check_update()["update_available"] is True
 
+
+def test_check_update_offers_final_release_to_prerelease_build(tmp_path, monkeypatch):
+    svc = _svc(tmp_path)
+    told = []
+    monkeypatch.setattr("romarr.app.VERSION", "1.7.0-rc.1")
+    monkeypatch.setattr(svc, "notify", lambda message: told.append(message) or [])
+
+    class FakeResponse:
+        status_code = 200
+        headers = {}
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"tag_name": "v1.7.0", "html_url": "https://example.test/release"}
+
+    import requests as _requests
+    monkeypatch.setattr(_requests, "get", lambda *a, **kw: FakeResponse())
+    out = svc.check_update()
+    assert out["update_available"] is True
+    assert out["latest"] == "1.7.0"
+    assert len(told) == 1
+
