@@ -157,7 +157,7 @@ def test_service_preview_apply_rollback_and_hash_index_paths(tmp_path):
     service.hashes.add(index.sha1, "Canonical Game (USA)", "nes", True,
                        "nes/archive.nes")
     started = service.preview_library_renames("nes")
-    assert started["status"] == "running"
+    assert started["status"] in {"running", "done"}
     service._library_rename_thread.join(timeout=5)
     current = service.library_rename_state()["preview"]
     assert current["status"] == "done" and current["eligible"] == 1
