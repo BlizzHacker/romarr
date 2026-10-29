@@ -3674,8 +3674,9 @@ RENDER.getstarted=async()=>{
   // The question a capable new self-hoster actually asked: "if I host ROMs,
   // where do I play them?" ROMarr acquires and files; something else plays.
   // Saying so plainly beats implying ROMarr is a frontend it is not.
-  const [status,libs,plat]=await Promise.all([
+  const [status,setup,libs,plat]=await Promise.all([
     j('/api/v1/system/status').catch(()=>({})),
+    j('/api/v1/setup/status').catch(()=>({})),
     j('/api/v1/library').catch(()=>({items:[]})),
     j('/api/platforms').catch(()=>({platforms:[]}))
   ]);
@@ -3684,9 +3685,19 @@ RENDER.getstarted=async()=>{
   const ok=x=>x?'<span class="pill" style="background:var(--ok);color:#08210d">ready</span>'
                 :'<span class="pill" style="background:var(--warn);color:#2a1c05">not set up</span>';
 
-  const indexerOk=!!(status.prowlarr||(status.indexers||0)>0);
-  const clientOk=!!(status.qbittorrent||status.sabnzbd||status.nzbget
-                    ||(status.download_clients||0)>0);
+  const anyCount=value=>Array.isArray(value)?value.length>0:Number(value||0)>0;
+  const indexerRows=Array.isArray(status.indexers)?status.indexers
+    :(Array.isArray(setup.indexers)?setup.indexers:[]);
+  const indexerOk=!!status.prowlarr
+    ||indexerRows.some(row=>row&&(typeof row.enabled==='boolean'
+      ?row.enabled:row.configured!==false))
+    ||(!Array.isArray(status.indexers)&&anyCount(status.indexers));
+  const clientRows=Array.isArray(status.clients)?status.clients
+    :(Array.isArray(setup.download_clients)?setup.download_clients:[]);
+  const clientOk=!!(status.qbittorrent||status.sabnzbd||status.nzbget)
+    ||clientRows.some(row=>row&&(typeof row.configured==='boolean'
+      ?row.configured&&row.ok!==false:!!row.enabled))
+    ||(!Array.isArray(status.download_clients)&&anyCount(status.download_clients));
   const libOk=items.some(l=>l.ok);
   const datOk=(status.dats||0)>0||!!status.dat_games;
 
