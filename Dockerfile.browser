@@ -37,6 +37,11 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt \
 
 WORKDIR /app
 COPY romarr/ /app/romarr/
+
+# Same baked-in version as the Alpine image; see romarr/version.py.
+ARG ROMARR_VERSION=""
+RUN printf '__version__ = "%s"\n' "${ROMARR_VERSION:-0.0.0+unknown}" \
+    > /app/romarr/_version.py
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh && mkdir -p /config /roms
 

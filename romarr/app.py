@@ -105,10 +105,14 @@ from .store import Event, QueueItem, SeerrRequest, Store
 from .ui import page as ui_page
 from .ui import link_page as ui_link_page
 from .ui import login_page as ui_login_page
+from .version import compare_key, derive_version, is_unknown
 
 log = logging.getLogger(__name__)
 
-VERSION = "1.6.0"
+# Derived, never typed here. A number that has to be retyped on every release is
+# how v1.7.0 shipped calling itself 1.6.0 while the Update page offered an
+# upgrade to the build already running. See version.py.
+VERSION = derive_version()
 
 # What ROMarr labels its own downloads with, so its jobs are distinguishable
 # from everything else in a shared client -- the same reason Radarr and Sonarr
@@ -4845,13 +4849,25 @@ class ROMarr:
         if not latest:
             return {"ok": False, "message": "github.com answered without a tag"}
 
-        def parts(version: str) -> tuple:
-            try:
-                return tuple(int(p) for p in version.split("."))
-            except ValueError:
-                return (0,)
+        if is_unknown(VERSION):
+            # Refuse before any side effect, never after. Every real release
+            # outranks 0.0.0+unknown, so this build would otherwise report a
+            # permanent update, notify once per release about news it cannot
+            # verify, and -- with auto_update on -- start an update from a
+            # version it cannot name. Record "no update" so a stale banner from
+            # a previous build clears, and say plainly why nothing was done.
+            self.store.settings["_latest_version"] = latest
+            self.store.settings["_update_available"] = False
+            self.store.save()
+            return {"ok": True, "latest": latest, "update_available": False,
+                    "indeterminate": True,
+                    "message": (f"latest is {latest}; this build does not know its "
+                                f"own version, so it cannot say whether it is "
+                                f"behind, and nothing was changed")}
 
-        newer = parts(latest) > parts(VERSION)
+        # compare_key normalizes trailing zeros, ranks a final release above
+        # its prereleases, and ranks .post releases after the release they patch.
+        newer = compare_key(latest) > compare_key(VERSION)
         self.store.settings["_latest_version"] = latest
         self.store.settings["_update_available"] = newer
         if newer and self.store.settings.get("_update_notified") != latest:
