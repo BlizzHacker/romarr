@@ -6,8 +6,9 @@ queue row `grabbed` until the stall timeout fired, three hours by default.
 A title whose every upload is dead cost that long per release.
 
 Two limits keep this from touching anything it should not. A failure is paired
-with its row by the client's job id only, and only a reason that blames the
-release counts; everything else waits for the stall timeout as it always did.
+with its row by the client that took the job and that client's job id, never
+by title, and only a reason that blames the release counts; everything else
+waits for the stall timeout as it always did.
 """
 
 from __future__ import annotations
@@ -33,10 +34,12 @@ def ago(minutes):
             - timedelta(minutes=minutes)).isoformat(timespec="seconds")
 
 
-def grabbed(job_id="SABnzbd_nzo_1", *, release="Contra.USA.NES-GRP", minutes=1):
+def grabbed(job_id="SABnzbd_nzo_1", *, client="sab-1",
+            release="Contra.USA.NES-GRP", minutes=1):
     return QueueItem("Contra", "nes", release, 0, "grabbed", at=ago(minutes),
                      release_id=f"Test|{release.lower()}|1000",
-                     indexer="Test", size=1000, download_id=job_id)
+                     indexer="Test", size=1000, download_id=job_id,
+                     download_client=client)
 
 
 class FakeProwlarr:
@@ -53,7 +56,8 @@ class FakeUsenet:
     protocol = "usenet"
     configured = True
 
-    def __init__(self, failures=()):
+    def __init__(self, failures=(), romarr_id="sab-1"):
+        self.romarr_id = romarr_id
         self.failures = list(failures)
         self.added = []
         self.last_job_id = ""
@@ -143,6 +147,45 @@ def test_a_failure_is_paired_by_job_id_never_by_title(tmp_path):
 
     assert service.retire_dead_downloads()["blocklisted"] == 0
     assert [row.state for row in service.queue] == ["grabbed", "grabbed"]
+
+
+def test_a_failure_from_another_client_with_the_same_job_id_is_ignored(tmp_path):
+    """Job ids are only unique within one client, and two SABnzbd rows can
+    both be enabled."""
+    service = svc(tmp_path)
+    service.clients = [FakeUsenet(romarr_id="sab-1"),
+                       FakeUsenet([failure()], romarr_id="sab-2")]
+    service.store.enqueue(grabbed(client="sab-1"))
+
+    assert service.retire_dead_downloads()["blocklisted"] == 0
+    assert service.queue[0].state == "grabbed"
+
+
+def test_a_row_queued_before_its_client_was_recorded_waits_for_the_timeout(tmp_path):
+    service = svc(tmp_path)
+    service.clients = [FakeUsenet([failure()])]
+    service.store.enqueue(grabbed(client=""))
+
+    assert service.retire_dead_downloads()["blocklisted"] == 0
+    assert service.queue[0].state == "grabbed"
+
+
+def test_a_grab_records_the_client_that_took_it(tmp_path):
+    service = svc(tmp_path)
+    service.prowlarr = FakeProwlarr([Release(
+        title="Contra (USA).nes", size=3_000_000, seeders=0, categories=(1030,),
+        download_url="http://nzb/contra", protocol="usenet", indexer="Test")])
+    service.clients = [FakeUsenet(romarr_id="sab-7")]
+
+    assert service.request("Contra", "nes")["ok"] is True
+    assert service.queue[-1].download_client == "sab-7"
+
+
+def test_a_queue_row_without_download_client_loads_from_old_state():
+    from romarr.store import _rows
+    rows = _rows([{"game": "g", "platform": "nes", "release": "r", "seeders": 1,
+                   "state": "grabbed", "download_id": "SABnzbd_nzo_1"}], QueueItem)
+    assert rows[0].download_client == ""
 
 
 def test_a_row_already_past_grabbed_is_not_rewritten(tmp_path):

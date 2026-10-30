@@ -1916,7 +1916,8 @@ class ROMarr:
                          size=getattr(pick, "size", 0),
                          release_fault=release_fault if not ok else False,
                          external_request_id=external_request_id,
-                         download_id=download_id)
+                         download_id=download_id,
+                         download_client=getattr(client, "romarr_id", ""))
         self.store.enqueue(item)
         if ok:
             if external_request_id:
@@ -2418,17 +2419,19 @@ class ROMarr:
         except (TypeError, ValueError):
             stall_minutes = 0
 
-        # Keyed by the client's job id alone. A title is not identity here:
-        # the same release name often comes from several indexers, and an old
+        # Keyed by the reporting client and its job id, never by title: the
+        # same release name often comes from several indexers, and an old
         # failure must not be pinned on a new grab that happens to share it.
-        failures = {job["id"]: job for job in self._failed_jobs() if job.get("id")}
+        failures = {(job["client_id"], job["id"]): job
+                    for job in self._failed_jobs() if job.get("id")}
         now = datetime.now(timezone.utc)
         dead: list[QueueItem] = []
         with self._lock:
             for row in self.queue:
                 if row.blocklisted or not row.release_id:
                     continue
-                failure = failures.get(row.download_id) if row.download_id else None
+                failure = (failures.get((row.download_client, row.download_id))
+                           if row.download_client and row.download_id else None)
                 if (row.state == "grabbed" and failure is not None
                         and failure.get("release_fault")):
                     row.state = "failed"
@@ -2493,8 +2496,10 @@ class ROMarr:
             if report is None or not getattr(client, "configured", True):
                 continue
             name = getattr(client, "name", "the download client")
+            client_id = getattr(client, "romarr_id", "")
             try:
-                jobs.extend({**job, "client": name} for job in report())
+                jobs.extend({**job, "client": name, "client_id": client_id}
+                            for job in report())
             except Exception as err:
                 # One unreachable client must not stop the sweep.
                 log.warning("%s failed_jobs() failed: %s", name, err)
