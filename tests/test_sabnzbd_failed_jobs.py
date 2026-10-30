@@ -181,6 +181,24 @@ def test_a_grab_records_the_client_that_took_it(tmp_path):
     assert service.queue[-1].download_client == "sab-7"
 
 
+def test_a_grab_still_matches_its_failure_after_a_restart(tmp_path):
+    """The pair a failure is matched on has to survive the state file."""
+    service = svc(tmp_path)
+    service.prowlarr = FakeProwlarr([Release(
+        title="Contra (USA).nes", size=3_000_000, seeders=0, categories=(1030,),
+        download_url="http://nzb/contra", protocol="usenet", indexer="Test")])
+    service.clients = [FakeUsenet(romarr_id="sab-7")]
+    assert service.request("Contra", "nes")["ok"] is True
+
+    restarted = svc(tmp_path)
+    row = restarted.queue[-1]
+    assert (row.download_client, row.download_id) == ("sab-7", "SABnzbd_nzo_1")
+
+    restarted.prowlarr = FakeProwlarr()
+    restarted.clients = [FakeUsenet([failure("SABnzbd_nzo_1")], romarr_id="sab-7")]
+    assert restarted.retire_dead_downloads()["blocklisted"] == 1
+
+
 def test_a_queue_row_without_download_client_loads_from_old_state():
     from romarr.store import _rows
     rows = _rows([{"game": "g", "platform": "nes", "release": "r", "seeders": 1,

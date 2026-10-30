@@ -187,6 +187,9 @@ class SABnzbd:
         """
         if not self.configured:
             return []
+        # Only the newest 100, like `completed`. The sweep runs far more often
+        # than a category collects 100 failures, and a failure pushed past
+        # them falls back to the stall timeout, as before this existed.
         out = self._call("history", limit=100, category=self._config.category,
                          failed_only=1)
         slots = ((out or {}).get("history") or {}).get("slots") or []
