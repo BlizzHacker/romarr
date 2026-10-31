@@ -141,6 +141,12 @@ class QueueItem:
     # because a client rarely names a job the way the indexer titled it.
     # Empty on rows queued before this field existed; those match by name.
     download_id: str = ""
+    # The `romarr_id` of the client row that took the job. A job id is only
+    # unique within one client, so a failure the client reports is matched on
+    # this and `download_id` together. Empty on rows queued before this field
+    # existed; those never match a reported failure and wait for the stall
+    # timeout.
+    download_client: str = ""
 
 
 @dataclass

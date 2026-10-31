@@ -140,6 +140,74 @@ class SABnzbd:
             if str(s.get("status", "")).lower() == "completed"
         ]
 
+    #: Every missing-articles failure SABnzbd has written since at least 2.3
+    #: ("Aborted, cannot be completed", "Download failed - Not on your
+    #: server(s)", "Download might fail, only ... available") ends in this
+    #: link, and the link is appended outside SABnzbd's translation, so it
+    #: reads the same in every UI language.
+    NOT_COMPLETE_LINK = "sabnzbd.org/not-complete"
+
+    #: The other reasons that blame the release, in SABnzbd's English wording,
+    #: unchanged from 2.3 to 5.1. A translated install only has the link above
+    #: recognised.
+    RELEASE_FAULTS = (
+        "encryption detected",
+        "unwanted extension detected",
+        "requires a password",
+        "crc error",
+        "corrupt rar file",
+        "unusable rar file",
+        "failed to verify",
+        "repairing failed",
+    )
+
+    @classmethod
+    def _release_fault(cls, reason: str) -> bool:
+        """Whether SABnzbd's reason blames the release rather than this machine.
+
+        Deliberately narrow. A full disk, a failed move, a post-processing
+        script, or wording from a version or language not listed here is left
+        to the stall timeout exactly as before: blocklisting a release for a
+        local fault would burn through good releases a sweep at a time.
+        """
+        text = reason.lower()
+        if "disk" in text:
+            # "Repairing failed, Disk full" shares its prefix with a bad release.
+            return False
+        return (cls.NOT_COMPLETE_LINK in text
+                or any(marker in text for marker in cls.RELEASE_FAULTS))
+
+    def failed_jobs(self) -> list[dict]:
+        """Jobs in our category that SABnzbd gave up on, and why.
+
+        Most fail within seconds of being added -- articles gone from every
+        server, a password, an extension the operator refuses -- and none will
+        ever reach `completed`, so without this the queue row sits out the
+        whole stall timeout before anything retires it.
+        """
+        if not self.configured:
+            return []
+        # Only the newest 100, like `completed`. The sweep runs far more often
+        # than a category collects 100 failures, and a failure pushed past
+        # them falls back to the stall timeout, as before this existed.
+        out = self._call("history", limit=100, category=self._config.category,
+                         failed_only=1)
+        slots = ((out or {}).get("history") or {}).get("slots") or []
+        jobs = []
+        for s in slots:
+            # failed_only has been in the API since at least 2.3; checking the
+            # status as well costs nothing if some build ignores it.
+            if str(s.get("status", "")).lower() != "failed":
+                continue
+            reason = str(s.get("fail_message") or "")
+            jobs.append({
+                "name": s.get("name", ""),
+                "id": s.get("nzo_id", ""),
+                "detail": reason,
+                "release_fault": self._release_fault(reason),
+            })
+        return jobs
+
 
 @dataclass(frozen=True)
 class NzbgetConfig:

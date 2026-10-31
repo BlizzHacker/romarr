@@ -1916,7 +1916,8 @@ class ROMarr:
                          size=getattr(pick, "size", 0),
                          release_fault=release_fault if not ok else False,
                          external_request_id=external_request_id,
-                         download_id=download_id)
+                         download_id=download_id,
+                         download_client=getattr(client, "romarr_id", ""))
         self.store.enqueue(item)
         if ok:
             if external_request_id:
@@ -2400,12 +2401,13 @@ class ROMarr:
         same dead file again. Retiring the release is the half that makes the
         retry land somewhere new.
 
-        Three things count as dead, and one thing deliberately does not:
-        a client that refused the release, a download that finished with no
-        ROMs in it, and one that has sat unfinished past the stall timeout.
-        A failure that is the *install's* fault -- no download client
-        configured for the protocol -- is not the release's doing and is left
-        alone, or the operator would come back to a blocklist full of
+        Four things count as dead, and one thing deliberately does not:
+        a client that refused the release, a download the client reports it
+        gave up on for a reason that blames the release, a download that
+        finished with no ROMs in it, and one that has sat unfinished past the
+        stall timeout. A failure that is the *install's* fault -- no download
+        client configured for the protocol -- is not the release's doing and
+        is left alone, or the operator would come back to a blocklist full of
         perfectly good torrents.
         """
         if not self.store.settings.get("blocklist_failed_downloads", True):
@@ -2417,12 +2419,25 @@ class ROMarr:
         except (TypeError, ValueError):
             stall_minutes = 0
 
+        # Keyed by the reporting client and its job id, never by title: the
+        # same release name often comes from several indexers, and an old
+        # failure must not be pinned on a new grab that happens to share it.
+        failures = {(job["client_id"], job["id"]): job
+                    for job in self._failed_jobs() if job.get("id")}
         now = datetime.now(timezone.utc)
         dead: list[QueueItem] = []
         with self._lock:
             for row in self.queue:
                 if row.blocklisted or not row.release_id:
                     continue
+                failure = (failures.get((row.download_client, row.download_id))
+                           if row.download_client and row.download_id else None)
+                if (row.state == "grabbed" and failure is not None
+                        and failure.get("release_fault")):
+                    row.state = "failed"
+                    row.release_fault = True
+                    row.detail = (f"{failure['client']} failed the download: "
+                                  f"{failure['detail']}")
                 if row.state in ("failed", "import-failed") and row.release_fault:
                     dead.append(row)
                     continue
@@ -2467,6 +2482,28 @@ class ROMarr:
                    f"grabbed {regrabbed} replacement(s)")
         return {"blocklisted": blocklisted, "regrabbed": regrabbed,
                 "message": message}
+
+    def _failed_jobs(self) -> list[dict]:
+        """Jobs a download client reports it gave up on, tagged with its name.
+
+        Only clients with `failed_jobs` answer. For every other client this is
+        empty, and the stall timeout stays the only way a dead download is
+        noticed, as it always was.
+        """
+        jobs = []
+        for client in self.clients:
+            report = getattr(client, "failed_jobs", None)
+            if report is None or not getattr(client, "configured", True):
+                continue
+            name = getattr(client, "name", "the download client")
+            client_id = getattr(client, "romarr_id", "")
+            try:
+                jobs.extend({**job, "client": name, "client_id": client_id}
+                            for job in report())
+            except Exception as err:
+                # One unreachable client must not stop the sweep.
+                log.warning("%s failed_jobs() failed: %s", name, err)
+        return jobs
 
     @staticmethod
     def _row_age_minutes(row, now) -> float | None:
