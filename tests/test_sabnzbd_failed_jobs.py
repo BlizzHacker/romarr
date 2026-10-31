@@ -295,6 +295,16 @@ class _Sess:
         return _Resp(self.body)
 
 
+class _Pages:
+    def __init__(self, bodies):
+        self.bodies = list(bodies)
+        self.params = []
+
+    def get(self, url, params=None, **kw):
+        self.params.append(params)
+        return _Resp(self.bodies.pop(0))
+
+
 def sab(session, **config):
     return SABnzbd(SabConfig(base_url="http://sab", api_key="k", **config),
                    session=session)
@@ -305,8 +315,27 @@ def test_sabnzbd_asks_for_failed_history_in_its_own_category():
     sab(session, category="roms").failed_jobs()
     asked = session.params[0]
     assert asked["mode"] == "history"
+    assert asked["start"] == 0
     assert asked["failed_only"] == 1
     assert asked["category"] == "roms"
+
+
+def test_sabnzbd_pages_failed_history_beyond_the_first_hundred():
+    rows = [
+        {"name": f"game-{n}", "nzo_id": f"job-{n}",
+         "status": "Failed", "fail_message": NOT_COMPLETE}
+        for n in range(101)
+    ]
+    session = _Pages([
+        {"history": {"slots": rows[:100]}},
+        {"history": {"slots": rows[100:]}},
+    ])
+
+    jobs = sab(session).failed_jobs()
+
+    assert [job["id"] for job in jobs] == [f"job-{n}" for n in range(101)]
+    assert [params["start"] for params in session.params] == [0, 100]
+    assert all(params["failed_only"] == 1 for params in session.params)
 
 
 def test_sabnzbd_reports_the_job_id_and_reason():
