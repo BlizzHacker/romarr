@@ -434,6 +434,10 @@ class ROMarr:
         # carrying Prowlarr's API key.
         self._candidates: dict[str, dict] = {}
         self._lock = threading.Lock()
+        # Background sweeps overlap, and client I/O happens before the queue row
+        # exists. Reserve a game during that gap, then let the queue row take
+        # over after the handoff.
+        self._automatic_grab_reservations: set[tuple[str, str]] = set()
         self._dat_reload_lock = threading.Lock()
         self._collection_source_lock = threading.Lock()
         # Lets a configuration change wake the background refresh instead of
@@ -1826,6 +1830,52 @@ class ROMarr:
         return self.grab(pick, game, platform.slug,
                           external_request_id=external_request_id)
 
+    def _reserve_automatic_grab(self, game: str, platform_slug: str):
+        """Reserve one game's automatic handoff without holding the lock over
+        indexer or download-client I/O."""
+        key = (game.strip().casefold(), platform_slug.strip().casefold())
+        with self._lock:
+            if key in self._automatic_grab_reservations:
+                return None
+            if any(q.game.strip().casefold() == key[0]
+                   and q.platform.strip().casefold() == key[1]
+                   and q.state in ("queued", "grabbed")
+                   for q in self.queue):
+                return None
+            self._automatic_grab_reservations.add(key)
+        return key
+
+    def _automatic_request(self, game: str, platform_name: str,
+                           external_request_id: str = "") -> dict:
+        """Request a replacement from a background sweep at most once."""
+        platform = resolve(platform_name)
+        if platform is None:
+            return self.request(game, platform_name, external_request_id)
+        key = self._reserve_automatic_grab(game, platform.slug)
+        if key is None:
+            return {"ok": False, "skipped": True,
+                    "error": "a download is already in flight"}
+        try:
+            if external_request_id:
+                return self.request(game, platform.slug,
+                                    external_request_id=external_request_id)
+            return self.request(game, platform.slug)
+        finally:
+            with self._lock:
+                self._automatic_grab_reservations.discard(key)
+
+    def _automatic_grab(self, pick, game: str, platform_slug: str) -> dict:
+        """Hand an RSS-selected release off only if no download is in flight."""
+        key = self._reserve_automatic_grab(game, platform_slug)
+        if key is None:
+            return {"ok": False, "skipped": True,
+                    "error": "a download is already in flight"}
+        try:
+            return self.grab(pick, game, platform_slug)
+        finally:
+            with self._lock:
+                self._automatic_grab_reservations.discard(key)
+
     def grab(self, pick, game: str, platform_slug: str, *, manual: bool = False,
              external_request_id: str = "") -> dict:
         """Hand one release to a download client and record what happened.
@@ -1899,7 +1949,13 @@ class ROMarr:
                 release_fault = False
                 failure_detail = str(err)
             else:
-                ok = client.add_torrent_file(torrent)
+                # Prowlarr may answer a .torrent request with a terminal magnet
+                # redirect. Keep the safe local fetch path, then pass that URI
+                # to qBittorrent instead of treating it as torrent bytes.
+                if isinstance(torrent, str):
+                    ok = client.add(torrent)
+                else:
+                    ok = client.add_torrent_file(torrent)
                 download_id = client.last_job_id if ok else ""
                 release_fault = False
                 if not ok:
@@ -2473,7 +2529,9 @@ class ROMarr:
             # reached Wanted is one nothing will ever look for again.
             self.store.want(row.game, row.platform)
             try:
-                if self.request(row.game, row.platform).get("ok"):
+                if self._automatic_request(
+                        row.game, row.platform,
+                        external_request_id=row.external_request_id).get("ok"):
                     regrabbed += 1
             except Exception as err:      # one bad row must not stop the rest
                 log.warning("replacement grab for %r failed: %s", row.game, err)
@@ -5096,21 +5154,29 @@ class ROMarr:
         on every sweep -- hammering indexers for games that were not there
         this morning is how trackers hand out bans.
         """
-        searched = grabbed_count = skipped = 0
+        searched = grabbed_count = skipped = skipped_in_flight = 0
         for item in list(self.store.wanted):
             if auto and not next_search_due(item.attempts, item.searched_at):
                 skipped += 1
                 continue
+            result = (self._automatic_request(item.game, item.platform)
+                      if auto else self.request(item.game, item.platform))
+            if auto and result.get("skipped"):
+                skipped_in_flight += 1
+                continue
             searched += 1
             if auto:
                 self.store.mark_searched(item.game, item.platform)
-            if self.request(item.game, item.platform).get("ok"):
+            if result.get("ok"):
                 grabbed_count += 1
         message = f"Searched {searched}, grabbed {grabbed_count}"
         if skipped:
             message += f", {skipped} waiting out backoff"
+        if skipped_in_flight:
+            message += f", {skipped_in_flight} already downloading"
         return {"searched": searched, "grabbed": grabbed_count,
-                "skipped": skipped, "message": message}
+                "skipped": skipped, "skipped_in_flight": skipped_in_flight,
+                "message": message}
 
     def rss_sync(self) -> str:
         """Watch what is new instead of asking again for everything.
@@ -5140,7 +5206,7 @@ class ROMarr:
                             err.__class__.__name__)
         if not sources:
             return "no indexer could be read"
-        grabbed_count = 0
+        grabbed_count = skipped_in_flight = 0
         for item in wanted:
             platform = resolve(item.platform)
             if platform is None:
@@ -5149,10 +5215,15 @@ class ROMarr:
                                profile=self.profile, blocklist=self.blocklist)
             if pick is None or not pick.download_url:
                 continue
-            if self.grab(pick, item.game, platform.slug).get("ok"):
+            result = self._automatic_grab(pick, item.game, platform.slug)
+            if result.get("skipped"):
+                skipped_in_flight += 1
+            elif result.get("ok"):
                 grabbed_count += 1
+        suffix = (f", skipped {skipped_in_flight} already downloading"
+                  if skipped_in_flight else "")
         return (f"{len(releases)} feed item(s) from {sources} source(s), "
-                f"grabbed {grabbed_count}")
+                f"grabbed {grabbed_count}{suffix}")
 
     #: Where release news comes from. Only ever read, never written to.
     RELEASES_URL = "https://api.github.com/repos/BlizzHacker/romarr/releases/latest"

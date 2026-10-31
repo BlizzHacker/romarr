@@ -18,8 +18,11 @@ Two things here are load-bearing and easy to get wrong:
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
-from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
+from urllib.parse import (
+    parse_qsl, unquote_plus, urlencode, urljoin, urlsplit, urlunsplit,
+)
 
 import requests
 
@@ -307,7 +310,44 @@ class Prowlarr:
         return urlunsplit((parts.scheme, parts.netloc, parts.path,
                            urlencode(query, doseq=True), ""))
 
-    def fetch_torrent(self, download_url: str) -> bytes:
+    @classmethod
+    def _terminal_magnet(cls, url: str) -> str | None:
+        """Return a clean, identifiable magnet URI, or None for other values."""
+        if len(url) > 8192:
+            return None
+        try:
+            parts = urlsplit(url)
+            if (parts.scheme.lower() != "magnet" or parts.netloc
+                    or parts.path):
+                return None
+            topics = [value for key, value in
+                      parse_qsl(parts.query, keep_blank_values=True)
+                      if key.lower() == "xt"]
+        except ValueError:
+            return None
+        for topic in topics:
+            lowered = topic.lower()
+            if lowered.startswith("urn:btih:"):
+                digest = topic[len("urn:btih:"):]
+                if re.fullmatch(r"(?:[a-f0-9]{40}|[a-z2-7]{32})",
+                                digest.lower()):
+                    return cls._without_api_key_from_magnet(url)
+            elif lowered.startswith("urn:btmh:1220"):
+                digest = topic[len("urn:btmh:1220"):]
+                if re.fullmatch(r"[a-f0-9]{64}", digest.lower()):
+                    return cls._without_api_key_from_magnet(url)
+        return None
+
+    @staticmethod
+    def _without_api_key_from_magnet(url: str) -> str:
+        """Remove credentials while retaining the magnet's original encoding."""
+        parts = urlsplit(url)
+        query = "&".join(
+            field for field in parts.query.split("&")
+            if unquote_plus(field.partition("=")[0]).lower() != "apikey")
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, query, ""))
+
+    def fetch_torrent(self, download_url: str) -> bytes | str:
         """Fetch a Prowlarr torrent locally without exposing its URL to qBittorrent.
 
         Redirects stay on the configured Prowlarr origin. In particular, a
@@ -336,8 +376,11 @@ class Prowlarr:
                     _close_response(response)
                     raise ProwlarrDownloadError(
                         "Prowlarr redirected the download without a location")
-                current = urljoin(current, location)
+                magnet = self._terminal_magnet(location)
                 _close_response(response)
+                if magnet is not None:
+                    return magnet
+                current = urljoin(current, location)
                 continue
             if not response.ok:
                 _close_response(response)

@@ -187,25 +187,45 @@ class SABnzbd:
         """
         if not self.configured:
             return []
-        # Only the newest 100, like `completed`. The sweep runs far more often
-        # than a category collects 100 failures, and a failure pushed past
-        # them falls back to the stall timeout, as before this existed.
-        out = self._call("history", limit=100, category=self._config.category,
-                         failed_only=1)
-        slots = ((out or {}).get("history") or {}).get("slots") or []
+        # Page the failed history so a backlog of old failures cannot hide the
+        # job that is currently blocking a queue row. SABnzbd's history API
+        # accepts start and limit alongside failed_only.
+        page_size = 100
+        start = 0
         jobs = []
-        for s in slots:
-            # failed_only has been in the API since at least 2.3; checking the
-            # status as well costs nothing if some build ignores it.
-            if str(s.get("status", "")).lower() != "failed":
-                continue
-            reason = str(s.get("fail_message") or "")
-            jobs.append({
-                "name": s.get("name", ""),
-                "id": s.get("nzo_id", ""),
-                "detail": reason,
-                "release_fault": self._release_fault(reason),
-            })
+        seen_ids = set()
+        seen_pages = set()
+        while True:
+            out = self._call("history", start=start, limit=page_size,
+                             category=self._config.category, failed_only=1)
+            slots = ((out or {}).get("history") or {}).get("slots") or []
+            if not slots:
+                break
+            page = tuple(str(row.get("nzo_id") or "") for row in slots)
+            if page in seen_pages:
+                # Avoid looping forever if an older server ignores the offset.
+                break
+            seen_pages.add(page)
+            for row in slots:
+                # failed_only has been in the API since at least 2.3; checking
+                # status as well costs nothing if a build ignores that filter.
+                if str(row.get("status", "")).lower() != "failed":
+                    continue
+                job_id = str(row.get("nzo_id") or "")
+                if job_id and job_id in seen_ids:
+                    continue
+                if job_id:
+                    seen_ids.add(job_id)
+                reason = str(row.get("fail_message") or "")
+                jobs.append({
+                    "name": row.get("name", ""),
+                    "id": job_id,
+                    "detail": reason,
+                    "release_fault": self._release_fault(reason),
+                })
+            if len(slots) < page_size:
+                break
+            start += len(slots)
         return jobs
 
 

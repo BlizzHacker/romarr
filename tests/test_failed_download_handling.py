@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 
 from romarr.app import QueueItem, ROMarr
 from romarr.selection import Release
+from romarr.store import SeerrRequest
 
 
 def svc(tmp_path, **env):
@@ -232,6 +233,32 @@ def test_retiring_a_dead_download_grabs_the_next_best_release(tmp_path):
 
     assert out["blocklisted"] == 1 and out["regrabbed"] == 1
     assert service.clients[0].added == [next_url]
+
+
+def test_replacement_keeps_the_external_request_id(tmp_path):
+    service = svc(tmp_path)
+    dead = rel("Super Metroid (USA) [!].smc",
+               url="magnet:?xt=urn:btih:" + "d" * 40)
+    replacement = rel("Super Metroid (USA) (Rev 1).smc",
+                      url="magnet:?xt=urn:btih:" + "e" * 40)
+    service.prowlarr = FakeProwlarr([dead, replacement])
+    service.clients = [FakeClient()]
+    service.store.put_seerr_request(SeerrRequest(
+        "peer-retry", "snes", game="Super Metroid", status="downloading"))
+    service.store.enqueue(QueueItem(
+        "Super Metroid", "snes", dead.title, dead.seeders, "failed",
+        detail="SABnzbd reported failure",
+        release_id="btih:" + "d" * 40, release_fault=True,
+        external_request_id="peer-retry"))
+
+    result = service.retire_dead_downloads()
+
+    assert result["regrabbed"] == 1
+    replacement_row = next(q for q in service.queue
+                           if q.state == "grabbed")
+    assert replacement_row.release == replacement.title
+    assert replacement_row.external_request_id == "peer-retry"
+    assert service.store.get_seerr_request("peer-retry").status == "downloading"
 
 
 def test_the_request_goes_back_on_wanted_before_the_replacement_search(tmp_path):
