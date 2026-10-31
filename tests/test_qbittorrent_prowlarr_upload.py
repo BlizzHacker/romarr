@@ -21,6 +21,10 @@ class Response:
         self.headers = headers or {}
         self._chunks = chunks
         self._body = body if body is not None else []
+        self.closed = False
+
+    def close(self):
+        self.closed = True
 
     def iter_content(self, chunk_size=65536):
         yield from self._chunks
@@ -102,6 +106,29 @@ def test_same_origin_redirect_is_followed_without_query_key():
                for call in session.calls)
 
 
+def test_magnet_redirect_is_terminal_and_has_no_apikey():
+    response = Response(302, headers={"Location":
+        "magnet:?xt=urn:btih:" + "a" * 40 + "&dn=Metroid&apikey=SUPERSECRET"})
+    session = FetchSession([response])
+    magnet = prowlarr(session).fetch_torrent(
+        "http://prowlarr:9696/1/download?apikey=SUPERSECRET")
+
+    assert magnet == "magnet:?xt=urn:btih:" + "a" * 40 + "&dn=Metroid"
+    assert response.closed is True
+    assert len(session.calls) == 1
+    assert "SUPERSECRET" not in magnet
+
+
+def test_malformed_magnet_redirect_is_refused():
+    response = Response(302, headers={"Location": "magnet:?dn=no-infohash"})
+    session = FetchSession([response])
+    with pytest.raises(ProwlarrDownloadError, match="outside its configured host"):
+        prowlarr(session).fetch_torrent(
+            "http://prowlarr:9696/1/download?apikey=SUPERSECRET")
+    assert response.closed is True
+    assert len(session.calls) == 1
+
+
 def test_cross_origin_redirect_is_refused_and_never_followed():
     session = FetchSession([Response(
         302, headers={"Location": "https://attacker.example/file.torrent"})])
@@ -167,6 +194,29 @@ def test_qbittorrent_http_200_pending_without_tag_is_not_success(monkeypatch):
 
     assert qbit.add_torrent_file(TORRENT) is False
     assert qbit.last_job_id == ""
+
+
+def test_qbittorrent_receives_a_safe_magnet_from_prowlarr_redirect(tmp_path):
+    magnet = "magnet:?xt=urn:btih:" + "a" * 40 + "&dn=Metroid"
+    fetch_session = FetchSession([Response(
+        302, headers={"Location": magnet + "&apikey=SUPERSECRET"})])
+    qbit_session = QbitSession(confirm=True)
+    service = ROMarr({"ROMARR_DATA": str(tmp_path / "state.json")})
+    service.prowlarr = prowlarr(fetch_session)
+    service.clients = [QBittorrent(
+        QbitConfig("https://seedbox.example"), session=qbit_session)]
+    release = Release(
+        "Super Metroid (USA).smc", 3_000_000, 20, (1030,),
+        "http://prowlarr:9696/1/download?apikey=SUPERSECRET",
+        "torrent", indexer="Prowlarr")
+
+    result = service.grab(release, "Super Metroid", "snes")
+
+    assert result["ok"] is True
+    assert qbit_session.posts[0][1]["data"]["urls"] == magnet
+    assert "SUPERSECRET" not in repr(qbit_session.posts)
+    assert service.queue[-1].state == "grabbed"
+    assert service.queue[-1].download_id.startswith("qbit-tag:romarr-")
 
 
 def test_remote_qbittorrent_never_receives_prowlarr_url_or_key(tmp_path, caplog):

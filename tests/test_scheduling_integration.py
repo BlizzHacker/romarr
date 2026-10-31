@@ -2,7 +2,7 @@
 
 from datetime import datetime, timedelta, timezone
 
-from romarr.app import ROMarr
+from romarr.app import QueueItem, ROMarr
 from romarr.selection import Release
 
 
@@ -71,6 +71,52 @@ def test_auto_search_honours_backoff_and_stamps(tmp_path, monkeypatch):
     assert rows["Chrono Trigger"]["searched_at"], "the sweep stamps what it searched"
 
 
+def test_auto_search_skips_a_game_already_downloading(tmp_path, monkeypatch):
+    s = svc(tmp_path)
+    s.store.want("Earthbound", "snes")
+    s.store.enqueue(QueueItem("Earthbound", "snes", "Earthbound (USA)", 5,
+                               "grabbed", release_id="btih:already-downloading"))
+    monkeypatch.setattr(
+        s, "request",
+        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("must not search")))
+    out = s.search_missing(auto=True)
+    assert out["searched"] == 0
+    assert out["grabbed"] == 0
+    assert out["skipped_in_flight"] == 1
+
+
+def test_overlapping_automatic_sweeps_reserve_the_game(tmp_path):
+    import threading
+
+    s = svc(tmp_path)
+    entered = threading.Event()
+    release = threading.Event()
+    calls = []
+
+    def slow_request(game, platform):
+        calls.append((game, platform))
+        entered.set()
+        assert release.wait(3)
+        s.store.enqueue(QueueItem(game, platform, "Earthbound (USA)", 5,
+                                   "grabbed", release_id="btih:reserved"))
+        return {"ok": True}
+
+    s.request = slow_request
+    results = []
+    worker = threading.Thread(
+        target=lambda: results.append(s._automatic_request("Earthbound", "snes")))
+    worker.start()
+    assert entered.wait(3)
+    duplicate = s._automatic_request("Earthbound", "snes")
+    release.set()
+    worker.join(3)
+
+    assert not worker.is_alive()
+    assert duplicate["skipped"] is True
+    assert calls == [("Earthbound", "snes")]
+    assert results == [{"ok": True}]
+
+
 def test_manual_search_ignores_backoff(tmp_path, monkeypatch):
     s = svc(tmp_path)
     monkeypatch.setattr(s, "request", lambda g, p: {"ok": True})
@@ -93,6 +139,23 @@ def test_rss_sync_grabs_a_wanted_match_through_the_scorer(tmp_path, monkeypatch)
     out = s.rss_sync()
     assert "grabbed 1" in out
     assert sent == ["magnet:?xt=urn:btih:abc"]
+
+
+def test_rss_sync_skips_a_game_already_downloading(tmp_path, monkeypatch):
+    s = svc(tmp_path, PROWLARR_URL="http://prowlarr:9696")
+    s.store.want("Super Metroid", "snes")
+    s.store.enqueue(QueueItem("Super Metroid", "snes",
+                              "Super Metroid (USA).smc", 20, "grabbed",
+                              release_id="btih:already-downloading"))
+    monkeypatch.setattr(
+        s.prowlarr, "search",
+        lambda term, **kw: [rel("Super Metroid (USA).smc")])
+
+    out = s.rss_sync()
+
+    assert "grabbed 0" in out
+    assert "skipped 1 already downloading" in out
+    assert len(s.queue) == 1
 
 
 def test_rss_sync_with_nothing_wanted_reads_no_feeds(tmp_path, monkeypatch):
