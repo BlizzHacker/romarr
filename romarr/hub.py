@@ -639,3 +639,301 @@ def uninstall(slug: str) -> dict:
 # Applied at import so in-process Hub calls see the same backend the CLI does.
 for _k, _v in _backend_env().items():
     os.environ.setdefault(_k, _v)
+
+
+# --------------------------------------------------------- Igir v5.8.0 1G1R --
+
+IGIR_VERSION = "5.8.0"
+IGIR_RELEASE_URL = "https://github.com/emmercm/igir/releases/tag/v5.8.0"
+
+DEFAULT_IGIR_PROFILE = {
+    "commands": ["copy", "extract", "test", "clean", "report"],
+    "input_dirs": ["/downloads/rom-hub"],
+    "output_dir": "/library/roms/{romm}",
+    "dat_dirs": ["/config/dats"],
+    "single_1g1r": True,
+    "prefer_verified": True,
+    "prefer_good": True,
+    "prefer_regions": ["USA", "WORLD", "EUR", "JPN"],
+    "prefer_languages": ["EN", "JA"],
+    "no_demos": True,
+    "no_prototypes": True,
+    "no_betas": True,
+    "dry_run": True,
+}
+
+
+def igir_status() -> dict:
+    """Detect whether the igir binary (v5.8.0+) is on PATH and return its status."""
+    import shutil
+    import subprocess
+    binary = shutil.which("igir")
+    cmd_preview = " ".join(build_igir_command(DEFAULT_IGIR_PROFILE))
+    if not binary:
+        return {
+            "available": False,
+            "version": "",
+            "target_version": IGIR_VERSION,
+            "release_url": IGIR_RELEASE_URL,
+            "install_cmd": f"npm install -g igir@{IGIR_VERSION}",
+            "default_profile": DEFAULT_IGIR_PROFILE,
+            "command_preview": cmd_preview,
+        }
+    try:
+        proc = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=10)
+        ver = (proc.stdout or proc.stderr or "").strip()
+    except Exception:
+        ver = "installed"
+    return {
+        "available": True,
+        "binary": binary,
+        "version": ver,
+        "target_version": IGIR_VERSION,
+        "release_url": IGIR_RELEASE_URL,
+        "install_cmd": f"npm install -g igir@{IGIR_VERSION}",
+        "default_profile": DEFAULT_IGIR_PROFILE,
+        "command_preview": cmd_preview,
+    }
+
+
+def build_igir_command(cfg: dict | None = None) -> list[str]:
+    """Build an Igir v5.8.0 1G1R command line using ROMarr's region/verification basis."""
+    merged = dict(DEFAULT_IGIR_PROFILE)
+    if isinstance(cfg, dict):
+        merged.update({k: v for k, v in cfg.items() if v is not None})
+
+    allowed_cmds = ("copy", "move", "link", "extract", "zip", "test", "dir2dat", "fixdat", "clean", "report")
+    cmds = [c for c in (merged.get("commands") or ["copy", "test", "report"]) if c in allowed_cmds]
+    if not cmds:
+        cmds = ["test", "report"]
+    if merged.get("dry_run"):
+        cmds = [c for c in cmds if c in ("test", "report")] or ["test", "report"]
+
+    args = ["igir", *cmds]
+    for d in merged.get("dat_dirs") or []:
+        if str(d).strip():
+            args.extend(["--dat", str(d).strip()])
+    for i in merged.get("input_dirs") or []:
+        if str(i).strip():
+            args.extend(["--input", str(i).strip()])
+
+    out_dir = str(merged.get("output_dir") or "/library/roms/{romm}").strip()
+    args.extend(["--output", out_dir])
+
+    if merged.get("single_1g1r", True):
+        args.append("--single")
+    if merged.get("prefer_verified", True):
+        args.append("--prefer-verified")
+    if merged.get("prefer_good", True):
+        args.append("--prefer-good")
+
+    regions = [str(r).strip().upper() for r in (merged.get("prefer_regions") or []) if str(r).strip()]
+    if regions:
+        args.extend(["--prefer-region", ",".join(regions)])
+
+    langs = [str(l).strip().upper() for l in (merged.get("prefer_languages") or []) if str(l).strip()]
+    if langs:
+        args.extend(["--prefer-language", ",".join(langs)])
+
+    if merged.get("no_demos", True):
+        args.append("--no-demos")
+    if merged.get("no_prototypes", True):
+        args.append("--no-prototypes")
+    if merged.get("no_betas", True):
+        args.append("--no-betas")
+
+    return args
+
+
+def run_igir(cfg: dict | None = None, timeout: int = 600) -> dict:
+    """Execute Igir v5.8.0 or return the planned 1G1R command line."""
+    import shlex
+    import subprocess
+    cmd = build_igir_command(cfg)
+    cmd_str = " ".join(shlex.quote(part) for part in cmd)
+    if isinstance(cfg, dict) and cfg.get("preview_only"):
+        return {"ok": True, "command": cmd_str, "out": f"Planned 1G1R command: {cmd_str}", "err": ""}
+    status = igir_status()
+    if not status["available"]:
+        return {
+            "ok": False,
+            "command": cmd_str,
+            "error": f"igir binary not found on PATH. Install with: {status['install_cmd']}",
+            "out": "",
+        }
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=_plugin_env())
+        return {
+            "ok": proc.returncode == 0,
+            "command": cmd_str,
+            "out": (proc.stdout or "")[-4000:],
+            "err": (proc.stderr or "")[-2000:],
+            "code": proc.returncode,
+        }
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "command": cmd_str, "error": "igir timed out", "out": ""}
+    except Exception as exc:
+        return {"ok": False, "command": cmd_str, "error": str(exc), "out": ""}
+
+
+# -------------------------------------- Device Fleet & Supportive Shell API --
+
+DEVICE_PROFILES: list[dict] = [
+    {
+        "id": "es-de",
+        "name": "ES-DE (EmulationStation Desktop Edition)",
+        "category": "Frontend / Desktop & Handheld",
+        "protocol": "Local / SMB / NFS / SSH + gamelist.xml",
+        "default_path": "~/ROMs/{platform}",
+        "gamelist_format": "esde",
+        "igir_token": "{es}",
+        "description": "Generates ES-DE gamelist.xml per platform and syncs verified 1G1R ROM subsets over LAN, SMB, or SSH.",
+    },
+    {
+        "id": "retropie-arcadepunks",
+        "name": "Raspberry Pi — RetroPie / ArcadePunks / Batocera",
+        "category": "SBC / Cabinet / Bartop",
+        "protocol": "SSH / rsync / SFTP / SMB (\\retropie\roms)",
+        "default_path": "/home/pi/RetroPie/roms/{platform}",
+        "gamelist_format": "esde",
+        "igir_token": "{batocera}",
+        "description": "Audits existing RetroPie, Batocera, or ArcadePunks image ROM folders against No-Intro/Redump DATs, prunes duplicates with Igir 1G1R, and updates gamelist.xml.",
+    },
+    {
+        "id": "argosy",
+        "name": "Argosy Launcher (Android)",
+        "category": "First-Party RomM Mobile",
+        "protocol": "RomM REST API + Client API Token",
+        "default_path": "https://romm.your-network.local",
+        "gamelist_format": "romm-api",
+        "igir_token": "{romm}",
+        "description": "Official Android launcher that browses and launches your RomM library on mobile with token pairing.",
+    },
+    {
+        "id": "grout",
+        "name": "Grout (muOS / NextUI Linux Handhelds)",
+        "category": "First-Party RomM Handheld",
+        "protocol": "SSH Sync + RomM Device Sync Protocol",
+        "default_path": "/mnt/mmc/ROMS/{platform}",
+        "gamelist_format": "romm-api",
+        "igir_token": "{romm}",
+        "description": "Linux handheld companion for Anbernic, Miyoo, and TrimUI devices running muOS or NextUI.",
+    },
+    {
+        "id": "deckrommsync",
+        "name": "DeckRommSync (Steam Deck)",
+        "category": "Community Handheld",
+        "protocol": "RomM REST API + WebDAV Save Sync",
+        "default_path": "/run/media/mmcblk0p1/Emulation/roms/{romm}",
+        "gamelist_format": "esde",
+        "igir_token": "{romm}",
+        "description": "Syncs Steam Deck EmuDeck / ES-DE libraries and RetroArch saves with RomM and ROMarr.",
+    },
+    {
+        "id": "retroarch-webdav",
+        "name": "RetroArch Built-in Cloud Sync (WebDAV)",
+        "category": "Cross-Platform Save & State Sync",
+        "protocol": "WebDAV (/webdav/)",
+        "default_path": "{romm_url}/webdav/",
+        "gamelist_format": "webdav",
+        "igir_token": "{romm}",
+        "description": "Zero-companion save and savestate cloud sync across PC, Raspberry Pi, Android, and handhelds.",
+    },
+    {
+        "id": "console-cfw-feeds",
+        "name": "Console Homebrew Feeds (Tinfoil / pkgj / pkgi / fpkgi / Kekatsu)",
+        "category": "Direct Console Installers",
+        "protocol": "HTTP/HTTPS URL Feeds",
+        "default_path": "{romm_url}/api/feeds/",
+        "gamelist_format": "feed",
+        "igir_token": "{romm}",
+        "description": "Direct over-the-air package feeds for Switch (.nsp/.xci), PS Vita/PSP/PS3/PS4/PS5, and Nintendo DS.",
+    },
+]
+
+
+def fleet_profiles() -> dict:
+    """Return all supported multi-device & LAN/Cloud network library sync profiles."""
+    return {
+        "profiles": DEVICE_PROFILES,
+        "igir": igir_status(),
+    }
+
+
+def build_fleet_sync_plan(spec: dict | None = None) -> dict:
+    """Build a non-destructive sync/verification command plan for a target device or network share."""
+    import shlex
+    spec = spec if isinstance(spec, dict) else {}
+    device_id = str(spec.get("device_id") or "retropie-arcadepunks").strip()
+    profile = next((p for p in DEVICE_PROFILES if p["id"] == device_id), DEVICE_PROFILES[0])
+    target_path = str(spec.get("target_path") or profile["default_path"]).strip()
+    source_path = str(spec.get("source_path") or "/library/roms").strip()
+    regions = [str(r).strip().upper() for r in (spec.get("prefer_regions") or ["USA", "WORLD", "EUR", "JPN"]) if str(r).strip()]
+    transport = str(spec.get("transport") or "local").strip().lower()
+    ssh_host = str(spec.get("ssh_host") or "pi@retropie.local").strip()
+
+    igir_cmd = build_igir_command({
+        "commands": ["copy", "extract", "test", "clean", "report"],
+        "input_dirs": [source_path],
+        "output_dir": target_path if transport == "local" else f"/tmp/romarr-stage/{device_id}/{profile['igir_token']}",
+        "dat_dirs": [str(spec.get("dat_dir") or "/config/dats")],
+        "single_1g1r": bool(spec.get("single_1g1r", True)),
+        "prefer_verified": True,
+        "prefer_good": True,
+        "prefer_regions": regions,
+        "dry_run": bool(spec.get("dry_run", False)),
+    })
+    igir_str = " ".join(shlex.quote(x) for x in igir_cmd)
+
+    rsync_str = ""
+    if transport == "ssh":
+        rsync_str = f"rsync -avz --progress --delete-after /tmp/romarr-stage/{device_id}/ {shlex.quote(ssh_host)}:{shlex.quote(target_path)}"
+    elif transport == "rclone":
+        rsync_str = f"rclone sync /tmp/romarr-stage/{device_id}/ {shlex.quote(target_path)} --progress"
+
+    return {
+        "ok": True,
+        "device": profile,
+        "target_path": target_path,
+        "igir_command": igir_str,
+        "network_sync_command": rsync_str,
+        "gamelist_export_url": f"/api/v1/frontend/export?format={profile['gamelist_format']}" if profile["gamelist_format"] in ("esde", "launchbox", "playnite") else "",
+    }
+
+
+def mcp_manifest(base_url: str = "http://localhost:6868") -> dict:
+    """Expose ROMarr's capabilities and Open-Eyes desktop pairing metadata for MCP hosts."""
+    return {
+        "name": "romarr-mcp",
+        "version": "1.0.0",
+        "open_eyes_repo": "https://github.com/BlizzHacker/open-eyes",
+        "base_url": base_url,
+        "tools": [
+            {"name": "romarr_library_status", "method": "GET", "path": "/api/v1/library",
+             "description": "List connected library servers (RomM, Retrom, Gaseous, Gameyfin) and their health."},
+            {"name": "romarr_igir_1g1r", "method": "POST", "path": "/api/v1/hub/igir",
+             "description": "Preview or run Igir v5.8.0 1G1R verification and {romm} sorting."},
+            {"name": "romarr_fleet_sync_plan", "method": "POST", "path": "/api/v1/hub/fleet",
+             "description": "Build a 1G1R + gamelist.xml sync plan for ES-DE, RetroPie/ArcadePunks, Batocera, Argosy, Grout, or Steam Deck."},
+            {"name": "romarr_search_releases", "method": "GET", "path": "/api/v1/release",
+             "description": "Interactive search across Prowlarr indexers and sandboxed ROM Hub plugins."},
+            {"name": "romarr_trigger_command", "method": "POST", "path": "/api/v1/command",
+             "description": "Run a ROMarr background command (refresh, search, import)."},
+        ],
+        "mcp_client_config": {
+            "mcpServers": {
+                "open-eyes": {
+                    "command": "npx",
+                    "args": ["-y", "github:BlizzHacker/open-eyes"]
+                },
+                "romarr": {
+                    "command": "npx",
+                    "args": ["-y", "mcp-remote", f"{base_url}/api/v1/mcp"],
+                    "env": {
+                        "ROMARR_URL": base_url,
+                        "ROMARR_API_KEY": "<YOUR_ROMARR_API_KEY>"
+                    }
+                }
+            }
+        }
+    }

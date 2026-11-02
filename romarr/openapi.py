@@ -21,6 +21,8 @@ VERSION = "3.1.0"
 #: which is the whole mechanism keeping this honest.
 DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "/": ("GET", "The web UI."),
+    "/favicon.ico": ("GET", "The retro cartridge SVG favicon."),
+    "/favicon.svg": ("GET", "The retro cartridge SVG favicon."),
     "/api/health": ("GET", "Liveness. Returns {ok} unauthenticated, the full "
                            "dependency report with a key."),
     "/metrics": ("GET", "Prometheus exposition."),
@@ -153,6 +155,9 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
                                        "Playnite JSON."),
     "/api/v1/hub/catalogue": ("GET", "Search the plugin catalogue."),
     "/api/v1/hub/plugins": ("GET", "The plugin catalogue, unfiltered."),
+    "/api/v1/hub/igir": ("GET", "Igir v5.8.0 1G1R front-end status, default profile, and CLI execution (POST runs or previews an Igir 1G1R job with {romm} output tokens)."),
+    "/api/v1/hub/fleet": ("GET", "Multi-device and network library sync profiles for ES-DE, RetroPie/ArcadePunks, Batocera, Argosy, Grout, Steam Deck, and RetroArch WebDAV (POST builds a 1G1R + gamelist.xml sync plan)."),
+    "/api/v1/mcp": ("GET", "Model Context Protocol (MCP) tool manifest and Open-Eyes desktop bridge configuration for ROMarr."),
     "/api/v1/hub/plugin": ("POST", "Install, enable, disable or uninstall a plugin."),
     "/api/v1/hub/source/check": ("POST", "Whether a repository URL may be "
                                          "installed from."),

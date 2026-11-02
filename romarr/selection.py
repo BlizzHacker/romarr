@@ -514,6 +514,60 @@ _DISC_FLOOR = 1024 * 1024
 _CARTRIDGE_FLOOR = 4 * 1024
 
 
+def infer_platform(release: Release) -> Platform | None:
+    """Infer the platform of a release when Interactive Search ran with Any platform.
+
+    Checks in order of specificity:
+      1. Unique physical ROM extensions in `release.title` or
+         `release.torrent_file_path` (e.g. `.nsp` -> `switch`, `.sfc` -> `snes`,
+         `.z64` -> `n64`, `.gba` -> `gba`).
+      2. Explicit platform markers/aliases in `release.title` (longest alias
+         matched first so `"game boy advance"` resolves to `gba` before
+         `"game boy"` resolves to `gb`).
+      3. PC scene/repack markers (`fitgirl`, `dodi`, `elamigos`, `gog`, etc.)
+         or Newznab/Torznab PC category IDs (`4050` PC/Games) -> `win`.
+    """
+    from .platforms import PLATFORMS, resolve
+
+    text = f"{release.title or ''} {release.torrent_file_path or ''}".lower()
+    # 1. Unique ROM extension
+    ext_owners: dict[str, list[Platform]] = {}
+    for p in PLATFORMS:
+        for ext in p.extensions:
+            if ext in (".zip", ".7z", ".rar", ".iso", ".bin", ".cue", ".chd",
+                       ".exe", ".msi", ".pkg", ".rom"):
+                continue
+            ext_owners.setdefault(ext.lower(), []).append(p)
+    for ext, owners in sorted(ext_owners.items(), key=lambda kv: -len(kv[0])):
+        if len(owners) == 1 and _has_extension(text, (ext,)):
+            return owners[0]
+
+    # 2. Explicit platform name / alias in title (longest first)
+    lowered = (release.title or "").lower()
+    candidates: list[tuple[int, str, Platform]] = []
+    for p in PLATFORMS:
+        tokens = set([p.slug.lower(), p.name.lower(), *(a.lower() for a in p.aliases)])
+        for tok in tokens:
+            # Skip generic 2-letter tokens like "pc" or "dc" only if we handle them carefully;
+            # _mentions enforces word boundaries.
+            if len(tok) < 2:
+                continue
+            if _mentions(lowered, tok):
+                candidates.append((len(tok), tok, p))
+    if candidates:
+        candidates.sort(key=lambda item: (-item[0], item[1]))
+        return candidates[0][2]
+
+    # 3. PC repack / scene markers or PC Torznab category (4050)
+    if any(_mentions(lowered, marker) for marker in PC_RELEASE_MARKERS):
+        return resolve("win")
+    cats = set(release.categories or ())
+    if any(4000 <= c < 4100 for c in cats):
+        return resolve("win")
+    return None
+
+
+
 def _size_floor(platform: Platform) -> int:
     return _DISC_FLOOR if platform.is_disc else _CARTRIDGE_FLOOR
 

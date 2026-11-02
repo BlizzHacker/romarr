@@ -243,6 +243,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # is <root>/<platform>/roms/<rom> (RomM "Structure B"). Overridable per
     # library on the Libraries page; this is the default for the primary one.
     "library_layout": "flat",
+    # Optional per-platform folder name overrides (e.g. {"win": "Windows",
+    # "ps2": "PlayStation 2"}) for libraries that use human-readable or
+    # custom directory names instead of RomM's canonical filesystem slugs.
+    "platform_folders": {},
     # What to do with English fan translations in a 1G1R set:
     # exclude | fill | prefer | keep_both. See collections.TRANSLATION_POLICIES.
     # keep_both files the translation in the platform's Translations subfolder.

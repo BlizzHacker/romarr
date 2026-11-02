@@ -100,8 +100,9 @@ LIST_SECRETS = ("api_key", "openxbl_key", "npsso", "itchio_key",
                 "epic_code", "epic_refresh", "ea_token",
                 "battlenet_cookie", "humble_cookie")
 from .scheduler import Scheduler, next_search_due
-from .selection import best_release, judge, score
+from .selection import Release, best_release, infer_platform, judge, score
 from .store import Event, QueueItem, SeerrRequest, Store
+from .ui import favicon_svg as ui_favicon_svg
 from .ui import page as ui_page
 from .ui import link_page as ui_link_page
 from .ui import login_page as ui_login_page
@@ -1184,6 +1185,24 @@ class ROMarr:
         return str((cfg or {}).get("layout")
                    or self.store.settings.get("library_layout") or "flat")
 
+    def platform_folders(self, cfg: dict | None = None) -> dict[str, str]:
+        """Per-platform folder name overrides, merging global and library settings."""
+        merged: dict[str, str] = {}
+        for source in (self.store.settings.get("platform_folders"),
+                       (cfg or {}).get("platform_folders")):
+            if isinstance(source, dict):
+                for k, v in source.items():
+                    if k and v:
+                        merged[str(k)] = str(v)
+            elif isinstance(source, list):
+                for row in source:
+                    if isinstance(row, dict):
+                        k = row.get("platform") or row.get("slug")
+                        v = row.get("folder") or row.get("name")
+                        if k and v:
+                            merged[str(k)] = str(v)
+        return merged
+
     def path_hint(self, root: Path) -> str:
         """Why a library path is missing, and which fix applies.
 
@@ -2050,10 +2069,13 @@ class ROMarr:
         items = []
         for n, (verdict, r) in enumerate(judged):
             rid = f"{abs(hash((key, r.title, r.size, r.indexer))):x}{n:02d}"
-            held[rid] = (r, game, platform.slug if platform else "")
+            inferred = platform or infer_platform(r)
+            plat_slug = inferred.slug if inferred is not None else ""
+            held[rid] = (r, game, plat_slug)
             items.append({
                 "id": rid,
                 "title": r.title,
+                "platform": plat_slug,
                 "size": r.size,
                 "seeders": r.seeders,
                 "indexer": r.indexer,
@@ -2129,7 +2151,7 @@ class ROMarr:
             removed = before - len(self.queue)
         return {"ok": True, "removed": removed}
 
-    def grab_candidate(self, release_id: str) -> dict:
+    def grab_candidate(self, release_id: str, platform_name: str = "") -> dict:
         """Grab one release the user picked out of a search."""
         found = None
         with self._lock:
@@ -2144,7 +2166,16 @@ class ROMarr:
         release, game, platform_slug = found
         if not release.download_url:
             return {"ok": False, "error": "release offers no usable download link"}
-        return self.grab(release, game, platform_slug, manual=True)
+        chosen_raw = str(platform_name or platform_slug or "").strip()
+        resolved = resolve(chosen_raw) if chosen_raw else infer_platform(release)
+        if resolved is None:
+            return {
+                "ok": False,
+                "needs_platform": True,
+                "error": ("could not determine which platform this release "
+                          "belongs to -- choose a platform and grab again"),
+            }
+        return self.grab(release, game, resolved.slug, manual=True)
 
     def download_clients(self) -> list[dict]:
         """Every client, what it speaks, and whether it answers.
@@ -2407,9 +2438,13 @@ class ROMarr:
         back to the raw string so an entry stored under a slug this build no
         longer recognises can still be removed.
         """
-        platform = resolve(platform_name)
-        slug = platform.slug if platform is not None else str(platform_name).strip()
+        platform = resolve(platform_name) if platform_name else None
+        slug = (platform.slug if platform is not None
+                else str(platform_name or "").strip())
         removed = self.store.unwant(game, slug)
+        if not removed and not slug:
+            # Fallback if an entry was stored under whitespace or None
+            removed = self.store.unwant(game, "")
         if removed:
             self.store.record(Event(kind="ignored", game=game, platform=slug,
                                     detail="request dropped"))
@@ -2499,7 +2534,8 @@ class ROMarr:
                     continue
                 if row.state == "grabbed" and stall_minutes > 0:
                     age = self._row_age_minutes(row, now)
-                    if age is not None and age >= stall_minutes:
+                    if (age is not None and age >= stall_minutes
+                            and not self._is_download_active_or_complete(row)):
                         row.state = "failed"
                         row.release_fault = True
                         row.detail = (f"stalled: no import after "
@@ -2510,6 +2546,7 @@ class ROMarr:
         regrabbed = 0
         retried: set[tuple[str, str]] = set()
         for row in dead:
+            self._remove_dead_from_client(row)
             reason = row.detail or f"download {row.state}"
             self.block_id(row.release_id, title=row.release,
                           indexer=row.indexer, size=row.size,
@@ -2562,6 +2599,80 @@ class ROMarr:
                 # One unreachable client must not stop the sweep.
                 log.warning("%s failed_jobs() failed: %s", name, err)
         return jobs
+
+    def _is_download_active_or_complete(self, row: QueueItem) -> bool:
+        """Return True if a download client reports `row` is completed or actively transferring (#108).
+
+        `row.at` is the grab timestamp, not the last-activity timestamp. A large
+        release that takes longer than `stalled_timeout_minutes` to finish at a
+        healthy speed -- or a completed download waiting for import -- must not
+        be retired as stalled.
+        """
+        for client in self.clients:
+            if not getattr(client, "configured", True):
+                continue
+            try:
+                completed = getattr(client, "completed", None)
+                if callable(completed):
+                    for item in completed():
+                        if match_queue_item([row], item) is not None:
+                            return True
+            except Exception:
+                pass
+            try:
+                active_fn = (getattr(client, "active_downloads", None)
+                             or getattr(client, "torrents", None))
+                if callable(active_fn):
+                    for item in active_fn():
+                        if match_queue_item([row], item) is None:
+                            continue
+                        progress = float(item.get("progress", 0) or 0)
+                        if progress >= 1.0:
+                            return True
+                        dlspeed = int(item.get("dlspeed", 0) or 0)
+                        state = str(item.get("state") or "")
+                        if dlspeed > 0 or state in (
+                            "downloading", "forcedDL", "checkingDL",
+                            "checkingUP", "allocating", "moving",
+                            "uploading", "stalledUP", "queuedUP", "forcedUP",
+                        ):
+                            if state == "downloading" and dlspeed == 0 and int(item.get("num_seeds", 0) or 0) == 0:
+                                continue
+                            return True
+            except Exception:
+                pass
+        return False
+
+    def _remove_dead_from_client(self, row: QueueItem) -> bool:
+        """Best-effort removal of a retired/stalled download from its client (#108)."""
+        removed = False
+        for client in self.clients:
+            if not getattr(client, "configured", True):
+                continue
+            client_id = getattr(client, "romarr_id", "") or getattr(client, "config_id", "")
+            if row.download_client and client_id and str(row.download_client) != str(client_id):
+                continue
+            remover = getattr(client, "remove_download", None)
+            if callable(remover) and row.download_id:
+                try:
+                    if remover(row.download_id):
+                        removed = True
+                        continue
+                except Exception as err:
+                    log.warning("could not remove dead download %r from %s: %s",
+                                row.download_id, getattr(client, "name", client), err)
+            deleter = getattr(client, "delete_torrent", None)
+            torrents_fn = getattr(client, "torrents", None)
+            if callable(deleter) and callable(torrents_fn):
+                try:
+                    for item in torrents_fn():
+                        if match_queue_item([row], item) is not None:
+                            thash = str(item.get("hash") or "").strip()
+                            if thash and deleter(thash):
+                                removed = True
+                except Exception:
+                    pass
+        return removed
 
     @staticmethod
     def _row_age_minutes(row, now) -> float | None:
@@ -2736,7 +2847,8 @@ class ROMarr:
                               require_verified=require_verified,
                               rename=bool(self.store.settings.get("rename_on_import", True)),
                               layout=self.library_layout(target_cfg),
-                              translation=is_translation(source.name))
+                              translation=is_translation(source.name),
+                              platform_folders=self.platform_folders(target_cfg))
 
         imported, refused = [], []
         for outcome in outcomes:
@@ -2839,7 +2951,8 @@ class ROMarr:
         if platform_slug:
             for cfg, _ in self.game_libraries:
                 folder = platform_dir(self.library_root(cfg), platform_slug,
-                                      layout=self.library_layout(cfg))
+                                      layout=self.library_layout(cfg),
+                                      platform_folders=self.platform_folders(cfg))
                 try:
                     # Recursive on purpose. iterdir() sees one level: a game
                     # filed in a subfolder ("Nintendo/Chrono Trigger.zip", a
@@ -2899,7 +3012,8 @@ class ROMarr:
         verified_titles: set[str] = set()
         for cfg, _ in self.game_libraries:
             folder = platform_dir(self.library_root(cfg), platform_slug,
-                                  layout=self.library_layout(cfg))
+                                  layout=self.library_layout(cfg),
+                                  platform_folders=self.platform_folders(cfg))
             if not folder.is_dir():
                 continue
             for path in folder.rglob("*"):
@@ -4865,7 +4979,8 @@ class ROMarr:
             return {"error": "no DATs loaded -- set the DAT directory under "
                              "Settings -> Media Management first"}
 
-        root = platform_dir(self.library, platform)
+        root = platform_dir(self.library, platform,
+                            platform_folders=self.platform_folders())
         state = {"status": "running", "platform": platform.slug,
                  "scanned": 0, "verified": 0, "bad": 0, "unknown": 0,
                  "bad_files": [], "duplicates": [],
@@ -5816,13 +5931,6 @@ class ROMarr:
                 log.warning("%s completed() failed: %s", getattr(client, "name", client), err)
         for torrent in finished:
             name = torrent.get("name", "")
-            # The client reports the path IT sees. When it runs in a different
-            # container that path means nothing here, and the import fails with
-            # "download path does not exist" while the file sits right there.
-            path = map_remote_path(
-                torrent.get("content_path") or torrent.get("save_path", ""),
-                self.store.settings.get("remote_path_mappings"),
-            )
             platform = None
             queue_item = None
             with self._lock:
@@ -5830,20 +5938,58 @@ class ROMarr:
                 if match is not None:
                     queue_item = match
                     if match.state not in ("imported", "import-failed"):
-                        platform = resolve(match.platform)
+                        platform = resolve(match.platform) if match.platform else None
+                        if platform is None:
+                            # Fallback for legacy Any-platform grabs queued with
+                            # an empty platform string (#109).
+                            inferred = infer_platform(Release(
+                                title=name or match.release or match.game,
+                                download_url="",
+                                size=int(torrent.get("size") or match.size or 0),
+                                seeders=0,
+                                indexer=match.indexer,
+                                categories=(),
+                                protocol="torrent",
+                            ))
+                            if inferred is not None:
+                                platform = inferred
+                                match.platform = inferred.slug
             if queue_item is not None and queue_item.state in ("imported", "import-failed"):
                 continue
             if platform is None:
+                warned = getattr(self, "_warned_unmatched", None)
+                if warned is None:
+                    warned = set()
+                    self._warned_unmatched = warned
+                if queue_item is not None:
+                    wkey = ("no-platform", name)
+                    if wkey not in warned:
+                        warned.add(wkey)
+                        log.warning(
+                            "completed download %r matched queue row for %r "
+                            "with no platform set; import skipped",
+                            name, queue_item.game)
+                    continue
                 category = str(torrent.get("category") or "")
                 romarr_categories = {
                     str(getattr(getattr(client, "_config", None), "category", ""))
                     for client in self.clients
                 }
                 if category and category in romarr_categories:
-                    log.warning("completed download %r in category %r could "
-                                "not be matched to a ROMarr queue row; import "
-                                "skipped", name, category)
+                    wkey = (name, category)
+                    if wkey not in warned:
+                        warned.add(wkey)
+                        log.warning("completed download %r in category %r could "
+                                    "not be matched to a ROMarr queue row; import "
+                                    "skipped", name, category)
                 continue
+            # The client reports the path IT sees. Mapped only after matching a
+            # pending queue row so already-imported or foreign downloads do not
+            # trigger path mapping logs on every sweep (#110).
+            path = map_remote_path(
+                torrent.get("content_path") or torrent.get("save_path", ""),
+                self.store.settings.get("remote_path_mappings"),
+            )
             refused = self._virus_check(path, name, platform, queue_item)
             if refused is not None:
                 results.append(refused)
@@ -5872,7 +6018,8 @@ class ROMarr:
                 dats=self.dats,
                 rename=bool(self.store.settings.get("rename_on_import", True)),
                 layout=self.library_layout(target_cfg),
-                translation=is_translation(name))
+                translation=is_translation(name),
+                platform_folders=self.platform_folders(target_cfg))
             if not outcomes:
                 self.store.record(Event(kind="failed", game=name,
                                         platform=platform.slug,
@@ -6257,7 +6404,9 @@ def make_handler(service: ROMarr):
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 return self.wfile.write(body)
-            if path in self.OPEN_PATHS or self._authorised():
+            if (path in self.OPEN_PATHS
+                    or path in ("/favicon.ico", "/favicon.svg")
+                    or self._authorised()):
                 return self._guard(handler)
             self._drain()
             return self._json(401, {
@@ -6282,6 +6431,9 @@ def make_handler(service: ROMarr):
         def _get(self):
             route = urlparse(self.path)
             query = parse_qs(route.query)
+            if route.path in ("/favicon.ico", "/favicon.svg"):
+                return self._send(200, ui_favicon_svg().encode("utf-8"),
+                                  "image/svg+xml")
             if route.path == "/link":
                 # Served before the sign-in check on purpose, and without
                 # consulting anything: the visitor is a stranger holding a
@@ -6833,6 +6985,12 @@ def make_handler(service: ROMarr):
                     game, (query.get("platform") or [""])[0]))
             if route.path == "/api/v1/hub/plugins":
                 return self._json(200, hub.plugins())
+            if route.path == "/api/v1/hub/igir":
+                return self._json(200, hub.igir_status())
+            if route.path == "/api/v1/hub/fleet":
+                return self._json(200, hub.fleet_profiles())
+            if route.path == "/api/v1/mcp":
+                return self._json(200, hub.mcp_manifest())
             if route.path == "/api/v1/moonlight":
                 return self._json(200, service.moonlight_status())
             if route.path == "/api/v1/hub/status":
@@ -7481,6 +7639,12 @@ def make_handler(service: ROMarr):
                       "disable": hub.disable, "uninstall": hub.uninstall}[action]
                 result = fn(slug)
                 return self._json(200 if result.get("ok") else 500, result)
+            if route.path == "/api/v1/hub/igir":
+                res = hub.run_igir(body if isinstance(body, dict) else {})
+                return self._json(200 if res.get("ok") else 400, res)
+            if route.path == "/api/v1/hub/fleet":
+                res = hub.build_fleet_sync_plan(body if isinstance(body, dict) else {})
+                return self._json(200 if res.get("ok") else 400, res)
             if route.path == "/api/request":
                 game = (body.get("game") or "").strip()
                 platform = (body.get("platform") or "").strip()
@@ -7526,7 +7690,9 @@ def make_handler(service: ROMarr):
                 release_id = (body.get("id") or "").strip()
                 if not release_id:
                     return self._json(400, {"error": "id is required"})
-                return self._json(200, service.grab_candidate(release_id))
+                platform_name = str(body.get("platform") or "").strip()
+                return self._json(
+                    200, service.grab_candidate(release_id, platform_name))
             if route.path == "/api/import":
                 return self._json(200, {"imported": service.import_finished()})
             if route.path in ("/api/v1/downloadclient", "/api/v1/indexer"):
@@ -7615,7 +7781,7 @@ def make_handler(service: ROMarr):
                 # Game and platform may arrive as query parameters or as a
                 # JSON body; a DELETE carrying one is unusual enough that
                 # refusing it would just be a papercut.
-                query = parse_qs(route.query)
+                query = parse_qs(route.query, keep_blank_values=True)
                 body = {}
                 length = int(self.headers.get("Content-Length") or 0)
                 if length:
@@ -7627,9 +7793,12 @@ def make_handler(service: ROMarr):
                     body = {}
                 game = str(body.get("game")
                            or (query.get("game") or [""])[0]).strip()
-                platform = str(body.get("platform")
-                               or (query.get("platform") or [""])[0]).strip()
-                if not game or not platform:
+                has_platform = "platform" in body or "platform" in query
+                platform = str(
+                    body.get("platform") if "platform" in body
+                    else (query.get("platform") or [""])[0]
+                ).strip()
+                if not game or not has_platform:
                     return self._json(400, {
                         "error": "game and platform are both required"})
                 removed = service.drop_request(game, platform)

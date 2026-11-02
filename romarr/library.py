@@ -26,7 +26,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from .dat import BAD_DUMP, UNKNOWN, VERIFIED, Match, hash_bytes, hash_stream
-from .platforms import Platform, romm_fs_slug
+from .platforms import Platform, resolve, romm_fs_slug
 from .selection import pick_all_rom_sets, pick_rom_set
 
 log = logging.getLogger(__name__)
@@ -412,11 +412,64 @@ def verify_set(source, members, dats) -> Match:
 TRANSLATION_SUBDIR = "Translations"
 
 
+def _custom_platform_folder(slug: str, platform_folders) -> str | None:
+    """Resolve an operator's custom folder name for `slug`, if configured.
+
+    Accepts either a dict (`{"win": "Windows", "ps2": "PlayStation 2"}`) or a
+    list of `{"platform": ..., "folder": ...}` rows. Keys are normalised via
+    `resolve()` so `"pc"`, `"windows"`, and `"win"` all map to the `win` slug.
+    Rejects path separators and traversal segments so a folder override stays a
+    single directory name under `library_root`.
+    """
+    if not platform_folders:
+        return None
+    target_plat = resolve(slug)
+    canonical = target_plat.slug if target_plat is not None else str(slug or "").strip().lower()
+    raw_map: dict[str, str] = {}
+    if isinstance(platform_folders, dict):
+        items = list(platform_folders.items())
+    elif isinstance(platform_folders, list):
+        items = [
+            (row.get("platform") or row.get("slug") or "",
+             row.get("folder") or row.get("name") or "")
+            for row in platform_folders if isinstance(row, dict)
+        ]
+    else:
+        return None
+    for k, v in items:
+        key_str = str(k or "").strip()
+        val_str = str(v or "").strip()
+        if not key_str or not val_str:
+            continue
+        if "/" in val_str or "\\" in val_str or val_str in (".", ".."):
+            continue
+        resolved = resolve(key_str)
+        norm_key = resolved.slug if resolved is not None else key_str.lower()
+        raw_map[norm_key] = val_str
+        raw_map[key_str.lower()] = val_str
+    return raw_map.get(canonical) or raw_map.get(str(slug or "").strip().lower())
+
+
+def _digital_set_name(download: Path) -> str:
+    """Folder name for a multi-file digital (PC) import.
+
+    `Path.stem` strips the last dot-separated segment even on directories, so a
+    scene or repack folder like `Call.of.Duty.Modern.Warfare.4.[DODI.Repack]`
+    was truncated to `Call.of.Duty.Modern.Warfare.4.[DODI`. Only strip the
+    suffix when `download` is an archive file.
+    """
+    if download.is_file() and download.suffix.lower() in ARCHIVE_SUFFIXES:
+        return download.stem
+    return download.name
+
+
 def platform_dir(library_root: Path, platform: "Platform | str", *,
-                 layout: str = "flat", translation: bool = False) -> Path:
+                 layout: str = "flat", translation: bool = False,
+                 platform_folders=None) -> Path:
     """Where a ROM for this platform is filed, under the chosen layout."""
     slug = getattr(platform, "slug", platform)
-    base = library_root / romm_fs_slug(slug)
+    folder = _custom_platform_folder(slug, platform_folders) or romm_fs_slug(slug)
+    base = library_root / folder
     if str(layout).lower() in ("nested", "romm_b", "b"):
         base = base / "roms"
     if translation:
@@ -428,7 +481,8 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
                overwrite: bool = False, dats=None,
                require_verified: bool = False,
                layout: str = "flat", translation: bool = False,
-               rename: bool = False) -> list[ImportResult]:
+               rename: bool = False,
+               platform_folders=None) -> list[ImportResult]:
     """Place every ROM from a finished download into the library.
 
     A cartridge zip may hold several games (a 3-in-1 collection, a bundle)
@@ -473,7 +527,8 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
             continue
 
         target_dir = platform_dir(library_root, platform,
-                                   layout=layout, translation=translation)
+                                  layout=layout, translation=translation,
+                                  platform_folders=platform_folders)
 
         if not chosen.is_multi_file:
             target_dir.mkdir(parents=True, exist_ok=True)
@@ -492,7 +547,7 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
         # A digital set is named after the download, not its primary: every
         # repack's installer is called setup.exe, and a library of
         # directories all named "setup" is a library of nothing.
-        set_name = (download.stem if platform.media == "digital"
+        set_name = (_digital_set_name(download) if platform.media == "digital"
                     else _set_name(chosen.primary))
         destination = target_dir / set_name
         if destination.exists() and any(destination.iterdir()) and not overwrite:

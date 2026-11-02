@@ -67,3 +67,35 @@ def test_the_page_and_route_exist():
     assert "RENDER.ecosystem" in p
     assert "/api/v1/ecosystem" in p
     assert "data-copy" in p, "install commands are copyable"
+
+
+def test_romm_ecosystem_and_igir_v580_are_present():
+    names = {p.name for p in all_projects()}
+    for item in (
+        "Igir Collection Manager",
+        "Argosy Launcher", "Grout", "RomM Playnite Plugin",
+        "Tinfoil", "pkgj", "pkgi", "fpkgi", "Kekatsu",
+        "RetroArch Cloud Sync",
+        "romm-ios-app", "romm-mobile", "RommBrowser", "RomMate",
+        "romm-client", "DeckRommSync", "SwitchRomM", "RetroArch Sync",
+        "romm-comm", "GG Requestz",
+        "Client API Tokens", "Device Sync Protocol", "SSH Sync",
+    ):
+        assert item in names, f"{item} missing from ecosystem"
+
+
+def test_portal_fleet_and_mcp_routes_are_wired():
+    from romarr.ui import page
+    from romarr import hub
+    html = page()
+    assert 'data-page="portal"' in html
+    assert "RENDER.portal=" in html
+    assert "/api/v1/hub/fleet" in html
+    assert "/api/v1/hub/igir" in html
+    assert "/api/v1/mcp" in html
+    plan = hub.build_fleet_sync_plan({"device_id": "retropie-arcadepunks", "transport": "ssh"})
+    assert plan["ok"] is True
+    assert "igir" in plan["igir_command"]
+    assert "rsync" in plan["network_sync_command"]
+    mcp = hub.mcp_manifest()
+    assert "open-eyes" in mcp["mcp_client_config"]["mcpServers"]

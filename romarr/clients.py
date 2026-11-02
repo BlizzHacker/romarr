@@ -503,13 +503,53 @@ class QBittorrent:
                 return False
         return True
 
-    def delete_torrent(self, torrent_hash: str) -> bool:
+    def delete_torrent(self, torrent_hash: str, *,
+                       delete_files: bool = False) -> bool:
         """Remove a ROMarr-tagged torrent without deleting downloaded data."""
         response = self._post(
             "torrents/delete",
-            data={"hashes": torrent_hash, "deleteFiles": "false"},
+            data={"hashes": torrent_hash,
+                  "deleteFiles": "true" if delete_files else "false"},
             timeout=self._config.timeout)
         return bool(response.ok)
+
+    def remove_download(self, download_id: str, *,
+                        delete_files: bool = False) -> bool:
+        """Remove a download by its ROMarr `download_id` (`qbit-tag:<tag>` or infohash).
+
+        Used when retiring stalled/dead downloads so `romarr-*` tagged torrents
+        do not accumulate indefinitely in qBittorrent (#108).
+        """
+        raw = str(download_id or "").strip()
+        if not raw:
+            return False
+        if not self._authed and not self.login():
+            return False
+        if raw.startswith("qbit-tag:"):
+            tag = raw.split(":", 1)[1].strip()
+            if not tag:
+                return False
+            try:
+                response = self._get("torrents/info", params={"tag": tag},
+                                     timeout=self._config.timeout)
+                rows = response.json() if response.ok else []
+            except (requests.RequestException, ValueError):
+                return False
+            hashes = [
+                str(r.get("hash") or "").strip()
+                for r in (rows if isinstance(rows, list) else [])
+                if isinstance(r, dict) and _row_has_tag(r, tag)
+                and str(r.get("hash") or "").strip()
+            ]
+            if not hashes:
+                return False
+            return self.delete_torrent("|".join(hashes),
+                                       delete_files=delete_files)
+        return self.delete_torrent(raw, delete_files=delete_files)
+
+    def active_downloads(self) -> list[dict]:
+        """All torrents visible to this client (for stall checks)."""
+        return self.torrents()
 
     def pause_torrent(self, torrent_hash: str) -> bool:
         response = self._post("torrents/pause",
