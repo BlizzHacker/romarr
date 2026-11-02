@@ -363,3 +363,45 @@ def test_issue_93_rom_hub_pin_updated():
     for rel in ("Dockerfile", "Dockerfile.browser", "docs/PLUGINS.md"):
         content = (root / rel).read_text(encoding="utf-8")
         assert expected_sha in content, f"{rel} does not pin {expected_sha}"
+
+
+def test_portal_proxy_same_origin_shield_and_ssrf_guard(tmp_path, monkeypatch):
+    """Supportive Library Shell same-origin proxy relays configured library
+    origins with credentials and HTML shim, and refuses foreign origins."""
+    from unittest.mock import MagicMock
+    import requests
+
+    service = ROMarr({
+        "ROMARR_DATA": str(tmp_path / "state.json"),
+        "ROMM_URL": "http://192.168.0.94:8080",
+        "ROMM_USERNAME": "moveweightuser",
+        "ROMM_PASSWORD": "secret",
+    })
+
+    # Foreign origin is refused (never an open proxy)
+    code, _, body = service.proxy_portal("http://192.168.0.1/admin")
+    assert code == 403
+    assert b"not a configured library origin" in body
+
+    # Configured library origin is relayed and HTML receives same-origin shim
+    seen_req = {}
+
+    def fake_request(self_sess, method, url, **kw):
+        seen_req["method"] = method
+        seen_req["url"] = url
+        seen_req["auth"] = self_sess.auth
+        return MagicMock(
+            status_code=200,
+            headers={"Content-Type": "text/html; charset=utf-8"},
+            content=b"<!doctype html><html><head><title>RomM</title></head><body>Hi</body></html>",
+            __enter__=lambda s: s,
+            __exit__=lambda *a: None,
+        )
+
+    monkeypatch.setattr(requests.Session, "request", fake_request)
+    code, ctype, raw = service.proxy_portal("http://192.168.0.94:8080", "/")
+    assert code == 200
+    assert "text/html" in ctype
+    assert b"/api/v1/portal/proxy" in raw
+    assert seen_req["url"] == "http://192.168.0.94:8080/"
+    assert seen_req["auth"] == ("moveweightuser", "secret")

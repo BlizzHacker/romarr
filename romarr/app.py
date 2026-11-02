@@ -5606,6 +5606,193 @@ class ROMarr:
             ctype = response.headers.get("Content-Type") or "image/png"
             return 200, ctype.split(";")[0].strip(), body
 
+    def _portal_targets(self) -> dict[str, dict]:
+        """Allowed library and request-frontend origins mapped to stored credentials."""
+        from urllib.parse import urlsplit
+
+        targets: dict[str, dict] = {}
+        env_user = str(self._env.get("LIBRARY_USERNAME") or self._env.get("ROMM_USERNAME") or "")
+        env_pass = str(self._env.get("LIBRARY_PASSWORD") or self._env.get("ROMM_PASSWORD") or "")
+        env_key = str(self._env.get("LIBRARY_API_KEY") or self._env.get("ROMM_API_TOKEN") or "")
+
+        def register(raw_url: str, cfg: dict | None = None) -> None:
+            b = urlsplit(str(raw_url or "").strip())
+            if b.scheme not in ("http", "https") or not b.netloc:
+                return
+            origin = f"{b.scheme}://{b.netloc}"
+            c = cfg or {}
+            existing = targets.get(origin) or {}
+            username = str(c.get("username") or existing.get("username") or env_user)
+            password = str(c.get("password") or existing.get("password") or env_pass)
+            api_key = str(c.get("api_key") or existing.get("api_key") or env_key)
+            if username == "********":
+                username = existing.get("username") or env_user
+            if password == "********":
+                password = existing.get("password") or env_pass
+            if api_key == "********":
+                api_key = existing.get("api_key") or env_key
+            targets[origin] = {
+                "origin": origin,
+                "username": username,
+                "password": password,
+                "api_key": api_key,
+            }
+
+        for cfg in self.store.list_items("libraries"):
+            register(str(cfg.get("url") or ""), cfg)
+        for cfg, backend in self.game_libraries:
+            base = str(cfg.get("url") or "") or str(
+                getattr(getattr(backend, "_config", None), "base_url", "") or "")
+            register(base, cfg)
+        for extra in (
+            getattr(self, "ggrequestz_url", ""),
+            self.store.settings.get("_romm_url", ""),
+            self._env.get("ROMM_URL", ""),
+            self._env.get("GGREQUESTZ_URL", ""),
+        ):
+            if extra:
+                register(str(extra))
+        return targets
+
+    def active_portal_url(self) -> str:
+        """The currently active portal origin, or the first configured library origin."""
+        active = str(getattr(self, "_active_portal_url", "") or "").strip()
+        targets = self._portal_targets()
+        if active and active in targets:
+            return active
+        if targets:
+            first = next(iter(targets))
+            self._active_portal_url = first
+            return first
+        return ""
+
+    @staticmethod
+    def _inject_portal_shim(html_bytes: bytes, origin: str, initial_path: str = "/") -> bytes:
+        """Inject a same-origin history + fetch/XHR rewrite shim into proxied HTML."""
+        try:
+            text = html_bytes.decode("utf-8", errors="replace")
+        except Exception:
+            return html_bytes
+        safe_origin = json.dumps(origin)
+        safe_path = json.dumps(initial_path if initial_path.startswith("/") else "/" + initial_path)
+        shim = (
+            "<script>(function(){"
+            f"var TARGET={safe_origin};"
+            f"var INIT_PATH={safe_path};"
+            "var PROXY='/api/v1/portal/proxy?url='+encodeURIComponent(TARGET)+'&path=';"
+            "try{if(location.pathname.indexOf('/api/v1/portal/proxy')===0){"
+            "history.replaceState(null,'',INIT_PATH);}}catch(e){}"
+            "function rw(u){"
+            "if(typeof u!=='string'||!u)return u;"
+            "if(u.indexOf('/api/v1/portal/proxy')===0)return u;"
+            "if(u.indexOf(location.origin+'/')===0)u=u.slice(location.origin.length);"
+            "if(u.indexOf('api/')===0)u='/'+u;"
+            "if(u.charAt(0)==='/'&&u.charAt(1)!=='/')return PROXY+encodeURIComponent(u);"
+            "if(u.indexOf(TARGET)===0)return PROXY+encodeURIComponent(u.slice(TARGET.length)||'/');"
+            "return u;}"
+            "var _f=window.fetch;"
+            "if(_f){window.fetch=function(i,init){"
+            "if(typeof i==='string')i=rw(i);"
+            "else if(i&&typeof i.url==='string'){try{i=new Request(rw(i.url),i);}catch(e){}}"
+            "return _f.call(this,i,init);};}"
+            "var _o=XMLHttpRequest.prototype.open;"
+            "XMLHttpRequest.prototype.open=function(m,u){"
+            "var a=Array.prototype.slice.call(arguments);a[1]=rw(u);"
+            "return _o.apply(this,a);};"
+            "})();</script>"
+        )
+        lower = text.lower()
+        idx = lower.find("<head>")
+        if idx != -1:
+            pos = idx + len("<head>")
+            text = text[:pos] + shim + text[pos:]
+        elif "<html" in lower:
+            text = shim + text
+        else:
+            text = shim + text
+        return text.encode("utf-8")
+
+    def proxy_portal(self, url: str = "", path: str = "", *,
+                     method: str = "GET", body: bytes | None = None,
+                     content_type: str = "", accept: str = "") -> tuple[int, str, bytes]:
+        """Same-origin authenticated reverse proxy for the Supportive Library Shell.
+
+        Relays HTML, API calls, and assets to a configured library server
+        (RomM, Retrom, Gaseous, Gameyfin, or GG Requestz), injecting stored
+        library credentials server-side so cross-origin cookies, OIDC
+        X-Frame-Options blocks, and HTTPS->HTTP mixed-content blocks never
+        break the embedded shell. Restricted strictly to configured origins.
+        """
+        import requests as _requests
+        from urllib.parse import urlsplit
+
+        targets = self._portal_targets()
+        wanted = str(url or "").strip() or self.active_portal_url()
+        parts = urlsplit(wanted)
+        if parts.scheme not in ("http", "https") or not parts.netloc:
+            return 400, "application/json", b'{"error":"http(s) URL required"}'
+        origin = f"{parts.scheme}://{parts.netloc}"
+        if origin not in targets:
+            return 403, "application/json", b'{"error":"not a configured library origin"}'
+
+        self._active_portal_url = origin
+        creds = targets[origin]
+        sub_path = str(path or "").strip()
+        if not sub_path:
+            sub_path = parts.path or "/"
+            if parts.query:
+                sub_path = f"{sub_path}?{parts.query}"
+        if not sub_path.startswith("/"):
+            sub_path = "/" + sub_path
+
+        sessions = getattr(self, "_portal_sessions", None)
+        if sessions is None:
+            sessions = {}
+            self._portal_sessions = sessions
+        session = sessions.get(origin)
+        if session is None:
+            session = _requests.Session()
+            sessions[origin] = session
+
+        if creds.get("username") and creds.get("password"):
+            session.auth = (creds["username"], creds["password"])
+        else:
+            session.auth = None
+
+        headers: dict[str, str] = {}
+        if content_type:
+            headers["Content-Type"] = content_type
+        if accept:
+            headers["Accept"] = accept
+        if creds.get("api_key") and not session.auth:
+            headers["X-Api-Key"] = creds["api_key"]
+            headers["Authorization"] = f"Bearer {creds['api_key']}"
+        csrf = session.cookies.get("romm_csrftoken")
+        if csrf:
+            headers["X-CSRFToken"] = csrf
+
+        upstream_url = origin + sub_path
+        try:
+            response = session.request(
+                method.upper(),
+                upstream_url,
+                data=body if method.upper() in ("POST", "PUT", "PATCH", "DELETE") else None,
+                headers=headers,
+                timeout=30,
+                allow_redirects=True,
+                stream=True,
+            )
+        except _requests.RequestException as err:
+            log.warning("portal proxy fetch failed for %s: %s", upstream_url, err)
+            return 502, "application/json", b'{"error":"library unreachable"}'
+        with response:
+            raw = response.content[:25 * 1024 * 1024]
+            ctype = response.headers.get("Content-Type") or "application/octet-stream"
+            if "text/html" in ctype.lower() and method.upper() == "GET":
+                raw = self._inject_portal_shim(raw, origin, sub_path)
+                ctype = "text/html; charset=utf-8"
+            return response.status_code, ctype, raw
+
     def _auto_import_summary(self) -> str:
         done = self.import_finished(retry_failed=False)
         if not done:
@@ -6646,6 +6833,12 @@ def make_handler(service: ROMarr):
                                      "private, max-age=86400")
                 self.end_headers()
                 return self.wfile.write(body)
+            if route.path == "/api/v1/portal/proxy":
+                return self._serve_portal_proxy(
+                    target=(query.get("url") or [""])[0],
+                    sub_path=(query.get("path") or [""])[0],
+                    method="GET",
+                )
             if route.path == "/api/v1/manualimport":
                 return self._json(200, service.scan(
                     query.get("path", [""])[0]))
@@ -7018,11 +7211,62 @@ def make_handler(service: ROMarr):
                 if not game:
                     return self._json(400, {"error": "game is required"})
                 return self._json(200, service.search(game, (query.get("platform") or [""])[0]))
+            if self._is_portal_subpath(route.path):
+                return self._serve_portal_proxy(
+                    target="", sub_path=self.path, method="GET")
             return self._json(404, {"error": "not found"})
+
+        @staticmethod
+        def _is_portal_subpath(path: str) -> bool:
+            """Whether `path` is a static asset or library-API subresource requested by the embedded portal shell."""
+            if path.startswith(("/assets/", "/_next/", "/static/")):
+                return True
+            if path in ("/site.webmanifest", "/manifest.webmanifest",
+                        "/apple-touch-icon.png", "/safari-pinned-tab.svg",
+                        "/favicon-32x32.png", "/favicon-16x16.png"):
+                return True
+            if path.startswith(("/api/config", "/api/users", "/api/heartbeat",
+                                "/api/roms", "/api/collections", "/api/firmware",
+                                "/api/devices", "/api/token", "/api/oauth",
+                                "/api/stats", "/api/tasks", "/api/playlists",
+                                "/api/saves", "/api/states", "/api/screenshots")):
+                return True
+            return False
+
+        def _serve_portal_proxy(self, target: str, sub_path: str,
+                                method: str = "GET", body: bytes | None = None):
+            code, ctype, raw = service.proxy_portal(
+                target,
+                sub_path,
+                method=method,
+                body=body,
+                content_type=self.headers.get("Content-Type", ""),
+                accept=self.headers.get("Accept", ""),
+            )
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(raw)))
+            if code == 200 and sub_path.startswith("/assets/"):
+                self.send_header("Cache-Control", "private, max-age=3600")
+            self.end_headers()
+            return self.wfile.write(raw)
 
         def _post(self):
             route = urlparse(self.path)
+            query = parse_qs(route.query)
             length = int(self.headers.get("Content-Length") or 0)
+            if route.path == "/api/v1/portal/proxy":
+                raw_body = self.rfile.read(min(length, 25 * 1024 * 1024)) if length > 0 else b""
+                return self._serve_portal_proxy(
+                    target=(query.get("url") or [""])[0],
+                    sub_path=(query.get("path") or [""])[0],
+                    method="POST",
+                    body=raw_body,
+                )
+            if self._is_portal_subpath(route.path):
+                raw_body = self.rfile.read(min(length, 25 * 1024 * 1024)) if length > 0 else b""
+                return self._serve_portal_proxy(
+                    target="", sub_path=self.path, method="POST", body=raw_body)
             # The capture body is assembled by a web page, so its size is
             # checked before it is read rather than after. `read(length)` on a
             # declared gigabyte allocates a gigabyte first and refuses second,
@@ -7772,6 +8016,21 @@ def make_handler(service: ROMarr):
 
         def _delete(self):
             route = urlparse(self.path)
+            query_del = parse_qs(route.query)
+            if route.path == "/api/v1/portal/proxy":
+                length = int(self.headers.get("Content-Length") or 0)
+                raw_body = self.rfile.read(min(length, 25 * 1024 * 1024)) if length > 0 else b""
+                return self._serve_portal_proxy(
+                    target=(query_del.get("url") or [""])[0],
+                    sub_path=(query_del.get("path") or [""])[0],
+                    method="DELETE",
+                    body=raw_body,
+                )
+            if self._is_portal_subpath(route.path):
+                length = int(self.headers.get("Content-Length") or 0)
+                raw_body = self.rfile.read(min(length, 25 * 1024 * 1024)) if length > 0 else b""
+                return self._serve_portal_proxy(
+                    target="", sub_path=self.path, method="DELETE", body=raw_body)
             if route.path == "/api/v1/wanted/missing":
                 # Dropping a request, which Wanted could not do: the list was
                 # only ever emptied by an import, so a typo went on costing an
@@ -7849,7 +8108,20 @@ def make_handler(service: ROMarr):
 
         def _put(self):
             route = urlparse(self.path)
+            query_put = parse_qs(route.query)
             length = int(self.headers.get("Content-Length") or 0)
+            if route.path == "/api/v1/portal/proxy":
+                raw_body = self.rfile.read(min(length, 25 * 1024 * 1024)) if length > 0 else b""
+                return self._serve_portal_proxy(
+                    target=(query_put.get("url") or [""])[0],
+                    sub_path=(query_put.get("path") or [""])[0],
+                    method="PUT",
+                    body=raw_body,
+                )
+            if self._is_portal_subpath(route.path):
+                raw_body = self.rfile.read(min(length, 25 * 1024 * 1024)) if length > 0 else b""
+                return self._serve_portal_proxy(
+                    target="", sub_path=self.path, method="PUT", body=raw_body)
             try:
                 body = json.loads(self.rfile.read(length) or b"{}")
             except json.JSONDecodeError:

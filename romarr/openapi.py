@@ -120,6 +120,12 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "/api/v1/asset": ("GET", "Relay one image from a configured library "
                              "server, for pages served over https that "
                              "cannot embed http assets directly."),
+    "/api/v1/portal/proxy": ("GET", "Authenticated same-origin Supportive "
+                                    "Library Shell reverse proxy for "
+                                    "configured library servers (RomM, Retrom, "
+                                    "Gaseous, Gameyfin, GG Requestz). Relays "
+                                    "HTML, API calls and assets while "
+                                    "attaching stored library credentials."),
     "/api/v1/collection": ("GET", "Set-acquisition batches in progress, and "
                                   "the DATs available to plan against."),
     "/api/v1/collection/plan": ("GET", "Compare a DAT against the library: "

@@ -2224,15 +2224,20 @@ function sharingEditor(peer){
 }
 
 RENDER.portal=async()=>{
-  const [libs, fleet, mcp] = await Promise.all([
+  const [libs, fleet, mcp, sys] = await Promise.all([
     j('/api/v1/library').catch(()=>({items:[]})),
     j('/api/v1/hub/fleet').catch(()=>({profiles:[],igir:{}})),
-    j('/api/v1/mcp').catch(()=>({tools:[],mcp_client_config:{}}))
+    j('/api/v1/mcp').catch(()=>({tools:[],mcp_client_config:{}})),
+    j('/api/v1/system/status').catch(()=>({}))
   ]);
-  const servers=(libs.items||[]).filter(l=>l.url);
+  const servers=(libs.items||[]).filter(l=>l.url).map(l=>({...l}));
+  if(sys&&sys.ggrequestz&&sys.ggrequestz.url&&!servers.some(s=>s.url===sys.ggrequestz.url)){
+    servers.push({name:'GG Requestz',type:'ggrequestz',url:sys.ggrequestz.url,path:sys.library_path||'/mnt/roms'});
+  }
   let tab='shell';
   let currentUrl=window._portalTargetUrl||(servers[0]&&servers[0].url)||'';
   let currentName=window._portalTargetName||(servers[0]&&servers[0].name)||'Library Server';
+  let useProxy=window._portalUseProxy!==undefined?window._portalUseProxy:true;
   let showShieldHelp=false;
 
   const draw=()=>{
@@ -2248,6 +2253,9 @@ RENDER.portal=async()=>{
           ${esc(s.name)} <span class="n">(${esc(s.type)})</span>
         </button>`
       ).join(' ');
+      const frameSrc=currentUrl
+        ? (useProxy ? ('/api/v1/portal/proxy?url='+encodeURIComponent(currentUrl)) : currentUrl)
+        : '';
 
       $('#page').innerHTML=`<div class="card">
         <h3>Supportive Library Shell — Absorb & Empower Without Replacing</h3>
@@ -2261,17 +2269,17 @@ RENDER.portal=async()=>{
           <button class="btn ghost" id="portal-rescan">Rescan API</button>
           <button class="btn ghost" id="portal-1g1r">Igir 1G1R Sort</button>
           <button class="btn ghost" id="portal-hashes">Seed Netplay Hashes</button>
-          <button class="btn ghost" id="portal-shield">Framing / CSP Shield</button>
+          <button class="btn ${useProxy?'':'ghost'}" id="portal-shield" title="Toggle Same-Origin Authenticated Proxy Shield">${useProxy?'Shield: Same-Origin Proxy (ON)':'Framing / CSP Shield (Direct)'}</button>
           ${currentUrl?`<a class="btn ghost" href="${esc(currentUrl)}" target="_blank" rel="noopener noreferrer">Pop Out</a>`:''}
         </div>
         <div id="portal-status"></div>
         ${showShieldHelp?`<div class="panel-note" style="margin-bottom:12px">
-          <b>Supportive Reverse-Proxy / CSP Shield (Allow Iframing):</b> If RomM, Retrom, or Gaseous blocks embedding via <code>X-Frame-Options</code>, add this to your reverse proxy (Nginx / Caddy / Traefik) so ROMarr can wrap it cleanly on your LAN/Tailscale network:<br>
-          <code>proxy_hide_header X-Frame-Options; add_header Content-Security-Policy "frame-ancestors 'self' http://*:6868 https://*";</code>
+          <b>Same-Origin Authenticated Proxy Shield (${useProxy?'Active':'Direct URL Mode'}):</b> ROMarr routes your configured library through <code>/api/v1/portal/proxy</code>, automatically attaching your stored library credentials and stripping <code>X-Frame-Options</code> so OIDC, cross-origin cookies, and HTTPS mixed-content blocks never break the embedded shell.
+          <button class="btn ghost sm" id="portal-toggle-mode" style="margin-left:8px">${useProxy?'Switch to Direct Iframe URL':'Switch to Same-Origin Proxy'}</button>
         </div>`:''}
         ${currentUrl
-          ? `<div style="border:1px solid var(--line);border-radius:var(--r-md);overflow:hidden;background:#000;height:74vh">
-               <iframe id="portal-frame" src="${esc(currentUrl)}" style="width:100%;height:100%;border:0"
+          ? `<div style="border:1px solid var(--line);border-radius:var(--r-md);overflow:hidden;background:#0d1117;height:74vh">
+               <iframe id="portal-frame" src="${esc(frameSrc)}" style="width:100%;height:100%;border:0"
                  allow="fullscreen; gamepad; autoplay; clipboard-read; clipboard-write"></iframe>
              </div>`
           : `<div class="empty-cat"><b>Select or enter a Library URL above</b>Load RomM, Retrom, or Gaseous right inside this tab so you never have to leave ROMarr.</div>`}
@@ -2288,20 +2296,26 @@ RENDER.portal=async()=>{
         draw();
       };
       $('#portal-shield').onclick=()=>{ showShieldHelp=!showShieldHelp; draw(); };
+      const modeBtn=$('#portal-toggle-mode');
+      if(modeBtn) modeBtn.onclick=()=>{ useProxy=!useProxy; window._portalUseProxy=useProxy; draw(); };
       $('#portal-rescan').onclick=async()=>{
         $('#portal-status').innerHTML='<div class="panel-note">Triggering library rescan across connected backends…</div>';
-        await fetch('/api/v1/command',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'refresh'})});
-        $('#portal-status').innerHTML='<div class="panel-note" style="border-left-color:var(--ok)">Library rescan triggered via API.</div>';
+        const r=await fetch('/api/v1/command',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'RefreshLibrary'})}).then(x=>x.json()).catch(()=>({}));
+        const msg=r.message||r.error||'Library rescan triggered via API.';
+        $('#portal-status').innerHTML='<div class="panel-note" style="border-left-color:var(--ok)">'+esc(msg)+'</div>';
       };
       $('#portal-hashes').onclick=async()=>{
         $('#portal-status').innerHTML='<div class="panel-note">Seeding Netplay SHA-1 hashes from library server…</div>';
         const r=await fetch('/api/v1/hashes/seed',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}).then(x=>x.json()).catch(()=>({}));
-        $('#portal-status').innerHTML='<div class="panel-note" style="border-left-color:var(--ok)">Seeded hashes: '+esc(JSON.stringify(r))+'</div>';
+        const msg=r.detail||r.error||JSON.stringify(r);
+        $('#portal-status').innerHTML='<div class="panel-note" style="border-left-color:var(--ok)"><b>Netplay Hash Seed:</b> '+esc(msg)+'</div>';
       };
       $('#portal-1g1r').onclick=async()=>{
-        $('#portal-status').innerHTML='<div class="panel-note">Running Igir v5.8.0 1G1R verification preview…</div>';
-        const r=await fetch('/api/v1/hub/igir',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dry_run:true,preview_only:true})}).then(x=>x.json()).catch(()=>({}));
-        $('#portal-status').innerHTML='<div class="panel-note"><b>Igir v5.8.0 1G1R Command:</b> <code>'+esc(r.command||'')+'</code></div>';
+        const activeSrv=servers.find(s=>s.url===currentUrl)||servers[0]||{};
+        const libPath=activeSrv.path||(sys&&sys.library_path)||'/mnt/roms';
+        $('#portal-status').innerHTML='<div class="panel-note">Running Igir v5.8.0 1G1R verification preview on <code>'+esc(libPath)+'</code>…</div>';
+        const r=await fetch('/api/v1/hub/igir',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({input_paths:[libPath],output_path:libPath+'/{romm}',dry_run:true,preview_only:true})}).then(x=>x.json()).catch(()=>({}));
+        $('#portal-status').innerHTML='<div class="panel-note" style="border-left-color:var(--ok)"><b>Igir v5.8.0 1G1R Command:</b> <code>'+esc(r.command||'')+'</code></div>';
       };
     } else if(tab==='fleet'){
       const profiles=fleet.profiles||[];
