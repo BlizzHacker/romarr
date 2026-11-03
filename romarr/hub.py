@@ -14,7 +14,9 @@ from __future__ import annotations
 import dataclasses
 import logging
 import os
+import re
 from pathlib import Path
+from .platforms import resolve, same_machine
 
 log = logging.getLogger(__name__)
 
@@ -420,20 +422,53 @@ def search(query: str, platform: str | None = None, limit: int = 25,
     # live, and a ReadTimeout inside the plugin surfaced as a plugin failure
     # rather than as a slow source. One timeout to reason about, not two.
     fetcher = HttpxFetcher(timeout=max(60.0, timeout))
+    call_limit = 100 if platform else limit
     try:
         outcome = search_all(plugins, fetcher=fetcher, query=query,
-                             platform=platform, limit=limit, timeout=timeout,
+                             platform=platform, limit=call_limit, timeout=timeout,
                              allow_unsandboxed=_unsandboxed())
     except Exception as exc:
         return [], f"ROM Hub search failed: {type(exc).__name__}: {exc}"
     finally:
         fetcher.close()
-    rows = []
+
+    resolved_plat = resolve(platform) if platform else None
+
+    # Group by plugin to cap at limit and filter collection paths (#118)
+    by_plugin: dict[str, list[dict]] = {}
     for r in outcome.results:
         try:
-            rows.append(r.model_dump())
+            row = r.model_dump()
         except Exception:  # pragma: no cover -- pydantic model, always dumps
-            rows.append(dict(r))
+            row = dict(r)
+        plugin_slug = str(row.get("plugin") or "")
+        extra = row.get("extra") if isinstance(row.get("extra"), dict) else {}
+        coll_path = extra.get("path")
+        if resolved_plat and coll_path:
+            parts = [p.strip() for p in re.split(r"[\/]+", str(coll_path)) if p.strip() and p != "."]
+            folder_parts = parts[:-1] if len(parts) > 1 else parts
+            found_machine = None
+            for folder in reversed(folder_parts):
+                if folder.lower() == "nintendo":
+                    continue
+                p = resolve(folder)
+                if p is not None:
+                    found_machine = p
+                    break
+            if found_machine is not None:
+                if not same_machine(found_machine.slug, resolved_plat.slug):
+                    continue  # names another machine -> drop
+            else:
+                title = str(row.get("title") or "").lower()
+                has_ext = any(title.endswith(ext) for ext in resolved_plat.extensions)
+                if not has_ext:
+                    continue  # names no machine and title has no platform extension -> drop
+
+        by_plugin.setdefault(plugin_slug, []).append(row)
+
+    rows = []
+    for plugin_slug, p_rows in by_plugin.items():
+        rows.extend(p_rows[:limit])
     return rows, ""
 
 

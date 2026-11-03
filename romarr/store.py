@@ -147,6 +147,7 @@ class QueueItem:
     # existed; those never match a reported failure and wait for the stall
     # timeout.
     download_client: str = ""
+    manual: bool = False
 
 
 @dataclass

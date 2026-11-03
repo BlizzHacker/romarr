@@ -126,6 +126,11 @@ class ReleaseProfile:
     size_preference: str = "auto"
     #: Optional bonus points awarded for matching size preference (0 to disable).
     size_weight: int = 0
+    #: Region mode: "prefer" | "strict"
+    region_mode: str = "prefer"
+    #: Fan translation policy: "exclude" | "prefer" | "fill" | "keep_both"
+    translation_policy: str = "exclude"
+    _settings_ref: dict | None = None
 
     @property
     def min_size_bytes(self) -> int:
@@ -249,6 +254,9 @@ class ReleaseProfile:
         except (ValueError, TypeError):
             size_weight = 0
 
+        region_mode = str(platform_cfg.get("region_mode") or settings.get("region_mode") or "prefer").strip().lower()
+        translation_policy = str(platform_cfg.get("translation_policy") or settings.get("translation_policy") or "exclude").strip().lower()
+
         return cls(
             preferred=preferred,
             excluded=excluded,
@@ -260,6 +268,9 @@ class ReleaseProfile:
             region_scores=region_scores,
             size_preference=size_preference,
             size_weight=size_weight,
+            region_mode=region_mode,
+            translation_policy=translation_policy,
+            _settings_ref=settings,
         )
 
     def refusal(self, lowered: str, size: int = 0) -> str:
@@ -319,17 +330,7 @@ class ReleaseProfile:
         return None
 
     def __bool__(self) -> bool:
-        return bool(
-            self.preferred
-            or self.excluded
-            or self.required
-            or (self.min_size_mb and self.min_size_mb > 0)
-            or (self.max_size_mb and self.max_size_mb > 0)
-            or (self.min_seeders is not None and self.min_seeders > 1)
-            or self.region_scores
-            or (self.size_preference and self.size_preference != "auto")
-            or self.size_weight > 0
-        )
+        return True
 
 
 _INFOHASH = re.compile(r"btih:([0-9a-fA-F]{40}|[0-9a-zA-Z]{32})")

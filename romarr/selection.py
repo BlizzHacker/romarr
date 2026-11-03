@@ -13,7 +13,7 @@ import logging
 import re
 from dataclasses import dataclass
 
-from .platforms import DISC, Platform
+from .platforms import DISC, Platform, by_slug, resolve, same_machine
 
 log = logging.getLogger(__name__)
 
@@ -77,6 +77,7 @@ PC_RELEASE_MARKERS = (
     "fitgirl", "dodi", "elamigos", "kaos", "sim0n", "0xdeadc0de",
     # A patch is not a game, however well seeded.
     "update v", "patch v", "hotfix", "dlc unlocker", "trainer",
+    "x64", "x86", "win64", "win32",
 )
 
 # Names for "several games in one box", which a single-game request cannot use.
@@ -161,7 +162,82 @@ _NON_ENGLISH_MARKERS = (
 # "(T+Rus)" the current one; either way the ROM has been altered after it left
 # the cartridge. Included even when the target language is English, because a
 # fan patch is still not the published game.
-_TRANSLATION_TAG = re.compile(r"[\[(]\s*t[-+]\s*[a-z]{2,4}[^\])]*[\])]")
+_TRANSLATION_TAG = re.compile(
+    r"([\[(]\s*t[-+]\s*[a-z]{2,4}[^\])]*[\])]|\[\s*tr\s+[a-z]{2,4}[^\]]*\])",
+    re.IGNORECASE,
+)
+
+_USA_TAG = re.compile(r"[\(\[]\s*(usa|us)\s*[\)\]]", re.IGNORECASE)
+_JAPAN_TAG = re.compile(r"[\(\[]\s*(japan|jp|jpn|j)\s*[\)\]]", re.IGNORECASE)
+_LANG_TAG = re.compile(r"[\(\[]\s*([a-z]{2})\s*[\)\]]", re.IGNORECASE)
+
+def is_foreign_language_tag(title: str) -> bool:
+    if _USA_TAG.search(title):
+        for m in _LANG_TAG.finditer(title):
+            lang = m.group(1).lower()
+            if lang not in ("en", "us"):
+                return True
+    if _JAPAN_TAG.search(title):
+        for m in _LANG_TAG.finditer(title):
+            lang = m.group(1).lower()
+            if lang not in ("ja", "jp", "j"):
+                return True
+    return False
+
+_TAG_RE = re.compile(r"[\(\[]([^\)\]]+)[\)\]]")
+
+_TOKEN_TO_REGIONS = {
+    "usa": {"usa"}, "us": {"usa"}, "united states": {"usa"}, "america": {"usa"},
+    "europe": {"europe"}, "eu": {"europe"}, "eur": {"europe"},
+    "world": {"world"}, "global": {"world"},
+    "japan": {"japan"}, "jp": {"japan"}, "jpn": {"japan"},
+    "australia": {"australia"}, "au": {"australia"}, "aus": {"australia"},
+    "germany": {"germany"}, "de": {"germany"}, "deu": {"germany"}, "ger": {"germany"}, "gr": {"germany"},
+    "france": {"france"}, "fr": {"france"}, "fra": {"france"}, "fre": {"france"},
+    "spain": {"spain"}, "es": {"spain"}, "esp": {"spain"}, "spa": {"spain"},
+    "italy": {"italy"}, "it": {"italy"}, "ita": {"italy"},
+    "netherlands": {"netherlands"}, "nl": {"netherlands"}, "holland": {"netherlands"}, "dut": {"netherlands"}, "ned": {"netherlands"},
+    "sweden": {"sweden"}, "se": {"sweden"}, "swe": {"sweden"},
+    "norway": {"norway"}, "no": {"norway"}, "nor": {"norway"},
+    "denmark": {"denmark"}, "dk": {"denmark"}, "dan": {"denmark"},
+    "finland": {"finland"}, "fi": {"finland"}, "fin": {"finland"},
+    "brazil": {"brazil"}, "br": {"brazil"}, "pt-br": {"brazil"}, "ptbr": {"brazil"},
+    "portugal": {"portugal"}, "pt": {"portugal", "brazil"},
+    "korea": {"korea"}, "kr": {"korea"}, "kor": {"korea"},
+    "china": {"china"}, "cn": {"china"}, "chn": {"china"}, "chs": {"china"}, "cht": {"china"}, "zh": {"china"},
+    "russia": {"russia"}, "ru": {"russia"}, "rus": {"russia"},
+    "poland": {"poland"}, "pl": {"poland"}, "pol": {"poland"},
+    "canada": {"canada"}, "ca": {"canada"},
+    "en": {"usa", "europe"},
+    "u": {"usa"}, "e": {"europe"}, "j": {"japan"}, "w": {"world"}, "a": {"australia"},
+    "g": {"germany"}, "f": {"france"}, "s": {"spain"}, "i": {"italy"}, "k": {"korea"},
+    "c": {"china"}, "b": {"brazil"},
+    "ue": {"usa", "europe"}, "uj": {"usa", "japan"}, "ju": {"japan", "usa"},
+    "jue": {"japan", "usa", "europe"}, "uej": {"usa", "europe", "japan"}, "jeu": {"japan", "europe", "usa"},
+}
+
+def detect_regions(title: str) -> set[str]:
+    lowered = title.lower()
+    detected = set()
+    found_any_tag = False
+    for tag_content in _TAG_RE.findall(lowered):
+        tokens = [t.strip() for t in re.split(r"[,/ ]+", tag_content) if t.strip()]
+        if not tokens:
+            continue
+        if all(token in _TOKEN_TO_REGIONS for token in tokens):
+            found_any_tag = True
+            for token in tokens:
+                detected.update(_TOKEN_TO_REGIONS[token])
+    if not found_any_tag:
+        if re.search(r"\bpal\b", lowered):
+            detected.add("europe")
+        if re.search(r"\bntsc-u\b", lowered) or re.search(r"\bntsc-us\b", lowered):
+            detected.add("usa")
+        elif re.search(r"\bntsc-j\b", lowered):
+            detected.add("japan")
+        elif re.search(r"\bntsc\b", lowered):
+            detected.update({"usa", "japan"})
+    return detected
 
 # "[MULTI5]", "[MULTi8-ENG]", "MULTi10-PLAZA". In every result seen this marks
 # a localised PC or emulator release, never a cartridge dump. `\d*` keeps it
@@ -315,6 +391,9 @@ def judge(release: Release, wanted: str,
             return Judgement(-900, verdict=refusal)
     if not is_game_release(release):
         return Judgement(-1000, verdict="not a game release (wrong category)")
+    if platform is not None and platform.media != "digital" and release.categories:
+        if all(4000 <= c < 5000 for c in release.categories):
+            return Judgement(-300, verdict="a PC release (PC categories)")
     if not title_matches(release.title, wanted):
         return Judgement(-500, verdict=f"title does not match {wanted!r}")
 
@@ -357,24 +436,48 @@ def judge(release: Release, wanted: str,
         else:
             add(min(release.seeders, 20) * 2, f"{release.seeders} seeders")
 
+    detected_regions = detect_regions(release.title)
+    if profile and getattr(profile, "region_mode", "prefer") == "strict":
+        pref_list = getattr(profile, "preferred_regions", None) or ["usa", "world", "europe", "japan"]
+        if detected_regions and not any(r in pref_list for r in detected_regions):
+            return Judgement(-300, verdict=f"region outside allowed list ({', '.join(sorted(detected_regions))})")
+
     region_handled = False
-    if profile and hasattr(profile, "region_score_for"):
-        custom_reg = profile.region_score_for(lowered)
-        if custom_reg is not None:
-            pts, label = custom_reg
-            add(pts, label)
+    if profile and hasattr(profile, "region_scores") and profile.region_scores:
+        best_score = None
+        best_lbl = ""
+        for r in detected_regions:
+            if r in profile.region_scores:
+                sc = profile.region_scores[r]
+                if best_score is None or sc > best_score:
+                    best_score = sc
+                    best_lbl = r
+        if best_score is not None:
+            add(best_score, f"region {best_lbl}")
             region_handled = True
+
     if not region_handled:
-        region = 0
-        label = ""
-        for markers, value in _REGION_SCORE:
-            if any(m in lowered for m in markers):
-                region, label = value, markers[0]
-                break
-        for code, value in _REGION_CODES.items():
-            if value > region and _mentions(lowered, code):
-                region, label = value, code
-        add(region, f"region {label}" if label else "region")
+        pref_list = getattr(profile, "preferred_regions", None) if profile else None
+        if not pref_list:
+            pref_list = ["usa", "world", "europe", "japan"]
+        n = len(pref_list)
+        matched_ranks = [(pref_list.index(r), r) for r in detected_regions if r in pref_list]
+        if matched_ranks:
+            matched_ranks.sort()
+            best_rank, best_region = matched_ranks[0]
+            pts = int(round(40 * (n - best_rank) / n))
+            add(pts, f"region {best_region}")
+        else:
+            region = 0
+            label = ""
+            for markers, value in _REGION_SCORE:
+                if any(m in lowered for m in markers):
+                    region, label = value, markers[0]
+                    break
+            for code, value in _REGION_CODES.items():
+                if value > region and _mentions(lowered, code):
+                    region, label = value, code
+            add(region, f"region {label}" if label else "region")
 
     if _GOOD_DUMP_MARKER in lowered:
         add(_GOOD_DUMP_BONUS, "verified good dump [!]")
@@ -391,11 +494,19 @@ def judge(release: Release, wanted: str,
     # is inside "Trigger", "ita" inside "digital", "spa" inside "space" and
     # "por" inside "port". A substring test would penalise a large part of
     # every result set -- starting with the game that prompted this.
+    is_tag_or_explicit_trans = (
+        _TRANSLATION_TAG.search(lowered) is not None
+        or "translated" in lowered
+    )
+    if profile and getattr(profile, "translation_policy", "exclude") == "exclude":
+        if is_tag_or_explicit_trans:
+            return Judgement(-300, verdict="translation excluded by policy")
+
+    foreign_lang_tag = is_foreign_language_tag(release.title)
     translated = (
         any(_mentions(lowered, marker) for marker in _NON_ENGLISH_MARKERS)
-        or _TRANSLATION_TAG.search(lowered) is not None
-        # MULTi12 on a PC repack is a feature -- the installer carries
-        # every language -- not a sign the game is in the wrong one.
+        or is_tag_or_explicit_trans
+        or foreign_lang_tag
         or (_MULTI_LANGUAGE.search(lowered) is not None and not _digital)
     )
     if translated:
@@ -475,12 +586,40 @@ def judge(release: Release, wanted: str,
     # the same game for several consoles, and most such releases name no
     # platform at all. A ROM extension is the strongest signal available --
     # ".smc" says Super Nintendo far more reliably than any title text.
+    path_confirms_platform = False
+    if getattr(release, "torrent_file_path", "") and platform is not None:
+        parts = [p.strip() for p in re.split(r"[\/]+", release.torrent_file_path) if p.strip() and p != "."]
+        folder_parts = parts[:-1] if len(parts) > 1 else parts
+        found_plat = None
+        for folder in reversed(folder_parts):
+            if folder.lower() == "nintendo":
+                continue
+            p = resolve(folder)
+            if p is not None:
+                found_plat = p
+                break
+        if found_plat is not None:
+            if same_machine(found_plat.slug, platform.slug):
+                add(60, f"collection path names {platform.name}")
+                path_confirms_platform = True
+            else:
+                return Judgement(-300, verdict=f"collection path names another platform ({found_plat.slug})")
+        else:
+            has_ext = any(lowered.endswith(ext) for ext in platform.extensions)
+            if not has_ext:
+                return Judgement(-300, verdict="collection path has no platform evidence")
+
     if platform is not None:
         if _has_extension(lowered, platform.extensions):
             add(60, f"carries a {platform.name} ROM extension")
         elif _mentions(lowered, platform.slug.lower()) or any(
                 _mentions(lowered, alias) for alias in platform.aliases):
             add(30, f"names {platform.name}")
+        if platform.is_disc:
+            has_ext = _has_extension(lowered, platform.extensions)
+            names_plat = _mentions(lowered, platform.slug.lower()) or any(_mentions(lowered, alias) for alias in platform.aliases)
+            if not (has_ext or names_plat or path_confirms_platform):
+                add(-40, f"no extension, platform name or path for {platform.name}")
 
     # A cartridge ROM is small. An oversized "release" for a cartridge platform
     # is a romset, a PC port, or a disc image -- none of which this pipeline can
@@ -591,6 +730,8 @@ def infer_platform(release: Release) -> Platform | None:
 
 
 def _size_floor(platform: Platform) -> int:
+    if platform.slug in ("ps2", "ngc", "xbox"):
+        return 8 * 1024 * 1024
     return _DISC_FLOOR if platform.is_disc else _CARTRIDGE_FLOOR
 
 

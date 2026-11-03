@@ -1992,7 +1992,8 @@ class ROMarr:
                          release_fault=release_fault if not ok else False,
                          external_request_id=external_request_id,
                          download_id=download_id,
-                         download_client=getattr(client, "romarr_id", ""))
+                         download_client=getattr(client, "romarr_id", ""),
+                         manual=manual)
         self.store.enqueue(item)
         if ok:
             if external_request_id:
@@ -2567,6 +2568,10 @@ class ROMarr:
                                     platform=row.platform, release=row.release,
                                     indexer=row.indexer,
                                     detail=f"blocklisted -- {reason}"))
+            # For a row grabbed by hand (manual=True), do not replace it automatically
+            # and do not put the search text on Wanted (#119).
+            if getattr(row, "manual", False):
+                continue
             key = (row.game.lower(), row.platform)
             if key in retried or regrabbed >= self.MAX_REGRABS_PER_SWEEP:
                 continue
@@ -6217,8 +6222,9 @@ class ROMarr:
                 layout=self.library_layout(target_cfg),
                 translation=is_translation(name),
                 platform_folders=self.platform_folders(target_cfg))
+            game_title = (queue_item.game if queue_item and getattr(queue_item, "game", "") else name)
             if not outcomes:
-                self.store.record(Event(kind="failed", game=name,
+                self.store.record(Event(kind="failed", game=game_title,
                                         platform=platform.slug,
                                         detail="no ROMs found in download"))
                 results.append({"name": name, "ok": False,
@@ -6235,21 +6241,34 @@ class ROMarr:
             any_ok = any(o.ok for o in outcomes)
             for outcome in outcomes:
                 if outcome.ok:
-                    self.store.record(Event(kind="imported", game=name,
+                    self.store.record(Event(kind="imported", game=game_title,
                                             platform=platform.slug, release=name,
                                             library=label,
                                             detail=str(outcome.destination)))
-                    self.notify(imported(name, platform.slug,
+                    self.notify(imported(game_title, platform.slug,
                                          outcome.verification))
                 else:
-                    self.store.record(Event(kind="failed", game=name,
+                    self.store.record(Event(kind="failed", game=game_title,
                                             platform=platform.slug,
                                             detail=outcome.reason))
-                    self.notify(failed(name, str(outcome.reason)))
+                    self.notify(failed(game_title, str(outcome.reason)))
             if queue_item is not None:
                 # Marked so the scheduled sweep never re-attempts it; the
                 # Tasks page button clears failure marks to retry.
                 queue_item.state = "imported" if any_ok else "import-failed"
+            if any_ok and queue_item is not None:
+                # If this was a partial collection grab (e.g. MiNERVA selective grab with qbit-tag:),
+                # clean up the partial collection torrent and its files from the client so it does not
+                # block subsequent grabs from the same collection (#115).
+                if str(queue_item.download_id or "").startswith("qbit-tag:"):
+                    for client in self.clients:
+                        remover = getattr(client, "remove_download", None)
+                        if callable(remover):
+                            try:
+                                remover(queue_item.download_id, delete_files=True)
+                            except Exception as err:
+                                log.warning("could not clean up collection torrent %r: %s",
+                                            queue_item.download_id, err)
             if any_ok:
                 if self.store.settings.get("rescan_after_import", True):
                     target_lib.rescan(platform.slug)

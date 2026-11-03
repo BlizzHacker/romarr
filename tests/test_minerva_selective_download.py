@@ -84,7 +84,9 @@ def test_selects_only_the_exact_normalized_minerva_path_before_resume():
         "magnet:?xt=urn:btih:abc",
         "./TOSEC/Nintendo/Chrono Trigger.zip")
     assert session.posts[0][0] == "torrents/add"
-    assert session.posts[0][1]["paused"] == "true"
+    assert session.posts[0][1]["paused"] == "false"
+    assert session.posts[0][1]["stopCondition"] == "MetadataReceived"
+    assert session.posts[0][1]["contentLayout"] == "NoSubfolder"
     priorities = [data for endpoint, data in session.posts
                   if endpoint == "torrents/filePrio"]
     assert priorities == [
@@ -207,3 +209,21 @@ def test_minerva_grab_refuses_other_torrent_clients_without_fallback(tmp_path):
     assert result["ok"] is False
     assert "requires qBittorrent" in result["error"]
     assert client.adds == 0
+
+
+def test_selects_path_under_original_content_layout_with_top_folder():
+    client, session = qbit([
+        {"index": 0, "name": "Minerva_Collection_Root/TOSEC/Nintendo/other.zip", "priority": 1},
+        {"index": 1, "name": "Minerva_Collection_Root\\TOSEC\\Nintendo\\Chrono Trigger.zip", "priority": 1},
+        {"index": 2, "name": "Minerva_Collection_Root/TOSEC/Nintendo/readme.txt", "priority": 1},
+    ])
+    assert client.add_magnet_selective(
+        "magnet:?xt=urn:btih:abc",
+        "./TOSEC/Nintendo/Chrono Trigger.zip")
+    priorities = [data for endpoint, data in session.posts
+                  if endpoint == "torrents/filePrio"]
+    assert priorities == [
+        {"hash": "abc123", "id": "0|2", "priority": "0"},
+        {"hash": "abc123", "id": "1", "priority": "1"},
+    ]
+    assert session.resumed is True

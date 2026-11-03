@@ -3307,14 +3307,6 @@ def match_queue_item(queue, download: dict):
     rows without a comparable identity can still match an exact release
     title, but file size never establishes identity.
     """
-    found = str(download.get("hash") or "").strip().lower()
-    job = str(download.get("id") or "").strip()
-    if found or job:
-        for item in queue:
-            if found and item.release_id == f"btih:{found}":
-                return item
-            if job and item.download_id == job:
-                return item
     tags = {part.strip() for part in str(download.get("tags") or "").split(",")
             if part.strip()}
     tag_matches = [item for item in queue
@@ -3323,13 +3315,22 @@ def match_queue_item(queue, download: dict):
     if tag_matches:
         return tag_matches[0] if len(tag_matches) == 1 else None
 
+    found = str(download.get("hash") or "").strip().lower()
+    job = str(download.get("id") or "").strip()
+    if found or job:
+        for item in queue:
+            if found and item.release_id == f"btih:{found}":
+                return item
+            if job and item.download_id == job:
+                return item
+
     def identity_conflicts(item):
         release_id = str(getattr(item, "release_id", "") or "")
         download_id = str(getattr(item, "download_id", "") or "")
-        if found and release_id.startswith("btih:"):
-            return True  # An equal hash would already have matched above.
         if download_id.startswith("qbit-tag:"):
             return bool(tags)  # A matching tag would already have matched.
+        if found and release_id.startswith("btih:"):
+            return True  # An equal hash would already have matched above.
         return bool(job and download_id)
 
     name = download.get("name", "")

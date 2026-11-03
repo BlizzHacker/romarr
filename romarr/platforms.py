@@ -133,7 +133,7 @@ PLATFORMS: tuple[Platform, ...] = (
     Platform("genesis-slash-megadrive", "Sega Genesis / Mega Drive",
              (".md", ".gen", ".smd", ".bin"),
              ("genesis", "mega drive", "megadrive", "sega genesis",
-              "sega mega drive/genesis"),
+              "sega mega drive/genesis", "mega drive & genesis", "mega drive genesis", "sega mega drive & genesis"),
              max_size=32 * MB),
     Platform("sms", "Sega Master System", (".sms",),
              ("master system", "sega master system/mark iii"),
@@ -492,7 +492,7 @@ PLATFORMS: tuple[Platform, ...] = (
              ("palm", "palmos", "palm pilot"), max_size=32 * MB, media=COMPUTER),
 
     Platform("dos", "MS-DOS", (".dosz", ".zip", ".dos", ".img", ".chd"),
-             ("ms-dos", "ms dos", "pc dos"), max_size=2 * GB, media=COMPUTER,
+             ("ms-dos", "ms dos", "pc dos", "pc compatibles", "ibm pc", "ibm pc compatibles", "ibm"), max_size=2 * GB, media=COMPUTER,
              archive_is_the_rom=True,
              # `dos` and `pc` are in FOREIGN_PLATFORM_MARKERS because they mean
              # "this is a PC port" for every console. Here they are the
@@ -618,3 +618,10 @@ def platform_for_file(filename: str) -> Platform | None:
 def romm_fs_slug(slug: str) -> str:
     """Translate stable ROMarr/IGDB identifiers to RomM's folder names."""
     return {"genesis-slash-megadrive": "genesis"}.get(slug, slug)
+
+
+def same_machine(slug_a: str, slug_b: str) -> bool:
+    """Whether two platform slugs represent the same system in different regions."""
+    if slug_a == slug_b:
+        return True
+    return {slug_a.lower(), slug_b.lower()} in ({"nes", "famicom"}, {"snes", "sfam"})

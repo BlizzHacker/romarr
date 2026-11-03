@@ -335,6 +335,16 @@ class MissingArchiveTool(Exception):
 
 
 def _source_for(download: Path, platform: Platform | None = None) -> _Source:
+    # When the download is a directory whose only non-hidden file is an archive,
+    # unwrap it so the import looks inside the selected archive (#115).
+    if download.is_dir():
+        non_hidden = [p for p in download.iterdir() if not p.name.startswith(".")]
+        if len(non_hidden) == 1 and non_hidden[0].is_file():
+            single_file = non_hidden[0]
+            single_suffix = single_file.suffix.lower()
+            if single_suffix in _STDLIB_ARCHIVES or single_suffix in ARCHIVE_SUFFIXES:
+                return _source_for(single_file, platform)
+
     # For MAME, FBNeo and DOSBox the archive IS the ROM: the core opens it and
     # expects its internal layout. Looking inside would pick one chip dump out
     # of a romset and import that, which succeeds and leaves an entry no core
@@ -539,6 +549,15 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
                     ImportResult(False, destination, "already in the library"))
                 continue
             source.copy(chosen.primary, destination)
+            if platform.slug in ("ps2", "ngc", "xbox"):
+                actual_size = destination.stat().st_size if destination.exists() else 0
+                if actual_size < 8 * 1024 * 1024:
+                    if destination.exists():
+                        destination.unlink()
+                    results.append(ImportResult(
+                        False, None,
+                        f"too small to be a {platform.name} disc image ({actual_size // (1024*1024)}MB < 8MB)"))
+                    continue
             log.info("imported %s -> %s", chosen.primary, destination)
             results.append(ImportResult(True, destination,
                                         verification=verdict))
@@ -573,6 +592,14 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
             source.copy(member, destination / name)
             written[name] = member
         else:
+            if platform.slug in ("ps2", "ngc", "xbox"):
+                total_set_size = sum(p.stat().st_size for p in destination.rglob("*") if p.is_file())
+                if total_set_size < 8 * 1024 * 1024:
+                    shutil.rmtree(destination, ignore_errors=True)
+                    results.append(ImportResult(
+                        False, None,
+                        f"too small to be a {platform.name} disc image ({total_set_size // (1024*1024)}MB < 8MB)"))
+                    continue
             log.info("imported %d files -> %s", len(written), destination)
             results.append(ImportResult(True, destination,
                                         verification=verdict))

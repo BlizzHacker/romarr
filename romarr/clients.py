@@ -311,7 +311,8 @@ class QBittorrent:
 
         tag = "romarr-" + secrets.token_hex(12)
         data = {"urls": magnet, "category": self._config.category,
-                "tags": tag, "paused": "true"}
+                "tags": tag, "paused": "false", "stopCondition": "MetadataReceived",
+                "contentLayout": "NoSubfolder"}
         if save_path:
             data["savepath"] = save_path
         try:
@@ -345,9 +346,9 @@ class QBittorrent:
                 state = str(tagged[0].get("state") or "")
                 if not owned_hash:
                     break
-                # A successful add request is not enough: require qBittorrent
-                # to report the new torrent paused before touching its files.
-                if state not in {"pausedDL", "pausedUP"}:
+                # Accept states where metadata is being fetched, queued, checking, paused or stopped (#114)
+                if state not in {"pausedDL", "pausedUP", "stoppedDL", "stoppedUP",
+                                 "metaDL", "queuedDL", "checkingResumeData"}:
                     self._added.error = (
                         "qBittorrent did not confirm the new torrent is paused")
                     try:
@@ -376,20 +377,25 @@ class QBittorrent:
                             owned_hash[:12])
             return False
 
-        def still_paused() -> bool:
-            try:
-                response = self._get(
-                    "torrents/info", params={"tag": tag},
-                    timeout=request_timeout)
-                rows = response.json() if response.ok else []
-            except (requests.RequestException, ValueError):
-                return False
-            tagged_rows = [row for row in rows
-                           if isinstance(row, dict) and _row_has_tag(row, tag)]
-            return (len(tagged_rows) == 1
-                    and str(tagged_rows[0].get("hash") or "") == owned_hash
-                    and str(tagged_rows[0].get("state") or "")
-                    in {"pausedDL", "pausedUP"})
+        def still_paused(timeout: float = 15.0) -> bool:
+            poll_deadline = time.monotonic() + timeout
+            while time.monotonic() <= poll_deadline:
+                try:
+                    response = self._get(
+                        "torrents/info", params={"tag": tag},
+                        timeout=request_timeout)
+                    rows = response.json() if response.ok else []
+                except (requests.RequestException, ValueError):
+                    rows = []
+                tagged_rows = [row for row in rows
+                               if isinstance(row, dict) and _row_has_tag(row, tag)]
+                if (len(tagged_rows) == 1
+                        and str(tagged_rows[0].get("hash") or "") == owned_hash
+                        and str(tagged_rows[0].get("state") or "")
+                        in {"pausedDL", "pausedUP", "stoppedDL", "stoppedUP"}):
+                    return True
+                time.sleep(0.5)
+            return False
 
         metadata_deadline = time.monotonic() + QBITTORRENT_FILE_METADATA_TIMEOUT
         files = []
@@ -413,9 +419,18 @@ class QBittorrent:
         if not files:
             return fail("qBittorrent did not provide torrent metadata in time")
 
+        def _matches_minerva_path(entry_name: str, target: str) -> bool:
+            norm = _normalise_torrent_path(entry_name)
+            if norm == target:
+                return True
+            parts = norm.split("/", 1)
+            if len(parts) == 2 and parts[1] == target:
+                return True
+            return False
+
         matches = [
             row for row in files
-            if _normalise_torrent_path(str(row.get("name") or "")) == wanted_path
+            if _matches_minerva_path(str(row.get("name") or ""), wanted_path)
         ]
         if len(matches) != 1:
             return fail(
