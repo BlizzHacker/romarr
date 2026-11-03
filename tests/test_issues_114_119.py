@@ -250,6 +250,8 @@ def test_issue_117_size_floor_8mib_scoring_and_import(tmp_path):
 # ==============================================================================
 
 def test_issue_118_hub_search_filters_collection_paths(monkeypatch):
+    import sys
+    import types
     import romarr.hub as hub
 
     class DummyResult:
@@ -265,15 +267,41 @@ def test_issue_118_hub_search_filters_collection_paths(monkeypatch):
             DummyResult("Game 3 (TI-82)", "./TOSEC/Texas Instruments/TI-82/game3.zip"),
         ]
 
-    class DummyFetcher:
-        def close(self):
-            pass
+    class FakePlugin:
+        enabled = True
+        manifest = type("M", (), {"capabilities": ("search",)})()
+        slug = "minerva-archive"
 
-    monkeypatch.setattr(hub, "searchable_plugins", lambda: ["minerva-archive"])
-    monkeypatch.setattr(hub, "_unsandboxed", lambda: True)
+    class FakeRegistry:
+        def __init__(self, *a, **kw): pass
+        def installed(self):
+            return [FakePlugin()]
 
-    import rom_hub.dispatcher as disp
-    monkeypatch.setattr(disp, "search_all", lambda *a, **kw: DummyOutcome())
+    fake_root = types.ModuleType("rom_hub")
+    fake_registry = types.ModuleType("rom_hub.registry")
+    fake_registry.Registry = FakeRegistry
+
+    class FakeFetcher:
+        def __init__(self, *a, **kw): pass
+        def close(self): pass
+
+    fake_broker = types.ModuleType("rom_hub.broker")
+    fake_fetcher_mod = types.ModuleType("rom_hub.broker.fetcher")
+    fake_fetcher_mod.HttpxFetcher = FakeFetcher
+
+    fake_disp = types.ModuleType("rom_hub.dispatcher")
+    fake_disp.search_all = lambda *a, **kw: DummyOutcome()
+
+    fake_root.registry = fake_registry
+    fake_root.broker = fake_broker
+    fake_broker.fetcher = fake_fetcher_mod
+    fake_root.dispatcher = fake_disp
+
+    monkeypatch.setitem(sys.modules, "rom_hub", fake_root)
+    monkeypatch.setitem(sys.modules, "rom_hub.registry", fake_registry)
+    monkeypatch.setitem(sys.modules, "rom_hub.broker", fake_broker)
+    monkeypatch.setitem(sys.modules, "rom_hub.broker.fetcher", fake_fetcher_mod)
+    monkeypatch.setitem(sys.modules, "rom_hub.dispatcher", fake_disp)
 
     rows, err = hub.search("game", platform="ps2", limit=25)
     assert err == ""
