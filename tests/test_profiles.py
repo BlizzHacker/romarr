@@ -199,3 +199,165 @@ def test_a_blocklist_beats_a_preference():
                     profile=ReleaseProfile(preferred=[("[!]", 500)]),
                     blocklist=blocklist)
     assert not verdict.accepted
+
+
+# --- issue #113: minimum size, per-platform profiles, custom scoring --------
+
+PSX = by_slug("psx")
+SWITCH = by_slug("switch")
+NES = by_slug("nes")
+
+
+def test_minimum_size_refuses_small_releases_with_clear_reason():
+    profile = ReleaseProfile(min_size_mb=10)
+    small = rel("Super Metroid (USA)", size=2 * MB)
+    verdict_small = judge(small, "super metroid", SNES, profile=profile)
+    assert not verdict_small.accepted
+    assert "smaller than release profile minimum size" in verdict_small.verdict
+    assert "10" in verdict_small.verdict
+
+    ok_size = rel("Super Metroid (USA)", size=15 * MB)
+    verdict_ok = judge(ok_size, "super metroid", SNES, profile=profile)
+    assert verdict_ok.accepted
+
+    # Unknown size (0) should not be refused by minimum size
+    zero_size = rel("Super Metroid (USA)", size=0)
+    verdict_zero = judge(zero_size, "super metroid", SNES, profile=profile)
+    assert verdict_zero.accepted
+
+
+def test_maximum_size_refuses_oversized_releases():
+    profile = ReleaseProfile(max_size_mb=50)
+    huge = rel("Super Metroid (USA)", size=80 * MB)
+    verdict = judge(huge, "super metroid", SNES, profile=profile)
+    assert not verdict.accepted
+    assert "larger than release profile maximum size" in verdict.verdict
+
+    ok_size = rel("Super Metroid (USA)", size=30 * MB)
+    assert judge(ok_size, "super metroid", SNES, profile=profile).accepted
+
+
+def test_minimum_seeders_enforced():
+    profile = ReleaseProfile(min_seeders=5)
+    few = rel("Game (USA)", seeders=2)
+    verdict_few = judge(few, "game", SNES, profile=profile)
+    assert not verdict_few.accepted
+    assert "less than 5 seeders" in verdict_few.verdict
+
+    many = rel("Game (USA)", seeders=10)
+    assert judge(many, "game", SNES, profile=profile).accepted
+
+
+def test_custom_region_scores():
+    profile = ReleaseProfile(region_scores={"japan": 100, "usa": 20})
+    j_jp = judge(rel("Game (Japan)"), "game", SNES, profile=profile)
+    j_us = judge(rel("Game (USA)"), "game", SNES, profile=profile)
+    assert j_jp.points > j_us.points
+    assert any("region japan" in line and "+100" in line for line in j_jp.why())
+    assert any("region usa" in line and "+20" in line for line in j_us.why())
+
+
+def test_negative_region_score_penalizes():
+    profile = ReleaseProfile(region_scores={"japan": -50, "usa": 40})
+    j_jp = judge(rel("Game (Japan)"), "game", SNES, profile=profile)
+    assert any("region japan" in line and "-50" in line for line in j_jp.why())
+
+
+def test_custom_size_preference_tiebreaker():
+    # PSX normally prefers larger disc images
+    profile = ReleaseProfile(size_preference="smaller")
+    small = rel("Game (USA)", 100 * MB, seeders=10)
+    big = rel("Game (USA)", 500 * MB, seeders=10)
+    assert best_release([small, big], "game", PSX, profile=profile) is small
+
+    # SNES normally prefers smaller cartridge dumps
+    profile_large = ReleaseProfile(size_preference="larger")
+    small_snes = rel("Game (USA)", 2 * MB, seeders=10)
+    big_snes = rel("Game (USA)", 4 * MB, seeders=10)
+    assert best_release([small_snes, big_snes], "game", SNES, profile=profile_large) is big_snes
+
+
+def test_size_scoring_bonus_points():
+    profile = ReleaseProfile(size_preference="smaller", size_weight=30)
+    j = judge(rel("Game (USA)", 1 * MB), "game", SNES, profile=profile)
+    assert any("size preference" in line for line in j.why())
+
+
+def test_per_platform_profile_from_settings():
+    settings = {
+        "min_size_mb": 1,
+        "max_size_mb": 100,
+        "preferred_regions": ["USA", "Europe"],
+        "preferred_terms": [("[!]", 40)],
+        "platform_profiles": {
+            "nes": {
+                "min_size_mb": 0.02,
+                "max_size_mb": 8,
+                "preferred_terms": [("PRG0", 15)],
+            },
+            "switch": {
+                "min_size_mb": 500,
+                "max_size_mb": 32768,
+                "size_preference": "smaller",
+                "region_scores": {"japan": 80, "usa": 40},
+            }
+        }
+    }
+    nes_prof = ReleaseProfile.from_settings(settings, "nes")
+    assert nes_prof.min_size_mb == 0.02
+    assert nes_prof.max_size_mb == 8
+    assert nes_prof.preferred_regions == ["USA", "Europe"]
+    assert any(t[0] == "[!]" for t in nes_prof.preferred)
+    assert any(t[0] == "PRG0" for t in nes_prof.preferred)
+
+    switch_prof = ReleaseProfile.from_settings(settings, "switch")
+    assert switch_prof.min_size_mb == 500
+    assert switch_prof.max_size_mb == 32768
+    assert switch_prof.size_preference == "smaller"
+    assert switch_prof.region_scores == {"japan": 80, "usa": 40}
+
+    # Unconfigured platform falls back to global
+    gb_prof = ReleaseProfile.from_settings(settings, "gb")
+    assert gb_prof.min_size_mb == 1
+    assert gb_prof.max_size_mb == 100
+
+
+def test_end_to_end_switch_tiny_file_refusal_vs_nes():
+    settings = {
+        "platform_profiles": {
+            "nes": {"min_size_mb": 0.01, "max_size_mb": 8},
+            "switch": {"min_size_mb": 500, "max_size_mb": 32768},
+        }
+    }
+    nes_prof = ReleaseProfile.from_settings(settings, NES)
+    switch_prof = ReleaseProfile.from_settings(settings, SWITCH)
+
+    tiny = rel("Mario", 5 * MB)
+    assert not judge(tiny, "mario", SWITCH, profile=switch_prof).accepted
+    assert judge(tiny, "mario", NES, profile=nes_prof).accepted
+
+
+def test_service_profile_for_resolves_and_inherits(tmp_path):
+    from romarr.app import ROMarr
+    service = ROMarr(env={"ROMARR_DATA": str(tmp_path / "s.json"),
+                          "ROMARR_AUTH": "disabled"})
+    service.store.update_settings({
+        "min_size_mb": 2,
+        "platform_profiles": {
+            "nes": {"min_size_mb": 0.05, "max_size_mb": 4},
+            "switch": {"min_size_mb": 800},
+        }
+    })
+    service.reload_policy()
+
+    nes_p = service.profile_for("nes")
+    assert nes_p.min_size_mb == 0.05
+    assert nes_p.max_size_mb == 4
+
+    switch_p = service.profile_for(SWITCH)
+    assert switch_p.min_size_mb == 800
+
+    global_p = service.profile_for(None)
+    assert global_p.min_size_mb == 2
+
+

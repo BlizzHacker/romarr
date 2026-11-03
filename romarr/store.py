@@ -263,11 +263,19 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # Profile: for ROMs the meaningful axis is region and revision, not
     # bitrate -- this is the games equivalent of a quality profile.
     "preferred_regions": ["USA", "World", "Europe", "Japan"],
+    "region_scores": {},
     "allow_beta": False,
     "allow_rom_hacks": False,
-    # Acquisition
+    # Acquisition & release profiles (global and per-system)
     "min_seeders": 1,
+    "min_size_mb": 0,
     "max_size_mb": 8192,
+    "size_preference": "auto",       # auto | smaller | larger | none
+    "size_weight": 0,
+    "preferred_terms": [],
+    "excluded_terms": [],
+    "required_terms": [],
+    "platform_profiles": {},         # slug -> {min_size_mb, max_size_mb, ...}
     "protocol": "torrent",       # torrent | usenet
     # Remote path mappings, the same concept Radarr and Sonarr expose.
     #

@@ -310,7 +310,7 @@ def judge(release: Release, wanted: str,
         return Judgement(-2000,
                          verdict=f"blocklisted: {blocklist.reason_for(release)}")
     if profile:
-        refusal = profile.refusal(release.title.lower())
+        refusal = profile.refusal(release.title.lower(), getattr(release, "size", 0))
         if refusal:
             return Judgement(-900, verdict=refusal)
     if not is_game_release(release):
@@ -344,24 +344,37 @@ def judge(release: Release, wanted: str,
     # torrent could never win a ranking no matter how right its release was.
     # Capped at 40 it ranks alongside region preference, which is the weight
     # availability actually deserves: a tie-breaker, not the deciding vote.
+    min_seeders = getattr(profile, "min_seeders", None) if profile else None
+    if min_seeders is None or min_seeders < 1:
+        min_seeders = 1
     if release.protocol == "torrent":
-        if release.seeders <= 0:
+        if release.seeders < min_seeders:
             if not release.private:
-                return Judgement(-400, verdict="no seeders on a public tracker")
+                if min_seeders <= 1:
+                    return Judgement(-400, verdict="no seeders on a public tracker")
+                return Judgement(-400, verdict=f"less than {min_seeders} seeders on a public tracker ({release.seeders} seeders)")
             add(-20, "no seeders (private tracker, often temporary)")
         else:
             add(min(release.seeders, 20) * 2, f"{release.seeders} seeders")
 
-    region = 0
-    label = ""
-    for markers, value in _REGION_SCORE:
-        if any(m in lowered for m in markers):
-            region, label = value, markers[0]
-            break
-    for code, value in _REGION_CODES.items():
-        if value > region and _mentions(lowered, code):
-            region, label = value, code
-    add(region, f"region {label}" if label else "region")
+    region_handled = False
+    if profile and hasattr(profile, "region_score_for"):
+        custom_reg = profile.region_score_for(lowered)
+        if custom_reg is not None:
+            pts, label = custom_reg
+            add(pts, label)
+            region_handled = True
+    if not region_handled:
+        region = 0
+        label = ""
+        for markers, value in _REGION_SCORE:
+            if any(m in lowered for m in markers):
+                region, label = value, markers[0]
+                break
+        for code, value in _REGION_CODES.items():
+            if value > region and _mentions(lowered, code):
+                region, label = value, code
+        add(region, f"region {label}" if label else "region")
 
     if _GOOD_DUMP_MARKER in lowered:
         add(_GOOD_DUMP_BONUS, "verified good dump [!]")
@@ -480,11 +493,13 @@ def judge(release: Release, wanted: str,
     # was picked for a SNES request.
     if platform is not None:
         medium = "disc image" if platform.is_disc else "cartridge"
-        if release.size > platform.max_size:
+        ceiling = (profile.max_size_bytes if (profile and getattr(profile, "max_size_bytes", 0) > 0)
+                   else platform.max_size)
+        if release.size > ceiling:
             add(-200,
                 f"too big for a {platform.name} {medium} "
                 f"({release.size // 1048576}MB, ceiling "
-                f"{platform.max_size // 1048576}MB)")
+                f"{ceiling // 1048576}MB)")
         elif 0 < release.size < _size_floor(platform):
             # The floor is per medium for the same reason the ceiling is. Four
             # kilobytes is a real floor for an Atari cartridge and no floor at
@@ -498,6 +513,13 @@ def judge(release: Release, wanted: str,
             # good the title match was. Absent evidence is not evidence of
             # absence; the title and extension checks still decide those.
             add(-200, f"too small to be a {platform.name} {medium}")
+
+    if profile and getattr(profile, "size_weight", 0) > 0 and getattr(release, "size", 0) > 0:
+        calc_ceiling = (profile.max_size_bytes if getattr(profile, "max_size_bytes", 0) > 0
+                        else (platform.max_size if platform else 8192 * 1024 * 1024))
+        size_adj = profile.size_score_for(release.size, calc_ceiling)
+        if size_adj:
+            add(*size_adj)
 
     if profile:
         for delta, text in profile.adjustments(lowered):
@@ -572,15 +594,17 @@ def _size_floor(platform: Platform) -> int:
     return _DISC_FLOOR if platform.is_disc else _CARTRIDGE_FLOOR
 
 
-def score(release: Release, wanted: str, platform: Platform | None = None) -> int:
+def score(release: Release, wanted: str, platform: Platform | None = None,
+          *, profile=None, blocklist=None) -> int:
     """Rank a release. Higher is better; negative means "do not take this"."""
-    return judge(release, wanted, platform).points
+    return judge(release, wanted, platform, profile=profile, blocklist=blocklist).points
 
 
 def explain(release: Release, wanted: str,
-            platform: Platform | None = None) -> list[str]:
+            platform: Platform | None = None,
+            *, profile=None, blocklist=None) -> list[str]:
     """Why this release scored what it did, worst reason first."""
-    return judge(release, wanted, platform).why()
+    return judge(release, wanted, platform, profile=profile, blocklist=blocklist).why()
 
 
 def best_release(releases: list[Release], wanted: str,
@@ -592,22 +616,20 @@ def best_release(releases: list[Release], wanted: str,
     ranked = [(s, r) for s, r in ranked if s > 0]
     if not ranked:
         return None
-    # Sort by score, then break the tie on size -- in the direction the medium
-    # calls for.
-    #
-    # For a cartridge, smaller wins: a bigger file at the same score is almost
-    # always a romset or a bad dump, not a better copy.
-    #
-    # For a disc that reasoning inverts. Two rips of the same game differ by
-    # how much of the disc was kept -- audio tracks, video, the lot -- so the
-    # smaller of two PlayStation releases scoring alike is the one with
-    # something missing. The ceiling above already excludes anything that is
-    # too big to be the game at all, so preferring the larger here can only
-    # choose between plausible rips.
-    if platform is not None and platform.is_disc:
-        ranked.sort(key=lambda pair: (-pair[0], -pair[1].size))
-    else:
+    # Sort by score, then break the tie on size -- according to profile.size_preference
+    # or the medium's default.
+    size_pref = (getattr(profile, "size_preference", "") or "auto").lower() if profile else "auto"
+    if size_pref == "smaller":
         ranked.sort(key=lambda pair: (-pair[0], pair[1].size))
+    elif size_pref == "larger":
+        ranked.sort(key=lambda pair: (-pair[0], -pair[1].size))
+    elif size_pref == "none":
+        ranked.sort(key=lambda pair: (-pair[0],))
+    else:
+        if platform is not None and platform.is_disc:
+            ranked.sort(key=lambda pair: (-pair[0], -pair[1].size))
+        else:
+            ranked.sort(key=lambda pair: (-pair[0], pair[1].size))
     return ranked[0][1]
 
 

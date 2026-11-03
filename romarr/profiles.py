@@ -24,6 +24,7 @@ import logging
 import re
 import time
 from dataclasses import dataclass, field
+from typing import Any
 
 log = logging.getLogger(__name__)
 
@@ -51,13 +52,57 @@ def _matches(term: str, haystack: str) -> bool:
     return term.lower() in haystack
 
 
+def _mentions(haystack: str, marker: str) -> bool:
+    """Whether `marker` appears in `haystack` as a whole word or phrase."""
+    padded = f" {re.sub(r'[^a-z0-9 ]+', ' ', haystack)} "
+    return f" {marker} " in re.sub(r"\s+", " ", padded)
+
+
+#: Canonical region markers: (substring markers, compact codes)
+_REGION_MARKERS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    "usa": (("usa", "(u)", "[u]", "ntsc-u", "united states", "america"),
+            ("u", "us", "ue", "uj", "ju", "jue", "uej", "jeu")),
+    "world": (("world", "(w)", "global"), ("w",)),
+    "europe": (("europe", "(e)", "pal"), ("e", "eu", "eur", "ue", "uej", "jeu", "jue")),
+    "japan": (("japan", "(j)", "ntsc-j"), ("j", "jp", "jpn", "ju", "uj", "jue", "uej", "jeu")),
+    "australia": (("australia", "(a)", "aus"), ("a", "au")),
+    "germany": (("germany", "(g)", "german", "deu"), ("de",)),
+    "france": (("france", "(f)", "french", "fra"), ("fr",)),
+    "spain": (("spain", "(s)", "spanish", "esp"), ("es",)),
+    "italy": (("italy", "(i)", "italian", "ita"), ("it",)),
+    "china": (("china", "chinese", "chs", "cht"), ("cn", "zh")),
+    "korea": (("korea", "korean", "kor"), ("kr", "ko")),
+    "brazil": (("brazil", "portuguese", "pt-br", "ptbr"), ("br", "pt")),
+}
+
+
+def _region_matches(region_key: str, lowered: str) -> bool:
+    """Whether `region_key` matches in `lowered` release title."""
+    rk = region_key.lower().strip()
+    if rk in _REGION_MARKERS:
+        substrings, codes = _REGION_MARKERS[rk]
+        if any(s in lowered for s in substrings):
+            return True
+        if any(_mentions(lowered, c) for c in codes):
+            return True
+    else:
+        if rk in lowered or _mentions(lowered, rk):
+            return True
+        if f"({rk})" in lowered or f"[{rk}]" in lowered:
+            return True
+    return False
+
+
 @dataclass
 class ReleaseProfile:
-    """Preferred, excluded and required terms.
+    """Preferred, excluded and required terms, sizing limits, and scoring preferences.
 
     `preferred` carries its own weight per term rather than a single global
     bonus, because "I mildly like this" and "I will take nothing else" are
     different instructions and one number cannot express both.
+
+    Sizing, region preferences, and scoring can also be customized globally
+    or on a per-platform basis.
     """
 
     #: (term, points). Negative is a penalty, which is how "avoid but do not
@@ -67,16 +112,52 @@ class ReleaseProfile:
     excluded: list[str] = field(default_factory=list)
     #: Every term must appear, or the release is refused.
     required: list[str] = field(default_factory=list)
+    #: Minimum release size in megabytes; 0 or None disables the floor check.
+    min_size_mb: float | None = None
+    #: Maximum release size in megabytes; 0 or None uses system/medium ceiling.
+    max_size_mb: float | None = None
+    #: Minimum seeders required on torrents (None or <=1 means normal check).
+    min_seeders: int | None = None
+    #: Preferred regions in ranking order.
+    preferred_regions: list[str] = field(default_factory=list)
+    #: Custom scores per region: {"japan": 100, "usa": 40, "europe": 20}.
+    region_scores: dict[str, int] = field(default_factory=dict)
+    #: Size preference tie-breaker: "auto" | "smaller" | "larger" | "none".
+    size_preference: str = "auto"
+    #: Optional bonus points awarded for matching size preference (0 to disable).
+    size_weight: int = 0
+
+    @property
+    def min_size_bytes(self) -> int:
+        if self.min_size_mb is not None and self.min_size_mb > 0:
+            return int(self.min_size_mb * 1024 * 1024)
+        return 0
+
+    @property
+    def max_size_bytes(self) -> int:
+        if self.max_size_mb is not None and self.max_size_mb > 0:
+            return int(self.max_size_mb * 1024 * 1024)
+        return 0
 
     @classmethod
-    def from_settings(cls, settings: dict) -> "ReleaseProfile":
+    def from_settings(cls, settings: dict, platform: Any = None) -> "ReleaseProfile":
         """Build from stored settings, tolerating whatever shape they are in.
 
-        Preferred terms are stored as a list of `{term, score}` because a UI
-        edits them as rows, and a tuple in JSON comes back as a list.
+        If `platform` is provided, platform-specific overrides from
+        `platform_profiles` in `settings` are merged over global defaults.
         """
+        platform_cfg = {}
+        if platform:
+            slug = getattr(platform, "slug", str(platform)).lower().strip()
+            platform_profiles = settings.get("platform_profiles") or {}
+            if isinstance(platform_profiles, dict):
+                platform_cfg = platform_profiles.get(slug) or {}
+
+        # Preferred terms: platform terms merged with global terms
         preferred = []
-        for entry in settings.get("preferred_terms") or []:
+        raw_preferred = list(platform_cfg.get("preferred_terms") or []) + list(settings.get("preferred_terms") or [])
+        seen_terms = set()
+        for entry in raw_preferred:
             if isinstance(entry, dict):
                 term = str(entry.get("term") or "")
                 try:
@@ -87,15 +168,101 @@ class ReleaseProfile:
                 term, points = str(entry[0]), int(entry[1] or 0)
             else:
                 term, points = str(entry), 25
-            if term:
+            if term and term not in seen_terms:
+                seen_terms.add(term)
                 preferred.append((term, points))
+
+        # Excluded terms
+        excluded = [str(t) for t in (platform_cfg.get("excluded_terms") or []) if t]
+        for t in (settings.get("excluded_terms") or []):
+            if t and str(t) not in excluded:
+                excluded.append(str(t))
+
+        # Required terms
+        required = [str(t) for t in (platform_cfg.get("required_terms") or []) if t]
+        for t in (settings.get("required_terms") or []):
+            if t and str(t) not in required:
+                required.append(str(t))
+
+        def _to_float(v, default=None):
+            if v is None or v == "":
+                return default
+            try:
+                num = float(v)
+                return num if num > 0 else default
+            except (ValueError, TypeError):
+                return default
+
+        min_size = _to_float(platform_cfg.get("min_size_mb"),
+                             _to_float(settings.get("min_size_mb")))
+        max_size = _to_float(platform_cfg.get("max_size_mb"),
+                             _to_float(settings.get("max_size_mb")))
+
+        min_seeders = platform_cfg.get("min_seeders")
+        if min_seeders is None or min_seeders == "":
+            min_seeders = settings.get("min_seeders")
+        try:
+            min_seeders = int(min_seeders) if min_seeders is not None else None
+        except (ValueError, TypeError):
+            min_seeders = None
+
+        preferred_regions = platform_cfg.get("preferred_regions")
+        if not preferred_regions:
+            preferred_regions = settings.get("preferred_regions") or []
+        preferred_regions = [str(r).strip() for r in preferred_regions if str(r).strip()]
+
+        raw_region_scores = platform_cfg.get("region_scores")
+        if not raw_region_scores:
+            raw_region_scores = settings.get("region_scores") or {}
+        region_scores: dict[str, int] = {}
+        if isinstance(raw_region_scores, dict):
+            for k, v in raw_region_scores.items():
+                try:
+                    region_scores[str(k).lower().strip()] = int(v)
+                except (ValueError, TypeError):
+                    pass
+        elif isinstance(raw_region_scores, (list, tuple)):
+            for entry in raw_region_scores:
+                if isinstance(entry, dict):
+                    reg = str(entry.get("region") or entry.get("term") or "").lower().strip()
+                    try:
+                        sc = int(entry.get("score") or 0)
+                        if reg:
+                            region_scores[reg] = sc
+                    except (ValueError, TypeError):
+                        pass
+                elif isinstance(entry, (list, tuple)) and len(entry) == 2:
+                    try:
+                        region_scores[str(entry[0]).lower().strip()] = int(entry[1])
+                    except (ValueError, TypeError):
+                        pass
+
+        size_preference = str(platform_cfg.get("size_preference") or settings.get("size_preference") or "auto").strip().lower()
+        if size_preference not in ("auto", "smaller", "larger", "none"):
+            size_preference = "auto"
+
+        size_weight = platform_cfg.get("size_weight")
+        if size_weight is None:
+            size_weight = settings.get("size_weight", 0)
+        try:
+            size_weight = int(size_weight or 0)
+        except (ValueError, TypeError):
+            size_weight = 0
+
         return cls(
             preferred=preferred,
-            excluded=[str(t) for t in (settings.get("excluded_terms") or []) if t],
-            required=[str(t) for t in (settings.get("required_terms") or []) if t],
+            excluded=excluded,
+            required=required,
+            min_size_mb=min_size,
+            max_size_mb=max_size,
+            min_seeders=min_seeders,
+            preferred_regions=preferred_regions,
+            region_scores=region_scores,
+            size_preference=size_preference,
+            size_weight=size_weight,
         )
 
-    def refusal(self, lowered: str) -> str:
+    def refusal(self, lowered: str, size: int = 0) -> str:
         """Why this release is refused outright, or "" if it is not."""
         for term in self.excluded:
             if _matches(term, lowered):
@@ -103,6 +270,10 @@ class ReleaseProfile:
         for term in self.required:
             if not _matches(term, lowered):
                 return f"missing a required term ({term!r})"
+        if self.min_size_bytes and 0 < size < self.min_size_bytes:
+            return f"smaller than release profile minimum size ({self.min_size_mb}MB)"
+        if self.max_size_bytes and size > self.max_size_bytes:
+            return f"larger than release profile maximum size ({self.max_size_mb}MB)"
         return ""
 
     def adjustments(self, lowered: str) -> list[tuple[int, str]]:
@@ -113,8 +284,52 @@ class ReleaseProfile:
                 out.append((points, f"release profile prefers {term!r}"))
         return out
 
+    def region_score_for(self, lowered: str) -> tuple[int, str] | None:
+        """Custom points and label for region, or None to fall back to default ladder."""
+        if self.region_scores:
+            matches: list[tuple[int, str]] = []
+            for region_name, points in self.region_scores.items():
+                if _region_matches(region_name, lowered):
+                    matches.append((points, region_name))
+            if matches:
+                # Take highest points match if multiple regions matched
+                matches.sort(key=lambda x: -x[0])
+                pts, name = matches[0]
+                return (pts, f"region {name}")
+        elif self.preferred_regions:
+            for idx, region_name in enumerate(self.preferred_regions):
+                if _region_matches(region_name, lowered):
+                    pts = max(10, 40 - (idx * 10))
+                    return (pts, f"region {region_name.lower()}")
+        return None
+
+    def size_score_for(self, size: int, ceiling: int) -> tuple[int, str] | None:
+        """Points adjustment based on size preference."""
+        if not self.size_weight or size <= 0 or ceiling <= 0:
+            return None
+        pref = (self.size_preference or "auto").lower()
+        if pref == "smaller":
+            fraction = max(0.0, min(1.0, 1.0 - (size / ceiling)))
+            pts = int(round(self.size_weight * fraction))
+            return (pts, f"size preference (smaller is preferred: {pts:+d} pts)")
+        elif pref == "larger":
+            fraction = max(0.0, min(1.0, size / ceiling))
+            pts = int(round(self.size_weight * fraction))
+            return (pts, f"size preference (larger is preferred: {pts:+d} pts)")
+        return None
+
     def __bool__(self) -> bool:
-        return bool(self.preferred or self.excluded or self.required)
+        return bool(
+            self.preferred
+            or self.excluded
+            or self.required
+            or (self.min_size_mb and self.min_size_mb > 0)
+            or (self.max_size_mb and self.max_size_mb > 0)
+            or (self.min_seeders is not None and self.min_seeders > 1)
+            or self.region_scores
+            or (self.size_preference and self.size_preference != "auto")
+            or self.size_weight > 0
+        )
 
 
 _INFOHASH = re.compile(r"btih:([0-9a-fA-F]{40}|[0-9a-zA-Z]{32})")

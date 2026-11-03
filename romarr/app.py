@@ -1606,9 +1606,9 @@ class ROMarr:
             # different question than the request path it claims to mirror.
             releases = releases + self._hub_releases(game, None)
         pick = best_release(releases, game, platform,
-                           profile=self.profile, blocklist=self.blocklist)
+                           profile=self.profile_for(platform), blocklist=self.blocklist)
         scored = sorted(
-            ((score(r, game, platform), r) for r in releases),
+            ((score(r, game, platform, profile=self.profile_for(platform)), r) for r in releases),
             key=lambda pair: -pair[0])
         # Which indexers actually contributed, and how many of their results
         # survived scoring. This is the question you have when a tracker you
@@ -1810,7 +1810,7 @@ class ROMarr:
 
         releases = self._search_releases(game, platform)
         pick = best_release(releases, game, platform,
-                           profile=self.profile, blocklist=self.blocklist)
+                           profile=self.profile_for(platform), blocklist=self.blocklist)
         if pick is None:
             item = QueueItem(game, platform.slug, "", 0, "failed",
                              f"no usable release among {len(releases)} result(s)",
@@ -2006,7 +2006,8 @@ class ROMarr:
             # The message other tools cannot send: what the scorer weighed.
             # A failure to explain must never fail the grab it explains.
             try:
-                reasons = judge(pick, game, resolve(platform_slug)).why()
+                reasons = judge(pick, game, resolve(platform_slug),
+                                profile=self.profile_for(platform_slug)).why()
             except Exception:
                 reasons = ()
             self.notify(grabbed(pick.title, platform_slug,
@@ -2059,9 +2060,12 @@ class ROMarr:
                     "game": game, "platform": platform.slug if platform else None,
                     "items": []}
 
-        judged = [(judge(r, game, platform,
-                         profile=self.profile, blocklist=self.blocklist), r)
-                  for r in releases]
+        judged = []
+        for r in releases:
+            inferred = platform or infer_platform(r)
+            plat_prof = self.profile_for(inferred)
+            judged.append((judge(r, game, inferred,
+                                 profile=plat_prof, blocklist=self.blocklist), r))
         judged.sort(key=lambda pair: (-pair[0].points, pair[1].size))
 
         key = f"{game}|{platform.slug if platform else ''}"
@@ -2461,6 +2465,12 @@ class ROMarr:
         self.blocklist = Blocklist.from_items(
             self.store.list_items("blocklist"))
         self.notifier = Notifier(self.store.list_items("connections"))
+
+    def profile_for(self, platform: Any = None) -> ReleaseProfile:
+        """Resolve the release profile for a given platform, with fallback to global."""
+        if not platform:
+            return self.profile
+        return ReleaseProfile.from_settings(self.store.settings, platform=platform)
 
     def block(self, release, reason: str = "") -> dict:
         """Never take this release again, and record why."""
@@ -5327,7 +5337,7 @@ class ROMarr:
             if platform is None:
                 continue
             pick = best_release(releases, item.game, platform,
-                               profile=self.profile, blocklist=self.blocklist)
+                               profile=self.profile_for(platform), blocklist=self.blocklist)
             if pick is None or not pick.download_url:
                 continue
             result = self._automatic_grab(pick, item.game, platform.slug)
@@ -6298,9 +6308,27 @@ def integration_view(row: SeerrRequest) -> dict:
             "assets": list(row.assets), "error": row.error}
 
 
+def is_portal_subpath(path: str) -> bool:
+    """Whether `path` is a static asset or library-API subresource requested by the embedded portal shell."""
+    if path.startswith(("/assets/", "/_next/", "/static/")):
+        return True
+    if path in ("/site.webmanifest", "/manifest.webmanifest",
+                "/apple-touch-icon.png", "/safari-pinned-tab.svg",
+                "/favicon-32x32.png", "/favicon-16x16.png"):
+        return True
+    if path.startswith(("/api/config", "/api/users", "/api/heartbeat",
+                        "/api/roms", "/api/collections", "/api/firmware",
+                        "/api/devices", "/api/token", "/api/oauth",
+                        "/api/stats", "/api/tasks", "/api/playlists",
+                        "/api/saves", "/api/states", "/api/screenshots")):
+        return True
+    return False
+
+
 def make_handler(service: ROMarr):
     class Handler(BaseHTTPRequestHandler):
         server_version = "ROMarr"
+        _is_portal_subpath = staticmethod(is_portal_subpath)
 
         def _send(self, code: int, body: bytes, content_type: str):
             self.send_response(code)
@@ -7211,7 +7239,7 @@ def make_handler(service: ROMarr):
                 if not game:
                     return self._json(400, {"error": "game is required"})
                 return self._json(200, service.search(game, (query.get("platform") or [""])[0]))
-            if self._is_portal_subpath(route.path):
+            if is_portal_subpath(route.path):
                 return self._serve_portal_proxy(
                     target="", sub_path=self.path, method="GET")
             return self._json(404, {"error": "not found"})
@@ -7263,7 +7291,7 @@ def make_handler(service: ROMarr):
                     method="POST",
                     body=raw_body,
                 )
-            if self._is_portal_subpath(route.path):
+            if is_portal_subpath(route.path):
                 raw_body = self.rfile.read(min(length, 25 * 1024 * 1024)) if length > 0 else b""
                 return self._serve_portal_proxy(
                     target="", sub_path=self.path, method="POST", body=raw_body)
@@ -8026,7 +8054,7 @@ def make_handler(service: ROMarr):
                     method="DELETE",
                     body=raw_body,
                 )
-            if self._is_portal_subpath(route.path):
+            if is_portal_subpath(route.path):
                 length = int(self.headers.get("Content-Length") or 0)
                 raw_body = self.rfile.read(min(length, 25 * 1024 * 1024)) if length > 0 else b""
                 return self._serve_portal_proxy(
@@ -8118,7 +8146,7 @@ def make_handler(service: ROMarr):
                     method="PUT",
                     body=raw_body,
                 )
-            if self._is_portal_subpath(route.path):
+            if is_portal_subpath(route.path):
                 raw_body = self.rfile.read(min(length, 25 * 1024 * 1024)) if length > 0 else b""
                 return self._serve_portal_proxy(
                     target="", sub_path=self.path, method="PUT", body=raw_body)
@@ -8145,6 +8173,7 @@ def make_handler(service: ROMarr):
                     # A stored path nothing re-reads is a setting that lies;
                     # reload_dats both stores and applies it.
                     service.reload_dats(str(body.get("dat_path") or ""))
+                service.reload_policy()
                 updated = service.safe_settings()
                 # A library path is only really changed once the running
                 # service files ROMs there, not once it is stored.

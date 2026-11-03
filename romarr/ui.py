@@ -3057,17 +3057,282 @@ RENDER.media=()=>settingsPage('Media Management',
      +'an allowlist — the plan counts every title omitted for having no dump '
      +'in your regions.'));
 
-RENDER.profiles=()=>settingsPage('Release Profile',
-  'A quality profile means nothing for a cartridge dump — there is no bitrate. '
-  +'What separates two dumps of one game is region, revision and whether it is a '
-  +'hack or a beta, so that is what is ranked here. Earlier regions win.',
-  `<div class="field"><label>Preferred regions, best first</label>
-     <input type="text" data-k="preferred_regions" data-list="1"
-       value="${esc((SETTINGS.preferred_regions||[]).join(', '))}"></div>`
-  +chk('allow_beta','Accept betas and prototypes',SETTINGS.allow_beta)
-  +chk('allow_rom_hacks','Accept ROM hacks',SETTINGS.allow_rom_hacks)
-  +fld('min_seeders','Minimum seeders',SETTINGS.min_seeders,'number')
-  +fld('max_size_mb','Maximum size (MB)',SETTINGS.max_size_mb,'number'));
+RENDER.profiles=async()=>{
+  const plats=await j('/api/platforms').catch(()=>[]);
+  plats.sort((a,b)=>a.name.localeCompare(b.name));
+
+  SETTINGS.platform_profiles=SETTINGS.platform_profiles||{};
+  let currentPlat=RENDER._current_profile_platform||'';
+
+  const renderProfileForm=()=>{
+    const isGlobal=!currentPlat;
+    const platInfo=isGlobal?null:(plats.find(p=>p.slug===currentPlat)||{name:currentPlat,slug:currentPlat});
+    const overrides=isGlobal?null:(SETTINGS.platform_profiles[currentPlat]||null);
+    const hasOverride=!isGlobal&&overrides!==null;
+
+    const getVal=(k,defVal)=>{
+      if(!isGlobal&&overrides&&overrides[k]!==undefined&&overrides[k]!==null&&overrides[k]!==''){
+        return overrides[k];
+      }
+      if(SETTINGS[k]!==undefined&&SETTINGS[k]!==null){
+        return SETTINGS[k];
+      }
+      return defVal;
+    };
+
+    const minSize=getVal('min_size_mb',0);
+    const maxSize=getVal('max_size_mb',platInfo?platInfo.max_size_mb:8192);
+    const minSeeders=getVal('min_seeders',1);
+    const sizePref=getVal('size_preference','auto');
+    const sizeWeight=getVal('size_weight',0);
+    const regions=getVal('preferred_regions',['USA','World','Europe','Japan']);
+    const regionScores=getVal('region_scores',{});
+    const regionScoreLines=Object.entries(regionScores||{})
+      .map(([reg,sc])=>`${reg} = ${sc}`).join('\n');
+
+    const preferredTerms=getVal('preferred_terms',[]);
+    const preferredTermLines=(preferredTerms||[]).map(t=>{
+      if(Array.isArray(t)&&t.length===2)return `${t[0]} = ${t[1]}`;
+      if(t&&typeof t==='object')return `${t.term||''} = ${t.score||0}`;
+      return `${t} = 25`;
+    }).join('\n');
+
+    const excludedTerms=(getVal('excluded_terms',[])||[]).join(', ');
+    const requiredTerms=(getVal('required_terms',[])||[]).join(', ');
+    const allowBeta=getVal('allow_beta',false);
+    const allowHacks=getVal('allow_rom_hacks',false);
+
+    const platOptions=[
+      `<option value=""${isGlobal?' selected':''}>Global (Default for all systems)</option>`,
+      ...plats.map(p=>{
+        const marked=(SETTINGS.platform_profiles&&SETTINGS.platform_profiles[p.slug])?' ★':'';
+        return `<option value="${esc(p.slug)}"${p.slug===currentPlat?' selected':''}>${esc(p.name)} (${esc(p.slug)})${marked}</option>`;
+      })
+    ].join('');
+
+    $('#page').innerHTML=`<div class="card">
+      <div class="row" style="margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+        <div>
+          <h3 style="margin:0">Release Profiles</h3>
+          <p class="help" style="margin:4px 0 0">
+            Fine-grained release selection policy, sizing thresholds, and scoring rules.
+            Configure global defaults or customize rules per gaming system.
+          </p>
+        </div>
+      </div>
+
+      <div class="field" style="margin-bottom:16px;background:var(--subtle,rgba(255,255,255,0.03));padding:12px;border-radius:6px;border:1px solid var(--border,#333)">
+        <label style="font-weight:600;margin-bottom:6px">Target System</label>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <select id="prof-sys-sel" style="max-width:320px;padding:6px 10px;border-radius:4px;background:var(--bg);color:var(--fg);border:1px solid var(--border,#555)">
+            ${platOptions}
+          </select>
+          ${!isGlobal?(hasOverride
+            ?`<span class="pill" style="background:var(--accent,#3a6);color:#fff">Custom Override</span>
+               <button class="btn secondary" id="prof-revert-btn" style="margin-left:auto">Revert to Global</button>`
+            :`<span class="pill" style="color:var(--dim)">Inheriting from Global</span>`)
+            :`<span class="pill" style="color:var(--dim)">Base Policy</span>`}
+        </div>
+      </div>
+
+      <div class="row" style="display:flex;gap:16px;flex-wrap:wrap">
+        <div style="flex:1;min-width:260px">
+          <div class="field">
+            <label>Minimum Size (MB)</label>
+            <input type="number" step="any" id="prof-min-size" value="${esc(minSize)}" placeholder="0 (disabled)">
+            <div style="color:var(--dim);font-size:11.5px;margin-top:4px">
+              Refuses releases smaller than this (avoids bad dumps, miscategorized files, or tiny updates).
+            </div>
+          </div>
+        </div>
+        <div style="flex:1;min-width:260px">
+          <div class="field">
+            <label>Maximum Size (MB)</label>
+            <input type="number" step="any" id="prof-max-size" value="${esc(maxSize)}" placeholder="Platform default">
+            <div style="color:var(--dim);font-size:11.5px;margin-top:4px">
+              Ceiling for releases of this system. Files larger than this are refused.
+            </div>
+          </div>
+        </div>
+        <div style="flex:1;min-width:260px">
+          <div class="field">
+            <label>Minimum Seeders</label>
+            <input type="number" id="prof-min-seeders" value="${esc(minSeeders)}" placeholder="1">
+            <div style="color:var(--dim);font-size:11.5px;margin-top:4px">
+              Required seeders on public torrent trackers.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="row" style="display:flex;gap:16px;flex-wrap:wrap;margin-top:8px">
+        <div style="flex:1;min-width:260px">
+          <div class="field">
+            <label>Size Preference (Tie-Breaker)</label>
+            <select id="prof-size-pref" style="width:100%;padding:6px 10px;border-radius:4px;background:var(--bg);color:var(--fg);border:1px solid var(--border,#555)">
+              <option value="auto"${sizePref==='auto'?' selected':''}>Auto (Cartridge = smaller, Disc = larger)</option>
+              <option value="smaller"${sizePref==='smaller'?' selected':''}>Prefer Smaller Dumps</option>
+              <option value="larger"${sizePref==='larger'?' selected':''}>Prefer Larger Dumps</option>
+              <option value="none"${sizePref==='none'?' selected':''}>None (Neutral, no size tie-breaker)</option>
+            </select>
+          </div>
+        </div>
+        <div style="flex:1;min-width:260px">
+          <div class="field">
+            <label>Size Scoring Bonus (Points)</label>
+            <input type="number" id="prof-size-weight" value="${esc(sizeWeight)}" placeholder="0 (tie-break only)">
+            <div style="color:var(--dim);font-size:11.5px;margin-top:4px">
+              Points awarded in release scoring based on size preference (0 for tie-break only).
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="field" style="margin-top:12px">
+        <label>Preferred Regions</label>
+        <input type="text" id="prof-regions" value="${esc(regions.join(', '))}" placeholder="USA, World, Europe, Japan">
+        <div style="color:var(--dim);font-size:11.5px;margin-top:4px">
+          Comma-separated list of regions in preferred order.
+        </div>
+      </div>
+
+      <div class="field" style="margin-top:12px">
+        <label>Custom Region Scores</label>
+        <textarea id="prof-region-scores" rows="3" style="width:100%;resize:vertical;font:12px/1.5 ui-monospace,Menlo,monospace" placeholder="japan = 100&#10;usa = 40&#10;europe = 20">${esc(regionScoreLines)}</textarea>
+        <div style="color:var(--dim);font-size:11.5px;margin-top:4px">
+          Customize scoring for regions (one per line: <code>region = score</code>) instead of just default "best first" order. Negative values penalize.
+        </div>
+      </div>
+
+      <div class="field" style="margin-top:12px">
+        <label>Preferred Terms</label>
+        <textarea id="prof-preferred-terms" rows="3" style="width:100%;resize:vertical;font:12px/1.5 ui-monospace,Menlo,monospace" placeholder="[!] = 50&#10;/(Rev \\d)/ = 25">${esc(preferredTermLines)}</textarea>
+        <div style="color:var(--dim);font-size:11.5px;margin-top:4px">
+          Keywords or regex patterns that add points (one per line: <code>term = score</code>).
+        </div>
+      </div>
+
+      <div class="field" style="margin-top:12px">
+        <label>Excluded Terms</label>
+        <input type="text" id="prof-excluded-terms" value="${esc(excludedTerms)}" placeholder="proto, beta, demo">
+        <div style="color:var(--dim);font-size:11.5px;margin-top:4px">
+          Comma-separated terms that disqualify a release immediately.
+        </div>
+      </div>
+
+      <div class="field" style="margin-top:12px">
+        <label>Required Terms</label>
+        <input type="text" id="prof-required-terms" value="${esc(requiredTerms)}" placeholder="verified">
+        <div style="color:var(--dim);font-size:11.5px;margin-top:4px">
+          Comma-separated terms that must be present in the title.
+        </div>
+      </div>
+
+      <div style="margin:16px 0">
+        <label class="check"><input type="checkbox" id="prof-allow-beta"${allowBeta?' checked':''}><span>Accept betas and prototypes</span></label>
+        <label class="check" style="margin-left:16px"><input type="checkbox" id="prof-allow-hacks"${allowHacks?' checked':''}><span>Accept ROM hacks</span></label>
+      </div>
+
+      <div style="margin-top:16px">
+        <button class="btn" id="prof-save-btn">Save Profile</button>
+      </div>
+    </div>`;
+
+    $('#prof-sys-sel').onchange=(e)=>{
+      RENDER._current_profile_platform=e.target.value;
+      currentPlat=e.target.value;
+      renderProfileForm();
+    };
+
+    if($('#prof-revert-btn')){
+      $('#prof-revert-btn').onclick=async()=>{
+        if(!confirm(`Revert ${platInfo.name} to global release profile defaults?`))return;
+        delete SETTINGS.platform_profiles[currentPlat];
+        const patch={platform_profiles:SETTINGS.platform_profiles};
+        SETTINGS=await j('/api/v1/config',{
+          method:'PUT',
+          headers:{'content-type':'application/json'},
+          body:JSON.stringify(patch)
+        });
+        toast(`Reverted ${platInfo.name} to global defaults`);
+        renderProfileForm();
+      };
+    }
+
+    $('#prof-save-btn').onclick=async()=>{
+      const minSz=Number($('#prof-min-size').value)||0;
+      const maxSz=Number($('#prof-max-size').value)||0;
+      const seeders=Number($('#prof-min-seeders').value)||1;
+      const sPref=$('#prof-size-pref').value;
+      const sWeight=Number($('#prof-size-weight').value)||0;
+      const regList=$('#prof-regions').value.split(',').map(s=>s.trim()).filter(Boolean);
+
+      const regScores={};
+      ($('#prof-region-scores').value||'').split('\n').forEach(line=>{
+        const [r,sc]=line.split('=').map(s=>(s||'').trim());
+        if(r&&sc&&!isNaN(Number(sc))){
+          regScores[r.toLowerCase()]=Number(sc);
+        }
+      });
+
+      const prefTerms=[];
+      ($('#prof-preferred-terms').value||'').split('\n').forEach(line=>{
+        const [t,sc]=line.split('=').map(s=>(s||'').trim());
+        if(t){
+          prefTerms.push({term:t,score:!isNaN(Number(sc))?Number(sc):25});
+        }
+      });
+
+      const exclTerms=$('#prof-excluded-terms').value.split(',').map(s=>s.trim()).filter(Boolean);
+      const reqTerms=$('#prof-required-terms').value.split(',').map(s=>s.trim()).filter(Boolean);
+      const beta=$('#prof-allow-beta').checked;
+      const hacks=$('#prof-allow-hacks').checked;
+
+      const patch={};
+      if(isGlobal){
+        patch.min_size_mb=minSz;
+        patch.max_size_mb=maxSz;
+        patch.min_seeders=seeders;
+        patch.size_preference=sPref;
+        patch.size_weight=sWeight;
+        patch.preferred_regions=regList;
+        patch.region_scores=regScores;
+        patch.preferred_terms=prefTerms;
+        patch.excluded_terms=exclTerms;
+        patch.required_terms=reqTerms;
+        patch.allow_beta=beta;
+        patch.allow_rom_hacks=hacks;
+      } else {
+        SETTINGS.platform_profiles=SETTINGS.platform_profiles||{};
+        SETTINGS.platform_profiles[currentPlat]={
+          min_size_mb:minSz,
+          max_size_mb:maxSz,
+          min_seeders:seeders,
+          size_preference:sPref,
+          size_weight:sWeight,
+          preferred_regions:regList,
+          region_scores:regScores,
+          preferred_terms:prefTerms,
+          excluded_terms:exclTerms,
+          required_terms:reqTerms,
+          allow_beta:beta,
+          allow_rom_hacks:hacks,
+        };
+        patch.platform_profiles=SETTINGS.platform_profiles;
+      }
+
+      SETTINGS=await j('/api/v1/config',{
+        method:'PUT',
+        headers:{'content-type':'application/json'},
+        body:JSON.stringify(patch)
+      });
+      toast(`Saved ${isGlobal?'global':platInfo.name} release profile`);
+      renderProfileForm();
+    };
+  };
+
+  renderProfileForm();
+};
 
 RENDER.clients=async()=>{
   const d=await j('/api/v1/downloadclient');
