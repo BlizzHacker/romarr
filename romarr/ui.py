@@ -340,6 +340,32 @@ input[type=search],select,textarea{
 input:focus,select:focus,textarea:focus{border-color:var(--accent-line);
   box-shadow:var(--ring)}
 .field{margin-bottom:14px;max-width:420px}
+.rp-selector{position:relative;display:inline-block;width:100%}
+.rp-selector input.rp-input{box-sizing:border-box;width:100%;min-height:38px;
+  padding:9px 34px 9px 36px;border:1px solid var(--line);border-radius:var(--r-sm);
+  background:var(--bg);color:var(--fg);font:inherit;font-size:13px;outline:none;
+  cursor:pointer;transition:border-color var(--t),box-shadow var(--t)}
+.rp-selector input.rp-input:focus{border-color:var(--accent-line);box-shadow:var(--ring);cursor:text}
+.rp-selector input.rp-input::placeholder{color:var(--dim);opacity:1}
+.rp-selector .rp-search-icon{position:absolute;left:11px;top:50%;width:16px;height:16px;
+  transform:translateY(-50%);color:var(--dim);pointer-events:none}
+.rp-selector .rp-arrow-icon{position:absolute;right:11px;top:50%;width:14px;height:14px;
+  transform:translateY(-50%);color:var(--dim);pointer-events:none;transition:transform .15s ease}
+.rp-selector.open .rp-arrow-icon{transform:translateY(-50%) rotate(180deg)}
+.rp-dropdown{position:absolute;top:calc(100% + 4px);left:0;right:0;min-width:200px;
+  background:var(--surface);border:1px solid var(--line);border-radius:var(--r-sm);
+  box-shadow:var(--shadow-2);max-height:240px;overflow-y:auto;z-index:1000;display:none}
+.rp-selector.open .rp-dropdown{display:block}
+.rp-opt{padding:7px 12px;font-size:13px;color:var(--fg);cursor:pointer;
+  display:flex;align-items:center;justify-content:space-between;user-select:none}
+.rp-opt:hover,.rp-opt.focused{background:var(--surface-2);color:var(--fg)}
+.rp-opt.selected{font-weight:600;color:var(--accent-text)}
+.rp-opt.disabled{color:var(--dim);cursor:default}
+.rp-divider{height:1px;background:var(--line);margin:4px 0}
+.rp-no-match{padding:9px 12px;font-size:12px;color:var(--dim);text-align:center}
+table .rp-selector input.rp-input{min-height:30px;padding:5px 28px 5px 28px;font-size:11.5px}
+table .rp-selector .rp-search-icon{left:8px;width:13px;height:13px}
+table .rp-selector .rp-arrow-icon{right:8px;width:12px;height:12px}
 .check{display:flex;align-items:center;gap:9px;margin-bottom:11px;
   color:var(--fg);font-size:13px;cursor:pointer}
 .check input{width:16px;height:16px;accent-color:var(--accent);flex:none}
@@ -705,6 +731,151 @@ const fmtDateTime=(s,sec=false,utc=false)=>{
   return sec?`${base}:${_pad2(d.getSeconds())}`:base;
 };
 let PLATFORMS=[], SETTINGS={};
+const platformsAZ=()=>[...PLATFORMS].sort((a,b)=>
+  a.name.localeCompare(b.name,undefined,{sensitivity:'base',numeric:true}));
+
+function enhancePlatformSelect(sel,placeholderText){
+  if(!sel||sel._rpSelector) return;
+  const wrap=document.createElement('div');
+  wrap.className='rp-selector';
+  const searchSvg='<svg class="rp-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>';
+  const arrowSvg='<svg class="rp-arrow-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>';
+  const input=document.createElement('input');
+  input.type='text';
+  input.className='rp-input';
+  input.autocomplete='off';
+  input.spellcheck=false;
+  if(placeholderText) input.placeholder=placeholderText;
+  const drop=document.createElement('div');
+  drop.className='rp-dropdown';
+  drop.tabIndex=-1;
+  wrap.innerHTML=searchSvg+arrowSvg;
+  wrap.insertBefore(input,wrap.querySelector('.rp-arrow-icon'));
+  wrap.appendChild(drop);
+  sel.style.display='none';
+  sel.parentNode.insertBefore(wrap,sel.nextSibling);
+  sel._rpSelector=wrap;
+
+  let isOpen=false, highlightedIndex=-1, visibleOptions=[];
+
+  function getSelectedOption(){
+    return sel.options[sel.selectedIndex]||sel.options[0]||null;
+  }
+  function updateInputDisplay(){
+    const opt=getSelectedOption();
+    if(!opt||(opt.disabled&&opt.value==='')){
+      input.value='';
+      if(opt&&opt.text) input.placeholder=opt.text;
+    }else{
+      input.value=opt.text;
+    }
+    input.disabled=!!sel.disabled;
+  }
+  function render(query=''){
+    drop.innerHTML='';
+    highlightedIndex=-1;
+    visibleOptions=[];
+    const q=query.trim().toLowerCase();
+    const special=[], regular=[];
+    for(let i=0;i<sel.options.length;i++){
+      const o=sel.options[i];
+      if(o.value===''||o.disabled) special.push(o);
+      else regular.push(o);
+    }
+    const matchesSpecial=special.filter(o=>!q||o.text.toLowerCase().includes(q));
+    const matchesRegular=regular.filter(o=>!q||o.text.toLowerCase().includes(q));
+    if(!matchesSpecial.length&&!matchesRegular.length){
+      const noMatch=document.createElement('div');
+      noMatch.className='rp-no-match';
+      noMatch.textContent='No platforms match';
+      drop.appendChild(noMatch);
+      return;
+    }
+    function addOpt(o){
+      const div=document.createElement('div');
+      div.className='rp-opt'+(o.selected?' selected':'')+(o.disabled?' disabled':'');
+      div.textContent=o.text;
+      div.dataset.value=o.value;
+      if(!o.disabled){
+        div.onmousedown=e=>{ e.preventDefault(); selectVal(o.value); };
+        visibleOptions.push({el:div,opt:o});
+      }
+      drop.appendChild(div);
+    }
+    matchesSpecial.forEach(addOpt);
+    if(matchesSpecial.length&&matchesRegular.length){
+      const divider=document.createElement('div');
+      divider.className='rp-divider';
+      drop.appendChild(divider);
+    }
+    matchesRegular.forEach(addOpt);
+  }
+  function selectVal(val){
+    if(sel.value!==val){
+      sel.value=val;
+      sel.dispatchEvent(new Event('change',{bubbles:true}));
+    }
+    updateInputDisplay();
+    close();
+  }
+  function open(){
+    if(sel.disabled) return;
+    isOpen=true;
+    wrap.classList.add('open');
+    render('');
+    input.select();
+  }
+  function close(){
+    if(!isOpen) return;
+    isOpen=false;
+    wrap.classList.remove('open');
+    updateInputDisplay();
+  }
+  input.onclick=()=>{ if(isOpen) close(); else open(); };
+  input.oninput=()=>{
+    if(!isOpen){ isOpen=true; wrap.classList.add('open'); }
+    render(input.value);
+  };
+  input.onkeydown=e=>{
+    if(e.key==='ArrowDown'){
+      e.preventDefault();
+      if(!isOpen){ open(); return; }
+      if(!visibleOptions.length) return;
+      highlightedIndex=(highlightedIndex+1)%visibleOptions.length;
+      updateHighlight();
+    }else if(e.key==='ArrowUp'){
+      e.preventDefault();
+      if(!isOpen){ open(); return; }
+      if(!visibleOptions.length) return;
+      highlightedIndex=(highlightedIndex-1+visibleOptions.length)%visibleOptions.length;
+      updateHighlight();
+    }else if(e.key==='Enter'){
+      e.preventDefault();
+      if(isOpen&&visibleOptions.length){
+        const target=highlightedIndex>=0?visibleOptions[highlightedIndex]:visibleOptions[0];
+        if(target) selectVal(target.opt.value);
+      }
+    }else if(e.key==='Escape'){
+      close();
+    }
+  };
+  function updateHighlight(){
+    visibleOptions.forEach((item,idx)=>{
+      item.el.classList.toggle('focused',idx===highlightedIndex);
+      if(idx===highlightedIndex) item.el.scrollIntoView({block:'nearest'});
+    });
+  }
+  document.addEventListener('pointerdown',e=>{
+    if(!wrap.contains(e.target)) close();
+  });
+  sel.addEventListener('change',updateInputDisplay);
+  if(typeof window !== 'undefined' && window.MutationObserver){
+    new MutationObserver(()=>{
+      input.disabled=!!sel.disabled;
+    }).observe(sel,{attributes:true,attributeFilter:['disabled']});
+  }
+  updateInputDisplay();
+}
 
 function toast(msg){
   const t=document.createElement('div');
@@ -1209,6 +1380,7 @@ RENDER.add=async()=>{
       <button class="btn" id="g-go" style="margin-top:20px">Search &amp; Grab</button>
     </div>
     <div id="g-out" style="margin-top:16px"></div></div>`;
+  enhancePlatformSelect($('#g-plat'));
   $('#g-go').onclick=async()=>{
     const game=$('#g-name').value.trim(), platform=$('#g-plat').value;
     if(!game){toast('Enter a game name');return;}
@@ -1237,7 +1409,7 @@ RENDER.search=async()=>{
       <div class="field" style="flex:1;margin:0"><label>Game</label>
         <input type="text" id="s-name" placeholder="Phantasy Star IV"></div>
       <div class="field" style="width:230px;margin:0"><label>Platform</label>
-        <select id="s-plat"><option value="">Any platform</option>${PLATFORMS.map(p=>
+        <select id="s-plat"><option value="">All platforms</option>${PLATFORMS.map(p=>
           `<option value="${esc(p.slug)}">${esc(p.name)}</option>`).join('')}</select></div>
       <button class="btn" id="s-go" style="margin-top:20px">Search</button>
     </div>
@@ -1245,6 +1417,7 @@ RENDER.search=async()=>{
       platform evidence to score on, so the ranking means less. Pick one when
       you can.</p>
     <div id="s-out" style="margin-top:16px"></div></div>`;
+  enhancePlatformSelect($('#s-plat'));
 
   const mb=n=>n>=1048576?(n/1048576).toFixed(1)+' MB'
     :n>0?(n/1024).toFixed(0)+' KB':'—';
@@ -1593,6 +1766,7 @@ function editList(item){
       <button class="btn" id="l-save">Save</button>
     </div></div>`;
   document.body.append(m);
+  enhancePlatformSelect(m.querySelector('[data-f="platform"]'));
   m.onclick=e=>{ if(e.target===m||e.target.dataset.close!==undefined) closeModal(); };
   m.querySelector('[data-f=type]').onchange=e=>{
     const kind=['url','steam','gog','xbox','psn','itchio'].includes(e.target.value)
@@ -2095,7 +2269,7 @@ async function friendShelf(peerId, opts){
       <input type="text" id="fs-q" placeholder="Search their library"
         value="${esc(FSHELF.q)}" style="flex:1;min-width:200px">
       <select id="fs-plat"><option value="">All platforms</option>
-        ${(r.platforms||[]).map(pl=>`<option value="${esc(pl)}"${
+        ${(r.platforms||[]).slice().sort((a,b)=>a.localeCompare(b,undefined,{sensitivity:'base',numeric:true})).map(pl=>`<option value="${esc(pl)}"${
           pl===FSHELF.platform?' selected':''}>${esc(pl)}</option>`).join('')}
       </select>
       <button class="btn ghost" id="fs-refresh">Refresh from them</button>
@@ -2122,6 +2296,7 @@ async function friendShelf(peerId, opts){
       :'<div class="empty">Nothing matches. They may not share this platform.</div>'}
     <div id="fs-out"></div></div>`;
 
+  enhancePlatformSelect($('#fs-plat'));
   const reload=o=>friendShelf(FSHELF.peer,o);
   $('#fs-q').onchange=e=>reload({q:e.target.value,offset:0});
   $('#fs-plat').onchange=e=>reload({platform:e.target.value,offset:0});
@@ -2556,7 +2731,7 @@ RENDER.stats=async()=>{
         against an exact, single-file DAT entry. Review the old and new path,
         select what you want, then confirm. Disc sets and ambiguous matches stay put.
         In flat layouts, files in a subfolder move to the platform folder; empty folders are left alone. Nested layouts are left untouched with an explanation.</p>
-      <div class="row"><select id="rn-plat">${PLATFORMS.map(p=>
+      <div class="row"><select id="rn-plat"><option value="" disabled selected hidden>Select a platform</option>${PLATFORMS.map(p=>
         '<option value="'+esc(p.slug)+'">'+esc(p.name)+'</option>').join('')}</select>
         <input id="rn-scope" placeholder="Optional subfolder (leave blank for all)" aria-label="Optional folder inside the platform">
         <button class="btn" id="rn-preview">Preview safe renames</button></div>
@@ -2572,6 +2747,8 @@ RENDER.stats=async()=>{
         <option value="shelved,playing">From both</option></select>
         <button class="btn" id="rl-go">Pick my next game</button></div>
       <div id="rl-out" style="margin-top:8px"></div></div>`;
+  enhancePlatformSelect($('#au-plat'));
+  enhancePlatformSelect($('#rn-plat'), 'Select a platform');
   const rl=document.getElementById('rl-go');
   if(rl)rl.onclick=async()=>{
     const out=document.getElementById('rl-out');
@@ -2743,6 +2920,7 @@ RENDER.stats=async()=>{
   };
   j('/api/v1/audit/renames').then(paintRenameState).catch(()=>{});
   const startRenamePreview=async(offset=0,platform=$('#rn-plat').value,scope=$('#rn-scope').value)=>{
+    if(!platform){ toast('Select a platform'); return; }
     clearInterval(rnTimer);
     const started=await j('/api/v1/audit/renames/preview',{method:'POST',
       headers:{'Content-Type':'application/json'},
@@ -4675,6 +4853,7 @@ RENDER.collections=async()=>{
     };
   };
 
+  enhancePlatformSelect($('#cplat'));
   const planBtn=$('#cplan');
   if(!planBtn) return;
   planBtn.onclick=async()=>{
@@ -4840,6 +5019,7 @@ RENDER.manualimport=async()=>{
         :'<div class="empty-cat"><b>Nothing importable there</b>'
          +'Check the path, or that the files carry extensions ROMarr knows.</div>');
 
+    out.querySelectorAll('.mi-pf').forEach(el=>enhancePlatformSelect(el));
     out.querySelectorAll('tbody tr').forEach(row=>{
       const btn=row.querySelector('.mi-go');
       if(btn) btn.onclick=()=>adopt(row,false);
@@ -5081,6 +5261,7 @@ async function refreshCounts(){
   [PLATFORMS,SETTINGS,setupState]=await Promise.all([
     j('/api/platforms').catch(()=>[]), j('/api/v1/config').catch(()=>({})),
     j('/api/v1/setup/status').catch(()=>({}))]);
+  PLATFORMS.sort((a,b)=>a.name.localeCompare(b.name,undefined,{sensitivity:'base',numeric:true}));
   go(location.hash.slice(1)||(setupState.suggested?'setup':'library'));
   refreshCounts(); setInterval(refreshCounts,15000);
 })();

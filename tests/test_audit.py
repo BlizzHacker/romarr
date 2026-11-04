@@ -70,6 +70,52 @@ def test_the_audit_finds_verified_bad_and_duplicate_files(tmp_path):
     assert "Good Game" in state["duplicates"][0]["file"]
 
 
+def test_unrelated_files_are_excluded_from_library_audit(tmp_path):
+    import hashlib
+    import zlib
+
+    good = b"GOODGAME"
+    dat_xml = f"""<?xml version="1.0"?>
+<datafile><header><name>t</name></header>
+  <game name="Good Game (USA)">
+    <rom name="Good Game (USA).smc" size="{len(good)}"
+         crc="{zlib.crc32(good) & 0xFFFFFFFF:08x}"
+         md5="{hashlib.md5(good).hexdigest()}"
+         sha1="{hashlib.sha1(good).hexdigest()}"/>
+  </game>
+</datafile>"""
+    svc = _svc(tmp_path)
+    from romarr.dat import DatIndex
+    index = DatIndex()
+    index.add(parse_dat(dat_xml))
+    svc.dats = index
+
+    shelf = tmp_path / "lib" / "snes"
+    shelf.mkdir(parents=True)
+    (shelf / "Good Game (USA).smc").write_bytes(good)
+
+    # An unrelated file with exact same size as the good ROM.
+    # Without extension filtering, this would be hashed and flagged as BAD_DUMP (#120)!
+    (shelf / "game_notes.txt").write_bytes(b"NOTE1234")
+    (shelf / "cover.jpg").write_bytes(b"JPEGDATA")
+    (shelf / "info.nfo").write_bytes(b"NFODATA0")
+
+    try:
+        (shelf / "symlink_to_good.smc").symlink_to(shelf / "Good Game (USA).smc")
+    except (OSError, NotImplementedError):
+        pass
+
+    out = svc.audit_library("snes")
+    assert "error" not in out
+    state = _wait_done(svc)
+    assert state["scanned"] == 1
+    assert state["verified"] == 1
+    assert state["bad"] == 0
+    assert state["unknown"] == 0
+    assert len(state["duplicates"]) == 0
+    assert len(state["bad_files"]) == 0
+
+
 def test_the_audit_refuses_to_run_blind(tmp_path):
     svc = _svc(tmp_path)
     svc.dats = None
@@ -123,9 +169,9 @@ def test_audit_preview_keeps_all_duplicates_beyond_the_old_display_cap(
     shelf = tmp_path / "lib" / "snes"
     shelf.mkdir(parents=True)
     body = b"same bytes"
-    (shelf / "keeper.bin").write_bytes(body)
+    (shelf / "keeper.smc").write_bytes(body)
     for n in range(205):
-        (shelf / f"copy-{n}.bin").write_bytes(body)
+        (shelf / f"copy-{n}.smc").write_bytes(body)
 
     svc.audit_library("snes")
     state = _wait_done(svc)

@@ -130,3 +130,18 @@ def test_the_inline_scripts_pass_node_syntax_check():
                                 capture_output=True, text=True, timeout=60)
         assert result.returncode == 0, \
             f"script block {n} fails to parse:\n{result.stderr[:1500]}"
+
+
+def test_searchable_platform_dropdowns_and_all_platforms_filter():
+    """Issue #121: Searchable alphabetical platform dropdowns and consistent filter label."""
+    html = page()
+    # Searchable selector CSS and JS components are present
+    assert ".rp-selector" in html
+    assert ".rp-input" in html
+    assert ".rp-dropdown" in html
+    assert "enhancePlatformSelect" in html
+    assert "platformsAZ" in html
+    # Interactive Search uses consistent 'All platforms' label
+    assert '<select id="s-plat"><option value="">All platforms</option>' in html
+    # Fix existing filenames includes 'Select a platform' placeholder
+    assert '<select id="rn-plat"><option value="" disabled selected hidden>Select a platform</option>' in html

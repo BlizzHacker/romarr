@@ -5010,9 +5010,15 @@ class ROMarr:
             # so a re-audit after a cleanup does not leave netplay offering
             # dumps that are no longer on disk.
             self.hashes.clear_platform(platform.slug)
+            from .libraries import FolderLibrary
+            allowed_extensions = {
+                ext.lower() if ext.startswith(".") else f".{ext.lower()}"
+                for ext in (set(platform.extensions) | set(FolderLibrary.ARCHIVES))
+            }
             try:
                 files = [p for p in sorted(root.rglob("*"))
-                         if p.is_file()][:50_000]
+                         if p.is_file() and not p.is_symlink()
+                         and p.suffix.lower() in allowed_extensions][:50_000]
             except OSError as err:
                 state.update(status="failed", error=str(err))
                 return
