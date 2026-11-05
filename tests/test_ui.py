@@ -145,3 +145,19 @@ def test_searchable_platform_dropdowns_and_all_platforms_filter():
     assert '<select id="s-plat"><option value="">All platforms</option>' in html
     # Fix existing filenames includes 'Select a platform' placeholder
     assert '<select id="rn-plat"><option value="" disabled selected hidden>Select a platform</option>' in html
+
+
+def test_issue_122_platform_placeholder_defaults_and_dropdown_display():
+    """Issue #122: Platform placeholder defaults, validation, and dropdown filtering."""
+    html = page()
+    # 1. Placeholders are present on Add New, Library Audit, and Fix Existing Filenames
+    assert '<select id="g-plat"><option value="" disabled selected hidden>Select a platform</option>' in html
+    assert '<select id="au-plat"><option value="" disabled selected hidden>Select a platform</option>' in html
+    assert '<select id="rn-plat"><option value="" disabled selected hidden>Select a platform</option>' in html
+
+    # 2. Handlers validate platform selection
+    assert "if(!platform){toast('Select a platform');return;}" in html
+    assert "const platform=$('#au-plat').value;" in html
+
+    # 3. enhancePlatformSelect excludes disabled empty-value placeholders from dropdown list & search
+    assert "if(o.disabled && o.value==='') continue;" in html

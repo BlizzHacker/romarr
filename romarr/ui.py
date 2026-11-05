@@ -779,6 +779,8 @@ function enhancePlatformSelect(sel,placeholderText){
     const special=[], regular=[];
     for(let i=0;i<sel.options.length;i++){
       const o=sel.options[i];
+      // Keep display-only placeholders out of dropdown results.
+      if(o.disabled && o.value==='') continue;
       if(o.value===''||o.disabled) special.push(o);
       else regular.push(o);
     }
@@ -1375,15 +1377,16 @@ RENDER.add=async()=>{
       <div class="field" style="flex:1;margin:0"><label>Game</label>
         <input type="text" id="g-name" placeholder="Super Mario World"></div>
       <div class="field" style="width:230px;margin:0"><label>Platform</label>
-        <select id="g-plat">${PLATFORMS.map(p=>
+        <select id="g-plat"><option value="" disabled selected hidden>Select a platform</option>${PLATFORMS.map(p=>
           `<option value="${esc(p.slug)}">${esc(p.name)}</option>`).join('')}</select></div>
       <button class="btn" id="g-go" style="margin-top:20px">Search &amp; Grab</button>
     </div>
     <div id="g-out" style="margin-top:16px"></div></div>`;
-  enhancePlatformSelect($('#g-plat'));
+  enhancePlatformSelect($('#g-plat'), 'Select a platform');
   $('#g-go').onclick=async()=>{
     const game=$('#g-name').value.trim(), platform=$('#g-plat').value;
     if(!game){toast('Enter a game name');return;}
+    if(!platform){toast('Select a platform');return;}
     $('#g-out').innerHTML='<div class="empty">Searching indexers…</div>';
     const r=await j('/api/request',{method:'POST',
       headers:{'content-type':'application/json'},
@@ -2724,7 +2727,7 @@ RENDER.stats=async()=>{
         (bit rot or tampering) — and byte-identical duplicates found by
         hash. One platform per run; it works in the background.</p>
       <div class="row">
-        <select id="au-plat">${PLATFORMS.map(p=>
+        <select id="au-plat"><option value="" disabled selected hidden>Select a platform</option>${PLATFORMS.map(p=>
           `<option value="${esc(p.slug)}">${esc(p.name)}</option>`).join('')}</select>
         <button class="btn" id="au-go">Audit</button></div>
       <div id="au-out" style="margin-top:10px"></div>
@@ -2750,7 +2753,7 @@ RENDER.stats=async()=>{
         <option value="shelved,playing">From both</option></select>
         <button class="btn" id="rl-go">Pick my next game</button></div>
       <div id="rl-out" style="margin-top:8px"></div></div>`;
-  enhancePlatformSelect($('#au-plat'));
+  enhancePlatformSelect($('#au-plat'), 'Select a platform');
   enhancePlatformSelect($('#rn-plat'), 'Select a platform');
   const rl=document.getElementById('rl-go');
   if(rl)rl.onclick=async()=>{
@@ -2839,10 +2842,12 @@ RENDER.stats=async()=>{
   j('/api/v1/audit').then(paintAudit).catch(()=>{});
   let auditTimer=null;
   $('#au-go').onclick=async()=>{
+    const platform=$('#au-plat').value;
+    if(!platform){toast('Select a platform');return;}
     selectedDuplicateFiles.clear(); auditDuplicateOffset=0;
     const a=await j('/api/v1/audit',{method:'POST',
       headers:{'content-type':'application/json'},
-      body:JSON.stringify({platform:$('#au-plat').value})});
+      body:JSON.stringify({platform})});
     if(a.error){toast(a.error);return;}
     paintAudit(a);
     clearInterval(auditTimer);
