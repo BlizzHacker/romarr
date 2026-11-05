@@ -5622,8 +5622,19 @@ class ROMarr:
         if origin not in allowed:
             return 403, "application/json", \
                 b'{"error":"not a configured library origin"}'
+        session = getattr(self, "_asset_session", None)
+        if session is None:
+            session = _requests.Session()
+            adapter = _requests.adapters.HTTPAdapter(
+                pool_connections=64,
+                pool_maxsize=64,
+                max_retries=3,
+            )
+            session.mount("http://", adapter)
+            session.mount("https://", adapter)
+            self._asset_session = session
         try:
-            response = _requests.get(wanted, timeout=20, stream=True)
+            response = session.get(wanted, timeout=20, stream=True)
         except _requests.RequestException as err:
             log.warning("asset proxy fetch failed for %s: %s", origin, err)
             return 502, "application/json", b'{"error":"library unreachable"}'
@@ -5790,12 +5801,19 @@ class ROMarr:
         session = sessions.get(origin)
         if session is None:
             session = _requests.Session()
+            adapter = _requests.adapters.HTTPAdapter(
+                pool_connections=64,
+                pool_maxsize=64,
+                max_retries=3,
+            )
+            session.mount("http://", adapter)
+            session.mount("https://", adapter)
             sessions[origin] = session
 
+        auth = None
         if creds.get("username") and creds.get("password"):
-            session.auth = (creds["username"], creds["password"])
-        else:
-            session.auth = None
+            auth = (creds["username"], creds["password"])
+        session.auth = auth
 
         headers: dict[str, str] = {}
         if content_type:
@@ -5804,7 +5822,7 @@ class ROMarr:
             headers["Accept"] = accept
         if range_header:
             headers["Range"] = range_header
-        if creds.get("api_key") and not session.auth:
+        if creds.get("api_key") and not auth:
             headers["X-Api-Key"] = creds["api_key"]
             headers["Authorization"] = f"Bearer {creds['api_key']}"
         csrf = session.cookies.get("romm_csrftoken")
@@ -5818,6 +5836,7 @@ class ROMarr:
                 upstream_url,
                 data=body if method.upper() in ("POST", "PUT", "PATCH", "DELETE") else None,
                 headers=headers,
+                auth=auth,
                 timeout=30,
                 allow_redirects=True,
                 stream=True,
@@ -6356,11 +6375,15 @@ def integration_view(row: SeerrRequest) -> dict:
 
 def is_portal_asset(path: str) -> bool:
     """Whether `path` is a static asset or manifest requested by the embedded portal shell."""
-    if path.startswith(("/assets/", "/_next/", "/static/")):
+    if path.startswith(("/assets/", "/_next/", "/static/", "/emulatorjs/")):
         return True
-    if path in ("/site.webmanifest", "/manifest.webmanifest",
+    if path in ("/site.webmanifest", "/manifest.webmanifest", "/manifest.json",
                 "/apple-touch-icon.png", "/safari-pinned-tab.svg",
-                "/favicon-32x32.png", "/favicon-16x16.png"):
+                "/favicon-32x32.png", "/favicon-16x16.png",
+                "/android-chrome-192x192.png", "/android-chrome-512x512.png",
+                "/sw.js"):
+        return True
+    if path.startswith("/workbox-"):
         return True
     return False
 
@@ -6379,9 +6402,11 @@ def is_portal_subpath(path: str) -> bool:
                         "/api/recommendations", "/api/music", "/api/sync",
                         "/api/feeds", "/api/logs", "/api/export",
                         "/api/netplay", "/api/permissions", "/api/memory_cards",
-                        "/api/streaming", "/api/login", "/api/logout")):
+                        "/api/streaming", "/api/login", "/api/logout",
+                        "/ws/", "/socket.io/", "/netplay")):
         return True
-    if path.startswith(("/rom/", "/platform/")) or path in ("/collections", "/stats", "/activity"):
+    if (path.startswith(("/rom/", "/platform/", "/console/"))
+            or path in ("/collections", "/stats", "/activity")):
         return True
     return False
 
@@ -6662,24 +6687,29 @@ def make_handler(service: ROMarr):
             # address: login is the one endpoint where guessing is the attack,
             # so it has to be limited for callers who have not authenticated
             # -- which is all of them, at that point.
-            category = RateLimiter.category_for(path)
-            allowed, retry = service.limiter.check(
-                category, self.client_address[0])
-            if not allowed:
-                # Drain first, for the same reason the 401 does: a POST has
-                # already sent its body, and replying without reading it
-                # aborts the connection so the caller never sees the 429 --
-                # which is precisely the caller who most needs to be told to
-                # slow down, and who will otherwise retry immediately.
-                self._drain()
-                self.send_response(429)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Retry-After", str(retry))
-                body = json.dumps({"error": "rate limited",
-                                   "retry_after": retry}).encode()
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                return self.wfile.write(body)
+            # Static portal assets, image relays, and library portal traffic are
+            # exempt so cover grids and emulator cores never trip HTTP 429.
+            if not (is_portal_asset(path)
+                    or path.startswith(("/api/v1/asset", "/api/v1/portal/proxy"))
+                    or is_portal_subpath(path)):
+                category = RateLimiter.category_for(path)
+                allowed, retry = service.limiter.check(
+                    category, self.client_address[0])
+                if not allowed:
+                    # Drain first, for the same reason the 401 does: a POST has
+                    # already sent its body, and replying without reading it
+                    # aborts the connection so the caller never sees the 429 --
+                    # which is precisely the caller who most needs to be told to
+                    # slow down, and who will otherwise retry immediately.
+                    self._drain()
+                    self.send_response(429)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Retry-After", str(retry))
+                    body = json.dumps({"error": "rate limited",
+                                       "retry_after": retry}).encode()
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    return self.wfile.write(body)
             if (path in self.OPEN_PATHS
                     or path in ("/favicon.ico", "/favicon.svg")
                     or is_portal_asset(path)
@@ -7327,10 +7357,11 @@ def make_handler(service: ROMarr):
             self.send_response(code)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(raw)))
-            for hdr in ("Content-Range", "Accept-Ranges", "ETag", "Last-Modified"):
+            for hdr in ("Content-Range", "Accept-Ranges", "ETag", "Last-Modified",
+                        "Content-Disposition", "Access-Control-Allow-Origin"):
                 if hdr in resp_headers:
                     self.send_header(hdr, resp_headers[hdr])
-            if code == 200 and sub_path.startswith("/assets/"):
+            if code == 200 and (sub_path.startswith("/assets/") or "/loader.js" in sub_path):
                 self.send_header("Cache-Control", "private, max-age=3600")
             self.end_headers()
             return self.wfile.write(raw)
@@ -8262,6 +8293,7 @@ def serve(port: int = 6868, env: dict[str, str] | None = None):
 
     bind_env = env if env is not None else os.environ
     host = str(bind_env.get("ROMARR_HOST") or "0.0.0.0")
+    ThreadingHTTPServer.request_queue_size = 256
     httpd = ThreadingHTTPServer((host, port), make_handler(service))
 
     # Native HTTPS, for installs with no reverse proxy in front. Both

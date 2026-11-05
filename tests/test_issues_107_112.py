@@ -440,11 +440,25 @@ def test_portal_proxy_same_origin_shield_and_ssrf_guard(tmp_path, monkeypatch):
     # Portal subpath verification for RomM routes & assets
     from romarr.app import is_portal_subpath, is_portal_asset
     assert is_portal_asset("/assets/index-BAzTkAR7.js")
+    assert is_portal_asset("/assets/emulatorjs/data/loader.js")
+    assert is_portal_asset("/emulatorjs/data/loader.js")
+    assert is_portal_asset("/manifest.json")
+    assert is_portal_asset("/sw.js")
     assert not is_portal_asset("/api/platforms")
     assert is_portal_subpath("/assets/index-BAzTkAR7.js")
     assert is_portal_subpath("/api/users/me")
     assert is_portal_subpath("/api/platforms/")
     assert is_portal_subpath("/rom/42")
     assert is_portal_subpath("/platform/snes")
+    assert is_portal_subpath("/console/rom/42/play")
+    assert is_portal_subpath("/ws/socket.io/")
+    assert is_portal_subpath("/socket.io/")
     assert not is_portal_subpath("/api/v1/system/status")
+
+    # Rate limiter bypass verification for high-volume asset loads
+    from romarr.ops import RateLimiter
+    assert RateLimiter.category_for("/assets/Player-Bdr16Kn4.js") == "assets"
+    assert RateLimiter.category_for("/api/v1/asset") == "assets"
+    assert RateLimiter.category_for("/api/v1/portal/proxy") == "assets"
+    assert RateLimiter.category_for("/api/v1/system/status") == "general"
 

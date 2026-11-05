@@ -160,6 +160,7 @@ DEFAULT_LIMITS = {
     "search": (30, 60),
     "download": (60, 60),
     "general": (300, 60),
+    "assets": (10000, 60),
 }
 
 
@@ -194,6 +195,8 @@ class RateLimiter:
         path = str(path or "")
         if "/login" in path:
             return "login"
+        if "/assets/" in path or "/api/v1/asset" in path or "/api/v1/portal/proxy" in path:
+            return "assets"
         if "/search" in path or "/release" in path or "/candidates" in path:
             return "search"
         if "/grab" in path or "/download" in path or "/queue" in path:
