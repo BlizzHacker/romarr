@@ -2409,6 +2409,9 @@ RENDER.portal=async()=>{
   if(sys&&sys.ggrequestz&&sys.ggrequestz.url&&!servers.some(s=>s.url===sys.ggrequestz.url)){
     servers.push({name:'GG Requestz',type:'ggrequestz',url:sys.ggrequestz.url,path:sys.library_path||'/mnt/roms'});
   }
+  if(location.hostname.includes('moveweight.com')&&!servers.some(s=>s.url==='https://romm.moveweight.com')){
+    servers.push({name:'RomM (Public)',type:'romm',url:'https://romm.moveweight.com',path:sys.library_path||'/mnt/roms'});
+  }
   let tab='shell';
   let currentUrl=window._portalTargetUrl||(servers[0]&&servers[0].url)||'';
   let currentName=window._portalTargetName||(servers[0]&&servers[0].name)||'Library Server';
@@ -2445,7 +2448,7 @@ RENDER.portal=async()=>{
           <button class="btn ghost" id="portal-1g1r">Igir 1G1R Sort</button>
           <button class="btn ghost" id="portal-hashes">Seed Netplay Hashes</button>
           <button class="btn ${useProxy?'':'ghost'}" id="portal-shield" title="Toggle Same-Origin Authenticated Proxy Shield">${useProxy?'Shield: Same-Origin Proxy (ON)':'Framing / CSP Shield (Direct)'}</button>
-          ${currentUrl?`<a class="btn ghost" href="${esc(currentUrl)}" target="_blank" rel="noopener noreferrer">Pop Out</a>`:''}
+          ${currentUrl?`<a class="btn ghost" href="${esc(currentUrl.includes('192.168.0.94') && location.hostname.includes('moveweight.com') ? 'https://romm.moveweight.com' : currentUrl)}" target="_blank" rel="noopener noreferrer">Pop Out</a>`:''}
         </div>
         <div id="portal-status"></div>
         ${showShieldHelp?`<div class="panel-note" style="margin-bottom:12px">

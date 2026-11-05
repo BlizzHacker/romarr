@@ -371,6 +371,16 @@ def _titles_are_same(title_a: str, title_b: str) -> bool:
 
 
 
+class ProxyResponse(tuple):
+    """3-tuple subclass holding response headers so callers can unpack as (code, ctype, raw) or inspect .headers."""
+    headers: dict[str, str]
+
+    def __new__(cls, code: int, ctype: str, raw: bytes, headers: dict | None = None):
+        instance = super().__new__(cls, (code, ctype, raw))
+        instance.headers = headers or {}
+        return instance
+
+
 class ROMarr:
     """The service. Holds config, clients, and the in-flight queue."""
 
@@ -5627,6 +5637,7 @@ class ROMarr:
             ctype = response.headers.get("Content-Type") or "image/png"
             return 200, ctype.split(";")[0].strip(), body
 
+
     def _portal_targets(self) -> dict[str, dict]:
         """Allowed library and request-frontend origins mapped to stored credentials."""
         from urllib.parse import urlsplit
@@ -5669,10 +5680,13 @@ class ROMarr:
             getattr(self, "ggrequestz_url", ""),
             self.store.settings.get("_romm_url", ""),
             self._env.get("ROMM_URL", ""),
+            self._env.get("ROMM_PUBLIC_URL", ""),
             self._env.get("GGREQUESTZ_URL", ""),
         ):
             if extra:
                 register(str(extra))
+        if "moveweight.com" in str(self._env.get("GGREQUESTZ_URL", "")) or "moveweight.com" in str(self._env.get("ROMM_URL", "")):
+            register("https://romm.moveweight.com")
         return targets
 
     def active_portal_url(self) -> str:
@@ -5694,6 +5708,8 @@ class ROMarr:
             text = html_bytes.decode("utf-8", errors="replace")
         except Exception:
             return html_bytes
+        import re
+        text = re.sub(r'\s+crossorigin(?:="[^"]*")?', '', text)
         safe_origin = json.dumps(origin)
         safe_path = json.dumps(initial_path if initial_path.startswith("/") else "/" + initial_path)
         shim = (
@@ -5735,7 +5751,8 @@ class ROMarr:
 
     def proxy_portal(self, url: str = "", path: str = "", *,
                      method: str = "GET", body: bytes | None = None,
-                     content_type: str = "", accept: str = "") -> tuple[int, str, bytes]:
+                     content_type: str = "", accept: str = "",
+                     range_header: str = "") -> tuple[int, str, bytes]:
         """Same-origin authenticated reverse proxy for the Supportive Library Shell.
 
         Relays HTML, API calls, and assets to a configured library server
@@ -5785,6 +5802,8 @@ class ROMarr:
             headers["Content-Type"] = content_type
         if accept:
             headers["Accept"] = accept
+        if range_header:
+            headers["Range"] = range_header
         if creds.get("api_key") and not session.auth:
             headers["X-Api-Key"] = creds["api_key"]
             headers["Authorization"] = f"Bearer {creds['api_key']}"
@@ -5807,12 +5826,14 @@ class ROMarr:
             log.warning("portal proxy fetch failed for %s: %s", upstream_url, err)
             return 502, "application/json", b'{"error":"library unreachable"}'
         with response:
-            raw = response.content[:25 * 1024 * 1024]
             ctype = response.headers.get("Content-Type") or "application/octet-stream"
             if "text/html" in ctype.lower() and method.upper() == "GET":
+                raw = response.content[:10 * 1024 * 1024]
                 raw = self._inject_portal_shim(raw, origin, sub_path)
                 ctype = "text/html; charset=utf-8"
-            return response.status_code, ctype, raw
+            else:
+                raw = response.content[:500 * 1024 * 1024]
+            return ProxyResponse(response.status_code, ctype, raw, dict(response.headers))
 
     def _auto_import_summary(self) -> str:
         done = self.import_finished(retry_failed=False)
@@ -6333,19 +6354,34 @@ def integration_view(row: SeerrRequest) -> dict:
             "assets": list(row.assets), "error": row.error}
 
 
-def is_portal_subpath(path: str) -> bool:
-    """Whether `path` is a static asset or library-API subresource requested by the embedded portal shell."""
+def is_portal_asset(path: str) -> bool:
+    """Whether `path` is a static asset or manifest requested by the embedded portal shell."""
     if path.startswith(("/assets/", "/_next/", "/static/")):
         return True
     if path in ("/site.webmanifest", "/manifest.webmanifest",
                 "/apple-touch-icon.png", "/safari-pinned-tab.svg",
                 "/favicon-32x32.png", "/favicon-16x16.png"):
         return True
+    return False
+
+
+def is_portal_subpath(path: str) -> bool:
+    """Whether `path` is a static asset or library-API subresource requested by the embedded portal shell."""
+    if is_portal_asset(path):
+        return True
     if path.startswith(("/api/config", "/api/users", "/api/heartbeat",
                         "/api/roms", "/api/collections", "/api/firmware",
                         "/api/devices", "/api/token", "/api/oauth",
                         "/api/stats", "/api/tasks", "/api/playlists",
-                        "/api/saves", "/api/states", "/api/screenshots")):
+                        "/api/saves", "/api/states", "/api/screenshots",
+                        "/api/platforms/", "/api/platform", "/api/activity",
+                        "/api/client_tokens", "/api/play_sessions",
+                        "/api/recommendations", "/api/music", "/api/sync",
+                        "/api/feeds", "/api/logs", "/api/export",
+                        "/api/netplay", "/api/permissions", "/api/memory_cards",
+                        "/api/streaming", "/api/login", "/api/logout")):
+        return True
+    if path.startswith(("/rom/", "/platform/")) or path in ("/collections", "/stats", "/activity"):
         return True
     return False
 
@@ -6646,6 +6682,7 @@ def make_handler(service: ROMarr):
                 return self.wfile.write(body)
             if (path in self.OPEN_PATHS
                     or path in ("/favicon.ico", "/favicon.svg")
+                    or is_portal_asset(path)
                     or self._authorised()):
                 return self._guard(handler)
             self._drain()
@@ -6695,6 +6732,11 @@ def make_handler(service: ROMarr):
                         .encode("utf-8"),
                         "text/html; charset=utf-8")
                 if route.path == "/login":
+                    if (self.headers.get("Sec-Fetch-Dest") == "iframe"
+                            or "portal" in self.headers.get("Referer", "")
+                            or "proxy" in self.headers.get("Referer", "")):
+                        return self._serve_portal_proxy(
+                            target="", sub_path="/", method="GET")
                     # Already signed in; nothing to log into.
                     self.send_response(303)
                     self.send_header("Location", "/")
@@ -7269,36 +7311,25 @@ def make_handler(service: ROMarr):
                     target="", sub_path=self.path, method="GET")
             return self._json(404, {"error": "not found"})
 
-        @staticmethod
-        def _is_portal_subpath(path: str) -> bool:
-            """Whether `path` is a static asset or library-API subresource requested by the embedded portal shell."""
-            if path.startswith(("/assets/", "/_next/", "/static/")):
-                return True
-            if path in ("/site.webmanifest", "/manifest.webmanifest",
-                        "/apple-touch-icon.png", "/safari-pinned-tab.svg",
-                        "/favicon-32x32.png", "/favicon-16x16.png"):
-                return True
-            if path.startswith(("/api/config", "/api/users", "/api/heartbeat",
-                                "/api/roms", "/api/collections", "/api/firmware",
-                                "/api/devices", "/api/token", "/api/oauth",
-                                "/api/stats", "/api/tasks", "/api/playlists",
-                                "/api/saves", "/api/states", "/api/screenshots")):
-                return True
-            return False
-
         def _serve_portal_proxy(self, target: str, sub_path: str,
                                 method: str = "GET", body: bytes | None = None):
-            code, ctype, raw = service.proxy_portal(
+            res = service.proxy_portal(
                 target,
                 sub_path,
                 method=method,
                 body=body,
                 content_type=self.headers.get("Content-Type", ""),
                 accept=self.headers.get("Accept", ""),
+                range_header=self.headers.get("Range", ""),
             )
+            code, ctype, raw = res[0], res[1], res[2]
+            resp_headers = getattr(res, "headers", {})
             self.send_response(code)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(raw)))
+            for hdr in ("Content-Range", "Accept-Ranges", "ETag", "Last-Modified"):
+                if hdr in resp_headers:
+                    self.send_header(hdr, resp_headers[hdr])
             if code == 200 and sub_path.startswith("/assets/"):
                 self.send_header("Cache-Control", "private, max-age=3600")
             self.end_headers()

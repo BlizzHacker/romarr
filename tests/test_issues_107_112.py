@@ -405,3 +405,46 @@ def test_portal_proxy_same_origin_shield_and_ssrf_guard(tmp_path, monkeypatch):
     assert b"/api/v1/portal/proxy" in raw
     assert seen_req["url"] == "http://192.168.0.94:8080/"
     assert seen_req["auth"] == ("moveweightuser", "secret")
+
+    # Crossorigin attribute stripping in injected HTML shim
+    html_with_crossorigin = b'<!doctype html><script type="module" crossorigin src="/assets/main.js"></script><link rel="stylesheet" crossorigin href="/assets/style.css">'
+    shimmed = service._inject_portal_shim(html_with_crossorigin, "http://192.168.0.94:8080", "/")
+    assert b"crossorigin" not in shimmed
+    assert b'src="/assets/main.js"' in shimmed
+
+    # Range request forwarding and ProxyResponse headers
+    def fake_range_request(self_sess, method, url, headers=None, **kw):
+        seen_req["headers"] = headers or {}
+        return MagicMock(
+            status_code=206,
+            headers={
+                "Content-Type": "application/octet-stream",
+                "Content-Range": "bytes 0-1023/2048",
+                "Accept-Ranges": "bytes",
+            },
+            content=b"A" * 1024,
+            __enter__=lambda s: s,
+            __exit__=lambda *a: None,
+        )
+
+    monkeypatch.setattr(requests.Session, "request", fake_range_request)
+    resp = service.proxy_portal(
+        "http://192.168.0.94:8080",
+        "/api/roms/42/content",
+        range_header="bytes=0-1023",
+    )
+    assert resp[0] == 206
+    assert seen_req["headers"].get("Range") == "bytes=0-1023"
+    assert resp.headers.get("Content-Range") == "bytes 0-1023/2048"
+
+    # Portal subpath verification for RomM routes & assets
+    from romarr.app import is_portal_subpath, is_portal_asset
+    assert is_portal_asset("/assets/index-BAzTkAR7.js")
+    assert not is_portal_asset("/api/platforms")
+    assert is_portal_subpath("/assets/index-BAzTkAR7.js")
+    assert is_portal_subpath("/api/users/me")
+    assert is_portal_subpath("/api/platforms/")
+    assert is_portal_subpath("/rom/42")
+    assert is_portal_subpath("/platform/snes")
+    assert not is_portal_subpath("/api/v1/system/status")
+
