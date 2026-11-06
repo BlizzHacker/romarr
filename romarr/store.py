@@ -907,7 +907,7 @@ class Store:
                 if any(q.state == "imported" for q in queue):
                     return "available"
                 if status in ("dispatching", "downloading") or any(
-                        q.state in ("queued", "grabbed") for q in queue):
+                        q.state in ("queued", "grabbed", "import-review") for q in queue):
                     return "active"
                 item["status"] = "cancelled"
                 item["error"] = ""

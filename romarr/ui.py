@@ -2959,7 +2959,7 @@ RENDER.queue=async()=>{
       <td><span class="pill ${esc(i.state)}">${esc(i.state)}</span>
       ${i.detail?`<div style="color:var(--dim);font-size:11.5px">${esc(i.detail)}</div>`:''}
       </td><td style="text-align:right"><div class="rowact">
-        ${i.state==='failed'?`<button data-qretry="${n}">Retry</button>`:''}
+        ${['failed','import-failed'].includes(i.state)?`<button data-qretry="${n}">Retry</button>`:''}
         ${i.state!=='imported'?`<button data-qplan="${n}">Preview import</button>`:''}
         <button data-qremove="${n}">Remove</button></div></td></tr>`).join('')}
       </tbody></table>`

@@ -1871,7 +1871,7 @@ class ROMarr:
                 return None
             if any(q.game.strip().casefold() == key[0]
                    and q.platform.strip().casefold() == key[1]
-                   and q.state in ("queued", "grabbed")
+                   and q.state in ("queued", "grabbed", "import-review")
                    for q in self.queue):
                 return None
             self._automatic_grab_reservations.add(key)
@@ -2133,6 +2133,8 @@ class ROMarr:
         from .import_intent import preview_import, choose_import
         from .library import MissingArchiveTool
         from requests import RequestException
+        import zipfile
+        import subprocess
         with self._lock:
             if not 0 <= index < len(self.queue):
                 return {"error": "no such queue item"}
@@ -2177,7 +2179,7 @@ class ROMarr:
                 item.import_preview = preview
                 self.store.save()
             return {"ok": True, "preview": preview}
-        except (OSError, ValueError, RuntimeError, TypeError, MissingArchiveTool, RequestException) as exc:
+        except (OSError, ValueError, RuntimeError, TypeError, MissingArchiveTool, RequestException, zipfile.BadZipFile, subprocess.SubprocessError) as exc:
             return {"error": str(exc)}
 
     def queue_action(self, index: int, action: str) -> dict:
@@ -4046,7 +4048,7 @@ class ROMarr:
         games = self._count_cache[0]
         split = self.library_split()
         with self._lock:
-            queued = sum(1 for i in self.queue if i.state in ("queued", "grabbed"))
+            queued = sum(1 for i in self.queue if i.state in ("queued", "grabbed", "import-review"))
         # `games` stays the sum, because that is what the badge has always
         # meant and a nav badge that changed number overnight would read as
         # data loss. The two categories ride alongside it so the badge can
@@ -6345,9 +6347,23 @@ class ROMarr:
             selected_primaries = None
             if queue_item is not None and path.exists():
                 from .import_intent import preview_import
-                preview = preview_import(path, platform, self.library_root(target_cfg),
-                                         layout=self.library_layout(target_cfg),
-                                         platform_folders=self.platform_folders(target_cfg))
+                from .library import MissingArchiveTool
+                import zipfile
+                import subprocess
+                try:
+                    preview = preview_import(path, platform, self.library_root(target_cfg),
+                                             layout=self.library_layout(target_cfg),
+                                             platform_folders=self.platform_folders(target_cfg))
+                except (OSError, ValueError, RuntimeError, MissingArchiveTool,
+                        zipfile.BadZipFile, subprocess.SubprocessError) as exc:
+                    # A bad archive belongs to this row, not to every completed
+                    # job behind it. Preserve sources and make the failure visible.
+                    queue_item.state = "import-failed"
+                    queue_item.detail = f"could not preview import: {exc}"
+                    self.store.record(Event(kind="failed", game=queue_item.game,
+                                            platform=platform.slug, detail=queue_item.detail))
+                    results.append({"name": name, "ok": False, "reason": queue_item.detail})
+                    continue
                 intent = queue_item.import_intent
                 if (preview["requires_review"] and not intent) or (intent and intent.get("token") != preview["token"]):
                     queue_item.import_preview = preview

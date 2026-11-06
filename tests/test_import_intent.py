@@ -99,3 +99,67 @@ def test_selected_member_missing_fails_without_publishing(tmp_path):
     path = archive(tmp_path, {"A.gb": b"a"})
     outcomes = import_rom(path, resolve("gb"), tmp_path / "lib", selected_primaries=["missing.gb"])
     assert not outcomes[0].ok and not (tmp_path / "lib").exists()
+
+
+def test_review_pending_reserves_automatic_grabs(tmp_path):
+    service = ROMarr({"ROMARR_DATA": str(tmp_path / "state.json")})
+    service.queue.append(QueueItem("A", "gb", "bundle", 1, "import-review"))
+    assert service._reserve_automatic_grab("A", "gb") is None
+
+
+def test_bad_archive_does_not_abort_next_completed_import(tmp_path, monkeypatch):
+    bad = tmp_path / "bad.zip"
+    bad.write_bytes(b"broken archive")
+    good = tmp_path / "Good.gb"
+    good.write_bytes(b"x" * 32768)
+    service = ROMarr({"ROMARR_DATA": str(tmp_path / "state.json")})
+    service.queue.extend([QueueItem("Bad", "gb", "Bad", 1, "grabbed"), QueueItem("Good", "gb", "Good", 1, "grabbed")])
+    service.clients = [SimpleNamespace(configured=True, completed=lambda: [{"name": "Bad", "content_path": str(bad)}, {"name": "Good", "content_path": str(good)}])]
+    cfg = {"path": str(tmp_path / "lib")}
+    monkeypatch.setattr(service, "library_for", lambda slug: (cfg, SimpleNamespace(rescan=lambda slug: None)))
+    monkeypatch.setattr(service, "_virus_check", lambda *a: None)
+    service.store.settings["reconcile_after_import"] = False
+    results = service.import_finished()
+    assert [r["ok"] for r in results] == [False, True]
+    assert service.queue[0].state == "import-failed"
+    assert "preview" in service.queue[0].detail
+    assert bad.exists()
+
+
+def test_http_preview_is_read_only_and_confirm_survives_restart(tmp_path, monkeypatch):
+    from romarr.app import make_handler
+    from http.server import ThreadingHTTPServer
+    import threading
+    import requests
+    path = archive(tmp_path, {"A.gb": b"a" * 32768, "B.gb": b"b" * 32768})
+    service = ROMarr({"ROMARR_DATA": str(tmp_path / "state.json"), "ROMARR_API_KEY": "testkey"})
+    service.queue.append(QueueItem("A", "gb", "bundle", 1, "grabbed"))
+    service.clients = [SimpleNamespace(configured=True, completed=lambda: [{"name": "bundle", "content_path": str(path)}])]
+    cfg = {"path": str(tmp_path / "lib")}
+    monkeypatch.setattr(service, "library_for", lambda slug: (cfg, SimpleNamespace(rescan=lambda slug: None)))
+    service.store.save()
+    original = (tmp_path / "state.json").read_bytes()
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(service))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_address[1]}/api/v1/queue/import-plan"
+    headers = {"X-Api-Key": "testkey"}
+    try:
+        response = requests.get(base, params={"index": 0}, headers=headers)
+        assert response.status_code == 200
+        plan = response.json()["preview"]
+        assert not (tmp_path / "lib").exists()
+        assert (tmp_path / "state.json").read_bytes() == original
+        body = {"index": 0, "confirm": True, "token": "stale", "choices": [{"primary": "A.gb", "role": "base"}]}
+        assert "error" in requests.post(base, json=body, headers=headers).json()
+        assert (tmp_path / "state.json").read_bytes() == original
+        body["token"] = plan["token"]
+        assert requests.post(base, json=body, headers=headers).json()["ok"]
+        loaded = Store(tmp_path / "state.json")
+        assert loaded.queue[0].import_intent["choices"] == body["choices"]
+        service.queue[0].state = "import-failed"
+        assert service.queue_action(0, "retry")["import_retry"]
+        assert len(service.queue) == 1 and service.queue[0].import_intent["choices"] == body["choices"]
+    finally:
+        server.shutdown()
+        server.server_close()
