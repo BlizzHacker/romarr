@@ -21,6 +21,7 @@ import re
 import shutil
 import subprocess
 import threading
+import tempfile
 import time
 import zipfile
 from dataclasses import dataclass, field
@@ -530,6 +531,38 @@ def platform_dir(library_root: Path, platform: "Platform | str", *,
     return base
 
 
+def _publish_staged(staged: Path, destination: Path, overwrite: bool) -> None:
+    """Publish complete bytes; link gives atomic no-clobber on a shared filesystem."""
+    if overwrite:
+        os.replace(staged, destination)
+    else:
+        try:
+            os.link(staged, destination)
+        except OSError as exc:
+            if exc.errno not in (errno.EPERM, errno.EOPNOTSUPP, errno.ENOSYS):
+                raise
+            if os.name == "nt":
+                # Windows rename refuses an existing destination atomically.
+                os.rename(staged, destination)
+                return
+            # Some library filesystems cannot hardlink even within one mount.
+            # Linux provides the same no-clobber guarantee without a hardlink.
+            import ctypes
+            libc = ctypes.CDLL(None, use_errno=True)
+            rename = getattr(libc, "renameat2", None)
+            if rename is None:
+                raise exc
+            if rename(-100, os.fsencode(staged), -100, os.fsencode(destination), 1) != 0:
+                error = ctypes.get_errno()
+                raise OSError(error, os.strerror(error), str(destination))
+
+
+def _existing_destination(destination: Path) -> str:
+    if destination.is_file() and destination.stat().st_size == 0:
+        return "existing zero-byte destination needs inspection; refusing to overwrite"
+    return "already in the library; reconcile existing files before retrying"
+
+
 def import_rom(download: Path, platform: Platform, library_root: Path, *,
                overwrite: bool = False, dats=None,
                require_verified: bool = False,
@@ -591,20 +624,22 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
             target_dir.mkdir(parents=True, exist_ok=True)
             name = _import_name(chosen.primary, verdict, rename=rename)
             destination = target_dir / name
-            if destination.exists() and not overwrite:
-                results.append(
-                    ImportResult(False, destination, "already in the library"))
+            if destination.exists() and (not overwrite or destination.stat().st_size == 0):
+                results.append(ImportResult(False, destination, _existing_destination(destination)))
                 continue
-            source.copy(chosen.primary, destination)
-            if platform.slug in ("ps2", "ngc", "xbox"):
-                actual_size = destination.stat().st_size if destination.exists() else 0
-                if actual_size < 8 * 1024 * 1024:
-                    if destination.exists():
-                        destination.unlink()
-                    results.append(ImportResult(
-                        False, None,
-                        f"too small to be a {platform.name} disc image ({actual_size // (1024*1024)}MB < 8MB)"))
-                    continue
+            try:
+                with tempfile.TemporaryDirectory(prefix=".romarr-import-", dir=target_dir) as staging:
+                    staged = Path(staging) / name
+                    source.copy(chosen.primary, staged)
+                    actual_size = staged.stat().st_size
+                    if actual_size == 0:
+                        raise ValueError("empty ROM payload")
+                    if platform.slug in ("ps2", "ngc", "xbox") and actual_size < 8 * 1024 * 1024:
+                        raise ValueError(f"too small to be a {platform.name} disc image ({actual_size // (1024*1024)}MB < 8MB)")
+                    _publish_staged(staged, destination, overwrite)
+            except (OSError, ValueError, zipfile.BadZipFile, subprocess.SubprocessError) as exc:
+                results.append(ImportResult(False, destination, f"copy/extraction or publication failed: {exc}"))
+                continue
             log.info("imported %s -> %s", chosen.primary, destination)
             results.append(ImportResult(True, destination,
                                         verification=verdict, **_transfer_summary(source)))
@@ -617,39 +652,38 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
                     else _set_name(chosen.primary))
         destination = target_dir / set_name
         if destination.exists() and any(destination.iterdir()) and not overwrite:
-            results.append(
-                ImportResult(False, destination, "already in the library"))
+            results.append(ImportResult(False, destination, _existing_destination(destination)))
             continue
-        destination.mkdir(parents=True, exist_ok=True)
-
-        written: dict[str, str] = {}
-        for member in chosen.members:
-            name = Path(member.replace("\\", "/")).name
-            if not is_safe_name(name, destination):
-                log.warning("refusing set member with an unusable name: %r",
-                            member)
-                continue
-            if name in written:
-                results.append(ImportResult(
-                    False, destination,
-                    f"two files in this download are both called {name!r} "
-                    f"({written[name]} and {member}); refusing to guess which "
-                    "one the game needs"))
-                break
-            source.copy(member, destination / name)
-            written[name] = member
-        else:
-            if platform.slug in ("ps2", "ngc", "xbox"):
-                total_set_size = sum(p.stat().st_size for p in destination.rglob("*") if p.is_file())
-                if total_set_size < 8 * 1024 * 1024:
-                    shutil.rmtree(destination, ignore_errors=True)
-                    results.append(ImportResult(
-                        False, None,
-                        f"too small to be a {platform.name} disc image ({total_set_size // (1024*1024)}MB < 8MB)"))
-                    continue
-            log.info("imported %d files -> %s", len(written), destination)
-            results.append(ImportResult(True, destination,
-                                        verification=verdict, **_transfer_summary(source)))
+        target_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            with tempfile.TemporaryDirectory(prefix=".romarr-import-", dir=target_dir) as staging:
+                staged_dir = Path(staging)
+                written: dict[str, str] = {}
+                for member in chosen.members:
+                    name = Path(member.replace("\\", "/")).name
+                    if not is_safe_name(name, staged_dir):
+                        raise ValueError(f"unsafe set member: {member!r}")
+                    if name in written:
+                        raise ValueError(f"two files in this download are both called {name!r} ({written[name]} and {member}); refusing to guess which one the game needs")
+                    source.copy(member, staged_dir / name)
+                    if (staged_dir / name).stat().st_size == 0:
+                        raise ValueError(f"empty set member: {member!r}")
+                    written[name] = member
+                total_set_size = sum(p.stat().st_size for p in staged_dir.iterdir())
+                if platform.slug in ("ps2", "ngc", "xbox") and total_set_size < 8 * 1024 * 1024:
+                    raise ValueError(f"too small to be a {platform.name} disc image ({total_set_size // (1024*1024)}MB < 8MB)")
+                destination.mkdir(parents=True, exist_ok=True)
+                for name in written:
+                    final = destination / name
+                    if final.exists() and final.stat().st_size == 0:
+                        raise ValueError(f"existing zero-byte destination needs inspection: {final}")
+                for name in written:
+                    _publish_staged(staged_dir / name, destination / name, overwrite)
+        except (OSError, ValueError, zipfile.BadZipFile, subprocess.SubprocessError) as exc:
+            results.append(ImportResult(False, destination, f"set copy/extraction or publication failed: {exc}; reconcile any completed members before retrying"))
+            continue
+        log.info("imported %d files -> %s", len(written), destination)
+        results.append(ImportResult(True, destination, verification=verdict, **_transfer_summary(source)))
 
     return results
 

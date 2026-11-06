@@ -6288,15 +6288,16 @@ class ROMarr:
                     queue_item.release_fault = True
                 continue
 
-            any_ok = any(o.ok for o in outcomes)
+            all_ok = all(o.ok for o in outcomes)
             for outcome in outcomes:
                 if outcome.ok:
                     self.store.record(Event(kind="imported", game=game_title,
                                             platform=platform.slug, release=name,
                                             library=label,
                                             detail=f"{outcome.destination} ({outcome.import_method or 'copy'}) {outcome.fallback_reason}"))
-                    self.notify(imported(game_title, platform.slug,
-                                         outcome.verification))
+                    if all_ok:
+                        self.notify(imported(game_title, platform.slug,
+                                             outcome.verification))
                 else:
                     self.store.record(Event(kind="failed", game=game_title,
                                             platform=platform.slug,
@@ -6305,8 +6306,8 @@ class ROMarr:
             if queue_item is not None:
                 # Marked so the scheduled sweep never re-attempts it; the
                 # Tasks page button clears failure marks to retry.
-                queue_item.state = "imported" if any_ok else "import-failed"
-            if any_ok and queue_item is not None:
+                queue_item.state = "imported" if all_ok else "import-failed"
+            if all_ok and queue_item is not None:
                 # If this was a partial collection grab (e.g. MiNERVA selective grab with qbit-tag:),
                 # clean up the partial collection torrent and its files from the client so it does not
                 # block subsequent grabs from the same collection (#115).
@@ -6320,7 +6321,7 @@ class ROMarr:
                             except Exception as err:
                                 log.warning("could not clean up collection torrent %r: %s",
                                             queue_item.download_id, err)
-            if any_ok:
+            if all_ok:
                 if self.store.settings.get("rescan_after_import", True):
                     target_lib.rescan(platform.slug)
                 # The absolute destinations this release was imported to.
@@ -6360,10 +6361,9 @@ class ROMarr:
                     except Exception:  # noqa: BLE001
                         log.warning("reconcile after import failed for %s",
                                     platform.slug, exc_info=True)
-            results.append({"name": name, "ok": any_ok,
-                            "reason": "" if any_ok else str(outcomes[0].reason),
-                            "library": label,
-                            "transfers": [{"method": o.import_method, "fallback_reason": o.fallback_reason} for o in outcomes if o.ok]})
+            results.append({"name": name, "ok": all_ok,
+                            "reason": "" if all_ok else next((str(o.reason) for o in outcomes if not o.ok), ""),
+                            "library": label, "transfers": [{"method": o.import_method, "fallback_reason": o.fallback_reason} for o in outcomes if o.ok]})
         # The sweep marks rows in place; without this the marks live only in
         # memory and a restart re-imports everything it had already done.
         self.store.save()
