@@ -56,6 +56,14 @@ def test_a_missing_cover_stays_empty(monkeypatch):
 
 # -- the relay's refusal to be an open proxy ----------------------------------
 
+def _stub_transport(monkeypatch, handler):
+    """Intercept the pooled Session used by the relay, not requests.get."""
+    import requests
+
+    monkeypatch.setattr(requests.Session, "get",
+                        lambda self, url, **kwargs: handler(url, **kwargs))
+
+
 def _svc(tmp_path, library_url="http://romm:8080"):
     svc = ROMarr(env={"ROMARR_DATA": str(tmp_path / "s.json")})
     backend = MagicMock()
@@ -76,7 +84,7 @@ def test_the_relay_serves_a_configured_library_origin(tmp_path, monkeypatch):
                          __enter__=lambda s: s, __exit__=lambda *a: None)
 
     import requests
-    monkeypatch.setattr(requests, "get", fake_get)
+    _stub_transport(monkeypatch, fake_get)
     code, ctype, body = svc.fetch_asset(
         "http://romm:8080/assets/x/cover.png")
     assert code == 200
@@ -90,7 +98,7 @@ def test_the_relay_refuses_a_foreign_origin(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     fetched = []
     import requests
-    monkeypatch.setattr(requests, "get",
+    _stub_transport(monkeypatch,
                         lambda url, **kw: fetched.append(url))
     code, _, body = svc.fetch_asset("http://192.168.0.1/admin")
     assert code == 403
@@ -102,7 +110,7 @@ def test_the_relay_refuses_a_non_http_scheme(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     fetched = []
     import requests
-    monkeypatch.setattr(requests, "get",
+    _stub_transport(monkeypatch,
                         lambda url, **kw: fetched.append(url))
     for bad in ("file:///etc/passwd", "ftp://romm/x.png", "", "romm:8080/x"):
         code, _, _ = svc.fetch_asset(bad)
@@ -117,7 +125,7 @@ def test_the_relay_reports_an_unreachable_library_as_502(tmp_path, monkeypatch):
     def down(url, **kw):
         raise requests.RequestException("connection refused")
 
-    monkeypatch.setattr(requests, "get", down)
+    _stub_transport(monkeypatch, down)
     code, ctype, body = svc.fetch_asset("http://romm:8080/assets/x.png")
     assert code == 502 and b"unreachable" in body
 
@@ -125,7 +133,7 @@ def test_the_relay_reports_an_unreachable_library_as_502(tmp_path, monkeypatch):
 def test_the_relay_passes_a_library_404_through(tmp_path, monkeypatch):
     svc = _svc(tmp_path)
     import requests
-    monkeypatch.setattr(requests, "get", lambda url, **kw: MagicMock(
+    _stub_transport(monkeypatch, lambda url, **kw: MagicMock(
         status_code=404, headers={}, content=b"",
         __enter__=lambda s: s, __exit__=lambda *a: None))
     code, _, _ = svc.fetch_asset("http://romm:8080/assets/missing.png")
@@ -138,7 +146,7 @@ def test_an_https_library_origin_is_also_allowed(tmp_path, monkeypatch):
     internal cert does not match the public name."""
     svc = _svc(tmp_path, library_url="https://romm.internal")
     import requests
-    monkeypatch.setattr(requests, "get", lambda url, **kw: MagicMock(
+    _stub_transport(monkeypatch, lambda url, **kw: MagicMock(
         status_code=200, headers={"Content-Type": "image/webp"},
         content=b"RIFF", __enter__=lambda s: s, __exit__=lambda *a: None))
     code, ctype, _ = svc.fetch_asset("https://romm.internal/assets/x.webp")
