@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 from dataclasses import dataclass
 
 from .platforms import DISC, Platform, by_slug, resolve, same_machine
@@ -311,6 +312,34 @@ class Release:
     # Keep that path server-side with the release; it is never a download URL.
     torrent_file_path: str = ""
     file_selection_required: bool = False
+    content_kind: str = ""
+
+
+def collection_content_kind(path: str) -> str:
+    """Classify known collection media hierarchies, never words in a title.
+
+    The final component is a filename, not a content branch. A Games folder
+    nested under Manuals does not turn a document into a playable release.
+    """
+    parts = [re.sub(r"[\s_-]+", "-", unicodedata.normalize("NFKC", part).strip().casefold())
+             for part in re.split(r"[\\/]+", str(path or "")) if part.strip() not in ("", ".")]
+    directories = set(parts[:-1])
+    if directories & {"manual", "manuals"}:
+        return "manual"
+    if directories & {"commercial", "commercials"}:
+        return "commercial"
+    if "tosec-pix" in directories:
+        return "associated-media"
+    return ""
+
+
+def collection_content_refusal(release) -> str:
+    kind = collection_content_kind(getattr(release, "torrent_file_path", ""))
+    kind = kind or getattr(release, "content_kind", "")
+    if kind in {"manual", "commercial", "associated-media"}:
+        label = "TOSEC-PIX associated media" if kind == "associated-media" else kind
+        return f"non-game collection content ({label})"
+    return ""
 
 
 def is_game_release(release: Release) -> bool:
@@ -382,11 +411,15 @@ def judge(release: Release, wanted: str,
     meant the block, and reading it the other way round is the worst available
     interpretation.
     """
+    content_refusal = collection_content_refusal(release)
+    if content_refusal:
+        return Judgement(-1200, verdict=content_refusal)
     if blocklist is not None and release in blocklist:
         return Judgement(-2000,
                          verdict=f"blocklisted: {blocklist.reason_for(release)}")
     if profile:
-        refusal = profile.refusal(release.title.lower(), getattr(release, "size", 0))
+        refusal = profile.refusal(release.title.lower(), getattr(release, "size", 0),
+                                  content_path=release.torrent_file_path)
         if refusal:
             return Judgement(-900, verdict=refusal)
     if not is_game_release(release):

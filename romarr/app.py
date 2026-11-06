@@ -103,7 +103,8 @@ LIST_SECRETS = ("api_key", "openxbl_key", "npsso", "itchio_key",
                 "epic_code", "epic_refresh", "ea_token",
                 "battlenet_cookie", "humble_cookie")
 from .scheduler import Scheduler, next_search_due
-from .selection import Release, best_release, infer_platform, judge, score
+from .selection import (Release, best_release, infer_platform, judge, score,
+                        collection_content_kind, collection_content_refusal)
 from .store import Event, QueueItem, SeerrRequest, Store
 from .ui import favicon_svg as ui_favicon_svg
 from .ui import page as ui_page
@@ -1726,6 +1727,7 @@ class ROMarr:
                     indexer=f"hub:{plugin_slug}",
                     info_url=str(row.get("url") or ""),
                     torrent_file_path=file_path,
+                    content_kind=collection_content_kind(file_path),
                     file_selection_required=True,
                 ))
                 continue
@@ -1917,6 +1919,9 @@ class ROMarr:
         like one the scorer picked, or Activity and Wanted start disagreeing
         with each other depending on how a game was requested.
         """
+        refusal = collection_content_refusal(pick)
+        if refusal:
+            return {"ok": False, "error": refusal}
         client = pick_client(pick.protocol, self.clients)
         if client is None:
             # Not the release's fault -- blocklisting it here would punish a
@@ -2110,7 +2115,7 @@ class ROMarr:
                 "score": verdict.points,
                 "accepted": verdict.accepted,
                 "reasons": verdict.why(),
-                "grabbable": bool(r.download_url),
+                "grabbable": bool(r.download_url) and not collection_content_refusal(r),
             })
 
         with self._lock:
