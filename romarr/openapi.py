@@ -219,6 +219,7 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
                                            "titles and platform resolution."),
     "/api/v1/connection": ("GET", "Configured notification connections, "
                                   "webhook URLs masked."),
+    "/api/v1/queue/import-plan": ("POST", "Confirm a bundle import using index, source-and-request token, mode, and primary/role choices. Unknown package identities require manual review."),
     "/api/v1/queue/action": ("POST", "Act on one queue row by index: retry "
                                      "re-runs the request, remove forgets it."),
     "/api/v1/queue/clear": ("POST", "Empty the queue, or only the rows in "
@@ -456,6 +457,11 @@ def spec(version: str = "0.0.0", *, base_url: str = "") -> dict:
     for path in sorted(DESCRIPTIONS):
         method, summary = DESCRIPTIONS[path]
         paths[path] = _operation(path, method, summary)
+    paths["/api/v1/queue/import-plan"].update(_operation(
+        "/api/v1/queue/import-plan", "GET", "Read-only payload preview for a completed queue item; returns grouped companions, excluded extras, sizes and an approval token."))
+    paths["/api/v1/queue/import-plan"]["get"]["parameters"] = [
+        {"name": "index", "in": "query", "required": True,
+         "schema": {"type": "integer", "minimum": 0}}]
     _guide_contracts(paths)
 
     return {
