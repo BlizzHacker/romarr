@@ -98,6 +98,10 @@ def test_issue_115_history_and_collection_cleanup(tmp_path):
             self.removed.append((download_id, delete_files))
             return True
 
+        def torrent_files(self, torrent_hash):
+            return [{"index": 0, "name": rom_file.name,
+                     "size": rom_file.stat().st_size, "priority": 1, "progress": 1}]
+
         def completed(self):
             return [{
                 "hash": "colhash",
@@ -121,7 +125,10 @@ def test_issue_115_history_and_collection_cleanup(tmp_path):
 
     # Queue item with qbit-tag
     q_item = QueueItem("Tetris", "gb", "Tetris (World).gb", 10, "grabbed",
-                       release_id="btih:colhash", download_id="qbit-tag:romarr-tetris")
+                       release_id="btih:colhash", download_id="qbit-tag:romarr-tetris",
+                       download_client="qbit", file_selection_required=True,
+                       selected_file={"path": rom_file.name, "index": 0,
+                                      "size": rom_file.stat().st_size, "hash": "colhash"})
     svc.store.enqueue(q_item)
 
     # Process import

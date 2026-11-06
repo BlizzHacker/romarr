@@ -148,6 +148,8 @@ class QueueItem:
     # timeout.
     download_client: str = ""
     manual: bool = False
+    file_selection_required: bool = False
+    selected_file: dict = field(default_factory=dict)
 
 
 @dataclass

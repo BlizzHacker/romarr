@@ -46,6 +46,8 @@ from urllib.parse import parse_qs, unquote_plus, urlparse
 
 import time
 
+import requests
+
 from .libraries import (
     LIBRARY_TYPES, build_library, build_library_from_config, library_counts,
     load_backend_plugins, merge_library_secrets, redact_library, route_library,
@@ -63,6 +65,7 @@ from .downloaders import (
 from .indexers import INDEXER_TYPES, build_indexer, merge_indexer_secrets, redact_indexer
 from .indexers import Prowlarr, ProwlarrConfig, ProwlarrDownloadError
 from .library import import_rom, map_remote_path, platform_dir
+from .selective_import import selected_import_path
 from .collections import is_translation
 from .auth import DISABLED as AUTH_DISABLED
 from .auth import MIN_PASSWORD, SESSION_COOKIE, Auth, new_api_key, parse_cookies
@@ -2003,7 +2006,10 @@ class ROMarr:
                          external_request_id=external_request_id,
                          download_id=download_id,
                          download_client=getattr(client, "romarr_id", ""),
-                         manual=manual)
+                         manual=manual,
+                         file_selection_required=required_file,
+                         selected_file=(getattr(client, "last_selected_file", {})
+                                        if required_file and ok else {}))
         self.store.enqueue(item)
         if ok:
             if external_request_id:
@@ -6176,7 +6182,8 @@ class ROMarr:
             if not getattr(client, "configured", True):
                 continue
             try:
-                finished.extend(client.completed())
+                finished.extend(dict(row, _romarr_client=client)
+                                for row in client.completed())
             except Exception as err:
                 # One unreachable client must not stop the others importing.
                 log.warning("%s completed() failed: %s", getattr(client, "name", client), err)
@@ -6241,6 +6248,22 @@ class ROMarr:
                 torrent.get("content_path") or torrent.get("save_path", ""),
                 self.store.settings.get("remote_path_mappings"),
             )
+            if (queue_item is not None and (
+                    queue_item.file_selection_required
+                    or queue_item.selected_file
+                    or "minerva" in queue_item.indexer.lower())):
+                try:
+                    path = selected_import_path(
+                        queue_item, torrent, torrent.get("_romarr_client"),
+                        self.store.settings.get("remote_path_mappings"))
+                except (TypeError, ValueError, OSError, requests.RequestException) as err:
+                    detail = f"selected collection file needs review: {err}"
+                    queue_item.state = "import-failed"
+                    queue_item.detail = detail
+                    self.store.record(Event(kind="failed", game=queue_item.game,
+                                            platform=platform.slug, detail=detail))
+                    results.append({"name": name, "ok": False, "reason": detail})
+                    continue
             refused = self._virus_check(path, name, platform, queue_item)
             if refused is not None:
                 results.append(refused)
