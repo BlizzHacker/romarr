@@ -2871,6 +2871,7 @@ class ROMarr:
                               dats=self.dats,
                               require_verified=require_verified,
                               rename=bool(self.store.settings.get("rename_on_import", True)),
+                prefer_hardlinks=bool(self.store.settings.get("prefer_hardlinks", False)),
                               layout=self.library_layout(target_cfg),
                               translation=is_translation(source.name),
                               platform_folders=self.platform_folders(target_cfg))
@@ -2920,6 +2921,8 @@ class ROMarr:
                 "file": str(outcome.destination),
                 "verdict": status,
                 "forced": forced,
+                "import_method": outcome.import_method,
+                "fallback_reason": outcome.fallback_reason,
             })
 
         if imported and self.store.settings.get("rescan_after_import", True):
@@ -6265,6 +6268,7 @@ class ROMarr:
                 path, platform, self.library_root(target_cfg),
                 dats=self.dats,
                 rename=bool(self.store.settings.get("rename_on_import", True)),
+                prefer_hardlinks=bool(self.store.settings.get("prefer_hardlinks", False)),
                 layout=self.library_layout(target_cfg),
                 translation=is_translation(name),
                 platform_folders=self.platform_folders(target_cfg))
@@ -6290,7 +6294,7 @@ class ROMarr:
                     self.store.record(Event(kind="imported", game=game_title,
                                             platform=platform.slug, release=name,
                                             library=label,
-                                            detail=str(outcome.destination)))
+                                            detail=f"{outcome.destination} ({outcome.import_method or 'copy'}) {outcome.fallback_reason}"))
                     self.notify(imported(game_title, platform.slug,
                                          outcome.verification))
                 else:
@@ -6306,7 +6310,8 @@ class ROMarr:
                 # If this was a partial collection grab (e.g. MiNERVA selective grab with qbit-tag:),
                 # clean up the partial collection torrent and its files from the client so it does not
                 # block subsequent grabs from the same collection (#115).
-                if str(queue_item.download_id or "").startswith("qbit-tag:"):
+                if (not self.store.settings.get("retain_downloads_after_import", True)
+                        and str(queue_item.download_id or "").startswith("qbit-tag:")):
                     for client in self.clients:
                         remover = getattr(client, "remove_download", None)
                         if callable(remover):
@@ -6357,7 +6362,8 @@ class ROMarr:
                                     platform.slug, exc_info=True)
             results.append({"name": name, "ok": any_ok,
                             "reason": "" if any_ok else str(outcomes[0].reason),
-                            "library": label})
+                            "library": label,
+                            "transfers": [{"method": o.import_method, "fallback_reason": o.fallback_reason} for o in outcomes if o.ok]})
         # The sweep marks rows in place; without this the marks live only in
         # memory and a restart re-imports everything it had already done.
         self.store.save()

@@ -14,6 +14,8 @@ details it does handle are the ones that silently corrupt a library:
 from __future__ import annotations
 
 import logging
+import errno
+import stat
 import os
 import re
 import shutil
@@ -101,6 +103,8 @@ class ImportResult:
     #: when none is configured -- metadata is an enhancement and its
     #: absence must never look like a failed import.
     info: dict = field(default_factory=dict)
+    import_method: str = ""
+    fallback_reason: str = ""
 
 
 def is_safe_name(name: str, root: Path) -> bool:
@@ -169,6 +173,9 @@ class _Source:
 class _ZipSource(_Source):
     def __init__(self, path: Path):
         self.path = path
+        self.prefer_hardlinks = False
+        self.last_transfer = ("copy", "")
+        self.transfers = {}
 
     def names(self):
         with zipfile.ZipFile(self.path) as archive:
@@ -297,6 +304,9 @@ class _PathSource(_Source):
 
     def __init__(self, path: Path):
         self.path = path
+        self.prefer_hardlinks = False
+        self.last_transfer = ("copy", "")
+        self.transfers = {}
 
     def names(self):
         if self.path.is_file():
@@ -327,7 +337,29 @@ class _PathSource(_Source):
         # the imported library file unreadable to the shared media group.
         # A new destination therefore follows the process umask, while the
         # source inode, owner, group and mode remain untouched.
+        self.last_transfer = ("copy", "")
+        if self.prefer_hardlinks:
+            mode = source.lstat().st_mode
+            # Shared libraries need readable files. Never chmod a seeded inode.
+            if not stat.S_ISREG(mode):
+                reason = "source is not an unchanged regular file"
+            elif mode & 0o444 != 0o444:
+                reason = "source permissions do not allow shared library reads"
+            else:
+                try:
+                    os.link(source, destination, follow_symlinks=False)
+                    self.last_transfer = ("hardlink", "")
+                    self.transfers[name] = self.last_transfer
+                    return
+                except OSError as exc:
+                    if exc.errno not in {errno.EXDEV, errno.EPERM, errno.EACCES,
+                                         errno.ENOTSUP, errno.EOPNOTSUPP, errno.ENOSYS,
+                                         errno.EMLINK}:
+                        raise
+                    reason = f"hardlink unavailable: {exc.strerror or exc}"
+            self.last_transfer = ("copy", reason)
         shutil.copyfile(source, destination)
+        self.transfers[name] = self.last_transfer
 
 
 class MissingArchiveTool(Exception):
@@ -492,7 +524,7 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
                require_verified: bool = False,
                layout: str = "flat", translation: bool = False,
                rename: bool = False,
-               platform_folders=None) -> list[ImportResult]:
+               platform_folders=None, prefer_hardlinks: bool = False) -> list[ImportResult]:
     """Place every ROM from a finished download into the library.
 
     A cartridge zip may hold several games (a 3-in-1 collection, a bundle)
@@ -516,6 +548,8 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
 
     try:
         source = _source_for(download, platform)
+        if isinstance(source, _PathSource):
+            source.prefer_hardlinks = prefer_hardlinks
         candidates = source.names()
     except MissingArchiveTool as exc:
         return [ImportResult(False, None, str(exc))]
@@ -528,6 +562,8 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
 
     results: list[ImportResult] = []
     for chosen in chosen_sets:
+        if isinstance(source, _PathSource):
+            source.transfers = {}
         verdict = verify_set(source, chosen.members, dats)
         if require_verified and verdict.status != VERIFIED:
             results.append(ImportResult(
@@ -560,7 +596,7 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
                     continue
             log.info("imported %s -> %s", chosen.primary, destination)
             results.append(ImportResult(True, destination,
-                                        verification=verdict))
+                                        verification=verdict, **_transfer_summary(source)))
             continue
 
         # A digital set is named after the download, not its primary: every
@@ -602,10 +638,19 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
                     continue
             log.info("imported %d files -> %s", len(written), destination)
             results.append(ImportResult(True, destination,
-                                        verification=verdict))
+                                        verification=verdict, **_transfer_summary(source)))
 
     return results
 
+
+
+def _transfer_summary(source):
+    if not isinstance(source, _PathSource):
+        return {"import_method": "extracted", "fallback_reason": "archive members require extraction"}
+    transfers = list(source.transfers.values())
+    methods = {method for method, _ in transfers}
+    return {"import_method": next(iter(methods)) if len(methods) == 1 else "mixed",
+            "fallback_reason": "; ".join(sorted({reason for _, reason in transfers if reason}))}
 
 
 def _import_name(primary: str, verdict: Match, *, rename: bool) -> str:

@@ -260,6 +260,8 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # historical fallback); "strict" treats the list as an allowlist.
     "region_mode": "prefer",
     "rename_on_import": True,
+    "prefer_hardlinks": False,
+    "retain_downloads_after_import": True,
     "overwrite_existing": False,
     # Profile: for ROMs the meaningful axis is region and revision, not
     # bitrate -- this is the games equivalent of a quality profile.
