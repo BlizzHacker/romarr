@@ -150,6 +150,7 @@ class QueueItem:
     manual: bool = False
     file_selection_required: bool = False
     selected_file: dict = field(default_factory=dict)
+    retained_torrent_hash: str = ""
     import_preview: dict = field(default_factory=dict)
     import_intent: dict = field(default_factory=dict)
 

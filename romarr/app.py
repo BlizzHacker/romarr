@@ -449,6 +449,7 @@ class ROMarr:
         # carrying Prowlarr's API key.
         self._candidates: dict[str, dict] = {}
         self._lock = threading.Lock()
+        self._collection_lock = threading.RLock()
         # Background sweeps overlap, and client I/O happens before the queue row
         # exists. Reserve a game during that gap, then let the queue row take
         # over after the handoff.
@@ -465,6 +466,7 @@ class ROMarr:
         # lost everything you had asked for, which is the difference between a
         # tool and a demo.
         self.store = Store(e.get("ROMARR_DATA", "/opt/romarr/romarr.json"))
+        self._remember_collection_owners()
         # A library path saved through the UI has to win over the environment,
         # or the setting is one you can change but not apply. A *default* must
         # not, which is why the stored default is empty: otherwise it outranks
@@ -1910,8 +1912,35 @@ class ROMarr:
             with self._lock:
                 self._automatic_grab_reservations.discard(key)
 
+    def _remember_collection_owners(self):
+        from .retained_collection import owner_records
+        ledger = self.store.settings.setdefault("retained_collection_owners", [])
+        known = {r.get("download_id") for r in ledger}
+        changed = False
+        for record in owner_records(self.store.queue):
+            if record["download_id"] not in known:
+                ledger.append(record)
+                known.add(record["download_id"])
+                changed = True
+        if changed:
+            self.store.save()
+
+    def _retained_owners(self):
+        self._remember_collection_owners()
+        return list(self.store.settings.get("retained_collection_owners", []))
+
     def grab(self, pick, game: str, platform_slug: str, *, manual: bool = False,
              external_request_id: str = "") -> dict:
+        # Serialize collection mutations through durable queue persistence.
+        if getattr(pick, "file_selection_required", False):
+            with self._collection_lock:
+                return self._grab_impl(pick, game, platform_slug, manual=manual,
+                                       external_request_id=external_request_id)
+        return self._grab_impl(pick, game, platform_slug, manual=manual,
+                               external_request_id=external_request_id)
+
+    def _grab_impl(self, pick, game: str, platform_slug: str, *, manual: bool = False,
+                   external_request_id: str = "") -> dict:
         """Hand one release to a download client and record what happened.
 
         Shared by the automatic path and the Search page, deliberately: a
@@ -1968,7 +1997,7 @@ class ROMarr:
                 "this collection source requires qBittorrent for exact file selection")
         elif required_file:
             ok = client.add_magnet_selective(
-                pick.download_url, selected_file)
+                pick.download_url, selected_file, owned_selections=self._retained_owners())
             download_id = client.last_job_id if ok else ""
             release_fault = False
             if not ok:
@@ -2014,8 +2043,12 @@ class ROMarr:
                          manual=manual,
                          file_selection_required=required_file,
                          selected_file=(getattr(client, "last_selected_file", {})
-                                        if required_file and ok else {}))
+                                        if required_file and ok else {}),
+                         retained_torrent_hash=(getattr(client, "last_retained_hash", "")
+                                                if required_file else ""))
         self.store.enqueue(item)
+        if ok and required_file:
+            self._remember_collection_owners()
         if ok:
             if external_request_id:
                 self.store.update_seerr_request(external_request_id,
@@ -2156,13 +2189,16 @@ class ROMarr:
         for client in self.clients:
             if not getattr(client, "configured", True):
                 continue
-            for candidate in client.completed():
+            candidates = (client.selective_completed([item], ownership=self._retained_owners()) if isinstance(client, QBittorrent) else [])
+            for candidate in candidates + client.completed():
                 if match_queue_item([item], candidate) is item:
                     torrent = candidate
                     source_client = client
                     break
         if torrent is None:
             return {"error": "download is not complete or cannot be found"}
+        if torrent.get("_romarr_selection_error"):
+            return {"error": torrent["_romarr_selection_error"]}
         path = map_remote_path(torrent.get("content_path") or torrent.get("save_path", ""),
                                self.store.settings.get("remote_path_mappings"))
         try:
@@ -2202,6 +2238,18 @@ class ROMarr:
             if not 0 <= index < len(self.queue):
                 return {"ok": False, "error": "no such queue item"}
             item = self.queue[index]
+        if action == "resume-retained":
+            with self._collection_lock:
+                client = next((c for c in self.clients if isinstance(c, QBittorrent)
+                               and getattr(c, "romarr_id", "") == item.download_client), None)
+                identity = item.selected_file or {"hash": item.retained_torrent_hash}
+                if client is None or not identity.get("hash"):
+                    return {"ok": False, "error": "retained collection identity is missing; review required"}
+                try:
+                    ok = client.resume_retained_collection(identity, self._retained_owners())
+                except (requests.RequestException, ValueError, TypeError, KeyError) as exc:
+                    return {"ok": False, "error": str(exc)}
+                return {"ok": bool(ok), "message": "Retained torrent resumed. Retry the pending grab." if ok else "Downloader refused to resume"}
         if action == "remove":
             with self._lock:
                 self.queue = [q for n, q in enumerate(self.queue)
@@ -2574,6 +2622,10 @@ class ROMarr:
     MAX_REGRABS_PER_SWEEP = 3
 
     def retire_dead_downloads(self) -> dict:
+        with self._collection_lock:
+            return self._retire_dead_downloads()
+
+    def _retire_dead_downloads(self) -> dict:
         """Blocklist downloads that died, then grab the next best release.
 
         The Blocklist has existed since 0.7 and nothing ever added to it on
@@ -6223,6 +6275,10 @@ class ROMarr:
         return {"name": name, "ok": False, "reason": detail}
 
     def import_finished(self, *, retry_failed: bool = True) -> list[dict]:
+        with self._collection_lock:
+            return self._import_finished(retry_failed=retry_failed)
+
+    def _import_finished(self, *, retry_failed: bool = True) -> list[dict]:
         """Import anything the download client has completed.
 
         Runs on the scheduler as well as from the Tasks page, so it has to be
@@ -6246,6 +6302,9 @@ class ROMarr:
             if not getattr(client, "configured", True):
                 continue
             try:
+                if isinstance(client, QBittorrent):
+                    finished.extend(dict(row, _romarr_client=client)
+                                    for row in client.selective_completed(list(self.queue), ownership=self._retained_owners()))
                 finished.extend(dict(row, _romarr_client=client)
                                 for row in client.completed())
             except Exception as err:
@@ -6304,6 +6363,14 @@ class ROMarr:
                         log.warning("completed download %r in category %r could "
                                     "not be matched to a ROMarr queue row; import "
                                     "skipped", name, category)
+                continue
+            if torrent.get("_romarr_selection_error") and queue_item is not None:
+                detail = str(torrent["_romarr_selection_error"])
+                queue_item.state = "import-review"
+                queue_item.detail = detail
+                self.store.record(Event(kind="failed", game=queue_item.game,
+                                        platform=platform.slug, detail=detail))
+                results.append({"name": name, "ok": False, "reason": detail})
                 continue
             # The client reports the path IT sees. Mapped only after matching a
             # pending queue row so already-imported or foreign downloads do not
@@ -6430,7 +6497,11 @@ class ROMarr:
                 # If this was a partial collection grab (e.g. MiNERVA selective grab with qbit-tag:),
                 # clean up the partial collection torrent and its files from the client so it does not
                 # block subsequent grabs from the same collection (#115).
-                if (not queue_item.import_intent
+                shared_collection = bool(queue_item.selected_file) and sum(
+                    bool(q.selected_file) and q.download_client == queue_item.download_client
+                    and q.selected_file.get("hash") == queue_item.selected_file.get("hash")
+                    for q in self.queue) > 1
+                if (not shared_collection and not queue_item.import_intent
                         and not self.store.settings.get("retain_downloads_after_import", True)
                         and str(queue_item.download_id or "").startswith("qbit-tag:")):
                     for client in self.clients:

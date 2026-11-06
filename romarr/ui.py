@@ -2961,6 +2961,7 @@ RENDER.queue=async()=>{
       </td><td style="text-align:right"><div class="rowact">
         ${['failed','import-failed'].includes(i.state)?`<button data-qretry="${n}">Retry</button>`:''}
         ${i.state!=='imported'?`<button data-qplan="${n}">Preview import</button>`:''}
+        ${i.selected_file?.hash||i.retained_torrent_hash?`<button data-qresume="${n}">Resume retained torrent</button>`:''}
         <button data-qremove="${n}">Remove</button></div></td></tr>`).join('')}
       </tbody></table>`
     :'<div class="empty">Queue is empty. Requests in flight show up here.</div>');
@@ -2983,7 +2984,7 @@ RENDER.queue=async()=>{
     const r=await j('/api/v1/queue/action',{method:'POST',
       headers:{'content-type':'application/json'},
       body:JSON.stringify({index:Number(index),action})});
-    toast(r.error||(action==='retry'?(r.ok?'Grabbed':'Still no luck'):'Removed'));
+    toast(r.error||r.message||(action==='retry'?(r.ok?'Grabbed':'Still no luck'):'Removed'));
     go('queue'); refreshCounts();
   };
   document.querySelectorAll('[data-qplan]').forEach(b=>b.onclick=async()=>{
@@ -3013,6 +3014,7 @@ RENDER.queue=async()=>{
       toast('Selection saved. The next import sweep will use it and retain the source.');go('queue');
     };
   });
+  document.querySelectorAll('[data-qresume]').forEach(b=>b.onclick=()=>act(b.dataset.qresume,'resume-retained'));
   document.querySelectorAll('[data-qretry]').forEach(b=>b.onclick=()=>act(b.dataset.qretry,'retry'));
   document.querySelectorAll('[data-qremove]').forEach(b=>b.onclick=()=>act(b.dataset.qremove,'remove'));
 };

@@ -221,7 +221,7 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
                                   "webhook URLs masked."),
     "/api/v1/queue/import-plan": ("POST", "Confirm a bundle import using index, source-and-request token, mode, and primary/role choices. Unknown package identities require manual review."),
     "/api/v1/queue/action": ("POST", "Act on one queue row by index: retry "
-                                     "re-runs the request, remove forgets it."),
+                                     "re-runs the request, remove forgets it; resume-retained explicitly resumes an owned retained collection."),
     "/api/v1/queue/clear": ("POST", "Empty the queue, or only the rows in "
                                     "{state} (e.g. failed)."),
     "/api/v1/discover/library": ("GET", "Browse the library you already "
