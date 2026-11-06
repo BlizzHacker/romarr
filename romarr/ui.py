@@ -2960,6 +2960,7 @@ RENDER.queue=async()=>{
       ${i.detail?`<div style="color:var(--dim);font-size:11.5px">${esc(i.detail)}</div>`:''}
       </td><td style="text-align:right"><div class="rowact">
         ${i.state==='failed'?`<button data-qretry="${n}">Retry</button>`:''}
+        ${i.state!=='imported'?`<button data-qplan="${n}">Preview import</button>`:''}
         <button data-qremove="${n}">Remove</button></div></td></tr>`).join('')}
       </tbody></table>`
     :'<div class="empty">Queue is empty. Requests in flight show up here.</div>');
@@ -2985,6 +2986,33 @@ RENDER.queue=async()=>{
     toast(r.error||(action==='retry'?(r.ok?'Grabbed':'Still no luck'):'Removed'));
     go('queue'); refreshCounts();
   };
+  document.querySelectorAll('[data-qplan]').forEach(b=>b.onclick=async()=>{
+    const index=Number(b.dataset.qplan);
+    const post=body=>j('/api/v1/queue/import-plan',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({index,...body})});
+    const data=await j('/api/v1/queue/import-plan?index='+index);
+    if(data.error){toast(data.error);return;}
+    const plan=data.preview;
+    const saved=d.items[index].import_intent||{};
+    const selected=new Map((saved.choices||[]).map(c=>[c.primary,c.role]));
+    $('#page').innerHTML=`<h2>Choose what enters the library</h2><p>${esc(plan.note)}</p>
+      <p class="help">Package identity is unverified. Confirm the base game and associate updates or DLC yourself. Companions are selected together. Sizes below describe these members, not the whole collection.</p>
+      <label>Import mode <select id="q-plan-mode"><option value="single">One base game and optional packages</option><option value="collection">Collection / multiple games</option></select></label>
+      <table><thead><tr><th>Import</th><th>Payload and companions</th><th>Role</th><th>Proposed destination</th></tr></thead><tbody>${plan.items.map((i,n)=>`<tr>
+        <td><input type="checkbox" data-plan-check="${n}" ${(selected.has(i.primary)||(!saved.token&&i.selected))?'checked':''}></td>
+        <td>${esc(i.primary)}<div class="help">${esc(i.evidence)} (${esc(i.confidence)})<br>${i.bytes==null?'Expanded size unknown':esc(String(i.bytes))+' bytes'}<br>${i.members.map(esc).join('<br>')}</div></td>
+        <td><select data-plan-role="${n}"><option value="unknown">Needs review</option><option value="base">Base game</option><option value="update">Update for this base</option><option value="dlc">DLC for this base</option><option value="additional-game">Additional game</option></select></td><td>${esc(i.destination)}</td></tr>`).join('')}</tbody></table>
+      <details><summary>${plan.extras.length} excluded files</summary>${plan.extras.map(esc).join('<br>')||'None'}</details>
+      <p><button class="btn" id="q-plan-save">Save selection</button> <button class="btn ghost" id="q-plan-back">Back</button></p>`;
+    $('#q-plan-mode').value=saved.mode||'single';
+    plan.items.forEach((i,n)=>document.querySelector(`[data-plan-role="${n}"]`).value=selected.get(i.primary)||i.role);
+    $('#q-plan-back').onclick=()=>go('queue');
+    $('#q-plan-save').onclick=async()=>{
+      const choices=plan.items.flatMap((i,n)=>document.querySelector(`[data-plan-check="${n}"]`).checked?[{primary:i.primary,role:document.querySelector(`[data-plan-role="${n}"]`).value}]:[]);
+      const r=await post({confirm:true,token:plan.token,choices,mode:$('#q-plan-mode').value});
+      if(r.error){toast(r.error);return;}
+      toast('Selection saved. The next import sweep will use it and retain the source.');go('queue');
+    };
+  });
   document.querySelectorAll('[data-qretry]').forEach(b=>b.onclick=()=>act(b.dataset.qretry,'retry'));
   document.querySelectorAll('[data-qremove]').forEach(b=>b.onclick=()=>act(b.dataset.qremove,'remove'));
 };

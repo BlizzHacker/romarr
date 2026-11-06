@@ -568,7 +568,7 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
                require_verified: bool = False,
                layout: str = "flat", translation: bool = False,
                rename: bool = False,
-               platform_folders=None, prefer_hardlinks: bool = False) -> list[ImportResult]:
+               platform_folders=None, prefer_hardlinks: bool = False, selected_primaries=None) -> list[ImportResult]:
     """Place every ROM from a finished download into the library.
 
     A cartridge zip may hold several games (a 3-in-1 collection, a bundle)
@@ -599,6 +599,12 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
         return [ImportResult(False, None, str(exc))]
 
     chosen_sets = pick_all_rom_sets(candidates, platform, read=source.read)
+    if selected_primaries is not None:
+        selected = set(selected_primaries)
+        available = {group.primary for group in chosen_sets}
+        if not selected or not selected <= available:
+            return [ImportResult(False, None, "selected import members changed; review the bundle again")]
+        chosen_sets = [group for group in chosen_sets if group.primary in selected]
     if not chosen_sets:
         return [ImportResult(
             False, None,

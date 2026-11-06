@@ -1,0 +1,68 @@
+"""A reviewable import plan. Filename hints never claim package identity."""
+from __future__ import annotations
+import hashlib
+import json
+from pathlib import Path
+from .library import _source_for, platform_dir, _digital_set_name, _set_name
+from .selection import pick_all_rom_sets
+
+
+def preview_import(download, platform, library_root, *, layout="flat", platform_folders=None):
+    source = _source_for(download, platform)
+    names = source.names()
+    sets = pick_all_rom_sets(names, platform, read=source.read)
+    sizes = {}
+    identity = []
+    # Stat the archive itself or every source member. No game payload is hashed
+    # just to display a preview; DAT verification remains in the actual importer.
+    paths = [download] if download.is_file() else sorted(download.rglob("*"))
+    for path in paths:
+        if path.is_file():
+            st = path.stat()
+            identity.append((str(path.relative_to(download)) if path != download else ".", st.st_size, st.st_mtime_ns))
+            sizes[str(path.relative_to(download)) if path != download else download.name] = st.st_size
+    import zipfile
+    if zipfile.is_zipfile(download) if download.is_file() else False:
+        with zipfile.ZipFile(download) as archive:
+            sizes = {i.filename: i.file_size for i in archive.infolist()}
+    token = hashlib.sha256(json.dumps([identity, names], sort_keys=True).encode()).hexdigest()
+    ambiguous_packages = {".nsp", ".xci", ".pkg", ".cia"}
+    target = platform_dir(library_root, platform, layout=layout, platform_folders=platform_folders)
+    items = []
+    used = set()
+    for group in sets:
+        members = list(group.members)
+        used.update(members)
+        unknown = Path(group.primary).suffix.lower() in ambiguous_packages
+        items.append({"primary": group.primary, "members": members,
+                      "role": "unknown" if unknown else "base",
+                      "evidence": "Package title, type and version have not been inspected; choose its role manually." if unknown else "Platform-compatible ROM set; companions are kept together. Game identity is unverified.",
+                      "confidence": "unknown" if unknown else "format-only",
+                      "bytes": sum(sizes[m] for m in members) if all(m in sizes for m in members) else None,
+                      "destination": str(target / ((_digital_set_name(download) if platform.media == "digital" else _set_name(group.primary)) if group.is_multi_file else Path(group.primary).name)),
+                      "selected": len(sets) == 1 and not unknown})
+    return {"token": token, "items": items,
+            "extras": [n for n in names if n not in used],
+            "requires_review": len(sets) > 1 or any(i["role"] == "unknown" for i in items),
+            "note": "This imports package files; it does not install or apply updates/DLC. Excluded files and the source download stay intact."}
+
+
+def choose_import(preview, choices, mode="single"):
+    if mode not in ("single", "collection"):
+        raise ValueError("Choose single game or collection mode")
+    allowed = {i["primary"] for i in preview["items"]}
+    if not isinstance(choices, list) or not choices:
+        raise ValueError("Select a base game and its optional packages")
+    seen = set()
+    for choice in choices:
+        if not isinstance(choice, dict) or choice.get("primary") not in allowed:
+            raise ValueError("Selection no longer matches the preview")
+        if choice["primary"] in seen:
+            raise ValueError("A package was selected twice")
+        seen.add(choice["primary"])
+        if choice.get("role") not in ("base", "update", "dlc", "additional-game"):
+            raise ValueError("Classify each selected package; unknown packages require review")
+    bases = sum(c["role"] == "base" for c in choices)
+    if not bases or (mode == "single" and (bases != 1 or any(c["role"] == "additional-game" for c in choices))):
+        raise ValueError("Single game mode needs exactly one base; use collection mode for additional games")
+    return {"token": preview["token"], "choices": choices, "mode": mode}
