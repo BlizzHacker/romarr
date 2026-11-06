@@ -595,8 +595,8 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
         if isinstance(source, _PathSource):
             source.prefer_hardlinks = prefer_hardlinks
         candidates = source.names()
-    except MissingArchiveTool as exc:
-        return [ImportResult(False, None, str(exc))]
+    except (MissingArchiveTool, OSError, ValueError, zipfile.BadZipFile, RuntimeError, subprocess.SubprocessError) as exc:
+        return [ImportResult(False, None, f"source inspection failed: {exc}")]
 
     chosen_sets = pick_all_rom_sets(candidates, platform, read=source.read)
     if selected_primaries is not None:
@@ -614,7 +614,11 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
     for chosen in chosen_sets:
         if isinstance(source, _PathSource):
             source.transfers = {}
-        verdict = verify_set(source, chosen.members, dats)
+        try:
+            verdict = verify_set(source, chosen.members, dats)
+        except (OSError, ValueError, zipfile.BadZipFile, RuntimeError, subprocess.SubprocessError) as exc:
+            results.append(ImportResult(False, None, f"verification failed: {exc}"))
+            continue
         if require_verified and verdict.status != VERIFIED:
             results.append(ImportResult(
                 False, None,
@@ -643,7 +647,7 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
                     if platform.slug in ("ps2", "ngc", "xbox") and actual_size < 8 * 1024 * 1024:
                         raise ValueError(f"too small to be a {platform.name} disc image ({actual_size // (1024*1024)}MB < 8MB)")
                     _publish_staged(staged, destination, overwrite)
-            except (OSError, ValueError, zipfile.BadZipFile, subprocess.SubprocessError) as exc:
+            except (OSError, ValueError, zipfile.BadZipFile, RuntimeError, subprocess.SubprocessError) as exc:
                 results.append(ImportResult(False, destination, f"copy/extraction or publication failed: {exc}"))
                 continue
             log.info("imported %s -> %s", chosen.primary, destination)
@@ -685,7 +689,7 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
                         raise ValueError(f"existing zero-byte destination needs inspection: {final}")
                 for name in written:
                     _publish_staged(staged_dir / name, destination / name, overwrite)
-        except (OSError, ValueError, zipfile.BadZipFile, subprocess.SubprocessError) as exc:
+        except (OSError, ValueError, zipfile.BadZipFile, RuntimeError, subprocess.SubprocessError) as exc:
             results.append(ImportResult(False, destination, f"set copy/extraction or publication failed: {exc}; reconcile any completed members before retrying"))
             continue
         log.info("imported %d files -> %s", len(written), destination)

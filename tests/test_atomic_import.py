@@ -174,3 +174,18 @@ def test_manual_partial_import_reports_failure_and_keeps_both_outcomes(tmp_path,
     assert result["refused"][0]["reason"] == "second member failed"
     assert source.exists()
     assert first.read_bytes() == b"complete first member"
+
+
+def test_archive_verification_error_reports_failure_without_publishing(tmp_path, monkeypatch):
+    import zipfile
+    import romarr.library as library
+    from romarr.platforms import resolve
+    source = tmp_path / "payload.zip"
+    with zipfile.ZipFile(source, "w") as archive:
+        archive.writestr("game.gb", b"x" * 32768)
+    def fail(*args, **kwargs):
+        raise zipfile.BadZipFile("CRC mismatch")
+    monkeypatch.setattr(library, "verify_set", fail)
+    result, = library.import_rom(source, resolve("gb"), tmp_path / "library")
+    assert not result.ok and "verification failed" in result.reason
+    assert source.exists() and not (tmp_path / "library").exists()
