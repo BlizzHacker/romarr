@@ -243,3 +243,13 @@ def test_shared_collection_preview_uses_per_file_completion(tmp_path,monkeypatch
     preview=service.queue_import_plan(0,{})
     assert preview["ok"] and preview["preview"]["items"][0]["primary"]=="A.gb"
     assert not (tmp_path/"library").exists()
+
+
+def test_rejected_nonmagnet_does_not_inherit_previous_retained_job():
+    client,session=make_client()
+    session.row["state"]="stoppedUP"
+    assert not client.add_magnet_selective(MAGNET,"Collection/B.zip",owned_selections=[owner()])
+    assert client.last_retained_hash==HASH
+    assert not client.add_magnet_selective("https://example.test/not-a-magnet","Collection/C.zip",owned_selections=[owner()])
+    assert client.last_retained_hash=="" and client.last_selected_file=={} and client.last_job_id==""
+    assert session.posts==[]

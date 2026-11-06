@@ -311,11 +311,11 @@ class QBittorrent:
         """
         self._added.job_id = ""
         self._added.error = ""
+        self._added.selected_file = {}
+        self._added.retained_hash = ""
         if not str(magnet or "").startswith("magnet:"):
             self._added.error = "file selection requires a magnet link"
             return False
-        self._added.selected_file = {}
-        self._added.retained_hash = ""
         wanted_path = _normalise_torrent_path(file_path)
         if not wanted_path:
             self._added.error = "the source did not provide a safe relative file path"
