@@ -2980,7 +2980,7 @@ class ROMarr:
                 kind="imported", game=source.stem, platform=platform.slug,
                 release=source.name, library=label,
                 detail=(f"manual import ({'FORCED over ' + str(status) if forced else status or 'unknown'})"
-                        f": {outcome.destination}")))
+                        f": {outcome.destination} ({outcome.import_method or 'copy'}) {outcome.fallback_reason}")))
             imported.append({
                 "file": str(outcome.destination),
                 "verdict": status,
