@@ -79,7 +79,8 @@ def test_issue_115_tag_matches_before_shared_infohash():
     assert matched is item2
 
 
-def test_issue_115_history_and_collection_cleanup(tmp_path):
+@pytest.mark.parametrize("retain", [True, False])
+def test_issue_115_history_and_collection_cleanup(tmp_path, retain):
     from romarr.app import ROMarr
 
     # Create download folder with a valid ROM
@@ -123,6 +124,8 @@ def test_issue_115_history_and_collection_cleanup(tmp_path):
     client = FakeClient()
     svc.clients = [client]
 
+    svc.store.settings["retain_downloads_after_import"] = retain
+
     # Queue item with qbit-tag
     q_item = QueueItem("Tetris", "gb", "Tetris (World).gb", 10, "grabbed",
                        release_id="btih:colhash", download_id="qbit-tag:romarr-tetris",
@@ -136,7 +139,7 @@ def test_issue_115_history_and_collection_cleanup(tmp_path):
     assert len(results) > 0
     assert results[0]["ok"] is True
     # Collection torrent was removed
-    assert ("qbit-tag:romarr-tetris", True) in client.removed
+    assert (("qbit-tag:romarr-tetris", True) in client.removed) is (not retain)
     # History Event recorded under game name rather than collection name
     imported_event = next(e for e in svc.store.events if e.kind == "imported")
     assert imported_event.game == "Tetris"
