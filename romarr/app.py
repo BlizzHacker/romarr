@@ -2991,7 +2991,7 @@ class ROMarr:
         self.store.save()
 
         result = {
-            "ok": bool(imported),
+            "ok": bool(imported) and not refused,
             "platform": platform.slug,
             "library": label,
             "imported": imported,

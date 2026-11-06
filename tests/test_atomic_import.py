@@ -146,3 +146,31 @@ def test_destination_without_hardlink_support_still_publishes_safely(tmp_path, m
     else:
         library._publish_staged(staged, dest, False)
         assert dest.read_bytes() == b"complete"
+
+
+
+def test_manual_partial_import_reports_failure_and_keeps_both_outcomes(tmp_path, monkeypatch):
+    import romarr.app as app
+    from romarr.app import ROMarr
+
+    root = tmp_path / "library"
+    root.mkdir()
+    service = ROMarr({"ROMARR_DATA": str(tmp_path / "state.json"),
+                       "LIBRARY_KIND": "folder", "LIBRARY_PATH": str(root)})
+    service.store.put_item("libraries", {"type": "folder", "name": "Shelf", "enable": True,
+                                         "path": str(root), "is_default": True})
+    service.reload_libraries()
+    source = tmp_path / "bundle.zip"
+    with zipfile.ZipFile(source, "w") as archive:
+        archive.writestr("first.gb", b"payload")
+        archive.writestr("second.gb", b"payload")
+    first = root / "first.gb"
+    first.write_bytes(b"complete first member")
+    monkeypatch.setattr(app, "import_rom", lambda *a, **kw: [
+        ImportResult(True, first), ImportResult(False, None, "second member failed")])
+    result = service.adopt(str(source), "gb")
+    assert result["ok"] is False
+    assert result["imported"][0]["file"] == str(first)
+    assert result["refused"][0]["reason"] == "second member failed"
+    assert source.exists()
+    assert first.read_bytes() == b"complete first member"
