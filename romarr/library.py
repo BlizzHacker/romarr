@@ -339,7 +339,8 @@ class _PathSource(_Source):
         # source inode, owner, group and mode remain untouched.
         self.last_transfer = ("copy", "")
         if self.prefer_hardlinks:
-            mode = source.lstat().st_mode
+            original = source.lstat()
+            mode = original.st_mode
             # Shared libraries need readable files. Never chmod a seeded inode.
             if not stat.S_ISREG(mode):
                 reason = "source is not an unchanged regular file"
@@ -348,6 +349,15 @@ class _PathSource(_Source):
             else:
                 try:
                     os.link(source, destination, follow_symlinks=False)
+                    linked = Path(destination).lstat()
+                    current = source.lstat()
+                    def identity(value):
+                        return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns)
+                    if (not stat.S_ISREG(linked.st_mode)
+                            or identity(linked) != identity(original)
+                            or identity(current) != identity(original)):
+                        Path(destination).unlink()
+                        raise OSError(errno.ESTALE, "source changed while creating hardlink")
                     self.last_transfer = ("hardlink", "")
                     self.transfers[name] = self.last_transfer
                     return
