@@ -2170,6 +2170,7 @@ class ROMarr:
 
     def queue_import_plan(self, index: int, body: dict) -> dict:
         from .import_intent import preview_import, choose_import, queue_identity
+        from .romm_bundle import decorate_preview, route_selection
         from .library import MissingArchiveTool
         from requests import RequestException
         import zipfile
@@ -2211,10 +2212,25 @@ class ROMarr:
                                      layout=self.library_layout(target[0]),
                                      platform_folders=self.platform_folders(target[0]),
                                      queue_identity=queue_identity(item))
+            preview = decorate_preview(preview, platform, self.library_root(target[0]),
+                                       kind=target[0].get("type", ""), layout=self.library_layout(target[0]),
+                                       platform_folders=self.platform_folders(target[0]),
+                                       translation=is_translation(str(torrent.get("name") or "")))
+            intent = None
+            if body.get("choices") is not None:
+                intent = choose_import(preview, body.get("choices"), body.get("mode", "single"), body.get("existing_game", ""))
+                routes = route_selection(preview, intent)
+                if routes:
+                    intent["routes"] = routes
+                    preview["planned_destinations"] = {primary: str(Path(preview["platform_root"]) / route) for primary, route in routes.items()}
+
             if body.get("confirm"):
                 if body.get("token") != preview["token"]:
                     return {"error": "download changed; refresh the preview before importing"}
-                intent = choose_import(preview, body.get("choices"), body.get("mode", "single"))
+                if intent is None:
+                    raise ValueError("Select payloads before confirmation")
+                if intent.get("routes") and body.get("reviewed_destinations") != preview.get("planned_destinations"):
+                    raise ValueError("Review the final destination tree before confirming")
                 with self._lock:
                     item.import_intent = intent
                     item.state = "grabbed"
@@ -6419,8 +6435,10 @@ class ROMarr:
             label = target_cfg.get("name") or getattr(target_lib, "name", "library")
 
             selected_primaries = None
+            bundle_routes = None
             if queue_item is not None and path.exists():
                 from .import_intent import preview_import, queue_identity
+                from .romm_bundle import decorate_preview, route_selection
                 from .library import MissingArchiveTool
                 import zipfile
                 import subprocess
@@ -6429,6 +6447,9 @@ class ROMarr:
                                              layout=self.library_layout(target_cfg),
                                              platform_folders=self.platform_folders(target_cfg),
                                              queue_identity=queue_identity(queue_item))
+                    preview = decorate_preview(preview, platform, self.library_root(target_cfg),
+                                               kind=target_cfg.get("type", ""), layout=self.library_layout(target_cfg),
+                                               platform_folders=self.platform_folders(target_cfg), translation=is_translation(name))
                 except (OSError, ValueError, RuntimeError, MissingArchiveTool,
                         zipfile.BadZipFile, subprocess.SubprocessError) as exc:
                     # A bad archive belongs to this row, not to every completed
@@ -6448,6 +6469,16 @@ class ROMarr:
                     continue
                 if intent:
                     selected_primaries = [c["primary"] for c in intent["choices"]]
+                    if intent.get("routes"):
+                        try:
+                            bundle_routes = route_selection(preview, intent)
+                            if bundle_routes != intent["routes"]:
+                                raise ValueError("Reviewed destination routes changed")
+                        except ValueError as exc:
+                            queue_item.state = "import-review"
+                            queue_item.detail = str(exc)
+                            results.append({"name": name, "ok": False, "reason": str(exc)})
+                            continue
 
             outcomes = import_rom(
                 path, platform, self.library_root(target_cfg),
@@ -6457,7 +6488,8 @@ class ROMarr:
                 layout=self.library_layout(target_cfg),
                 translation=is_translation(name),
                 platform_folders=self.platform_folders(target_cfg),
-                **({"selected_primaries": selected_primaries} if selected_primaries is not None else {}))
+                **({"selected_primaries": selected_primaries} if selected_primaries is not None else {}),
+                **({"bundle_routes": bundle_routes} if bundle_routes is not None else {}))
             game_title = (queue_item.game if queue_item and getattr(queue_item, "game", "") else name)
             if not outcomes:
                 self.store.record(Event(kind="failed", game=game_title,
@@ -6475,13 +6507,14 @@ class ROMarr:
                 continue
 
             all_ok = all(o.ok for o in outcomes)
+            fulfils_base = not (queue_item and queue_item.import_intent.get("existing_game"))
             for outcome in outcomes:
                 if outcome.ok:
                     self.store.record(Event(kind="imported", game=game_title,
                                             platform=platform.slug, release=name,
                                             library=label,
                                             detail=f"{outcome.destination} ({outcome.import_method or 'copy'}) {outcome.fallback_reason}"))
-                    if all_ok:
+                    if all_ok and fulfils_base:
                         self.notify(imported(game_title, platform.slug,
                                              outcome.verification))
                 else:
@@ -6522,12 +6555,12 @@ class ROMarr:
                     imported_paths = [str(o.destination) for o in outcomes if o.ok]
                     if imported_paths:
                         queue_item.imported_paths = imported_paths
-                        if queue_item.external_request_id:
+                        if queue_item.external_request_id and fulfils_base:
                             self.store.update_seerr_request(
                                 queue_item.external_request_id,
                                 assets=imported_paths,
                                 status="available")
-                for w in list(self.store.wanted):
+                for w in (list(self.store.wanted) if fulfils_base else []):
                     if w.platform != platform.slug:
                         continue
                     wanted_key = _title_key(w.game)
@@ -6546,7 +6579,7 @@ class ROMarr:
                 # that are already present and verified in the library but were
                 # never fulfilled (word-order/alias titles, pre-existing stale
                 # entries). Gated by setting so the hash walk can be disabled.
-                if self.store.settings.get("reconcile_after_import", True):
+                if fulfils_base and self.store.settings.get("reconcile_after_import", True):
                     try:
                         self.reconcile_platform(platform.slug)
                     except Exception:  # noqa: BLE001

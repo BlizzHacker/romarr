@@ -53,7 +53,7 @@ def preview_import(download, platform, library_root, *, layout="flat", platform_
             "note": "This imports package files; it does not install or apply updates/DLC. Excluded files and the source download stay intact."}
 
 
-def choose_import(preview, choices, mode="single"):
+def choose_import(preview, choices, mode="single", existing_game=""):
     if mode not in ("single", "collection"):
         raise ValueError("Choose single game or collection mode")
     allowed = {i["primary"] for i in preview["items"]}
@@ -69,6 +69,14 @@ def choose_import(preview, choices, mode="single"):
         if choice.get("role") not in ("base", "update", "dlc", "additional-game"):
             raise ValueError("Classify each selected package; unknown packages require review")
     bases = sum(c["role"] == "base" for c in choices)
-    if not bases or (mode == "single" and (bases != 1 or any(c["role"] == "additional-game" for c in choices))):
+    attachment = bool(existing_game)
+    if attachment and (not preview.get("romm_routing") or existing_game not in {g["name"] for g in preview.get("existing_games", [])}):
+        raise ValueError("Select an identified existing game folder")
+    if attachment and any(c["role"] not in {"update", "dlc"} for c in choices):
+        raise ValueError("Existing game attachments accept updates/DLC only")
+    if not attachment and (not bases or (mode == "single" and (bases != 1 or any(c["role"] == "additional-game" for c in choices)))):
         raise ValueError("Single game mode needs exactly one base; use collection mode for additional games")
-    return {"token": preview["token"], "choices": choices, "mode": mode}
+    intent = {"token": preview["token"], "choices": choices, "mode": mode}
+    if attachment:
+        intent["existing_game"] = existing_game
+    return intent

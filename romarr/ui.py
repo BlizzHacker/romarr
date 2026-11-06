@@ -2997,22 +2997,34 @@ RENDER.queue=async()=>{
     const selected=new Map((saved.choices||[]).map(c=>[c.primary,c.role]));
     $('#page').innerHTML=`<h2>Choose what enters the library</h2><p>${esc(plan.note)}</p>
       <p class="help">Package identity is unverified. Confirm the base game and associate updates or DLC yourself. Companions are selected together. Sizes below describe these members, not the whole collection.</p>
+      ${plan.romm_routing?`<label>Attach to existing game <select id="q-plan-existing"><option value="">New base game from this download</option>${plan.existing_games.map(g=>`<option value="${esc(g.name)}">${esc(g.name)} (${g.bases.map(esc).join(", ")})</option>`).join("")}</select></label><p class="help">Existing-game attachments import updates/DLC only and never fulfil a missing base-game request. Loose base files require an explicit move into a game folder before attachment.</p>`:""}
       <label>Import mode <select id="q-plan-mode"><option value="single">One base game and optional packages</option><option value="collection">Collection / multiple games</option></select></label>
       <table><thead><tr><th>Import</th><th>Payload and companions</th><th>Role</th><th>Proposed destination</th></tr></thead><tbody>${plan.items.map((i,n)=>`<tr>
         <td><input type="checkbox" data-plan-check="${n}" ${(selected.has(i.primary)||(!saved.token&&i.selected))?'checked':''}></td>
         <td>${esc(i.primary)}<div class="help">${esc(i.evidence)} (${esc(i.confidence)})<br>${i.bytes==null?'Expanded size unknown':esc(String(i.bytes))+' bytes'}<br>${i.members.map(esc).join('<br>')}</div></td>
         <td><select data-plan-role="${n}"><option value="unknown">Needs review</option><option value="base">Base game</option><option value="update">Update for this base</option><option value="dlc">DLC for this base</option><option value="additional-game">Additional game</option></select></td><td>${esc(i.destination)}</td></tr>`).join('')}</tbody></table>
       <details><summary>${plan.extras.length} excluded files</summary>${plan.extras.map(esc).join('<br>')||'None'}</details>
-      <p><button class="btn" id="q-plan-save">Save selection</button> <button class="btn ghost" id="q-plan-back">Back</button></p>`;
+      <p><button class="btn" id="q-plan-save">${plan.romm_routing?"Review destinations":"Save selection"}</button> <button class="btn ghost" id="q-plan-back">Back</button></p><div id="q-plan-review"></div>`;
     $('#q-plan-mode').value=saved.mode||'single';
+    if(plan.romm_routing) $('#q-plan-existing').value=saved.existing_game||'';
     plan.items.forEach((i,n)=>document.querySelector(`[data-plan-role="${n}"]`).value=selected.get(i.primary)||i.role);
     $('#q-plan-back').onclick=()=>go('queue');
     $('#q-plan-save').onclick=async()=>{
       const choices=plan.items.flatMap((i,n)=>document.querySelector(`[data-plan-check="${n}"]`).checked?[{primary:i.primary,role:document.querySelector(`[data-plan-role="${n}"]`).value}]:[]);
-      const r=await post({confirm:true,token:plan.token,choices,mode:$('#q-plan-mode').value});
-      if(r.error){toast(r.error);return;}
-      toast('Selection saved. The next import sweep will use it and retain the source.');go('queue');
+      const selection={token:plan.token,choices,mode:$('#q-plan-mode').value,existing_game:plan.romm_routing?$('#q-plan-existing').value:''};
+      const save=async extra=>{
+        const result=await post({confirm:true,...selection,...extra});
+        if(result.error){toast(result.error);return;}
+        toast('Selection saved. The next import sweep will use it and retain the source.');go('queue');
+      };
+      if(!plan.romm_routing){await save({});return;}
+      const reviewed=await post({review:true,...selection});
+      if(reviewed.error){toast(reviewed.error);return;}
+      const destinations=reviewed.preview.planned_destinations||{};
+      $('#q-plan-review').innerHTML=`<h3>Confirm destination tree</h3><p class="help">Files are organized for RomM scanning; updates/DLC are not installed or applied to an emulator. Sources stay intact.</p><ul>${Object.entries(destinations).map(([primary,destination])=>`<li>${esc(primary)} → <code>${esc(destination)}</code></li>`).join('')}</ul><button class="btn" id="q-plan-confirm">Confirm these destinations</button>`;
+      $('#q-plan-confirm').onclick=()=>save({reviewed_destinations:destinations});
     };
+    document.querySelectorAll('[data-plan-check],[data-plan-role],#q-plan-mode,#q-plan-existing').forEach(c=>c.onchange=()=>{$('#q-plan-review').innerHTML='';});
   });
   document.querySelectorAll('[data-qresume]').forEach(b=>b.onclick=()=>act(b.dataset.qresume,'resume-retained'));
   document.querySelectorAll('[data-qretry]').forEach(b=>b.onclick=()=>act(b.dataset.qretry,'retry'));
