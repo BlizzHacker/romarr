@@ -2130,7 +2130,7 @@ class ROMarr:
         }
 
     def queue_import_plan(self, index: int, body: dict) -> dict:
-        from .import_intent import preview_import, choose_import
+        from .import_intent import preview_import, choose_import, queue_identity
         from .library import MissingArchiveTool
         from requests import RequestException
         import zipfile
@@ -2167,7 +2167,8 @@ class ROMarr:
                                             self.store.settings.get("remote_path_mappings"))
             preview = preview_import(path, platform, self.library_root(target[0]),
                                      layout=self.library_layout(target[0]),
-                                     platform_folders=self.platform_folders(target[0]))
+                                     platform_folders=self.platform_folders(target[0]),
+                                     queue_identity=queue_identity(item))
             if body.get("confirm"):
                 if body.get("token") != preview["token"]:
                     return {"error": "download changed; refresh the preview before importing"}
@@ -6346,14 +6347,15 @@ class ROMarr:
 
             selected_primaries = None
             if queue_item is not None and path.exists():
-                from .import_intent import preview_import
+                from .import_intent import preview_import, queue_identity
                 from .library import MissingArchiveTool
                 import zipfile
                 import subprocess
                 try:
                     preview = preview_import(path, platform, self.library_root(target_cfg),
                                              layout=self.library_layout(target_cfg),
-                                             platform_folders=self.platform_folders(target_cfg))
+                                             platform_folders=self.platform_folders(target_cfg),
+                                             queue_identity=queue_identity(queue_item))
                 except (OSError, ValueError, RuntimeError, MissingArchiveTool,
                         zipfile.BadZipFile, subprocess.SubprocessError) as exc:
                     # A bad archive belongs to this row, not to every completed

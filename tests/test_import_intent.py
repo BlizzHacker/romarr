@@ -153,6 +153,15 @@ def test_http_preview_is_read_only_and_confirm_survives_restart(tmp_path, monkey
         body = {"index": 0, "confirm": True, "token": "stale", "choices": [{"primary": "A.gb", "role": "base"}]}
         assert "error" in requests.post(base, json=body, headers=headers).json()
         assert (tmp_path / "state.json").read_bytes() == original
+        # A queue index can shift while the preview is open. Another row can
+        # refer to the same completed bytes, so source metadata alone is unsafe.
+        first = service.queue[0]
+        service.queue[0] = QueueItem("Different requested game", "gb", "bundle", 1, "grabbed")
+        body["token"] = plan["token"]
+        assert "error" in requests.post(base, json=body, headers=headers).json()
+        assert not service.queue[0].import_intent
+        assert (tmp_path / "state.json").read_bytes() == original
+        service.queue[0] = first
         body["token"] = plan["token"]
         assert requests.post(base, json=body, headers=headers).json()["ok"]
         loaded = Store(tmp_path / "state.json")

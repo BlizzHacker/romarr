@@ -7,7 +7,13 @@ from .library import _source_for, platform_dir, _digital_set_name, _set_name
 from .selection import pick_all_rom_sets
 
 
-def preview_import(download, platform, library_root, *, layout="flat", platform_folders=None):
+def queue_identity(item):
+    """Bind approvals to a durable queue row, not its current list position."""
+    return [item.game, item.platform, item.at, item.download_id, item.release_id,
+            item.release, item.indexer, item.external_request_id]
+
+
+def preview_import(download, platform, library_root, *, layout="flat", platform_folders=None, queue_identity=None):
     source = _source_for(download, platform)
     names = source.names()
     sets = pick_all_rom_sets(names, platform, read=source.read)
@@ -22,10 +28,10 @@ def preview_import(download, platform, library_root, *, layout="flat", platform_
             identity.append((str(path.relative_to(download)) if path != download else ".", st.st_size, st.st_mtime_ns))
             sizes[str(path.relative_to(download)) if path != download else download.name] = st.st_size
     import zipfile
-    if zipfile.is_zipfile(download) if download.is_file() else False:
+    if download.is_file() and zipfile.is_zipfile(download):
         with zipfile.ZipFile(download) as archive:
             sizes = {i.filename: i.file_size for i in archive.infolist()}
-    token = hashlib.sha256(json.dumps([identity, names], sort_keys=True).encode()).hexdigest()
+    token = hashlib.sha256(json.dumps([identity, names, queue_identity], sort_keys=True).encode()).hexdigest()
     ambiguous_packages = {".nsp", ".xci", ".pkg", ".cia"}
     target = platform_dir(library_root, platform, layout=layout, platform_folders=platform_folders)
     items = []
