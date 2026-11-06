@@ -594,8 +594,13 @@ class QBittorrent:
         if len(confirmed) != 1:
             self._added.error = "new request tag was not confirmed; data retained for review"
             return False
-        self._added.selected_file = {"path": chosen["name"], "index": index,
-                                     "size": chosen["size"], "hash": torrent_hash}
+        identity = {"path": chosen["name"], "index": index,
+                    "size": chosen["size"], "hash": torrent_hash}
+        from .retained_collection import owner_records
+        prospective = owner_records(owners) + [{"client": getattr(self, "romarr_id", ""),
+                        "download_id": "qbit-tag:" + tag, "selected_file": identity}]
+        self._collection_owners(confirmed[0], prospective)
+        self._added.selected_file = identity
         self._added.job_id = "qbit-tag:" + tag
         self._added.error = ""
         return True
