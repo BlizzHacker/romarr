@@ -161,10 +161,16 @@ class QBittorrent:
         self._session = session or requests.Session()
         self._authed = False
         self._added = threading.local()
+        self._selection_lock = threading.RLock()
+        self._selective_hashes = set()
 
     @property
     def last_job_id(self) -> str:
         return getattr(self._added, "job_id", "")
+
+    @property
+    def last_retained_hash(self):
+        return getattr(self._added, "retained_hash", "")
 
     @property
     def last_selected_file(self) -> dict:
@@ -288,7 +294,14 @@ class QBittorrent:
             time.sleep(min(QBITTORRENT_ADD_POLL_INTERVAL, remaining))
 
     def add_magnet_selective(self, magnet: str, file_path: str, *,
-                             save_path: str | None = None) -> bool:
+                             save_path: str | None = None,
+                             owned_selections=None) -> bool:
+        with self._selection_lock:
+            return self._add_magnet_selective(magnet, file_path, save_path=save_path,
+                                              owned_selections=owned_selections)
+
+    def _add_magnet_selective(self, magnet: str, file_path: str, *,
+                              save_path=None, owned_selections=None) -> bool:
         """Add a magnet paused, select one exact file, then resume it.
 
         Failure never falls back to an ordinary add: a newly-created torrent
@@ -298,10 +311,11 @@ class QBittorrent:
         """
         self._added.job_id = ""
         self._added.error = ""
+        self._added.selected_file = {}
+        self._added.retained_hash = ""
         if not str(magnet or "").startswith("magnet:"):
             self._added.error = "file selection requires a magnet link"
             return False
-        self._added.selected_file = {}
         wanted_path = _normalise_torrent_path(file_path)
         if not wanted_path:
             self._added.error = "the source did not provide a safe relative file path"
@@ -314,7 +328,22 @@ class QBittorrent:
             self._added.error = "qBittorrent authentication failed"
             return False
 
-        tag = "romarr-" + secrets.token_hex(12)
+        from .retained_collection import magnet_hash
+        torrent_hash = magnet_hash(magnet)
+        if torrent_hash:
+            try:
+                existing = [row for row in self.torrents()
+                            if str(row.get("hash") or "").lower() == torrent_hash]
+                if len(existing) > 1:
+                    self._added.error = "ambiguous retained collection; review ownership"
+                    return False
+                if existing:
+                    with self._selection_lock:
+                        return self._reuse_collection(existing[0], wanted_path, owned_selections or [])
+            except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
+                self._added.error = f"retained collection needs review: {exc}"
+                return False
+        tag = "romarr-collection-" + secrets.token_hex(12)
         data = {"urls": magnet, "category": self._config.category,
                 "tags": tag, "paused": "false", "stopCondition": "MetadataReceived",
                 "contentLayout": "NoSubfolder"}
@@ -348,6 +377,10 @@ class QBittorrent:
                 return False
             if tagged:
                 owned_hash = str(tagged[0].get("hash") or "")
+                tags = {t.strip() for t in str(tagged[0].get("tags") or "").split(",") if t.strip()}
+                if tags != {tag} or tagged[0].get("category") != self._config.category:
+                    self._added.error = "new torrent ownership/category changed; data retained for review"
+                    return False
                 state = str(tagged[0].get("state") or "")
                 if not owned_hash:
                     break
@@ -374,6 +407,11 @@ class QBittorrent:
         def fail(message: str) -> bool:
             self._added.error = message
             try:
+                current = [r for r in self.torrents() if r.get("hash") == owned_hash]
+                if (len(current) != 1 or current[0].get("category") != self._config.category
+                        or {t.strip() for t in str(current[0].get("tags") or "").split(",") if t.strip()} != {tag}):
+                    self._added.error += "; ownership changed, data retained for review"
+                    return False
                 if not self.delete_torrent(owned_hash):
                     log.warning("could not remove paused unselected torrent %s",
                                 owned_hash[:12])
@@ -396,6 +434,8 @@ class QBittorrent:
                                if isinstance(row, dict) and _row_has_tag(row, tag)]
                 if (len(tagged_rows) == 1
                         and str(tagged_rows[0].get("hash") or "") == owned_hash
+                        and tagged_rows[0].get("category") == self._config.category
+                        and {t.strip() for t in str(tagged_rows[0].get("tags") or "").split(",") if t.strip()} == {tag}
                         and str(tagged_rows[0].get("state") or "")
                         in {"pausedDL", "pausedUP", "stoppedDL", "stoppedUP"}):
                     return True
@@ -498,6 +538,115 @@ class QBittorrent:
         self._added.error = ""
         return True
 
+    def _collection_owners(self, row, owners):
+        from .retained_collection import validate_owners
+        torrent_hash = str(row.get("hash") or "")
+        files = self.torrent_files(torrent_hash)
+        fresh = [r for r in self.torrents() if str(r.get("hash") or "") == torrent_hash]
+        if len(fresh) != 1:
+            raise ValueError("retained torrent disappeared or became ambiguous")
+        validate_owners(fresh[0], files, owners, getattr(self, "romarr_id", ""), self._config.category)
+        return files
+
+    def _reuse_collection(self, row, wanted, owners):
+        fresh = [r for r in self.torrents() if r.get("hash") == row.get("hash")]
+        if len(fresh) != 1:
+            raise ValueError("retained torrent disappeared")
+        row = fresh[0]
+        files = self._collection_owners(row, owners)
+        torrent_hash = str(row["hash"])
+        self._added.retained_hash = torrent_hash
+        state = str(row.get("state") or "")
+        if state in {"pausedDL", "pausedUP", "stoppedDL", "stoppedUP"}:
+            self._added.error = "Retained collection is stopped. Use Resume retained torrent in Queue, then retry this grab."
+            return False
+        if state not in {"downloading", "stalledDL", "queuedDL", "forcedDL", "uploading", "stalledUP", "queuedUP", "forcedUP"}:
+            self._added.error = "retained collection is not ready for selection; review its downloader state"
+            return False
+        matches = [f for f in files if _normalise_torrent_path(f.get("name", "")) == wanted
+                   or _normalise_torrent_path(f.get("name", "")).partition("/")[2] == wanted]
+        if len(matches) != 1:
+            self._added.error = "selected path did not match exactly one retained collection file"
+            return False
+        chosen = matches[0]
+        before = {int(f["index"]): int(f["priority"]) for f in files}
+        index = int(chosen["index"])
+        if int(chosen.get("size") or 0) <= 0:
+            self._added.error = "selected file size is missing; review collection metadata"
+            return False
+        if not before[index] and not self.set_file_priorities(torrent_hash, {index: 1}):
+            self._added.error = "additive selection failed; existing data retained for review"
+            return False
+        after = self._collection_owners(row, owners)
+        expected = dict(before)
+        expected[index] = before[index] or 1
+        if ({int(f["index"]): int(f["priority"]) for f in after} != expected
+                or not any(f.get("index") == chosen["index"] and f.get("name") == chosen.get("name")
+                           and f.get("size") == chosen.get("size") for f in after)):
+            self._added.error = "collection changed during additive selection; retained for review"
+            return False
+        tag = "romarr-collection-" + secrets.token_hex(12)
+        response = self._post("torrents/addTags", data={"hashes": torrent_hash, "tags": tag}, timeout=self._config.timeout)
+        if not response.ok:
+            self._added.error = "could not tag the new request; additive selection retained for review"
+            return False
+        confirmed = [f for f in self.torrents() if str(f.get("hash") or "") == torrent_hash and _row_has_tag(f, tag)]
+        if len(confirmed) != 1:
+            self._added.error = "new request tag was not confirmed; data retained for review"
+            return False
+        identity = {"path": chosen["name"], "index": index,
+                    "size": chosen["size"], "hash": torrent_hash}
+        from .retained_collection import owner_records
+        prospective = owner_records(owners) + [{"client": getattr(self, "romarr_id", ""),
+                        "download_id": "qbit-tag:" + tag, "selected_file": identity}]
+        self._collection_owners(confirmed[0], prospective)
+        self._added.selected_file = identity
+        self._added.job_id = "qbit-tag:" + tag
+        self._added.error = ""
+        return True
+
+    def resume_retained_collection(self, identity, owners):
+        with self._selection_lock:
+            rows = [r for r in self.torrents() if r.get("hash") == identity.get("hash")]
+            if len(rows) != 1:
+                raise ValueError("retained collection cannot be identified")
+            self._collection_owners(rows[0], owners)
+            return self.resume_torrent(identity["hash"])
+
+    def selective_completed(self, owners, *, ownership=None):
+        """One completed selected member per independent request, not per torrent."""
+        from .retained_collection import owner_records
+        records = owner_records(owners)
+        matching = [o for o in records if o["client"] == getattr(self, "romarr_id", "")]
+        all_known = owner_records(ownership if ownership is not None else owners)
+        self._selective_hashes = {o["selected_file"].get("hash") for o in all_known
+                                  if o["client"] == getattr(self, "romarr_id", "")}
+        if not matching:
+            return []
+        rows = {str(r.get("hash") or ""): r for r in self.torrents()}
+        out = []
+        for torrent_hash in self._selective_hashes:
+            row = rows.get(torrent_hash)
+            if not row:
+                continue
+            try:
+                files = self._collection_owners(row, ownership if ownership is not None else matching)
+            except (ValueError, KeyError, TypeError, requests.RequestException) as exc:
+                for owner in matching:
+                    if owner["selected_file"].get("hash") == torrent_hash:
+                        out.append(dict(row, tags=owner["download_id"][9:], id=owner["download_id"],
+                                        _romarr_selection_error=f"Retained collection needs review: {exc}"))
+                continue
+            for owner in matching:
+                identity = owner["selected_file"]
+                if identity.get("hash") != torrent_hash:
+                    continue
+                member = next((f for f in files if f.get("index") == identity.get("index")), None)
+                if member and float(member.get("progress") or 0) == 1 and int(member.get("priority") or 0) > 0:
+                    tag = owner["download_id"][9:]
+                    out.append(dict(row, tags=tag, id=owner["download_id"]))
+        return out
+
     def torrents(self) -> list[dict]:
         """Return the client's torrent list for an explicit collection plan."""
         if not self._authed and not self.login():
@@ -573,6 +722,12 @@ class QBittorrent:
             ]
             if not hashes:
                 return False
+            # A shared torrent belongs to several independent requests. Never
+            # retire/delete all of their bytes through a single request tag.
+            for row in rows:
+                tags = {t.strip() for t in str(row.get("tags") or "").split(",") if t.strip()}
+                if _row_has_tag(row, tag) and len(tags) > 1:
+                    return False
             return self.delete_torrent("|".join(hashes),
                                        delete_files=delete_files)
         return self.delete_torrent(raw, delete_files=delete_files)
@@ -636,6 +791,8 @@ class QBittorrent:
         done = []
         for row in response.json():
             if _deselected(row):
+                if (row.get("hash") in self._selective_hashes or "romarr-collection-" in str(row.get("tags") or "")):
+                    continue
                 self.reselect(row)
             else:
                 done.append(row)

@@ -61,7 +61,7 @@ class Session:
         self.gets.append((endpoint, dict(params or {})))
         if endpoint == "torrents/info":
             return Response([{"hash": self.hash, "tags": self.tag,
-                              "state": self.state}])
+                              "state": self.state, "category": "romarr"}])
         if endpoint == "torrents/files":
             return Response([dict(row) for row in self.files])
         return Response(status=404, text="Not Found")
@@ -163,7 +163,7 @@ def test_minerva_grab_passes_the_exact_path_to_qbittorrent(tmp_path, monkeypatch
     client, _session = qbit([])
     calls = []
 
-    def select(magnet, path):
+    def select(magnet, path, **kwargs):
         calls.append((magnet, path))
         client._added.job_id = "qbit-tag:minerva-test"
         return True

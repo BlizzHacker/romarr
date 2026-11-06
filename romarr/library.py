@@ -568,7 +568,7 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
                require_verified: bool = False,
                layout: str = "flat", translation: bool = False,
                rename: bool = False,
-               platform_folders=None, prefer_hardlinks: bool = False, selected_primaries=None) -> list[ImportResult]:
+               platform_folders=None, prefer_hardlinks: bool = False, selected_primaries=None, bundle_routes=None) -> list[ImportResult]:
     """Place every ROM from a finished download into the library.
 
     A cartridge zip may hold several games (a 3-in-1 collection, a bundle)
@@ -631,9 +631,29 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
                                   platform_folders=platform_folders)
 
         if not chosen.is_multi_file:
-            target_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                target_dir.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                results.append(ImportResult(False, target_dir, f"destination preparation failed: {exc}"))
+                continue
             name = _import_name(chosen.primary, verdict, rename=rename)
-            destination = target_dir / name
+            if bundle_routes is not None:
+                relative = Path(bundle_routes.get(chosen.primary, ""))
+                if (not str(relative) or str(relative) == "." or relative.is_absolute()
+                        or ".." in relative.parts
+                        or not (target_dir / relative).resolve().is_relative_to(target_dir.resolve())):
+                    results.append(ImportResult(False, None, "invalid reviewed destination; review the bundle again"))
+                    continue
+                destination = target_dir / relative
+                target_dir = destination.parent
+                try:
+                    target_dir.mkdir(parents=True, exist_ok=True)
+                except OSError as exc:
+                    results.append(ImportResult(False, destination, f"destination preparation failed: {exc}"))
+                    continue
+                name = destination.name
+            else:
+                destination = target_dir / name
             if destination.exists() and (not overwrite or destination.stat().st_size == 0):
                 results.append(ImportResult(False, destination, _existing_destination(destination)))
                 continue

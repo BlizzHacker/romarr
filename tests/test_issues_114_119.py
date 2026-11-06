@@ -80,7 +80,8 @@ def test_issue_115_tag_matches_before_shared_infohash():
 
 
 @pytest.mark.parametrize("retain", [True, False])
-def test_issue_115_history_and_collection_cleanup(tmp_path, retain):
+@pytest.mark.parametrize("selective", [True, False])
+def test_issue_115_history_and_collection_cleanup(tmp_path, retain, selective):
     from romarr.app import ROMarr
 
     # Create download folder with a valid ROM
@@ -129,9 +130,9 @@ def test_issue_115_history_and_collection_cleanup(tmp_path, retain):
     # Queue item with qbit-tag
     q_item = QueueItem("Tetris", "gb", "Tetris (World).gb", 10, "grabbed",
                        release_id="btih:colhash", download_id="qbit-tag:romarr-tetris",
-                       download_client="qbit", file_selection_required=True,
+                       download_client="qbit", file_selection_required=selective,
                        selected_file={"path": rom_file.name, "index": 0,
-                                      "size": rom_file.stat().st_size, "hash": "colhash"})
+                                      "size": rom_file.stat().st_size, "hash": "colhash"} if selective else {})
     svc.store.enqueue(q_item)
 
     # Process import

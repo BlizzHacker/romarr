@@ -273,10 +273,10 @@ class ReleaseProfile:
             _settings_ref=settings,
         )
 
-    def refusal(self, lowered: str, size: int = 0) -> str:
+    def refusal(self, lowered: str, size: int = 0, *, content_path: str = "") -> str:
         """Why this release is refused outright, or "" if it is not."""
         for term in self.excluded:
-            if _matches(term, lowered):
+            if _matches(term, lowered) or (content_path and _matches(term, content_path.lower())):
                 return f"excluded by release profile ({term!r})"
         for term in self.required:
             if not _matches(term, lowered):
