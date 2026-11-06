@@ -2116,6 +2116,7 @@ class ROMarr:
                 "accepted": verdict.accepted,
                 "reasons": verdict.why(),
                 "grabbable": bool(r.download_url) and not collection_content_refusal(r),
+                "grab_refusal": collection_content_refusal(r),
             })
 
         with self._lock:

@@ -70,6 +70,7 @@ def test_hub_adapter_carries_refusal_and_search_disables_grab(tmp_path, monkeypa
     monkeypatch.setattr(service, "_search_releases", lambda *args: items)
     result = service.candidates("Fixture Game", "wiiu")["items"][0]
     assert not result["accepted"] and not result["grabbable"]
+    assert result["grab_refusal"] == "non-game collection content (manual)"
     assert "non-game" in " ".join(result["reasons"])
     assert not service.grab(items[0], "Fixture Game", "wiiu", manual=True)["ok"]
     assert not service.queue

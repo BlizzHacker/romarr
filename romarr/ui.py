@@ -1462,7 +1462,7 @@ RENDER.search=async()=>{
         <td style="color:var(--dim);font-size:12px">${r.reasons.map(esc).join('<br>')}</td>
         <td><div class="rowact">${r.grabbable
           ? `<button data-grab="${esc(r.id)}" data-plat="${esc(r.platform||'')}">Grab</button>`
-          : '<span style="color:var(--dim);font-size:12px">no link</span>'}</div></td>
+          : `<span style="color:var(--dim);font-size:12px">${esc(r.grab_refusal||'no link')}</span>`}</div></td>
         </tr>`).join('')}</tbody></table>`;
 
     document.querySelectorAll('[data-grab]').forEach(b=>b.onclick=async()=>{
