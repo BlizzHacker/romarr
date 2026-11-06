@@ -79,3 +79,30 @@ def test_existing_destination_never_clobbered(tmp_path):
     result, = import_rom(source, resolve("gb"), tmp_path / "library", prefer_hardlinks=True)
     assert not result.ok
     assert destination.read_bytes() == b"previous"
+
+
+def test_archive_as_playable_rom_can_link(tmp_path):
+    source = tmp_path / "game.zip"
+    with zipfile.ZipFile(source, "w") as archive:
+        archive.writestr("chip.bin", b"x" * 32768)
+    source.chmod(0o644)
+    result, = import_rom(source, resolve("mame"), tmp_path / "library", prefer_hardlinks=True)
+    assert result.ok and result.import_method == "hardlink"
+    assert os.path.samefile(source, result.destination)
+
+
+def test_link_source_replacement_refused(tmp_path, monkeypatch):
+    from romarr.library import _PathSource
+    source = raw(tmp_path)
+    reader = _PathSource(source)
+    reader.prefer_hardlinks = True
+    original_link = os.link
+    def race(src, dst, **kw):
+        source.unlink()
+        source.write_bytes(b"replacement")
+        return original_link(src, dst, **kw)
+    monkeypatch.setattr(os, "link", race)
+    with pytest.raises(OSError, match="source changed"):
+        reader.copy(source.name, tmp_path / "destination.gb")
+    assert not (tmp_path / "destination.gb").exists()
+    assert source.read_bytes() == b"replacement"
