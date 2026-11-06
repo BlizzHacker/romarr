@@ -46,6 +46,8 @@ from urllib.parse import parse_qs, unquote_plus, urlparse
 
 import time
 
+import requests
+
 from .libraries import (
     LIBRARY_TYPES, build_library, build_library_from_config, library_counts,
     load_backend_plugins, merge_library_secrets, redact_library, route_library,
@@ -63,6 +65,7 @@ from .downloaders import (
 from .indexers import INDEXER_TYPES, build_indexer, merge_indexer_secrets, redact_indexer
 from .indexers import Prowlarr, ProwlarrConfig, ProwlarrDownloadError
 from .library import import_rom, map_remote_path, platform_dir
+from .selective_import import selected_import_path
 from .collections import is_translation
 from .auth import DISABLED as AUTH_DISABLED
 from .auth import MIN_PASSWORD, SESSION_COOKIE, Auth, new_api_key, parse_cookies
@@ -1868,7 +1871,7 @@ class ROMarr:
                 return None
             if any(q.game.strip().casefold() == key[0]
                    and q.platform.strip().casefold() == key[1]
-                   and q.state in ("queued", "grabbed")
+                   and q.state in ("queued", "grabbed", "import-review")
                    for q in self.queue):
                 return None
             self._automatic_grab_reservations.add(key)
@@ -2003,7 +2006,10 @@ class ROMarr:
                          external_request_id=external_request_id,
                          download_id=download_id,
                          download_client=getattr(client, "romarr_id", ""),
-                         manual=manual)
+                         manual=manual,
+                         file_selection_required=required_file,
+                         selected_file=(getattr(client, "last_selected_file", {})
+                                        if required_file and ok else {}))
         self.store.enqueue(item)
         if ok:
             if external_request_id:
@@ -2123,6 +2129,60 @@ class ROMarr:
             "items": items,
         }
 
+    def queue_import_plan(self, index: int, body: dict) -> dict:
+        from .import_intent import preview_import, choose_import, queue_identity
+        from .library import MissingArchiveTool
+        from requests import RequestException
+        import zipfile
+        import subprocess
+        with self._lock:
+            if not 0 <= index < len(self.queue):
+                return {"error": "no such queue item"}
+            item = self.queue[index]
+            if item.state == "imported":
+                return {"error": "this item has already imported"}
+        platform = resolve(item.platform)
+        target = self.library_for(item.platform) if platform else None
+        if target is None:
+            return {"error": "configure a platform and library first"}
+        torrent = None
+        source_client = None
+        for client in self.clients:
+            if not getattr(client, "configured", True):
+                continue
+            for candidate in client.completed():
+                if match_queue_item([item], candidate) is item:
+                    torrent = candidate
+                    source_client = client
+                    break
+        if torrent is None:
+            return {"error": "download is not complete or cannot be found"}
+        path = map_remote_path(torrent.get("content_path") or torrent.get("save_path", ""),
+                               self.store.settings.get("remote_path_mappings"))
+        try:
+            if (getattr(item, "file_selection_required", False) or getattr(item, "selected_file", None)
+                    or "minerva" in item.indexer.lower()):
+                from .selective_import import selected_import_path
+                path = selected_import_path(item, torrent, source_client,
+                                            self.store.settings.get("remote_path_mappings"))
+            preview = preview_import(path, platform, self.library_root(target[0]),
+                                     layout=self.library_layout(target[0]),
+                                     platform_folders=self.platform_folders(target[0]),
+                                     queue_identity=queue_identity(item))
+            if body.get("confirm"):
+                if body.get("token") != preview["token"]:
+                    return {"error": "download changed; refresh the preview before importing"}
+                intent = choose_import(preview, body.get("choices"), body.get("mode", "single"))
+                with self._lock:
+                    item.import_intent = intent
+                    item.state = "grabbed"
+                    item.detail = "Import selection saved; source download will be retained"
+                item.import_preview = preview
+                self.store.save()
+            return {"ok": True, "preview": preview}
+        except (OSError, ValueError, RuntimeError, TypeError, MissingArchiveTool, RequestException, zipfile.BadZipFile, subprocess.SubprocessError) as exc:
+            return {"error": str(exc)}
+
     def queue_action(self, index: int, action: str) -> dict:
         """Act on one queue row: retry it, or forget it.
 
@@ -2141,6 +2201,10 @@ class ROMarr:
                 self.queue = [q for n, q in enumerate(self.queue)
                               if n != index]
             return {"ok": True, "removed": True}
+        if action == "retry" and (item.import_intent or item.state in ("import-failed", "import-review")):
+            item.state = "grabbed"
+            self.store.save()
+            return {"ok": True, "import_retry": True}
         if action == "retry":
             # Drop the stale row first so the retry's outcome is the only
             # one for this game, then run the same request a person would.
@@ -2871,6 +2935,7 @@ class ROMarr:
                               dats=self.dats,
                               require_verified=require_verified,
                               rename=bool(self.store.settings.get("rename_on_import", True)),
+                prefer_hardlinks=bool(self.store.settings.get("prefer_hardlinks", False)),
                               layout=self.library_layout(target_cfg),
                               translation=is_translation(source.name),
                               platform_folders=self.platform_folders(target_cfg))
@@ -2915,11 +2980,13 @@ class ROMarr:
                 kind="imported", game=source.stem, platform=platform.slug,
                 release=source.name, library=label,
                 detail=(f"manual import ({'FORCED over ' + str(status) if forced else status or 'unknown'})"
-                        f": {outcome.destination}")))
+                        f": {outcome.destination} ({outcome.import_method or 'copy'}) {outcome.fallback_reason}")))
             imported.append({
                 "file": str(outcome.destination),
                 "verdict": status,
                 "forced": forced,
+                "import_method": outcome.import_method,
+                "fallback_reason": outcome.fallback_reason,
             })
 
         if imported and self.store.settings.get("rescan_after_import", True):
@@ -2927,7 +2994,7 @@ class ROMarr:
         self.store.save()
 
         result = {
-            "ok": bool(imported),
+            "ok": bool(imported) and not refused,
             "platform": platform.slug,
             "library": label,
             "imported": imported,
@@ -3982,7 +4049,7 @@ class ROMarr:
         games = self._count_cache[0]
         split = self.library_split()
         with self._lock:
-            queued = sum(1 for i in self.queue if i.state in ("queued", "grabbed"))
+            queued = sum(1 for i in self.queue if i.state in ("queued", "grabbed", "import-review"))
         # `games` stays the sum, because that is what the badge has always
         # meant and a nav badge that changed number overnight would read as
         # data loss. The two categories ride alongside it so the badge can
@@ -6173,7 +6240,8 @@ class ROMarr:
             if not getattr(client, "configured", True):
                 continue
             try:
-                finished.extend(client.completed())
+                finished.extend(dict(row, _romarr_client=client)
+                                for row in client.completed())
             except Exception as err:
                 # One unreachable client must not stop the others importing.
                 log.warning("%s completed() failed: %s", getattr(client, "name", client), err)
@@ -6238,6 +6306,22 @@ class ROMarr:
                 torrent.get("content_path") or torrent.get("save_path", ""),
                 self.store.settings.get("remote_path_mappings"),
             )
+            if (queue_item is not None and (
+                    queue_item.file_selection_required
+                    or queue_item.selected_file
+                    or "minerva" in queue_item.indexer.lower())):
+                try:
+                    path = selected_import_path(
+                        queue_item, torrent, torrent.get("_romarr_client"),
+                        self.store.settings.get("remote_path_mappings"))
+                except (TypeError, ValueError, OSError, requests.RequestException) as err:
+                    detail = f"selected collection file needs review: {err}"
+                    queue_item.state = "import-failed"
+                    queue_item.detail = detail
+                    self.store.record(Event(kind="failed", game=queue_item.game,
+                                            platform=platform.slug, detail=detail))
+                    results.append({"name": name, "ok": False, "reason": detail})
+                    continue
             refused = self._virus_check(path, name, platform, queue_item)
             if refused is not None:
                 results.append(refused)
@@ -6261,13 +6345,46 @@ class ROMarr:
             target_cfg, target_lib = target
             label = target_cfg.get("name") or getattr(target_lib, "name", "library")
 
+            selected_primaries = None
+            if queue_item is not None and path.exists():
+                from .import_intent import preview_import, queue_identity
+                from .library import MissingArchiveTool
+                import zipfile
+                import subprocess
+                try:
+                    preview = preview_import(path, platform, self.library_root(target_cfg),
+                                             layout=self.library_layout(target_cfg),
+                                             platform_folders=self.platform_folders(target_cfg),
+                                             queue_identity=queue_identity(queue_item))
+                except (OSError, ValueError, RuntimeError, MissingArchiveTool,
+                        zipfile.BadZipFile, subprocess.SubprocessError) as exc:
+                    # A bad archive belongs to this row, not to every completed
+                    # job behind it. Preserve sources and make the failure visible.
+                    queue_item.state = "import-failed"
+                    queue_item.detail = f"could not preview import: {exc}"
+                    self.store.record(Event(kind="failed", game=queue_item.game,
+                                            platform=platform.slug, detail=queue_item.detail))
+                    results.append({"name": name, "ok": False, "reason": queue_item.detail})
+                    continue
+                intent = queue_item.import_intent
+                if (preview["requires_review"] and not intent) or (intent and intent.get("token") != preview["token"]):
+                    queue_item.import_preview = preview
+                    queue_item.state = "import-review"
+                    queue_item.detail = "Review bundle contents in Queue before importing"
+                    results.append({"name": name, "ok": False, "reason": queue_item.detail})
+                    continue
+                if intent:
+                    selected_primaries = [c["primary"] for c in intent["choices"]]
+
             outcomes = import_rom(
                 path, platform, self.library_root(target_cfg),
                 dats=self.dats,
                 rename=bool(self.store.settings.get("rename_on_import", True)),
+                prefer_hardlinks=bool(self.store.settings.get("prefer_hardlinks", False)),
                 layout=self.library_layout(target_cfg),
                 translation=is_translation(name),
-                platform_folders=self.platform_folders(target_cfg))
+                platform_folders=self.platform_folders(target_cfg),
+                **({"selected_primaries": selected_primaries} if selected_primaries is not None else {}))
             game_title = (queue_item.game if queue_item and getattr(queue_item, "game", "") else name)
             if not outcomes:
                 self.store.record(Event(kind="failed", game=game_title,
@@ -6284,15 +6401,16 @@ class ROMarr:
                     queue_item.release_fault = True
                 continue
 
-            any_ok = any(o.ok for o in outcomes)
+            all_ok = all(o.ok for o in outcomes)
             for outcome in outcomes:
                 if outcome.ok:
                     self.store.record(Event(kind="imported", game=game_title,
                                             platform=platform.slug, release=name,
                                             library=label,
-                                            detail=str(outcome.destination)))
-                    self.notify(imported(game_title, platform.slug,
-                                         outcome.verification))
+                                            detail=f"{outcome.destination} ({outcome.import_method or 'copy'}) {outcome.fallback_reason}"))
+                    if all_ok:
+                        self.notify(imported(game_title, platform.slug,
+                                             outcome.verification))
                 else:
                     self.store.record(Event(kind="failed", game=game_title,
                                             platform=platform.slug,
@@ -6301,12 +6419,14 @@ class ROMarr:
             if queue_item is not None:
                 # Marked so the scheduled sweep never re-attempts it; the
                 # Tasks page button clears failure marks to retry.
-                queue_item.state = "imported" if any_ok else "import-failed"
-            if any_ok and queue_item is not None:
+                queue_item.state = "imported" if all_ok else "import-failed"
+            if all_ok and queue_item is not None:
                 # If this was a partial collection grab (e.g. MiNERVA selective grab with qbit-tag:),
                 # clean up the partial collection torrent and its files from the client so it does not
                 # block subsequent grabs from the same collection (#115).
-                if str(queue_item.download_id or "").startswith("qbit-tag:"):
+                if (not queue_item.import_intent
+                        and not self.store.settings.get("retain_downloads_after_import", True)
+                        and str(queue_item.download_id or "").startswith("qbit-tag:")):
                     for client in self.clients:
                         remover = getattr(client, "remove_download", None)
                         if callable(remover):
@@ -6315,7 +6435,7 @@ class ROMarr:
                             except Exception as err:
                                 log.warning("could not clean up collection torrent %r: %s",
                                             queue_item.download_id, err)
-            if any_ok:
+            if all_ok:
                 if self.store.settings.get("rescan_after_import", True):
                     target_lib.rescan(platform.slug)
                 # The absolute destinations this release was imported to.
@@ -6355,9 +6475,9 @@ class ROMarr:
                     except Exception:  # noqa: BLE001
                         log.warning("reconcile after import failed for %s",
                                     platform.slug, exc_info=True)
-            results.append({"name": name, "ok": any_ok,
-                            "reason": "" if any_ok else str(outcomes[0].reason),
-                            "library": label})
+            results.append({"name": name, "ok": all_ok,
+                            "reason": "" if all_ok else next((str(o.reason) for o in outcomes if not o.ok), ""),
+                            "library": label, "transfers": [{"method": o.import_method, "fallback_reason": o.fallback_reason} for o in outcomes if o.ok]})
         # The sweep marks rows in place; without this the marks live only in
         # memory and a restart re-imports everything it had already done.
         self.store.save()
@@ -6793,6 +6913,8 @@ def make_handler(service: ROMarr):
                     sort=(query.get("sort") or [""])[0]))
             if route.path == "/api/v1/wanted/missing":
                 return self._json(200, {"items": service.store.missing()})
+            if route.path == "/api/v1/queue/import-plan":
+                return self._json(200, service.queue_import_plan(int((query.get("index") or ["-1"])[0]), {}))
             if route.path == "/api/v1/queue":
                 return self._json(200, {"items": [asdict(i) for i in service.queue]})
             if route.path == "/api/v1/history":
@@ -7780,6 +7902,8 @@ def make_handler(service: ROMarr):
             if route.path == "/api/v1/audit":
                 return self._json(200, service.audit_library(
                     str(body.get("platform") or "")))
+            if route.path == "/api/v1/queue/import-plan":
+                return self._json(200, service.queue_import_plan(int(body.get("index", -1)), body))
             if route.path == "/api/v1/queue/action":
                 return self._json(200, service.queue_action(
                     int(body.get("index", -1)), str(body.get("action") or "")))

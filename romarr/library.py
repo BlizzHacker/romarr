@@ -14,11 +14,14 @@ details it does handle are the ones that silently corrupt a library:
 from __future__ import annotations
 
 import logging
+import errno
+import stat
 import os
 import re
 import shutil
 import subprocess
 import threading
+import tempfile
 import time
 import zipfile
 from dataclasses import dataclass, field
@@ -101,6 +104,8 @@ class ImportResult:
     #: when none is configured -- metadata is an enhancement and its
     #: absence must never look like a failed import.
     info: dict = field(default_factory=dict)
+    import_method: str = ""
+    fallback_reason: str = ""
 
 
 def is_safe_name(name: str, root: Path) -> bool:
@@ -169,6 +174,9 @@ class _Source:
 class _ZipSource(_Source):
     def __init__(self, path: Path):
         self.path = path
+        self.prefer_hardlinks = False
+        self.last_transfer = ("copy", "")
+        self.transfers = {}
 
     def names(self):
         with zipfile.ZipFile(self.path) as archive:
@@ -297,6 +305,9 @@ class _PathSource(_Source):
 
     def __init__(self, path: Path):
         self.path = path
+        self.prefer_hardlinks = False
+        self.last_transfer = ("copy", "")
+        self.transfers = {}
 
     def names(self):
         if self.path.is_file():
@@ -327,7 +338,40 @@ class _PathSource(_Source):
         # the imported library file unreadable to the shared media group.
         # A new destination therefore follows the process umask, while the
         # source inode, owner, group and mode remain untouched.
+        self.last_transfer = ("copy", "")
+        if self.prefer_hardlinks:
+            original = source.lstat()
+            mode = original.st_mode
+            # Shared libraries need readable files. Never chmod a seeded inode.
+            if not stat.S_ISREG(mode):
+                reason = "source is not an unchanged regular file"
+            elif mode & 0o444 != 0o444:
+                reason = "source permissions do not allow shared library reads"
+            else:
+                try:
+                    os.link(source, destination, follow_symlinks=False)
+                except OSError as exc:
+                    if exc.errno not in {errno.EXDEV, errno.EPERM, errno.EACCES,
+                                         errno.ENOTSUP, errno.EOPNOTSUPP, errno.ENOSYS,
+                                         errno.EMLINK}:
+                        raise
+                    reason = f"hardlink unavailable: {exc.strerror or exc}"
+                else:
+                    linked = Path(destination).lstat()
+                    current = source.lstat()
+                    def identity(value):
+                        return (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns)
+                    if (not stat.S_ISREG(linked.st_mode)
+                            or identity(linked) != identity(original)
+                            or identity(current) != identity(original)):
+                        Path(destination).unlink()
+                        raise OSError(errno.ESTALE, "source changed while creating hardlink")
+                    self.last_transfer = ("hardlink", "")
+                    self.transfers[name] = self.last_transfer
+                    return
+            self.last_transfer = ("copy", reason)
         shutil.copyfile(source, destination)
+        self.transfers[name] = self.last_transfer
 
 
 class MissingArchiveTool(Exception):
@@ -487,12 +531,44 @@ def platform_dir(library_root: Path, platform: "Platform | str", *,
     return base
 
 
+def _publish_staged(staged: Path, destination: Path, overwrite: bool) -> None:
+    """Publish complete bytes; link gives atomic no-clobber on a shared filesystem."""
+    if overwrite:
+        os.replace(staged, destination)
+    else:
+        try:
+            os.link(staged, destination)
+        except OSError as exc:
+            if exc.errno not in (errno.EPERM, errno.EOPNOTSUPP, errno.ENOSYS):
+                raise
+            if os.name == "nt":
+                # Windows rename refuses an existing destination atomically.
+                os.rename(staged, destination)
+                return
+            # Some library filesystems cannot hardlink even within one mount.
+            # Linux provides the same no-clobber guarantee without a hardlink.
+            import ctypes
+            libc = ctypes.CDLL(None, use_errno=True)
+            rename = getattr(libc, "renameat2", None)
+            if rename is None:
+                raise exc
+            if rename(-100, os.fsencode(staged), -100, os.fsencode(destination), 1) != 0:
+                error = ctypes.get_errno()
+                raise OSError(error, os.strerror(error), str(destination))
+
+
+def _existing_destination(destination: Path) -> str:
+    if destination.is_file() and destination.stat().st_size == 0:
+        return "existing zero-byte destination needs inspection; refusing to overwrite"
+    return "already in the library; reconcile existing files before retrying"
+
+
 def import_rom(download: Path, platform: Platform, library_root: Path, *,
                overwrite: bool = False, dats=None,
                require_verified: bool = False,
                layout: str = "flat", translation: bool = False,
                rename: bool = False,
-               platform_folders=None) -> list[ImportResult]:
+               platform_folders=None, prefer_hardlinks: bool = False, selected_primaries=None) -> list[ImportResult]:
     """Place every ROM from a finished download into the library.
 
     A cartridge zip may hold several games (a 3-in-1 collection, a bundle)
@@ -516,11 +592,19 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
 
     try:
         source = _source_for(download, platform)
+        if isinstance(source, _PathSource):
+            source.prefer_hardlinks = prefer_hardlinks
         candidates = source.names()
-    except MissingArchiveTool as exc:
-        return [ImportResult(False, None, str(exc))]
+    except (MissingArchiveTool, OSError, ValueError, zipfile.BadZipFile, RuntimeError, subprocess.SubprocessError) as exc:
+        return [ImportResult(False, None, f"source inspection failed: {exc}")]
 
     chosen_sets = pick_all_rom_sets(candidates, platform, read=source.read)
+    if selected_primaries is not None:
+        selected = set(selected_primaries)
+        available = {group.primary for group in chosen_sets}
+        if not selected or not selected <= available:
+            return [ImportResult(False, None, "selected import members changed; review the bundle again")]
+        chosen_sets = [group for group in chosen_sets if group.primary in selected]
     if not chosen_sets:
         return [ImportResult(
             False, None,
@@ -528,7 +612,13 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
 
     results: list[ImportResult] = []
     for chosen in chosen_sets:
-        verdict = verify_set(source, chosen.members, dats)
+        if isinstance(source, _PathSource):
+            source.transfers = {}
+        try:
+            verdict = verify_set(source, chosen.members, dats)
+        except (OSError, ValueError, zipfile.BadZipFile, RuntimeError, subprocess.SubprocessError) as exc:
+            results.append(ImportResult(False, None, f"verification failed: {exc}"))
+            continue
         if require_verified and verdict.status != VERIFIED:
             results.append(ImportResult(
                 False, None,
@@ -544,23 +634,25 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
             target_dir.mkdir(parents=True, exist_ok=True)
             name = _import_name(chosen.primary, verdict, rename=rename)
             destination = target_dir / name
-            if destination.exists() and not overwrite:
-                results.append(
-                    ImportResult(False, destination, "already in the library"))
+            if destination.exists() and (not overwrite or destination.stat().st_size == 0):
+                results.append(ImportResult(False, destination, _existing_destination(destination)))
                 continue
-            source.copy(chosen.primary, destination)
-            if platform.slug in ("ps2", "ngc", "xbox"):
-                actual_size = destination.stat().st_size if destination.exists() else 0
-                if actual_size < 8 * 1024 * 1024:
-                    if destination.exists():
-                        destination.unlink()
-                    results.append(ImportResult(
-                        False, None,
-                        f"too small to be a {platform.name} disc image ({actual_size // (1024*1024)}MB < 8MB)"))
-                    continue
+            try:
+                with tempfile.TemporaryDirectory(prefix=".romarr-import-", dir=target_dir) as staging:
+                    staged = Path(staging) / name
+                    source.copy(chosen.primary, staged)
+                    actual_size = staged.stat().st_size
+                    if actual_size == 0:
+                        raise ValueError("empty ROM payload")
+                    if platform.slug in ("ps2", "ngc", "xbox") and actual_size < 8 * 1024 * 1024:
+                        raise ValueError(f"too small to be a {platform.name} disc image ({actual_size // (1024*1024)}MB < 8MB)")
+                    _publish_staged(staged, destination, overwrite)
+            except (OSError, ValueError, zipfile.BadZipFile, RuntimeError, subprocess.SubprocessError) as exc:
+                results.append(ImportResult(False, destination, f"copy/extraction or publication failed: {exc}"))
+                continue
             log.info("imported %s -> %s", chosen.primary, destination)
             results.append(ImportResult(True, destination,
-                                        verification=verdict))
+                                        verification=verdict, **_transfer_summary(source)))
             continue
 
         # A digital set is named after the download, not its primary: every
@@ -570,42 +662,50 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
                     else _set_name(chosen.primary))
         destination = target_dir / set_name
         if destination.exists() and any(destination.iterdir()) and not overwrite:
-            results.append(
-                ImportResult(False, destination, "already in the library"))
+            results.append(ImportResult(False, destination, _existing_destination(destination)))
             continue
-        destination.mkdir(parents=True, exist_ok=True)
-
-        written: dict[str, str] = {}
-        for member in chosen.members:
-            name = Path(member.replace("\\", "/")).name
-            if not is_safe_name(name, destination):
-                log.warning("refusing set member with an unusable name: %r",
-                            member)
-                continue
-            if name in written:
-                results.append(ImportResult(
-                    False, destination,
-                    f"two files in this download are both called {name!r} "
-                    f"({written[name]} and {member}); refusing to guess which "
-                    "one the game needs"))
-                break
-            source.copy(member, destination / name)
-            written[name] = member
-        else:
-            if platform.slug in ("ps2", "ngc", "xbox"):
-                total_set_size = sum(p.stat().st_size for p in destination.rglob("*") if p.is_file())
-                if total_set_size < 8 * 1024 * 1024:
-                    shutil.rmtree(destination, ignore_errors=True)
-                    results.append(ImportResult(
-                        False, None,
-                        f"too small to be a {platform.name} disc image ({total_set_size // (1024*1024)}MB < 8MB)"))
-                    continue
-            log.info("imported %d files -> %s", len(written), destination)
-            results.append(ImportResult(True, destination,
-                                        verification=verdict))
+        target_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            with tempfile.TemporaryDirectory(prefix=".romarr-import-", dir=target_dir) as staging:
+                staged_dir = Path(staging)
+                written: dict[str, str] = {}
+                for member in chosen.members:
+                    name = Path(member.replace("\\", "/")).name
+                    if not is_safe_name(name, staged_dir):
+                        raise ValueError(f"unsafe set member: {member!r}")
+                    if name in written:
+                        raise ValueError(f"two files in this download are both called {name!r} ({written[name]} and {member}); refusing to guess which one the game needs")
+                    source.copy(member, staged_dir / name)
+                    if (staged_dir / name).stat().st_size == 0:
+                        raise ValueError(f"empty set member: {member!r}")
+                    written[name] = member
+                total_set_size = sum(p.stat().st_size for p in staged_dir.iterdir())
+                if platform.slug in ("ps2", "ngc", "xbox") and total_set_size < 8 * 1024 * 1024:
+                    raise ValueError(f"too small to be a {platform.name} disc image ({total_set_size // (1024*1024)}MB < 8MB)")
+                destination.mkdir(parents=True, exist_ok=True)
+                for name in written:
+                    final = destination / name
+                    if final.exists() and final.stat().st_size == 0:
+                        raise ValueError(f"existing zero-byte destination needs inspection: {final}")
+                for name in written:
+                    _publish_staged(staged_dir / name, destination / name, overwrite)
+        except (OSError, ValueError, zipfile.BadZipFile, RuntimeError, subprocess.SubprocessError) as exc:
+            results.append(ImportResult(False, destination, f"set copy/extraction or publication failed: {exc}; reconcile any completed members before retrying"))
+            continue
+        log.info("imported %d files -> %s", len(written), destination)
+        results.append(ImportResult(True, destination, verification=verdict, **_transfer_summary(source)))
 
     return results
 
+
+
+def _transfer_summary(source):
+    if not isinstance(source, _PathSource):
+        return {"import_method": "extracted", "fallback_reason": "archive members require extraction"}
+    transfers = list(source.transfers.values())
+    methods = {method for method, _ in transfers}
+    return {"import_method": next(iter(methods)) if len(methods) == 1 else "mixed",
+            "fallback_reason": "; ".join(sorted({reason for _, reason in transfers if reason}))}
 
 
 def _import_name(primary: str, verdict: Match, *, rename: bool) -> str:

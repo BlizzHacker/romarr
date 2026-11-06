@@ -227,3 +227,12 @@ def test_selects_path_under_original_content_layout_with_top_folder():
         {"hash": "abc123", "id": "1", "priority": "1"},
     ]
     assert session.resumed is True
+
+
+def test_selected_client_file_identity_is_captured_for_import():
+    client, session = qbit([
+        {"index": 7, "name": "Collection/PS2/game.zip", "size": 100, "priority": 1},
+    ])
+    assert client.add_magnet_selective("magnet:?xt=urn:btih:abc", "PS2/game.zip")
+    assert client.last_selected_file == {"path": "Collection/PS2/game.zip", "index": 7,
+                                         "size": 100, "hash": "abc123"}
