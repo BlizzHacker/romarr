@@ -349,6 +349,13 @@ class _PathSource(_Source):
             else:
                 try:
                     os.link(source, destination, follow_symlinks=False)
+                except OSError as exc:
+                    if exc.errno not in {errno.EXDEV, errno.EPERM, errno.EACCES,
+                                         errno.ENOTSUP, errno.EOPNOTSUPP, errno.ENOSYS,
+                                         errno.EMLINK}:
+                        raise
+                    reason = f"hardlink unavailable: {exc.strerror or exc}"
+                else:
                     linked = Path(destination).lstat()
                     current = source.lstat()
                     def identity(value):
@@ -361,12 +368,6 @@ class _PathSource(_Source):
                     self.last_transfer = ("hardlink", "")
                     self.transfers[name] = self.last_transfer
                     return
-                except OSError as exc:
-                    if exc.errno not in {errno.EXDEV, errno.EPERM, errno.EACCES,
-                                         errno.ENOTSUP, errno.EOPNOTSUPP, errno.ENOSYS,
-                                         errno.EMLINK}:
-                        raise
-                    reason = f"hardlink unavailable: {exc.strerror or exc}"
             self.last_transfer = ("copy", reason)
         shutil.copyfile(source, destination)
         self.transfers[name] = self.last_transfer
