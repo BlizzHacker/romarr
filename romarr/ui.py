@@ -553,7 +553,8 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
   html.sidebar-ready #sidebar-close{display:flex}
   #brand{font-size:20px;padding:17px 50px 16px 18px}
   #sidebar-scrim:not([hidden]){display:block;position:fixed;inset:0;z-index:69;
-    background:rgba(0,0,0,.6)}
+    background:rgba(0,0,0,.6);touch-action:none}
+  html.sidebar-drawer-open,html.sidebar-drawer-open body{overflow:hidden}
   #railfoot{padding-bottom:max(12px,env(safe-area-inset-bottom,0px))}
   #top{gap:10px}
   #top input{min-width:0}
@@ -585,25 +586,23 @@ html:not(.sidebar-ready) .sw-fallback{display:block;position:relative}
 .sw-fallback:has(input:checked){box-shadow:0 0 0 2px var(--rail),0 0 0 4px var(--accent-text)}
 html:not(.sidebar-ready) .navgroup[open]>.navhead{
   background:var(--accent-soft);color:var(--accent-text);box-shadow:inset 3px 0 0 var(--accent)}
-#sidebar-menu-native{display:none}
+#sidebar-native-toggle,#sidebar-menu-native,#sidebar-native-scrim{display:none}
 @media(max-width:700px){
   html:not(.sidebar-ready) #sidebar-menu{display:none}
-  html:not(.sidebar-ready) #sidebar-menu-native{display:block}
-  #sidebar-menu-native>summary{padding:6px 10px;cursor:pointer;border:1px solid var(--line);
-    border-radius:7px;background:var(--surface);color:var(--accent-text)}
-  #sidebar-menu-native>summary::before{content:none}
-  html:not(.sidebar-ready):has(#sidebar-menu-native[open]) #rail{visibility:visible;transform:none}
-  /* A filtered ancestor otherwise confines its fixed backdrop to the top bar. */
-  html:not(.sidebar-ready):has(#sidebar-menu-native[open]) #top{
-    -webkit-backdrop-filter:none;backdrop-filter:none;z-index:69}
-  html:not(.sidebar-ready) #sidebar-menu-native[open]{position:fixed;inset:0;z-index:69}
-  html:not(.sidebar-ready) #sidebar-menu-native[open]>summary{position:absolute;inset:0;
-    font-size:0;border:0;border-radius:0;background:rgba(0,0,0,.6)}
-  html:not(.sidebar-ready) #sidebar-menu-native[open]>summary::after{content:"×";
-    position:absolute;right:12px;top:12px;font-size:24px;color:var(--fg)}
-  #railfoot{padding-bottom:env(safe-area-inset-bottom,0px)}
+  html:not(.sidebar-ready) #sidebar-native-toggle{display:block;position:fixed;
+    width:1px;height:1px;opacity:0}
+  html:not(.sidebar-ready) #sidebar-menu-native{display:block;padding:6px 10px;
+    cursor:pointer;border:1px solid var(--line);border-radius:7px;
+    background:var(--surface);color:var(--accent-text)}
+  #sidebar-native-toggle:focus-visible ~ #main #sidebar-menu-native{
+    outline:2px solid var(--accent-text);outline-offset:2px}
+  html:not(.sidebar-ready) #sidebar-native-toggle:checked ~ #rail{
+    visibility:visible;transform:none}
+  html:not(.sidebar-ready) #sidebar-native-toggle:checked ~ #sidebar-native-scrim{
+    display:block;position:fixed;inset:0;z-index:69;background:rgba(0,0,0,.6);
+    touch-action:none;cursor:pointer}
 }
-html:not(.sidebar-ready){--accent-text:var(--accent)}
+html:not(.sidebar-ready){--accent-text:var(--fg)}
 html:not(.sidebar-ready):has(#fallback-accent-0:checked){--accent:#f2a33c;}
 html:not(.sidebar-ready):has(#fallback-accent-1:checked){--accent:#f2635f;}
 html:not(.sidebar-ready):has(#fallback-accent-2:checked){--accent:#c084fc;}
@@ -860,6 +859,7 @@ SETTINGS_ICON = (
 )
 
 def _nav_html() -> str:
+    """Render native category disclosures and canonical route links."""
     """Native details keep sidebar categories expandable without JavaScript.
 
     ROMarr's go(page) and RENDER registry still require JavaScript to render pages.
@@ -1104,6 +1104,7 @@ function sidebarCloseDrawer(){
   const wasOpen=rail.classList.contains('drawer-open');
   const returnFocus=rail.contains(document.activeElement);
   rail.classList.remove('drawer-open');
+  document.documentElement.classList.remove('sidebar-drawer-open');
   $('#sidebar-scrim').hidden=true;
   menu.setAttribute('aria-expanded','false');
   $('#main').inert=false;
@@ -1137,6 +1138,7 @@ function sidebarBindNav(){
   }
   for(const link of document.querySelectorAll('.nav[data-page]')){
     link.addEventListener('click',event=>{
+      if(event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
       event.preventDefault();
       go(link.dataset.page);
       sidebarCloseDrawer();
@@ -1148,6 +1150,7 @@ function sidebarBindNav(){
     if(rail.classList.contains('drawer-open')) return sidebarCloseDrawer();
     sidebarFitViewport();
     rail.classList.add('drawer-open');
+    document.documentElement.classList.add('sidebar-drawer-open');
     rail.setAttribute('role','dialog');
     rail.setAttribute('aria-modal','true');
     $('#sidebar-scrim').hidden=false;
@@ -5664,13 +5667,15 @@ def page() -> str:
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <title>ROMarr</title><meta name="viewport" content="width=device-width,initial-scale=1">
 {FAVICON_LINK}<style>{CSS}</style><script>{THEME_BOOT}</script></head><body>
+<input id="sidebar-native-toggle" type="checkbox" aria-label="Toggle navigation" aria-controls="rail">
 <nav id="rail" aria-label="Main navigation"><div id="brand">ROM<span>arr</span></div>
 <button id="sidebar-close" type="button" aria-label="Close navigation">×</button>
 <div id="navwrap">{_nav_html()}</div>
 {_theme_control_html()}</nav>
 <div id="sidebar-scrim" hidden></div>
+<label id="sidebar-native-scrim" for="sidebar-native-toggle" aria-hidden="true"></label>
 <div id="main">
-  <div id="top"><details id="sidebar-menu-native"><summary aria-label="Open navigation">☰</summary></details>
+  <div id="top"><label id="sidebar-menu-native" for="sidebar-native-toggle">☰</label>
   <button id="sidebar-menu" type="button" aria-label="Open navigation"
     aria-controls="rail" aria-expanded="false">☰</button><h1>Games</h1><input id="search" placeholder="Filter…" autocomplete="off"></div>
   <div class="page" id="page"></div>

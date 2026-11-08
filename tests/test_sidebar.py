@@ -109,7 +109,7 @@ def test_appearance_is_native_collapsible_with_css_only_presets():
     for radio in radios:
         assert f":has(#{radio['id']}:checked)" in ui.CSS
     assert 'id="sidebar-menu-native"' in ui.page()
-    assert ':has(#sidebar-menu-native[open]) #rail' in ui.CSS
+    assert '#sidebar-native-toggle:checked ~ #rail' in ui.CSS
     assert '#appearance-toggle' in ui.CSS
     assert 'position:sticky' in ui.CSS
     assert 'romarr.theme' in ui.THEME_BOOT and 'romarr.accent' in ui.THEME_BOOT
@@ -156,14 +156,20 @@ for(const page of ['does-not-exist','toString','constructor','__proto__','<img s
 }
 ''')
 
-def test_native_mobile_backdrop_escapes_filtered_topbar():
-    import re
-    rules = re.findall(r'([^{}]+)\{([^{}]*)\}', ui.CSS)
-    fallback_top = [body for selector, body in rules
-                    if ':has(#sidebar-menu-native[open]) #top' in selector]
-    assert fallback_top, 'native fixed backdrop needs an unfiltered viewport containing block'
-    assert 'backdrop-filter:none' in fallback_top[0]
-    assert '-webkit-backdrop-filter:none' in fallback_top[0]
+def test_mobile_drawer_preserves_modified_links_and_locks_background_scroll():
+    run_sidebar(r'''
+sidebarBindNav();go('library');menu.fire('click');
+assert(document.documentElement.classList.contains('sidebar-drawer-open'));
+const link=$('.nav[data-page="discover"]');
+for(const key of ['ctrlKey','metaKey','shiftKey','altKey']){
+  assert(!link.fire('click',{[key]:true}).prevented);
+  assert.equal(rendered,'library');
+  assert(rail.classList.contains('drawer-open'));
+}
+assert(link.fire('click').prevented);
+assert.equal(rendered,'discover');
+assert(!document.documentElement.classList.contains('sidebar-drawer-open'));
+''')
 
 def test_live_counts_update_parent_and_page_without_changing_selection():
     counts = ui.JS[ui.JS.index('async function refreshCounts'):ui.JS.index('(async()=>{', ui.JS.index('async function refreshCounts'))]
