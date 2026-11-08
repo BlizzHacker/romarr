@@ -322,23 +322,21 @@ ZIP handling is built in. Install `bsdtar` for supported `.7z` and `.rar` archiv
 
 ## Windows app
 
-Download the portable **Windows 10/11 x64** app. The package contains the native Windows window, embedded WebView2 interface, Python backend, ROM Hub and Git. No Python, PowerShell, Docker, .NET or separate browser installation is required to use it.
+Choose a **portable ZIP** if you want to keep the app and its data together, or the **current-user installer** if you want Start menu and optional desktop shortcuts. Both packages include the native ROMarr window, local Python backend, ROM Hub, Git, and embedded WebView2 runtime. They do not require Python, PowerShell, Docker, .NET, or a separate browser on your PC.
 
-1. Open [ROMarr releases](https://github.com/BlizzHacker/romarr/releases/latest) and download **`ROMarr-1.8.0-win-x64.zip`** (choose the matching version on later releases).
-2. Extract the **whole ZIP** to a folder you own. Keep `ROMarr.exe`, `backend`, `browser` and `git` together. Do not open the EXE from inside the ZIP.
-3. Double-click **ROMarr.exe**. Choose your data folder and ROM library folder, then click **Start ROMarr**.
-4. Set your ROMarr password in the embedded interface. Follow **Settings -> Setup Guide**. Choose **I already have ROMs** to start with an existing collection.
-5. Add your connections and plugins when needed. The **Cartridge** menu offers separate optional downloads for Windows and Xbox players; neither is required for ROMarr.
+1. Open [ROMarr releases](https://github.com/BlizzHacker/romarr/releases/latest) and download either `ROMarr-1.8.1-win-x64.zip` or `ROMarr-1.8.1-Setup-x64.exe` (choose the matching version on later releases).
+2. For the installer, run the setup file; it installs for your Windows account without administrator access. For portable mode, extract the **whole ZIP** into a folder you own and keep `ROMarr.exe`, `backend`, `browser`, and `git` together.
+3. Open **ROMarr**. The backend starts automatically. Set your ROMarr password in the embedded interface; a new data folder opens the Setup Guide. Choose your existing library or a new folder and add connections there.
+4. Open **Connect services** in the desktop menu at any time. Add a running qBittorrent, SABnzbd, NZBGet, or another supported download client; connect Prowlarr or an indexer for search. ROMarr does not install a download daemon for you. The connection form checks that ROMarr can reach the address and credentials you enter.
+5. The **Cartridge** menu offers optional Windows and Xbox players. They are not required to run ROMarr.
 
-The app listens on `127.0.0.1:6868` by default. Its native window has folder pickers, Start/Stop, a port setting, data/log access and help links. Closing it stops the backend it started. It does not run as a Windows service or start automatically with Windows.
+ROMarr listens on `127.0.0.1:6868` by default and can use a download client or library service on another machine when that address is reachable from this PC. The native window includes folder pickers, Start/Stop, a port setting, data/log access, service shortcuts, and help links. Closing the app stops the backend it started.
 
-The default data folder is `%LOCALAPPDATA%\ROMarr`; the desktop preferences file is `%LOCALAPPDATA%\ROMarr\desktop.json`. The default ROM folder is `%USERPROFILE%\Games\ROMs`. Select another drive before starting if that is where your collection belongs. Changing the data folder selects a separate installation's settings; it does not move existing data.
+The installer keeps program files under your Windows user profile and settings under `%LOCALAPPDATA%\ROMarr`; uninstalling ROMarr does not remove that data folder. Portable mode keeps desktop preferences, settings, logs, plugins, and the WebView2 profile inside the extracted app's `data` folder. Paths located inside the portable folder are stored relative to it, so you can move the whole folder to another drive or PC. The default ROM folder is `%USERPROFILE%\Games\ROMs` in installer mode and a `Games\ROMs` folder beside `ROMarr.exe` in portable mode. Choose a different location before starting if your collection belongs elsewhere.
 
-To update, close ROMarr, extract the new release into a fresh application folder and open its `ROMarr.exe` with your existing data and library paths. Keep those data/library folders. Back up the data folder before an update. Fixed WebView2 is included and updates with the application package.
+To update the installer version, close ROMarr and run the newer setup file; it keeps your user data. To update a portable copy, extract the new ZIP over the same app folder and keep its existing `data` and `ROMs` folders. Back up the data folder before an update. The fixed WebView2 runtime updates with the app package.
 
-Windows checks build the actual app and run it with external Python and Git removed from `PATH`. They check the native window, embedded sign-in/setup guide, API protection, bundled plugin installation and settings after restart. Check the release's linked run and proof for its exact results; real hardware and every external integration need their own field reports.
-
-The **unsigned MSIX** is for development and Store preparation. It is not a certified Microsoft Store release or a normal unsigned installation option. [Build and Store submission details](../desktop/windows/BUILDING.md).
+The installer and MSIX are currently unsigned, so Windows can show a publisher warning before launch. The **unsigned MSIX** is for development and Store preparation; it is not a certified Microsoft Store release. [Build and Store submission details](../desktop/windows/BUILDING.md).
 
 ## Windows source install
 

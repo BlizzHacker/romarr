@@ -33,7 +33,7 @@ Imports can be checked against DAT checksums. The result is **verified**, **bad 
 |---|---|---|
 | **Docker Compose** | Most servers, NAS hosts, or Docker Desktop | [Quick start below](#docker-compose-quick-start) |
 | **Proxmox LXC** | A Proxmox host | [LXC installer](docs/INSTALL.md#proxmox-lxc) |
-| **Windows app** | Windows 10/11 on x64 | [Download the Windows ZIP](docs/INSTALL.md#windows-app), extract it and double-click **ROMarr.exe**. No Python, PowerShell or .NET installation required. |
+| **Windows app** | Windows 10/11 on x64 | Choose the [portable ZIP or one-click installer](docs/INSTALL.md#windows-app). ROMarr starts locally and guides you through connecting your existing download client and libraries. No Python, PowerShell, Docker, .NET, or separate browser installation required. |
 | **Linux/macOS source checkout** | Development or an existing Python host | [Source instructions](docs/INSTALL.md#from-source) |
 | **Home Assistant add-on** | A Home Assistant installation | [Add-on instructions](docs/INSTALL.md#home-assistant); this packaging needs more field testing. |
 

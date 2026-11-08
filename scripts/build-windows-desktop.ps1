@@ -1,15 +1,15 @@
 #Requires -Version 7.2
 <#
 .SYNOPSIS
-Build the self-contained ROMarr Windows desktop ZIP and unsigned MSIX.
+Build the self-contained ROMarr Windows portable ZIP, user installer, and unsigned MSIX.
 .DESCRIPTION
-Developer/CI build only. End users extract the ZIP and open ROMarr.exe.
-Python, ROM Hub, MinGit, .NET and a fixed WebView2 runtime ship in the package.
+Developer/CI build only. End users can extract the portable ZIP or run the setup EXE.
+Python, ROM Hub, MinGit, .NET and a fixed WebView2 runtime ship in both formats.
 #>
 [CmdletBinding()]
 param(
     [string]$OutputDirectory,
-    [string]$Version = '1.8.0',
+    [string]$Version = '1.8.1',
     [string]$PythonPath = 'python',
     [string]$StoreIdentityName = 'MoveWeight.ROMarr.Desktop',
     [string]$StorePublisher = 'CN=MoveWeight',
@@ -161,6 +161,7 @@ if ($LASTEXITCODE -ne 0) { throw 'The native desktop application did not publish
 if (-not (Test-Path -LiteralPath (Join-Path $bundle 'ROMarr.exe'))) { throw 'ROMarr.exe is missing.' }
 Copy-Item -LiteralPath (Join-Path $repo 'LICENSE') -Destination (Join-Path $bundle 'LICENSE.txt')
 Copy-Item -LiteralPath (Join-Path $repo 'README.md') -Destination (Join-Path $bundle 'README.md')
+Copy-Item -LiteralPath $iconPath -Destination (Join-Path $bundle 'ROMarr.ico')
 $instructions = @'
 ROMarr for Windows
 
@@ -168,13 +169,16 @@ Extract this entire folder to a location you choose, then open ROMarr.exe.
 Keep backend, browser and git next to the EXE. No Python, Docker, PowerShell
 or separate browser installation is needed to run the desktop app.
 
-Choose your data folder and ROM library folder on first launch. Your settings
-and logs stay in your data folder, outside the program folder. ROMarr listens
-only on this PC. Stop or close the app to stop its own backend.
+ROMarr starts its local backend when you open the app. A new data folder opens
+the Setup Guide. Choose a library folder, then use Connect services to add your
+existing qBittorrent, SABnzbd, indexer, or game-library connections. ROMarr does
+not install those other services for you.
 
-The ZIP works without a signing certificate. The separate unsigned MSIX is a
-development/Partner Center submission package; it is not a certified Store
-release and Windows requires signing before it can be installed directly.
+The portable ZIP keeps preferences, settings, plugins, logs, and browser data
+inside its data folder; the current-user installer stores settings under
+%LOCALAPPDATA%\ROMarr. Both setup formats are unsigned, so Windows may show a
+publisher warning. The separate unsigned MSIX is for development/Store
+submission and is not a certified Microsoft Store release.
 
 Third-party licenses ship with the bundled Python, MinGit, WebView2 and Python
 packages. ROMarr is MIT licensed. Support: https://github.com/BlizzHacker/romarr
@@ -229,16 +233,33 @@ if (-not $SkipMsix) {
     $kits = Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'Windows Kits\10\bin'
     $makeAppx = @(Get-ChildItem -Path (Join-Path $kits '*\x64\makeappx.exe') -File |
         Sort-Object { [version]$_.Directory.Parent.Name } -Descending)[0].FullName
-    if (-not $makeAppx) { throw 'Windows SDK MakeAppx.exe is required for MSIX. Install the SDK or use -SkipMsix for ZIP-only development.' }
+    if (-not $makeAppx) { throw 'Windows SDK MakeAppx.exe is required for MSIX. Install the SDK or use -SkipMsix to build the ZIP and installer without MSIX.' }
     & $makeAppx pack /o /d $bundle /p (Join-Path $OutputDirectory "$bundleName-unsigned.msix")
     if ($LASTEXITCODE -ne 0) { throw 'MSIX packaging failed.' }
 }
+# Store-only files are no longer needed after MakeAppx creates the MSIX.
+foreach ($storeFile in @((Join-Path $bundle 'AppxManifest.xml'), (Join-Path $bundle 'Assets'))) {
+    if (Test-Path -LiteralPath $storeFile) { Remove-Item -LiteralPath $storeFile -Recurse -Force }
+}
+# The portable marker is included in the ZIP and intentionally excluded by the installer.
+[IO.File]::WriteAllText((Join-Path $bundle 'ROMarr.portable'), 'portable')
+$iscc = (Get-Command 'ISCC.exe' -ErrorAction SilentlyContinue).Source
+if (-not $iscc) {
+    $compilerPath = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6\ISCC.exe'
+    if (Test-Path -LiteralPath $compilerPath) { $iscc = $compilerPath }
+}
+if (-not $iscc) { throw 'Inno Setup 6 is required to build the standalone Windows installer.' }
+$installerScript = Join-Path $repo 'desktop\windows\ROMarr.iss'
+& $iscc $installerScript "/DAppVersion=$Version" "/DBundlePath=$bundle" "/DOutputPath=$OutputDirectory"
+if ($LASTEXITCODE -ne 0) { throw 'The Windows installer did not compile.' }
 $zip = Join-Path $OutputDirectory "$bundleName.zip"
 Compress-Archive -LiteralPath $bundle -DestinationPath $zip -CompressionLevel Optimal
-$packages = @(Get-ChildItem -LiteralPath $OutputDirectory -File | Where-Object Extension -in '.zip','.msix')
+$packages = @(Get-ChildItem -LiteralPath $OutputDirectory -File | Where-Object Extension -in '.zip','.msix','.exe')
 $checksums = $packages | ForEach-Object {
     (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant() + '  ' + $_.Name
 }
 [IO.File]::WriteAllLines((Join-Path $OutputDirectory 'SHA256SUMS.txt'),$checksums)
-Write-Host "Built native desktop package: $zip"
-Write-Host 'The MSIX is unsigned and requires the real Partner Center identity and Store signing for public Store distribution.'
+Write-Host "Built portable desktop package: $zip"
+$installerOutput = Join-Path $OutputDirectory "ROMarr-$Version-Setup-x64.exe"
+Write-Host "Built current-user installer: $installerOutput"
+Write-Host 'The installer and MSIX are unsigned. The MSIX requires Partner Center identity and Store signing for public Store distribution.'

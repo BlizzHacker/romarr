@@ -24,6 +24,10 @@ The fixes are in [v1.7.0](https://github.com/BlizzHacker/romarr/releases/tag/v1.
 
 These changes ship in [v1.8.0](https://github.com/BlizzHacker/romarr/releases/tag/v1.8.0). The native ZIP runs independently of Docker; the unsigned MSIX is for Store preparation and still needs the real Partner Center identity and certification.
 
+## Windows distribution update
+
+The next desktop package adds a portable ZIP that keeps its state beside the executable, plus a current-user setup EXE with shortcuts and automatic local backend startup. New installs open the guided setup; the desktop menu jumps directly to download clients, indexers, and game library connections. This connects to services the user already runs, including qBittorrent. Installing ROMarr as a Windows service or starting it at Windows logon remains a separate future item.
+
 ## Next priorities
 
 | Priority | Work | What completion needs to mean |

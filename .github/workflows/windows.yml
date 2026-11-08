@@ -146,7 +146,7 @@ jobs:
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
-      - name: Build self-contained ZIP and unsigned MSIX
+      - name: Build portable ZIP, setup installer, and unsigned MSIX
         shell: pwsh
         env:
           EVENT_NAME: ${{ github.event_name }}
@@ -210,12 +210,13 @@ jobs:
             ${{ runner.temp }}/romarr-desktop-package/ROMarr-*/BUILD-INFO.json
           if-no-files-found: warn
           retention-days: 14
-      - name: Upload desktop ZIP and unsigned MSIX
+      - name: Upload portable ZIP, setup installer, and unsigned MSIX
         uses: actions/upload-artifact@v4
         with:
           name: ROMarr-Windows-desktop-packages
           path: |
             ${{ runner.temp }}/romarr-desktop-package/*.zip
+            ${{ runner.temp }}/romarr-desktop-package/*.exe
             ${{ runner.temp }}/romarr-desktop-package/*.msix
             ${{ runner.temp }}/romarr-desktop-package/SHA256SUMS.txt
           compression-level: 0

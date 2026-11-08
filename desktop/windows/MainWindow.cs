@@ -20,6 +20,8 @@ public sealed class MainWindow : Form
     readonly HttpClient http = new() { Timeout = TimeSpan.FromSeconds(4) };
     readonly string? smokeRoot;
     readonly string preferenceFile;
+    readonly string portableRoot;
+    readonly bool portableMode;
     Process? backend;
     bool busy;
     bool closing;
@@ -36,9 +38,16 @@ public sealed class MainWindow : Form
         Text = "ROMarr"; Width = 1280; Height = 880; MinimumSize = new Size(850, 600);
         StartPosition = FormStartPosition.CenterScreen;
         var appData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ROMarr");
-        preferenceFile = Path.Combine(appData, "desktop.json");
-        dataPath.Text = smokeRoot is null ? appData : Path.Combine(smokeRoot, "config");
-        libraryPath.Text = smokeRoot is null ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Games", "ROMs") : Path.Combine(smokeRoot, "roms");
+        portableRoot = AppContext.BaseDirectory;
+        portableMode = smokeRoot is null
+            && File.Exists(Path.Combine(portableRoot, "ROMarr.portable"))
+            && !portableRoot.Contains("WindowsApps", StringComparison.OrdinalIgnoreCase);
+        var preferenceRoot = portableMode ? Path.Combine(portableRoot, "data") : appData;
+        preferenceFile = Path.Combine(preferenceRoot, "desktop.json");
+        dataPath.Text = smokeRoot is null ? preferenceRoot : Path.Combine(smokeRoot, "config");
+        libraryPath.Text = smokeRoot is null
+            ? Path.Combine(portableMode ? portableRoot : Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Games", "ROMs")
+            : Path.Combine(smokeRoot, "roms");
         if (smokeRoot is null) LoadPreferences();
 
         var menu = new MenuStrip();
@@ -49,11 +58,16 @@ public sealed class MainWindow : Form
         var companion = new ToolStripMenuItem("Cartridge");
         companion.DropDownItems.Add("Get Cartridge for Windows", null, (_,_) => OpenExternal("https://github.com/BlizzHacker/romarr/releases/download/v1.8.0/Cartridge-Windows-Portable-0.2.0-x64.exe"));
         companion.DropDownItems.Add("Get Cartridge for Xbox", null, (_,_) => OpenExternal("https://apps.microsoft.com/detail/9MXC51W17LH4"));
+        var connect = new ToolStripMenuItem("Connect services");
+        connect.DropDownItems.Add("Download client · qBittorrent, SABnzbd, and more", null, async (_,_) => await OpenAppPage("clients"));
+        connect.DropDownItems.Add("Search source · Prowlarr, Torznab, and more", null, async (_,_) => await OpenAppPage("indexers"));
+        connect.DropDownItems.Add("Game library · RomM, Gaseous, or Retrom", null, async (_,_) => await OpenAppPage("libraries"));
         var help = new ToolStripMenuItem("Help");
+        help.DropDownItems.Add("Open Setup Guide", null, async (_,_) => await OpenAppPage("setup"));
         help.DropDownItems.Add("Getting started", null, (_,_) => OpenExternal("https://github.com/BlizzHacker/romarr/blob/main/docs/GETTING-STARTED.md"));
         help.DropDownItems.Add("ROM Hub plugins", null, (_,_) => { if (browser.CoreWebView2 is not null) browser.CoreWebView2.Navigate(origin + "/#hub"); });
         help.DropDownItems.Add("Roadmap", null, (_,_) => OpenExternal("https://github.com/BlizzHacker/romarr/blob/main/ROADMAP.md"));
-        menu.Items.AddRange([file, companion, help]);
+        menu.Items.AddRange([file, connect, companion, help]);
         MainMenuStrip = menu;
 
         var options = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(10), WrapContents = true };
@@ -71,7 +85,7 @@ public sealed class MainWindow : Form
         Shown += async (_,_) =>
         {
             if (smokeRoot is not null) await Smoke();
-            else if (File.Exists(preferenceFile)) await StartWithMessage();
+            else await StartWithMessage();
         };
     }
 
@@ -93,8 +107,8 @@ public sealed class MainWindow : Form
         {
             var value = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(preferenceFile));
             if (value is null) return;
-            if (value.TryGetValue("data", out var d)) dataPath.Text = d;
-            if (value.TryGetValue("library", out var l)) libraryPath.Text = l;
+            if (value.TryGetValue("data", out var d)) dataPath.Text = RestorePreferencePath(d);
+            if (value.TryGetValue("library", out var l)) libraryPath.Text = RestorePreferencePath(l);
             if (value.TryGetValue("port", out var p) && int.TryParse(p, out var n) && n >= 1024 && n <= 65535) port.Value = n;
         }
         catch (IOException) { }
@@ -107,10 +121,24 @@ public sealed class MainWindow : Form
         Directory.CreateDirectory(Path.GetDirectoryName(preferenceFile)!);
         var temp = preferenceFile + ".tmp";
         File.WriteAllText(temp, JsonSerializer.Serialize(new Dictionary<string, string> {
-            ["data"] = dataPath.Text, ["library"] = libraryPath.Text, ["port"] = port.Value.ToString()
+            ["data"] = StorePreferencePath(dataPath.Text), ["library"] = StorePreferencePath(libraryPath.Text), ["port"] = port.Value.ToString()
         }));
         File.Move(temp, preferenceFile, true);
     }
+
+    string StorePreferencePath(string value)
+    {
+        if (!portableMode) return value;
+        var full = Path.GetFullPath(value);
+        var relative = Path.GetRelativePath(portableRoot, full);
+        if (relative == ".." || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+            || relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal)) return full;
+        return relative;
+    }
+
+    string RestorePreferencePath(string value) => portableMode && !Path.IsPathRooted(value)
+        ? Path.GetFullPath(Path.Combine(portableRoot, value))
+        : value;
 
     async Task StartWithMessage()
     {
@@ -128,6 +156,7 @@ public sealed class MainWindow : Form
             var python = Path.Combine(root, "backend", "python.exe");
             var runtime = Path.Combine(root, "browser");
             var git = Path.Combine(root, "git", "cmd");
+            var firstRun = !File.Exists(Path.Combine(dataPath.Text, "romarr.json"));
             if (!File.Exists(python) || !File.Exists(Path.Combine(runtime, "msedgewebview2.exe")))
                 throw new IOException("This download is incomplete. Extract the entire ROMarr Windows ZIP before opening ROMarr.exe.");
             foreach (var folder in new[] { dataPath.Text, libraryPath.Text })
@@ -205,12 +234,12 @@ public sealed class MainWindow : Form
                 if (e.IsSuccess) ready.TrySetResult(); else ready.TrySetException(new IOException("The desktop interface could not load."));
             }
             browser.NavigationCompleted += Loaded;
-            browser.CoreWebView2.Navigate(origin + "/");
+            browser.CoreWebView2.Navigate(origin + (firstRun ? "/#setup" : "/"));
             browserReady = ready.Task;
             await browserReady.WaitAsync(TimeSpan.FromSeconds(30));
             dataPath.Enabled = false; libraryPath.Enabled = false; port.Enabled = false;
             foreach (var button in folderButtons) button.Enabled = false;
-            stop.Enabled = true; status.Text = "Running locally. Your library stays on this PC.";
+            stop.Enabled = true; status.Text = "ROMarr is running locally. Connect your existing services in Setup Guide.";
             SavePreferences();
         }
         finally { busy = false; if (!closing) start.Enabled = backend is null || backend.HasExited; }
@@ -232,6 +261,13 @@ public sealed class MainWindow : Form
             lock (this) { log?.Dispose(); log = null; }
             if (!closing) { foreach (var button in folderButtons) button.Enabled = true; dataPath.Enabled = true; libraryPath.Enabled = true; port.Enabled = true; start.Enabled = true; stop.Enabled = false; if (updateStatus) status.Text = "Stopped. Your files and settings are saved."; }
         }
+    }
+
+    async Task OpenAppPage(string page)
+    {
+        await StartWithMessage();
+        if (backend is { HasExited: false } && browser.CoreWebView2 is not null)
+            browser.CoreWebView2.Navigate(origin + "/#" + page);
     }
 
     static void PrepareWindows10Runtime(string runtime)
