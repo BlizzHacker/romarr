@@ -2,6 +2,7 @@
 import pytest
 from romarr.app import ROMarr
 from romarr.selection import Release
+from romarr.store import SeerrRequest, Store
 
 class RecordingClient:
     name = 'fixture'
@@ -66,6 +67,7 @@ def test_cached_any_platform_search_cannot_bypass_the_guard(tmp_path):
 def test_invalid_platform_never_selects_client_or_dispatches_external_request(
         tmp_path, monkeypatch, entry):
     s, client = service(tmp_path)
+    s.store.put_seerr_request(SeerrRequest('fixture', 'switch', status='searching'))
     before = s.store.path.read_bytes()
 
     def forbidden(*args, **kwargs):
@@ -85,5 +87,4 @@ def test_platform_alias_is_canonicalized_in_persisted_queue(tmp_path):
     assert result['ok'] is True
     assert len(client.added) == 1
     assert s.queue[0].platform == 'switch'
-    from romarr.store import Store
     assert Store(s.store.path).queue[0].platform == 'switch'
