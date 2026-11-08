@@ -176,6 +176,18 @@ def test_json_add_response_confirms_unique_tag_then_selects_and_resumes():
     assert session.resumed and not session.deleted
 
 
+def test_hybrid_and_v2_magnets_use_qbittorrent_torrent_id_for_file_operations():
+    from romarr.clients import _row_matches_infohash
+
+    v1, v2 = "a" * 40, "b" * 64
+    row = {"hash": v2[:40], "infohash_v1": v1, "infohash_v2": v2}
+    assert _row_matches_infohash(row, v1)
+    assert _row_matches_infohash(row, v2)
+    assert _row_matches_infohash({"hash": v2[:40]}, v2)
+    assert not _row_matches_infohash({**row, "infohash_v2": "c" * 64}, v2)
+    assert not _row_matches_infohash(row, "c" * 40)
+
+
 def test_json_acknowledgment_without_tag_never_selects_or_resumes(monkeypatch):
     from romarr import clients
 
