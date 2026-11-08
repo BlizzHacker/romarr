@@ -1197,9 +1197,14 @@ function sidebarBindNav(){
 }
 
 /* ---------------- routing ---------------- */
+let activePage=null, pageVersion=0, metadataLookup=null;
 function go(page){
   // Hashes are untrusted input; inherited Object properties are not renderers.
   if(!Object.prototype.hasOwnProperty.call(RENDER,page)) page='library';
+  activePage=page;
+  ++pageVersion;
+  metadataLookup?.abort();
+  metadataLookup=null;
   location.hash=page;
   sidebarSyncNav(page);
   const titles={library:'Games',add:'Add New Game',search:'Interactive Search',
@@ -1219,7 +1224,10 @@ function go(page){
   $('#search').classList.toggle('hide', !['library','add'].includes(page));
   (RENDER[page]||RENDER.library)();
 }
-addEventListener('hashchange',()=>go(location.hash.slice(1)||'library'));
+addEventListener('hashchange',()=>{
+  const page=location.hash.slice(1)||'library';
+  if(page!==activePage) go(page);
+});
 
 /* ---------------- pages ---------------- */
 const RENDER={};
@@ -4593,10 +4601,14 @@ RENDER.connections=async()=>{
 
 // --- Metadata --------------------------------------------------------------
 RENDER.metadata=async()=>{
-  const mine=await j('/api/v1/metadataprovider').catch(()=>({items:[]}));
-  const schema=await j('/api/v1/metadata/schema').catch(()=>({providers:[]}));
-  const probe=await j('/api/v1/metadata/lookup?filename='
-    +encodeURIComponent('Chrono.Trigger.USA.v1.1.smc')).catch(()=>({}));
+  const version=pageVersion;
+  const current=()=>version===pageVersion && location.hash==='#metadata';
+  $('#page').innerHTML='<div class="empty">Loading metadata settings…</div>';
+  const [mine,schema]=await Promise.all([
+    j('/api/v1/metadataprovider').catch(()=>({items:[]})),
+    j('/api/v1/metadata/schema').catch(()=>({providers:[]}))
+  ]);
+  if(!current()) return;
   $('#page').innerHTML='<div class="card"><h3>Configured providers</h3>'
     +'<p class="help"><b>This is where the keys go.</b> Add RAWG (a free key) '
     +'or IGDB (a Twitch client id + bearer token) and lookups, Discover and '
@@ -4630,13 +4642,29 @@ RENDER.metadata=async()=>{
     +'<div class="field"><label>Filename</label>'
     +'<input id="mfn" value="Chrono.Trigger.USA.v1.1.smc"></div>'
     +'<button class="mini accent" id="mgo">Identify</button>'
-    +'<div id="mout" style="margin-top:12px">'+metaResult(probe)+'</div></div>';
+    +'<div id="mout" role="status" style="margin-top:12px"></div></div>';
 
-  $('#mgo').onclick=async()=>{
-    const d=await j('/api/v1/metadata/lookup?filename='
-      +encodeURIComponent($('#mfn').value)).catch(()=>({}));
-    $('#mout').innerHTML=metaResult(d);
+  const input=$('#mfn'), output=$('#mout');
+  const lookup=async()=>{
+    if(!current() || !output.isConnected) return;
+    metadataLookup?.abort();
+    const request=new AbortController(), filename=input.value;
+    metadataLookup=request;
+    output.textContent='Looking up...';
+    const result=await j('/api/v1/metadata/lookup?filename='+encodeURIComponent(filename),
+      {signal:request.signal}).catch(()=>({}));
+    if(metadataLookup!==request) return;
+    metadataLookup=null;
+    if(current() && output.isConnected && input.value===filename)
+      output.innerHTML=metaResult(result);
   };
+  input.oninput=()=>{
+    metadataLookup?.abort();
+    metadataLookup=null;
+    output.textContent='Click Identify to run a lookup.';
+  };
+  $('#mgo').onclick=lookup;
+  lookup();
   $('#mp-add').onclick=()=>addItem('metadataprovider');
   document.querySelectorAll('[data-mpedit]').forEach(b=>b.onclick=()=>
     editItem('metadataprovider', mine.items[Number(b.dataset.mpedit)]));
