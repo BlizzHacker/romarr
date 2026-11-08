@@ -19,6 +19,8 @@ One file, no build step, no framework. This runs in a 512MB container beside a
 download client and a database.
 """
 
+from html import escape
+
 CSS = """
 *{box-sizing:border-box;margin:0;padding:0}
 
@@ -34,7 +36,9 @@ CSS = """
    before it is legible as link text, is luminance maths CSS has no way to do.
    Everything else here is derived with color-mix so a new accent costs one
    custom-property write rather than a stylesheet. */
-:root{
+/* Forgiving :is() keeps the original theme usable without :has() support. */
+:is(:root,
+html:not(.sidebar-ready):has(#fallback-mode-dark:checked)){
   color-scheme:dark;
   --bg:#12141a; --surface:#1a1d25; --surface-2:#212734; --surface-3:#2b3240;
   --rail:#0d0f14; --rail-2:#1a1f2a;
@@ -47,7 +51,8 @@ CSS = """
   --edge:inset 0 1px 0 rgba(255,255,255,.045);
   --art:#0b0d11;
 }
-:root[data-theme="light"]{
+:is(:root[data-theme="light"],
+html:not(.sidebar-ready):has(#fallback-mode-light:checked)){
   color-scheme:light;
   --bg:#eef1f6; --surface:#fff; --surface-2:#f5f7fb; --surface-3:#e7ebf2;
   --rail:#fff; --rail-2:#eef1f7;
@@ -64,7 +69,8 @@ CSS = """
    contrast range. It is a light mode you can sit in after midnight -- pure
    white at 2am is the thing being avoided, so the surfaces stay dimmer than
    light mode and the ink stays browner than black. */
-:root[data-theme="sepia"]{
+:is(:root[data-theme="sepia"],
+html:not(.sidebar-ready):has(#fallback-mode-sepia:checked)){
   color-scheme:light;
   --bg:#e6dbcb; --surface:#f3ebde; --surface-2:#ece2d2; --surface-3:#dfd2bd;
   --rail:#e0d4c0; --rail-2:#d5c6ae;
@@ -502,6 +508,107 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
 @media(prefers-reduced-motion:reduce){
   *,*::before,*::after{transition:none !important;animation:none !important}
 }
+/* ---- responsive category navigation ---- */
+#rail{width:222px;min-height:0}
+#navwrap{flex:1 1 auto;min-height:0;overscroll-behavior:contain}
+.navgroup{padding:6px 0 2px}
+.navhead{display:flex;align-items:center;gap:9px;width:calc(100% - 20px);
+  min-height:40px;margin:1px 10px;padding:8px 11px;border-radius:7px;
+  font-family:inherit;font-weight:650;font-size:13px;line-height:1.3;
+  letter-spacing:normal;text-transform:none;
+  color:var(--fg-2);opacity:1;cursor:pointer}
+.navhead:hover{background:var(--rail-2);color:var(--fg)}
+.navhead.active-parent{background:color-mix(in srgb,var(--accent) 14%,var(--rail-2));
+  color:var(--accent-text);box-shadow:inset 3px 0 0 var(--accent)}
+#rail summary::before{content:none}
+.group-icon{width:19px;flex:none;text-align:center;color:var(--dim)}
+.settings-glyph{display:block;width:16px;height:16px;margin:auto;stroke:currentColor}
+.active-parent .group-icon{color:var(--accent-text)}
+.group-title{flex:1}
+.navlinks{margin-left:36px;padding:3px 0 5px;border-left:1px solid var(--line-soft)}
+.navgroup:not([open]) .navlinks{display:none}
+.navlinks .nav{margin:1px 10px 1px 9px;padding:7px 9px;min-height:34px;
+  font-size:13px;text-decoration:none}
+.navlinks .nav.on::before{left:-11px;top:4px;bottom:4px;width:4px}
+.parent-count{font-size:10.5px;padding:1px 7px;border-radius:var(--r-pill);
+  background:var(--surface-3);color:var(--dim)}
+.navgroup[open] .parent-count,.parent-count:empty{display:none!important}
+#sidebar-menu,#sidebar-close,#sidebar-scrim{display:none}
+#sidebar-menu,#sidebar-close{flex:none;border:1px solid var(--line);
+  border-radius:7px;background:var(--surface);color:var(--accent-text);cursor:pointer}
+#sidebar-menu{padding:6px 10px;font-size:18px;line-height:1.2}
+#sidebar-close{position:absolute;right:12px;top:14px;width:32px;height:32px;
+  align-items:center;justify-content:center;font-size:22px;line-height:1}
+#railfoot{min-height:0;max-height:55vh;max-height:55dvh;overflow-y:auto;
+  overscroll-behavior:contain}
+@media(min-width:701px) and (max-width:820px){#main{margin-left:222px}}
+@media(max-width:700px){
+  #rail{width:min(82vw,270px);z-index:70;bottom:auto;
+    top:var(--sidebar-visual-top,0px);height:100vh;height:var(--sidebar-visual-height,100dvh);
+    transform:translateX(-105%);visibility:hidden;
+    transition:transform .2s ease}
+  #rail.drawer-open{transform:none;visibility:visible}
+  #main{margin-left:0}
+  #sidebar-menu{display:block}
+  html.sidebar-ready #sidebar-close{display:flex}
+  #brand{font-size:20px;padding:17px 50px 16px 18px}
+  #sidebar-scrim:not([hidden]){display:block;position:fixed;inset:0;z-index:69;
+    background:rgba(0,0,0,.6);touch-action:none}
+  html.sidebar-drawer-open,html.sidebar-drawer-open body{overflow:hidden}
+  #railfoot{padding-bottom:max(12px,env(safe-area-inset-bottom,0px))}
+  #top{gap:10px}
+  #top input{min-width:0}
+}
+[hidden]{display:none!important}
+
+/* Appearance is independently expandable and remains reachable on short screens. */
+#railfoot{padding:0}
+#appearance-toggle{display:flex;align-items:center;gap:9px;position:sticky;top:0;
+  z-index:1;background:var(--rail);min-height:44px;padding:12px 15px;
+  color:var(--fg-2);font-size:12.5px;font-weight:650;cursor:pointer}
+#appearance-panel{padding:10px 12px 14px;border-top:1px solid var(--line-soft)}
+.appearance-chevron{margin-left:auto;width:12px;height:12px;fill:none;
+  stroke:currentColor;stroke-width:1.5}
+#appearance-details[open] .appearance-chevron{transform:rotate(180deg)}
+#rail .thm-modes{flex-direction:row}
+#rail .thm-accents{justify-content:space-between;gap:5px}
+#rail .sw{width:22px;height:22px;flex:none;margin:0}
+#rail .sw.pick{display:block}
+.thm-fallback,.sw-fallback{display:none}
+html:not(.sidebar-ready) .thm[data-theme-set],
+html:not(.sidebar-ready) .sw[data-accent],
+html:not(.sidebar-ready) .sw.pick{display:none!important}
+html:not(.sidebar-ready) .thm-fallback{display:block;position:relative;text-align:center;margin:0}
+html:not(.sidebar-ready) .sw-fallback{display:block;position:relative}
+.thm-fallback input,.sw-fallback input{position:absolute;width:1px;height:1px;opacity:0}
+.thm-fallback:focus-within,.sw-fallback:focus-within{outline:2px solid var(--accent-text);outline-offset:2px}
+.thm-fallback:has(input:checked){background:var(--surface);color:var(--fg);box-shadow:var(--shadow-1)}
+.sw-fallback:has(input:checked){box-shadow:0 0 0 2px var(--rail),0 0 0 4px var(--accent-text)}
+html:not(.sidebar-ready) .navgroup[open]>.navhead{
+  background:var(--accent-soft);color:var(--accent-text);box-shadow:inset 3px 0 0 var(--accent)}
+#sidebar-native-toggle,#sidebar-menu-native,#sidebar-native-scrim{display:none}
+@media(max-width:700px){
+  html:not(.sidebar-ready) #sidebar-menu{display:none}
+  html:not(.sidebar-ready) #sidebar-native-toggle{display:block;position:fixed;
+    width:1px;height:1px;opacity:0}
+  html:not(.sidebar-ready) #sidebar-menu-native{display:block;padding:6px 10px;
+    cursor:pointer;border:1px solid var(--line);border-radius:7px;
+    background:var(--surface);color:var(--accent-text)}
+  #sidebar-native-toggle:focus-visible ~ #main #sidebar-menu-native{
+    outline:2px solid var(--accent-text);outline-offset:2px}
+  html:not(.sidebar-ready) #sidebar-native-toggle:checked ~ #rail{
+    visibility:visible;transform:none}
+  html:not(.sidebar-ready) #sidebar-native-toggle:checked ~ #sidebar-native-scrim{
+    display:block;position:fixed;inset:0;z-index:69;background:rgba(0,0,0,.6);
+    touch-action:none;cursor:pointer}
+}
+html:not(.sidebar-ready){--accent-text:var(--fg)}
+html:not(.sidebar-ready):has(#fallback-accent-0:checked){--accent:#f2a33c;}
+html:not(.sidebar-ready):has(#fallback-accent-1:checked){--accent:#f2635f;}
+html:not(.sidebar-ready):has(#fallback-accent-2:checked){--accent:#c084fc;}
+html:not(.sidebar-ready):has(#fallback-accent-3:checked){--accent:#5aa2f0;}
+html:not(.sidebar-ready):has(#fallback-accent-4:checked){--accent:#2dd4bf;}
+html:not(.sidebar-ready):has(#fallback-accent-5:checked){--accent:#7bd88f;}
 """
 
 
@@ -636,69 +743,156 @@ THEME_BOOT = r"""
 
 
 def _theme_control_html() -> str:
-    """The mode switch and the accent swatches, for the rail's footer."""
-    swatches = "".join(
+    """Appearance preferences, with native radio presets when JS is disabled."""
+    swatches = ''.join(
         f'<button class="sw" type="button" data-accent="{value}" '
-        f'style="--sw:{value}" title="{name}" '
-        f'aria-label="{name} accent"></button>'
+        f'style="--sw:{value}" title="{escape(name)}" '
+        f'aria-label="{escape(name)} accent" aria-pressed="false"></button>'
         for value, name in ACCENTS
+    )
+    fallback_swatches = ''.join(
+        f'<label class="sw sw-fallback" style="--sw:{value}" '
+        f'title="{escape(name)} accent">'
+        f'<input id="fallback-accent-{idx}" type="radio" '
+        f'name="fallback-accent" value="{value}" '
+        f'aria-label="{escape(name)} accent"'
+        f'{" checked" if idx == 0 else ""}></label>'
+        for idx, (value, name) in enumerate(ACCENTS)
     )
     return (
         '<div id="railfoot">'
+        '<details id="appearance-details">'
+        '<summary id="appearance-toggle">'
+        '<span class="appearance-icon" aria-hidden="true">◐</span>'
+        '<span>Appearance</span>'
+        '<svg class="appearance-chevron" aria-hidden="true" viewBox="0 0 24 24">'
+        '<polyline points="6 15 12 9 18 15"/></svg>'
+        '</summary><div id="appearance-panel">'
         '<div class="thm-lbl">Theme</div>'
         '<div class="thm-modes" role="group" aria-label="Colour mode">'
         '<button class="thm" type="button" data-theme-set="dark" '
-        'title="Dark">Dark</button>'
+        'aria-pressed="false">Dark</button>'
         '<button class="thm" type="button" data-theme-set="light" '
-        'title="Light">Light</button>'
+        'aria-pressed="false">Light</button>'
         '<button class="thm" type="button" data-theme-set="sepia" '
-        'title="Easy on the eyes — warm, low contrast, less blue light">'
-        'Easy</button></div>'
-        f'<div class="thm-accents">{swatches}'
+        'aria-pressed="false" title="Warm, low-blue-light mode">Warm</button>'
+        '<label class="thm thm-fallback"><input type="radio" id="fallback-mode-dark" '
+        'name="fallback-theme" checked>Dark</label>'
+        '<label class="thm thm-fallback"><input type="radio" id="fallback-mode-light" '
+        'name="fallback-theme">Light</label>'
+        '<label class="thm thm-fallback"><input type="radio" id="fallback-mode-sepia" '
+        'name="fallback-theme">Warm</label>'
+        '</div>'
+        '<div class="thm-accents" role="group" aria-label="Accent colour">'
+        + swatches + fallback_swatches +
         '<label class="sw pick" title="Any colour you like">'
         f'<input type="color" id="accent-pick" value="{ACCENTS[0][0]}" '
         'aria-label="Custom accent colour"></label>'
-        '</div></div>'
+        '</div></div></details></div>'
     )
 
 # The nav, in *arr order. `count` names a stat the badge reads.
 NAV = [
-    ("Library",  [("library", "Games", "games"), ("add", "Add New", None),
-                  ("discover", "Discover", None),
-                  ("search", "Interactive Search", None)]),
-    ("Wanted",   [("missing", "Missing", "missing"), ("lists", "Lists", None),
-                  ("calendar", "Calendar", None)]),
-    ("Activity", [("queue", "Queue", "queued"), ("history", "History", None),
-                  ("blocklist", "Blocklist", None)]),
-    ("Hub",      [("hub", "Plugins", None), ("portal", "Library Shell", None), ("peers", "Friends", None)]),
-    ("Settings", [("setup", "Setup Guide", None), ("media", "Media Management", None), ("profiles", "Profiles", None),
-                  ("indexers", "Indexers", None), ("clients", "Download Clients", None),
-                  ("libraries", "Libraries", None),
-                  ("connections", "Connections", None),
-                  ("metadata", "Metadata", None), ("general", "General", None)]),
-    ("System",   [("status", "Status", None), ("stats", "Stats", None),
-                  ("update", "Update", None),
-                  ("ecosystem", "Ecosystem", None),
-                  ("platforms", "Platforms", None),
-                  ("getstarted", "Get Started", None),
-                  ("collections", "Collections", None),
-                  ("manualimport", "Manual Import", None),
-                  ("tasks", "Tasks", None), ("logs", "Logs", None)]),
+    ('Library', [
+        ('library', 'Games', 'games'),
+        ('add', 'Add New', None),
+        ('discover', 'Discover', None),
+        ('search', 'Interactive Search', None),
+    ]),
+    ('Wanted', [
+        ('missing', 'Missing', 'missing'),
+        ('lists', 'Lists', None),
+        ('calendar', 'Calendar', None),
+    ]),
+    ('Activity', [
+        ('queue', 'Queue', 'queued'),
+        ('history', 'History', None),
+        ('blocklist', 'Blocklist', None),
+    ]),
+    ('Hub', [
+        ('hub', 'Plugins', None),
+        ('portal', 'Library Shell', None),
+        ('peers', 'Friends', None),
+        ('ecosystem', 'Ecosystem', None),
+    ]),
+    ('Settings', [
+        ('general', 'General', None),
+        ('media', 'Media Management', None),
+        ('profiles', 'Profiles', None),
+        ('indexers', 'Indexers', None),
+        ('clients', 'Download Clients', None),
+        ('libraries', 'Libraries', None),
+        ('connections', 'Connections', None),
+        ('metadata', 'Metadata', None),
+        ('setup', 'Setup Guide', None),
+        ('getstarted', 'Get Started', None),
+    ]),
+    ('System', [
+        ('status', 'Status', None),
+        ('stats', 'Stats', None),
+        ('update', 'Update', None),
+        ('platforms', 'Platforms', None),
+        ('collections', 'Collections', None),
+        ('manualimport', 'Manual Import', None),
+        ('tasks', 'Tasks', None),
+        ('logs', 'Logs', None),
+    ]),
 ]
 
+GROUP_ICONS = {
+    "Library": "▦", "Wanted": "⌕", "Activity": "◷",
+    "Hub": "⬡", "Settings": "⚙", "System": "▤",
+}
+
+SETTINGS_ICON = (
+    '<svg class="settings-glyph" viewBox="0 0 24 24" fill="none" '
+    'stroke="currentColor" stroke-width="1.8" stroke-linecap="round" '
+    'stroke-linejoin="round" aria-hidden="true">'
+    '<path d="M12 2.5l1.6.3.6 2.1a7.5 7.5 0 0 1 1.7.9l2.1-.8 1.3 1.4-.9 2.1'
+    'a7.8 7.8 0 0 1 .9 1.7l2.1.6.3 1.7-.3 1.6-2.1.6a7.5 7.5 0 0 1-.9 1.7'
+    'l.9 2.1-1.3 1.3-2.1-.8a7.5 7.5 0 0 1-1.7.9l-.6 2.1-1.6.3-1.7-.3'
+    '-.6-2.1a7.5 7.5 0 0 1-1.7-.9l-2.1.8-1.3-1.3.9-2.1a7.5 7.5 0 0 1-.9-1.7'
+    'l-2.1-.6-.3-1.6.3-1.7 2.1-.6a7.5 7.5 0 0 1 .9-1.7l-.9-2.1 1.3-1.4'
+    ' 2.1.8a7.5 7.5 0 0 1 1.7-.9l.6-2.1z"/>'
+    '<circle cx="12" cy="12" r="3"/>'
+    '</svg>'
+)
 
 def _nav_html() -> str:
+    """Render native category disclosures and canonical route links."""
+    """Native details keep sidebar categories expandable without JavaScript.
+
+    ROMarr's go(page) and RENDER registry still require JavaScript to render pages.
+    """
     out = []
     for group, items in NAV:
-        out.append(f'<div class="navgroup"><div class="navhead">{group}</div>')
-        for key, label, count in items:
+        ident = group.lower()
+        first_page = items[0][0]
+        open_attr = ' open' if group == 'Library' else ''
+        out.append(
+            f'<details class="navgroup" name="romarr-groups" '
+            f'data-group="{ident}"{open_attr}>'
+            f'<summary class="navhead" data-group="{ident}" '
+            f'data-first-page="{first_page}" aria-controls="navlinks-{ident}">'
+            f'<span class="group-icon" aria-hidden="true">'
+            f'{SETTINGS_ICON if group == "Settings" else escape(GROUP_ICONS[group])}</span>'
+            f'<span class="group-title">{escape(group)}</span>'
+        )
+        if group == "Activity":
+            # Same count API key as Queue, not a new endpoint.
+            out.append(
+                '<b class="ct parent-count" data-ct="queued" '
+                'aria-label="Queued downloads"></b>'
+            )
+        out.append(f'</summary><div class="navlinks" id="navlinks-{ident}">')
+        for page, label, count in items:
             badge = f'<b class="ct" data-ct="{count}"></b>' if count else ""
             out.append(
-                f'<div class="nav" data-page="{key}">'
-                f'<span class="lbl">{label}</span>{badge}</div>'
+                f'<a id="nav-{page}" class="nav" href="#{page}" data-page="{page}">'
+                f'<span class="lbl">{escape(label)}</span>{badge}</a>'
             )
-        out.append("</div>")
-    return "".join(out)
+        out.append('</div></details>')
+    return ''.join(out)
 
 
 JS = r"""
@@ -885,11 +1079,129 @@ function toast(msg){
   setTimeout(()=>t.remove(),4200);
 }
 
+/* ---------------- sidebar ---------------- */
+function sidebarSyncNav(page){
+  const current = [...document.querySelectorAll('.nav[data-page]')]
+    .find(link=>link.dataset.page===page);
+  const parent = current ? current.closest('.navgroup') : null;
+  for(const group of document.querySelectorAll('.navgroup')){
+    const selected = group===parent;
+    group.open = selected;
+    group.classList.toggle('current-group',selected);
+    const head = group.querySelector('.navhead');
+    head.classList.toggle('active-parent',selected);
+    head.setAttribute('aria-expanded',String(selected));
+  }
+  for(const link of document.querySelectorAll('.nav[data-page]')){
+    const selected = link===current;
+    link.classList.toggle('on',selected);
+    if(selected) link.setAttribute('aria-current','page');
+    else link.removeAttribute('aria-current');
+  }
+}
+function sidebarCloseDrawer(){
+  const rail=$('#rail'), menu=$('#sidebar-menu');
+  const wasOpen=rail.classList.contains('drawer-open');
+  const returnFocus=rail.contains(document.activeElement);
+  rail.classList.remove('drawer-open');
+  document.documentElement.classList.remove('sidebar-drawer-open');
+  $('#sidebar-scrim').hidden=true;
+  menu.setAttribute('aria-expanded','false');
+  $('#main').inert=false;
+  rail.removeAttribute('role');
+  rail.removeAttribute('aria-modal');
+  if(wasOpen && returnFocus && window.matchMedia('(max-width:700px)').matches)
+    menu.focus({preventScroll:true});
+}
+function sidebarFitViewport(){
+  const rail=$('#rail');
+  if(!window.matchMedia('(max-width:700px)').matches){
+    sidebarCloseDrawer();
+    rail.style.removeProperty('--sidebar-visual-height');
+    rail.style.removeProperty('--sidebar-visual-top');
+    return;
+  }
+  const view=window.visualViewport;
+  const height=view ? view.height : window.innerHeight;
+  const top=view ? view.offsetTop : 0;
+  if(Number.isFinite(height) && height>0)
+    rail.style.setProperty('--sidebar-visual-height',`${Math.floor(height)}px`);
+  if(Number.isFinite(top))
+    rail.style.setProperty('--sidebar-visual-top',`${Math.max(0,Math.floor(top))}px`);
+}
+function sidebarBindNav(){
+  for(const head of document.querySelectorAll('.navhead[data-group]')){
+    head.addEventListener('click',event=>{
+      event.preventDefault(); // Native details still work when JS is disabled.
+      go(head.dataset.firstPage);
+    });
+  }
+  for(const link of document.querySelectorAll('.nav[data-page]')){
+    link.addEventListener('click',event=>{
+      if(event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      event.preventDefault();
+      go(link.dataset.page);
+      sidebarCloseDrawer();
+    });
+  }
+  const rail=$('#rail'), menu=$('#sidebar-menu');
+  menu.addEventListener('click',()=>{
+    if(!window.matchMedia('(max-width:700px)').matches) return;
+    if(rail.classList.contains('drawer-open')) return sidebarCloseDrawer();
+    sidebarFitViewport();
+    rail.classList.add('drawer-open');
+    document.documentElement.classList.add('sidebar-drawer-open');
+    rail.setAttribute('role','dialog');
+    rail.setAttribute('aria-modal','true');
+    $('#sidebar-scrim').hidden=false;
+    menu.setAttribute('aria-expanded','true');
+    // Focus the active category before making its opener's ancestor inert.
+    const first=rail.querySelector('.navgroup[open] .navhead') || $('#sidebar-close');
+    first.focus({preventScroll:true});
+    $('#main').inert=true;
+  });
+  $('#sidebar-close').addEventListener('click',sidebarCloseDrawer);
+  $('#sidebar-scrim').addEventListener('click',sidebarCloseDrawer);
+  document.addEventListener('keydown',event=>{
+    if(!rail.classList.contains('drawer-open')) return;
+    if(event.key==='Escape'){
+      event.preventDefault();
+      sidebarCloseDrawer();
+      menu.focus({preventScroll:true});
+    }else if(event.key==='Tab'){
+      const focusable=[...rail.querySelectorAll(
+        'summary, a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])'
+      )].filter(el=>{
+        if(el.disabled || el.getAttribute('tabindex')==='-1' ||
+           !el.getClientRects().length || getComputedStyle(el).visibility==='hidden') return false;
+        const closed=el.closest('details:not([open])');
+        return !closed || el===closed.querySelector(':scope > summary');
+      });
+      const first=focusable[0], last=focusable[focusable.length-1];
+      if(!first) return;
+      const current=document.activeElement;
+      if(event.shiftKey && (current===first || !rail.contains(current))){
+        event.preventDefault(); last.focus();
+      }else if(!event.shiftKey && (current===last || !rail.contains(current))){
+        event.preventDefault(); first.focus();
+      }
+    }
+  });
+  sidebarFitViewport();
+  window.addEventListener('resize',sidebarFitViewport,{passive:true});
+  if(window.visualViewport){
+    window.visualViewport.addEventListener('resize',sidebarFitViewport,{passive:true});
+    window.visualViewport.addEventListener('scroll',sidebarFitViewport,{passive:true});
+  }
+  document.documentElement.classList.add('sidebar-ready');
+}
+
 /* ---------------- routing ---------------- */
 function go(page){
+  // Hashes are untrusted input; inherited Object properties are not renderers.
+  if(!Object.prototype.hasOwnProperty.call(RENDER,page)) page='library';
   location.hash=page;
-  document.querySelectorAll('.nav').forEach(n=>
-    n.classList.toggle('on', n.dataset.page===page));
+  sidebarSyncNav(page);
   const titles={library:'Games',add:'Add New Game',search:'Interactive Search',
     missing:'Wanted — Missing',lists:'Import Lists',stats:'Statistics',
     discover:'Discover',ecosystem:'The Ecosystem',peers:'Friends',
@@ -5262,10 +5574,19 @@ RENDER.logs=async()=>{
    is left here is wiring the buttons and keeping them showing the truth. */
 function paintTheme(){
   const mode=ROMTHEME.mode(), accent=ROMTHEME.accent().toLowerCase();
-  document.querySelectorAll('[data-theme-set]').forEach(b=>
-    b.classList.toggle('on', b.dataset.themeSet===mode));
-  document.querySelectorAll('[data-accent]').forEach(b=>
-    b.classList.toggle('on', b.dataset.accent.toLowerCase()===accent));
+  document.querySelectorAll('[data-theme-set]').forEach(b=>{
+    const active=b.dataset.themeSet===mode;
+    b.classList.toggle('on',active);
+    b.setAttribute('aria-pressed',String(active));
+  });
+  let preset=false;
+  document.querySelectorAll('[data-accent]').forEach(b=>{
+    const active=b.dataset.accent.toLowerCase()===accent;
+    preset=preset||active;
+    b.classList.toggle('on',active);
+    b.setAttribute('aria-pressed',String(active));
+  });
+  const custom=$('.sw.pick'); if(custom) custom.classList.toggle('on',!preset);
   const pick=$('#accent-pick'); if(pick) pick.value=accent;
 }
 function bindTheme(){
@@ -5300,7 +5621,7 @@ async function refreshCounts(){
   });
 }
 (async()=>{
-  document.querySelectorAll('.nav').forEach(n=>n.onclick=()=>go(n.dataset.page));
+  sidebarBindNav();
   bindTheme();
   let searchTimer=null;
   $('#search').oninput=()=>{const p=location.hash.slice(1)||'library';
@@ -5346,11 +5667,17 @@ def page() -> str:
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <title>ROMarr</title><meta name="viewport" content="width=device-width,initial-scale=1">
 {FAVICON_LINK}<style>{CSS}</style><script>{THEME_BOOT}</script></head><body>
-<nav id="rail"><div id="brand">ROM<span>arr</span></div>
+<input id="sidebar-native-toggle" type="checkbox" aria-label="Toggle navigation" aria-controls="rail">
+<nav id="rail" aria-label="Main navigation"><div id="brand">ROM<span>arr</span></div>
+<button id="sidebar-close" type="button" aria-label="Close navigation">×</button>
 <div id="navwrap">{_nav_html()}</div>
 {_theme_control_html()}</nav>
+<div id="sidebar-scrim" hidden></div>
+<label id="sidebar-native-scrim" for="sidebar-native-toggle" aria-hidden="true"></label>
 <div id="main">
-  <div id="top"><h1>Games</h1><input id="search" placeholder="Filter…" autocomplete="off"></div>
+  <div id="top"><label id="sidebar-menu-native" for="sidebar-native-toggle">☰</label>
+  <button id="sidebar-menu" type="button" aria-label="Open navigation"
+    aria-controls="rail" aria-expanded="false">☰</button><h1>Games</h1><input id="search" placeholder="Filter…" autocomplete="off"></div>
   <div class="page" id="page"></div>
 </div>
 <script>{JS}</script></body></html>"""

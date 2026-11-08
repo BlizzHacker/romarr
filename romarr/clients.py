@@ -144,6 +144,16 @@ def _row_has_tag(row: dict, tag: str) -> bool:
     return False
 
 
+def _row_matches_infohash(row: dict, infohash: str) -> bool:
+    """Match the magnet identity even when qBittorrent uses a truncated v2 ID."""
+    field = "infohash_v2" if len(infohash) == 64 else "infohash_v1"
+    reported = str(row.get(field) or "").lower()
+    if reported:
+        return reported == infohash
+    torrent_id = str(row.get("hash") or "").lower()
+    return torrent_id in (infohash, infohash[:40])
+
+
 class QBittorrent:
     """Just enough of the WebUI API to add a torrent and watch it finish."""
 
@@ -333,7 +343,7 @@ class QBittorrent:
         if torrent_hash:
             try:
                 existing = [row for row in self.torrents()
-                            if str(row.get("hash") or "").lower() == torrent_hash]
+                            if _row_matches_infohash(row, torrent_hash)]
                 if len(existing) > 1:
                     self._added.error = "ambiguous retained collection; review ownership"
                     return False
@@ -345,7 +355,8 @@ class QBittorrent:
                 return False
         tag = "romarr-collection-" + secrets.token_hex(12)
         data = {"urls": magnet, "category": self._config.category,
-                "tags": tag, "paused": "false", "stopCondition": "MetadataReceived",
+                "tags": tag, "paused": "false", "stopped": "false",
+                "stopCondition": "MetadataReceived",
                 "contentLayout": "NoSubfolder"}
         if save_path:
             data["savepath"] = save_path
@@ -356,8 +367,11 @@ class QBittorrent:
             self._added.error = (
                 f"qBittorrent did not accept a paused magnet ({err.__class__.__name__})")
             return False
-        if not response.ok or response.text.strip().lower() not in ("", "ok."):
-            self._added.error = "qBittorrent did not accept the paused magnet"
+        # Older WebUIs return Ok. or Fails.; newer ones return JSON.
+        # Confirm the add by querying its unique tag before touching priorities.
+        if not response.ok or response.text.strip().casefold() == "fails.":
+            self._added.error = (
+                f"qBittorrent did not accept the paused magnet (HTTP {response.status_code})")
             return False
 
         request_timeout = min(max(int(self._config.timeout), 1), 5)
@@ -384,6 +398,9 @@ class QBittorrent:
                 state = str(tagged[0].get("state") or "")
                 if not owned_hash:
                     break
+                if torrent_hash and not _row_matches_infohash(tagged[0], torrent_hash):
+                    self._added.error = "new torrent hash does not match the magnet; review required"
+                    return False
                 # Accept states where metadata is being fetched, queued, checking, paused or stopped (#114)
                 if state not in {"pausedDL", "pausedUP", "stoppedDL", "stoppedUP",
                                  "metaDL", "queuedDL", "checkingResumeData"}:
