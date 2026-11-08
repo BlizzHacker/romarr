@@ -345,7 +345,8 @@ class QBittorrent:
                 return False
         tag = "romarr-collection-" + secrets.token_hex(12)
         data = {"urls": magnet, "category": self._config.category,
-                "tags": tag, "paused": "false", "stopCondition": "MetadataReceived",
+                "tags": tag, "paused": "false", "stopped": "false",
+                "stopCondition": "MetadataReceived",
                 "contentLayout": "NoSubfolder"}
         if save_path:
             data["savepath"] = save_path

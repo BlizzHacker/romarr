@@ -87,6 +87,7 @@ def test_selects_only_the_exact_normalized_minerva_path_before_resume():
         "./TOSEC/Nintendo/Chrono Trigger.zip")
     assert session.posts[0][0] == "torrents/add"
     assert session.posts[0][1]["paused"] == "false"
+    assert session.posts[0][1]["stopped"] == "false"
     assert session.posts[0][1]["stopCondition"] == "MetadataReceived"
     assert session.posts[0][1]["contentLayout"] == "NoSubfolder"
     priorities = [data for endpoint, data in session.posts
