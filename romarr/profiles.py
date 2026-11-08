@@ -214,7 +214,7 @@ class ReleaseProfile:
         preferred_regions = platform_cfg.get("preferred_regions")
         if not preferred_regions:
             preferred_regions = settings.get("preferred_regions") or []
-        preferred_regions = [str(r).strip() for r in preferred_regions if str(r).strip()]
+        preferred_regions = [str(r).strip().casefold() for r in preferred_regions if str(r).strip()]
 
         raw_region_scores = platform_cfg.get("region_scores")
         if not raw_region_scores:

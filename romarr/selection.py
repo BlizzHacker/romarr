@@ -168,24 +168,29 @@ _TRANSLATION_TAG = re.compile(
     re.IGNORECASE,
 )
 
-_USA_TAG = re.compile(r"[\(\[]\s*(usa|us)\s*[\)\]]", re.IGNORECASE)
-_JAPAN_TAG = re.compile(r"[\(\[]\s*(japan|jp|jpn|j)\s*[\)\]]", re.IGNORECASE)
-_LANG_TAG = re.compile(r"[\(\[]\s*([a-z]{2})\s*[\)\]]", re.IGNORECASE)
+_TAG_RE = re.compile(r"[\(\[]([^\)\]]+)[\)\]]")
+# Language codes used in release tags. A two-letter tag alone is not evidence
+# of a language: NP is the Nintendo Power release format, for example.
+_LANGUAGE_CODES = frozenset("""
+af ar bg ca cs cy da de el en es et eu fa fi fr ga gl he hi hr hu id is it
+ja ko lt lv mk ms nl no pl pt ro ru sk sl sr sv th tr uk vi zh
+""".split())
+
 
 def is_foreign_language_tag(title: str) -> bool:
-    if _USA_TAG.search(title):
-        for m in _LANG_TAG.finditer(title):
-            lang = m.group(1).lower()
-            if lang not in ("en", "us"):
-                return True
-    if _JAPAN_TAG.search(title):
-        for m in _LANG_TAG.finditer(title):
-            lang = m.group(1).lower()
-            if lang not in ("ja", "jp", "j"):
-                return True
-    return False
+    regions = detect_regions(title)
+    allowed = {"en"}
+    if "japan" in regions:
+        allowed.add("ja")
+    if not regions.intersection({"usa", "japan"}):
+        return False
+    languages = set()
+    for tag in _TAG_RE.findall(title.lower()):
+        codes = set(re.split(r"[,/ ]+", tag.strip()))
+        if codes and codes <= _LANGUAGE_CODES:
+            languages.update(codes)
+    return bool(languages and languages.isdisjoint(allowed))
 
-_TAG_RE = re.compile(r"[\(\[]([^\)\]]+)[\)\]]")
 
 _TOKEN_TO_REGIONS = {
     "usa": {"usa"}, "us": {"usa"}, "united states": {"usa"}, "america": {"usa"},
@@ -209,7 +214,6 @@ _TOKEN_TO_REGIONS = {
     "russia": {"russia"}, "ru": {"russia"}, "rus": {"russia"},
     "poland": {"poland"}, "pl": {"poland"}, "pol": {"poland"},
     "canada": {"canada"}, "ca": {"canada"},
-    "en": {"usa", "europe"},
     "u": {"usa"}, "e": {"europe"}, "j": {"japan"}, "w": {"world"}, "a": {"australia"},
     "g": {"germany"}, "f": {"france"}, "s": {"spain"}, "i": {"italy"}, "k": {"korea"},
     "c": {"china"}, "b": {"brazil"},
@@ -220,16 +224,20 @@ _TOKEN_TO_REGIONS = {
 def detect_regions(title: str) -> set[str]:
     lowered = title.lower()
     detected = set()
-    found_any_tag = False
+    ambiguous = set()
     for tag_content in _TAG_RE.findall(lowered):
-        tokens = [t.strip() for t in re.split(r"[,/ ]+", tag_content) if t.strip()]
+        tokens = [t for t in re.split(r"[,/ ]+", tag_content.strip()) if t]
         if not tokens:
             continue
-        if all(token in _TOKEN_TO_REGIONS for token in tokens):
-            found_any_tag = True
+        if all(token in _LANGUAGE_CODES for token in tokens):
+            # A standalone compact country code still works as a region when
+            # there is no stronger evidence. A list like En,Fr is language.
+            if len(tokens) == 1:
+                ambiguous.update(_TOKEN_TO_REGIONS.get(tokens[0], ()))
+        elif all(token in _TOKEN_TO_REGIONS for token in tokens):
             for token in tokens:
                 detected.update(_TOKEN_TO_REGIONS[token])
-    if not found_any_tag:
+    if not detected:
         if re.search(r"\bpal\b", lowered):
             detected.add("europe")
         if re.search(r"\bntsc-u\b", lowered) or re.search(r"\bntsc-us\b", lowered):
@@ -238,6 +246,8 @@ def detect_regions(title: str) -> set[str]:
             detected.add("japan")
         elif re.search(r"\bntsc\b", lowered):
             detected.update({"usa", "japan"})
+    if not detected:
+        detected = ambiguous
     return detected
 
 # "[MULTI5]", "[MULTi8-ENG]", "MULTi10-PLAZA". In every result seen this marks
@@ -470,8 +480,8 @@ def judge(release: Release, wanted: str,
             add(min(release.seeders, 20) * 2, f"{release.seeders} seeders")
 
     detected_regions = detect_regions(release.title)
+    pref_list = getattr(profile, "preferred_regions", None) or ["usa", "world", "europe", "japan"]
     if profile and getattr(profile, "region_mode", "prefer") == "strict":
-        pref_list = getattr(profile, "preferred_regions", None) or ["usa", "world", "europe", "japan"]
         if detected_regions and not any(r in pref_list for r in detected_regions):
             return Judgement(-300, verdict=f"region outside allowed list ({', '.join(sorted(detected_regions))})")
 
@@ -490,9 +500,6 @@ def judge(release: Release, wanted: str,
             region_handled = True
 
     if not region_handled:
-        pref_list = getattr(profile, "preferred_regions", None) if profile else None
-        if not pref_list:
-            pref_list = ["usa", "world", "europe", "japan"]
         n = len(pref_list)
         matched_ranks = [(pref_list.index(r), r) for r in detected_regions if r in pref_list]
         if matched_ranks:
@@ -500,7 +507,7 @@ def judge(release: Release, wanted: str,
             best_rank, best_region = matched_ranks[0]
             pts = int(round(40 * (n - best_rank) / n))
             add(pts, f"region {best_region}")
-        else:
+        elif not detected_regions:
             region = 0
             label = ""
             for markers, value in _REGION_SCORE:

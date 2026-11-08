@@ -458,3 +458,20 @@ def test_ordinary_browsing_is_not_rate_limited(server):
     base, _ = server
     codes = [get(base + "/api/v1/game", key="testkey")[0] for _ in range(20)]
     assert set(codes) == {200}
+
+@pytest.mark.parametrize("during_headers", [True, False])
+def test_response_writer_closes_disconnected_browser(during_headers):
+    from types import SimpleNamespace
+
+    def disconnected(*args):
+        raise BrokenPipeError("browser cancelled fetch")
+
+    handler_type = make_handler(None)
+    handler = handler_type.__new__(handler_type)
+    handler.close_connection = False
+    handler.send_response = lambda *args: None
+    handler.send_header = lambda *args: None
+    handler.end_headers = disconnected if during_headers else lambda: None
+    handler.wfile = SimpleNamespace(write=disconnected)
+    handler._json(200, {"ok": True})
+    assert handler.close_connection

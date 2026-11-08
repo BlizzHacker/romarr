@@ -306,7 +306,7 @@ def test_per_platform_profile_from_settings():
     nes_prof = ReleaseProfile.from_settings(settings, "nes")
     assert nes_prof.min_size_mb == 0.02
     assert nes_prof.max_size_mb == 8
-    assert nes_prof.preferred_regions == ["USA", "Europe"]
+    assert nes_prof.preferred_regions == ["usa", "europe"]
     assert any(t[0] == "[!]" for t in nes_prof.preferred)
     assert any(t[0] == "PRG0" for t in nes_prof.preferred)
 

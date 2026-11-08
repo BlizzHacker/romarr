@@ -241,3 +241,59 @@ def test_native_navigation_preserves_routes_in_requested_order():
         'games', 'missing', 'queued', 'queued']
     heads = [a for t, a in nodes if t == 'summary']
     assert [h['data-first-page'] for h in heads] == [p.split()[0] for p in expected.values()]
+
+def test_metadata_paints_before_lookup_and_ignores_superseded_responses():
+    metadata = ui.JS[ui.JS.index("RENDER.metadata=async()=>{"):ui.JS.index("// --- Calendar")]
+    run_sidebar(metadata + r"""
+const content=make('div',{id:'page'},main);
+let input,output,identify;
+Object.defineProperty(content,'innerHTML',{set(html){
+  for(const child of this.children) child.isConnected=false;
+  this.children=[];
+  if(html.includes('id="mfn"')){
+    input=make('input',{id:'mfn'},this);input.value='Chrono.Trigger.USA.v1.1.smc';
+    output=make('div',{id:'mout'},this);output.isConnected=true;
+    identify=make('button',{id:'mgo'},this);
+    make('button',{id:'mp-add'},this);
+  }
+}});
+let pending=[],setupRequests=0;
+const esc=value=>String(value);
+const j=(url,options)=>{
+  if(!url.includes('/lookup?')){++setupRequests;return Promise.resolve({});}
+  return new Promise(resolve=>pending.push({url,resolve,signal:options.signal}));
+};
+const tick=()=>new Promise(resolve=>setImmediate(resolve));
+(async()=>{
+  go('metadata');
+  location.hash='#metadata';
+  window.events.hashchange[0]();
+  await tick();
+  assert.equal(setupRequests,2,'hashchange must not render Metadata twice');
+  assert.equal(output.textContent,'Looking up...');
+  assert.equal(pending.length,1);
+  assert(pending[0].url.includes('Chrono.Trigger'));
+  input.value='Manual.smc';input.oninput();
+  assert(pending[0].signal.aborted);
+  const manual=identify.onclick();
+  pending[1].resolve({matched_by:'filename',title:'Manual result'});
+  await manual;
+  pending[0].resolve({matched_by:'filename',title:'Old example'});
+  await tick();
+  assert(output.innerHTML.includes('Manual result'));
+  input.value='Pending.smc';
+  const abandoned=identify.onclick();
+  go('history');
+  assert(pending[2].signal.aborted);
+  assert.equal(rendered,'history');
+  pending[2].resolve({matched_by:'filename',title:'Late result'});
+  await abandoned;
+  assert(!output.innerHTML.includes('Late result'));
+  location.hash='#metadata';
+  window.events.hashchange[0]();
+  location.hash='#metadata';
+  await tick();
+  assert.equal(output.textContent,'Looking up...');
+  assert.equal(setupRequests,4);
+})().catch(e=>{console.error(e);process.exitCode=1;});
+""")

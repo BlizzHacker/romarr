@@ -6650,8 +6650,12 @@ def make_handler(service: ROMarr):
             self.send_response(code)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.end_headers()
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                # Navigation can cancel an in-flight fetch before its reply.
+                self.close_connection = True
 
         def _json(self, code: int, payload):
             self._send(code, json.dumps(payload).encode(), "application/json")
