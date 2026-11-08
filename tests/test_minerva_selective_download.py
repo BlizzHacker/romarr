@@ -60,6 +60,8 @@ class Session:
         endpoint = url.rsplit("/api/v2/", 1)[-1]
         self.gets.append((endpoint, dict(params or {})))
         if endpoint == "torrents/info":
+            if not self.tag:
+                return Response([])
             return Response([{"hash": self.hash, "tags": self.tag,
                               "state": self.state, "category": "romarr"}])
         if endpoint == "torrents/files":
@@ -152,6 +154,51 @@ def test_invalid_or_failed_add_never_falls_back_to_a_collection_download():
     assert session.resumed is False
     assert not any(endpoint == "torrents/filePrio"
                    for endpoint, _ in session.posts)
+
+
+def test_json_add_response_confirms_unique_tag_then_selects_and_resumes():
+    import json
+
+    infohash = "a" * 40
+    client, session = qbit([
+        {"index": 0, "name": "Collection/Game.zip", "size": 32768, "priority": 1},
+        {"index": 1, "name": "Collection/Other.zip", "size": 32768, "priority": 1},
+    ], add_text=json.dumps({"added_torrent_ids": [infohash], "success_count": 1,
+                           "failure_count": 0, "pending_count": 0}))
+    session.hash = infohash
+    assert client.add_magnet_selective(f"magnet:?xt=urn:btih:{infohash}", "Collection/Game.zip")
+    assert client.last_job_id == f"qbit-tag:{session.tag}"
+    assert client.last_selected_file == {
+        "hash": infohash, "index": 0, "path": "Collection/Game.zip", "size": 32768,
+    }
+    assert [row["priority"] for row in session.files] == [1, 0]
+    assert session.resumed and not session.deleted
+
+
+def test_json_acknowledgment_without_tag_never_selects_or_resumes(monkeypatch):
+    from romarr import clients
+
+    client, session = qbit([], add_text='{"success_count":1}')
+    original_get = session.get
+    def get_without_confirmation(url, **kwargs):
+        if url.endswith("torrents/info"):
+            return Response([])
+        return original_get(url, **kwargs)
+    monkeypatch.setattr(session, "get", get_without_confirmation)
+    monkeypatch.setattr(clients, "QBITTORRENT_ADD_CONFIRM_TIMEOUT", 0.01)
+    assert not client.add_magnet_selective("magnet:?xt=urn:btih:" + "a" * 40, "Game.zip")
+    assert "did not confirm" in client.last_error
+    assert [endpoint for endpoint, _ in session.posts] == ["torrents/add"]
+    assert not client.last_job_id and not client.last_selected_file
+
+
+def test_tag_on_wrong_infohash_never_mutates_that_torrent():
+    client, session = qbit([], add_text='{"success_count":1}')
+    session.hash = "b" * 40
+    assert not client.add_magnet_selective("magnet:?xt=urn:btih:" + "a" * 40, "Game.zip")
+    assert "hash does not match" in client.last_error
+    assert [endpoint for endpoint, _ in session.posts] == ["torrents/add"]
+    assert not client.last_job_id and not client.last_selected_file
 
 
 def test_minerva_grab_passes_the_exact_path_to_qbittorrent(tmp_path, monkeypatch):

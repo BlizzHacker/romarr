@@ -356,8 +356,11 @@ class QBittorrent:
             self._added.error = (
                 f"qBittorrent did not accept a paused magnet ({err.__class__.__name__})")
             return False
-        if not response.ok or response.text.strip().lower() not in ("", "ok."):
-            self._added.error = "qBittorrent did not accept the paused magnet"
+        # Older WebUIs return Ok. or Fails.; newer ones return JSON.
+        # Confirm the add by querying its unique tag before touching priorities.
+        if not response.ok or response.text.strip().casefold() == "fails.":
+            self._added.error = (
+                f"qBittorrent did not accept the paused magnet (HTTP {response.status_code})")
             return False
 
         request_timeout = min(max(int(self._config.timeout), 1), 5)
@@ -384,6 +387,9 @@ class QBittorrent:
                 state = str(tagged[0].get("state") or "")
                 if not owned_hash:
                     break
+                if torrent_hash and owned_hash.lower() != torrent_hash:
+                    self._added.error = "new torrent hash does not match the magnet; review required"
+                    return False
                 # Accept states where metadata is being fetched, queued, checking, paused or stopped (#114)
                 if state not in {"pausedDL", "pausedUP", "stoppedDL", "stoppedUP",
                                  "metaDL", "queuedDL", "checkingResumeData"}:
