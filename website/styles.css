@@ -171,6 +171,7 @@ h1 span{color:var(--blue);font-weight:590}
 .stack-links{display:grid;grid-template-columns:1fr 1fr;border-top:1px solid var(--line-bright)}
 .stack-links a{min-height:49px;padding:0 11px;border-right:1px solid var(--line)}
 .stack-links a:nth-child(2n){border-right:0}
+.stack-links a:last-child:nth-child(odd){grid-column:1/-1;border-right:0}
 .direction-section{border-block:1px solid var(--line);background:#090d12}
 .direction-header{display:grid;grid-template-columns:1fr .72fr;gap:8%;align-items:end;margin-bottom:30px}
 .direction-header h2{max-width:580px}
