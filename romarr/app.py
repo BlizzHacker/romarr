@@ -1948,6 +1948,12 @@ class ROMarr:
         like one the scorer picked, or Activity and Wanted start disagreeing
         with each other depending on how a game was requested.
         """
+        platform = resolve(platform_slug) if isinstance(platform_slug, str) else None
+        if platform is None:
+            return {"ok": False,
+                    "error": "Select a valid platform and search again before grabbing. "
+                             "A download without a platform cannot be imported."}
+        platform_slug = platform.slug
         refusal = collection_content_refusal(pick)
         if refusal:
             return {"ok": False, "error": refusal}
