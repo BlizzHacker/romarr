@@ -239,3 +239,176 @@ def test_identify_releases_lock_before_slow_provider_lookup(tmp_path, monkeypatc
         finally:
             release.set()
         assert result.result(timeout=8)["title"] == "Local test"
+
+
+def test_masked_credentials_require_a_saved_value(tmp_path):
+    """Reject invented masks and stale editors; preserve genuine saved secrets."""
+    service = new_service(tmp_path)
+    first_revision = service.metadata_revision
+    with loopback_api(service) as request:
+        status, invalid = request('/api/v1/metadataprovider', 'POST', {
+            'type': 'rawg', 'name': 'New masked provider', 'enable': True,
+            'api_key': '********',
+        })
+        assert status == 400 and 'error' in invalid
+        assert service.store.list_items('metadata_providers') == []
+        assert service.metadata_revision == first_revision
+
+        status, saved = request('/api/v1/metadataprovider', 'POST', {
+            'type': 'rawg', 'name': 'Valid', 'enable': True,
+            'api_key': 'synthetic-test-key',
+        })
+        assert status == 200 and saved['api_key'] == '********'
+        provider_id = saved['id']
+        status, updated = request('/api/v1/metadataprovider', 'POST', {
+            'id': provider_id, 'type': 'rawg', 'name': 'Renamed',
+            'enable': True, 'api_key': '********',
+        })
+        assert status == 200 and updated['api_key'] == '********'
+        actual = service.store.get_item('metadata_providers', provider_id)
+        assert actual['api_key'] == 'synthetic-test-key'
+        assert actual['name'] == 'Renamed'
+
+        status, deleted = request('/api/v1/metadataprovider/' + provider_id, 'DELETE')
+        assert status == 200 and deleted['deleted'] is True
+        revision = service.metadata_revision
+        status, stale = request('/api/v1/metadataprovider', 'POST', {
+            'id': provider_id, 'type': 'rawg', 'name': 'Stale editor',
+            'enable': True, 'api_key': '********',
+        })
+        assert status == 404 and 'error' in stale
+        assert service.store.list_items('metadata_providers') == []
+        assert service.metadata_revision == revision
+
+        status, partial = request('/api/v1/metadataprovider', 'POST', {
+            'type': 'igdb', 'name': 'Partially masked', 'enable': True,
+            'client_id': '********', 'token': 'new-test-token',
+        })
+        assert status == 400 and 'error' in partial
+        assert service.store.list_items('metadata_providers') == []
+
+
+def test_failed_provider_rebuild_does_not_persist_or_publish(tmp_path, monkeypatch):
+    """Validate the prospective chain before changing stored or active settings."""
+    service = new_service(tmp_path)
+    original_metadata = service.metadata
+    original_snapshot = service._metadata_provider_snapshot
+    original_revision = service.metadata_revision
+    real_metadata = app_module.Metadata
+
+    def reject_invalid(providers):
+        """Deterministically simulate constructor failure on invalid input."""
+        if any(p.get('name') == 'Rejected' for p in providers):
+            raise ValueError('Synthetic test build failure')
+        return real_metadata(providers)
+
+    monkeypatch.setattr(app_module, 'Metadata', reject_invalid)
+    with loopback_api(service) as request:
+        status, result = request('/api/v1/metadataprovider', 'POST', {
+            'type': 'rawg', 'name': 'Rejected', 'enable': False,
+        })
+    assert status == 400 and result['error'] == 'invalid metadata provider configuration'
+    assert service.store.list_items('metadata_providers') == []
+    assert service.metadata is original_metadata
+    assert service._metadata_provider_snapshot is original_snapshot
+    assert service.metadata_revision == original_revision
+    assert 'Synthetic' not in str(result)
+
+
+def test_failed_provider_edit_preserves_existing_configuration(tmp_path, monkeypatch):
+    """A failed edit must preserve the prior secret and stable revision."""
+    service = new_service(tmp_path)
+    with loopback_api(service) as request:
+        status, saved = request('/api/v1/metadataprovider', 'POST', {
+            'type': 'rawg', 'name': 'Valid', 'enable': False,
+            'api_key': 'synthetic-test-key',
+        })
+        assert status == 200
+        original_cfg = service.store.get_item('metadata_providers', saved['id'])
+        original_chain = service.metadata
+        original_revision = service.metadata_revision
+        real_metadata = app_module.Metadata
+
+        def fail_rebuild(providers):
+            """Reject only edits containing a simulated invalid entry."""
+            if any(p.get('name') == 'Invalid edit' for p in providers):
+                raise RecursionError('Simulated nested provider limit')
+            return real_metadata(providers)
+
+        monkeypatch.setattr(app_module, 'Metadata', fail_rebuild)
+        status, result = request('/api/v1/metadataprovider', 'POST', {
+            'id': saved['id'], 'type': 'rawg', 'name': 'Invalid edit',
+            'enable': False, 'api_key': '********',
+        })
+    assert status == 400 and 'error' in result
+    assert service.store.get_item('metadata_providers', saved['id']) == original_cfg
+    assert service.metadata is original_chain
+    assert service.metadata_revision == original_revision
+    assert_consistent(service)
+
+
+def test_reload_metadata_failure_preserves_published_tuple(tmp_path, monkeypatch):
+    """An exception between deep copies cannot half-publish a metadata chain."""
+    service = new_service(tmp_path)
+    chain, snapshot, revision = (service.metadata, service._metadata_provider_snapshot,
+                                 service.metadata_revision)
+    service.store.put_item('metadata_providers', {
+        'name': 'Changed', 'type': 'rawg', 'enable': False,
+    })
+    original_deepcopy = app_module.deepcopy
+    call_count = 0
+
+    def fail_second_copy(value):
+        """Raise at the second deepcopy to test atomic publication."""
+        nonlocal call_count
+        call_count += 1
+        if call_count == 2:
+            raise RecursionError('Synthetic second-copy failure')
+        return original_deepcopy(value)
+
+    monkeypatch.setattr(app_module, 'deepcopy', fail_second_copy)
+    with pytest.raises(RecursionError):
+        service.reload_metadata()
+    assert service.metadata is chain
+    assert service._metadata_provider_snapshot is snapshot
+    assert service.metadata_revision == revision
+
+
+def test_client_save_and_restore_publish_latest_clients(tmp_path, monkeypatch):
+    """A blocked client reload cannot overwrite clients published by restore."""
+    from types import SimpleNamespace
+
+    service = new_service(tmp_path)
+    first_reload = threading.Event()
+    release = threading.Event()
+
+    def client_factory(cfg):
+        """Avoid external download clients and coordinate a deterministic race."""
+        if cfg.get('name') == 'Before restore':
+            first_reload.set()
+            assert release.wait(8), 'Client reload was never released'
+        return SimpleNamespace(name=cfg['name'])
+
+    monkeypatch.setattr(app_module, 'build_client', client_factory)
+    restored = make_backup({**service.store.settings,
+                            'download_clients': [{
+                                'id': 'restored-client', 'type': 'qbittorrent',
+                                'name': 'After restore', 'enable': True,
+                            }]}, include_secrets=True)
+    with loopback_api(service) as request, ThreadPoolExecutor(max_workers=2) as pool:
+        client_request = pool.submit(request, '/api/v1/downloadclient', 'POST', {
+            'id': 'before-client', 'type': 'qbittorrent',
+            'name': 'Before restore', 'enable': True,
+        })
+        try:
+            assert first_reload.wait(5), 'Client update did not reach rebuild'
+            restore_request = pool.submit(request, '/api/v1/restore', 'POST', restored)
+            assert not restore_request.done(), 'Restore escaped while client reload was blocked'
+        finally:
+            release.set()
+        assert client_request.result(timeout=8)[0] == 200
+        status, result = restore_request.result(timeout=8)
+    assert status == 200 and result['ok'] is True
+    clients = service.store.list_items('download_clients')
+    assert [c['name'] for c in clients] == ['After restore']
+    assert [c.romarr_name for c in service.clients] == ['After restore']

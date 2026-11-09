@@ -1288,44 +1288,45 @@ class ROMarr:
         an *arr that needs restarting to use a client you just added is not
         one anybody would call configured.
         """
-        clients = []
-        for cfg in self.store.list_items("download_clients"):
-            if not cfg.get("enable", True):
-                continue
-            client = build_client(cfg)
-            if client is not None:
-                client.romarr_id = str(cfg.get("id") or "")
-                client.romarr_name = str(cfg.get("name") or "")
-                # A client that has to READ a file another host wrote needs
-                # the translation table, and the table belongs to the install
-                # rather than to any one client row -- so it is handed over
-                # here, where both are in scope, instead of being duplicated
-                # into every configuration that might need it.
-                if hasattr(client, "path_mappings"):
-                    client.path_mappings = (
-                        self.store.settings.get("remote_path_mappings") or [])
-                clients.append(client)
-        self.clients = clients
+        with self._metadata_lock:
+            clients = []
+            for cfg in self.store.list_items("download_clients"):
+                if not cfg.get("enable", True):
+                    continue
+                client = build_client(cfg)
+                if client is not None:
+                    client.romarr_id = str(cfg.get("id") or "")
+                    client.romarr_name = str(cfg.get("name") or "")
+                    # A client that has to READ a file another host wrote needs
+                    # the translation table, and the table belongs to the install
+                    # rather than to any one client row -- so it is handed over
+                    # here, where both are in scope, instead of being duplicated
+                    # into every configuration that might need it.
+                    if hasattr(client, "path_mappings"):
+                        client.path_mappings = (
+                            self.store.settings.get("remote_path_mappings") or [])
+                    clients.append(client)
+            self.clients = clients
 
-        # The first enabled Prowlarr entry drives search.
-        for cfg in self.store.list_items("indexers"):
-            if cfg.get("type") == "prowlarr" and cfg.get("enable", True):
-                self.prowlarr = Prowlarr(ProwlarrConfig(
-                    base_url=cfg.get("url", ""), api_key=cfg.get("api_key", "")))
-                self.store.settings["_prowlarr_url"] = cfg.get("url", "")
-                break
+            # The first enabled Prowlarr entry drives search.
+            for cfg in self.store.list_items("indexers"):
+                if cfg.get("type") == "prowlarr" and cfg.get("enable", True):
+                    self.prowlarr = Prowlarr(ProwlarrConfig(
+                        base_url=cfg.get("url", ""), api_key=cfg.get("api_key", "")))
+                    self.store.settings["_prowlarr_url"] = cfg.get("url", "")
+                    break
 
-        # Directly-configured Torznab and Newznab indexers. These were
-        # storable, editable and testable but never searched, so an operator
-        # could add one, watch Test pass, and never see a result from it.
-        direct = []
-        for cfg in self.store.list_items("indexers"):
-            if not cfg.get("enable", True):
-                continue
-            indexer = build_indexer(cfg)
-            if indexer is not None:
-                direct.append(indexer)
-        self.indexers = direct
+            # Directly-configured Torznab and Newznab indexers. These were
+            # storable, editable and testable but never searched, so an operator
+            # could add one, watch Test pass, and never see a result from it.
+            direct = []
+            for cfg in self.store.list_items("indexers"):
+                if not cfg.get("enable", True):
+                    continue
+                indexer = build_indexer(cfg)
+                if indexer is not None:
+                    direct.append(indexer)
+            self.indexers = direct
 
     def safe_settings(self) -> dict:
         """Settings with every stored credential masked.
@@ -3726,18 +3727,56 @@ class ROMarr:
             return {"error": "unknown action"}
         return self._source_job_progress(job)
 
+    def _prepare_metadata(self, providers: list[dict]) -> tuple[Metadata, list[dict]]:
+        """Build a provider chain and a deep snapshot without publishing either."""
+        return Metadata(deepcopy(providers)), deepcopy(providers)
+
     def reload_metadata(self) -> None:
-        """Publish a coherent Metadata chain, snapshot and revision."""
+        """Publish a complete Metadata chain, snapshot and revision together."""
         with self._metadata_lock:
             providers = self.store.list_items("metadata_providers")
             if (hasattr(self, "metadata")
                     and providers == getattr(self, "_metadata_provider_snapshot", None)):
                 return
-            # Readers obtain the chain under this same lock; lookups then run
-            # on that immutable-for-the-request reference without holding it.
-            self.metadata = Metadata(deepcopy(providers))
-            self._metadata_provider_snapshot = deepcopy(providers)
-            self.metadata_revision = uuid.uuid4().hex
+            metadata, snapshot = self._prepare_metadata(providers)
+            revision = uuid.uuid4().hex
+            self.metadata, self._metadata_provider_snapshot, self.metadata_revision = (
+                metadata, snapshot, revision)
+
+    def save_metadata_provider(self, cfg: dict) -> dict:
+        """Validate a complete candidate before saving or publishing a provider."""
+        with self._metadata_lock:
+            providers = self.store.list_items("metadata_providers")
+            candidate = dict(cfg)
+            incoming_id = str(candidate.get("id") or "")
+            if not incoming_id:
+                # Mirror Store's short random identifier, before staging the
+                # prospective chain, so saved and prepared rows are identical.
+                existing_ids = {str(p.get("id")) for p in providers}
+                while True:
+                    incoming_id = uuid.uuid4().hex[:12]
+                    if incoming_id not in existing_ids:
+                        break
+                candidate["id"] = incoming_id
+            for index, existing in enumerate(providers):
+                if str(existing.get("id")) == incoming_id:
+                    providers[index] = candidate
+                    break
+            else:
+                if cfg.get("id"):
+                    raise ValueError("metadata provider no longer exists")
+                providers.append(candidate)
+            changed = providers != getattr(self, "_metadata_provider_snapshot", None)
+            if changed:
+                metadata, snapshot = self._prepare_metadata(providers)
+                revision = uuid.uuid4().hex
+            # Store.put_item also writes the settings file; no published chain
+            # changes if preflight cannot build both candidate representations.
+            saved = self.store.put_item("metadata_providers", candidate)
+            if changed:
+                self.metadata, self._metadata_provider_snapshot, self.metadata_revision = (
+                    metadata, snapshot, revision)
+            return saved
 
     def identify(self, filename: str = "", verification=None) -> dict:
         """Name a game, and say how confidently.
@@ -7712,8 +7751,8 @@ def make_handler(service: ROMarr):
                     service.store.settings.update(settings)
                     service.store.save()
                     service.reload_metadata()
-                service.reload_clients()
-                service.reload_libraries()
+                    service.reload_clients()
+                    service.reload_libraries()
                 return self._json(200, {"ok": True, "warning": warning})
             if route.path == "/api/v1/collection/start":
                 return self._json(200, service.collection_start(
@@ -7767,22 +7806,32 @@ def make_handler(service: ROMarr):
                     force=bool(body.get("force"))))
             if route.path == "/api/v1/metadataprovider":
                 secrets = {"api_key", "token", "client_id"}
+                if not isinstance(body, dict):
+                    return self._json(400, {"error": "invalid provider configuration"})
                 with service._metadata_lock:
-                    cfg = dict(body or {})
+                    cfg = dict(body)
+                    old_cfg = None
                     if cfg.get("id"):
                         old_cfg = service.store.get_item("metadata_providers",
-                                                         str(cfg["id"])) or {}
-                        for key in secrets:
-                            # A key that is absent counts the same as one sent
-                            # back masked. `put_item` replaces the whole entry,
-                            # so without this a caller renaming a provider wipes
-                            # the credential it was renaming -- and the provider
-                            # then reports itself as unconfigured, which is the
-                            # exact confusion this endpoint keeps producing.
-                            if cfg.get(key, "") in ("********", ""):
-                                cfg[key] = old_cfg.get(key, "")
-                    saved = service.store.put_item("metadata_providers", cfg)
-                    service.reload_metadata()
+                                                         str(cfg["id"]))
+                        if old_cfg is None:
+                            return self._json(404, {"error": "metadata provider no longer exists"})
+                    for key in secrets:
+                        supplied = cfg.get(key, "")
+                        if supplied == "********":
+                            if not old_cfg or old_cfg.get(key, "") in ("", "********"):
+                                return self._json(400, {
+                                    "error": "masked credential has no saved value"})
+                            cfg[key] = old_cfg[key]
+                        elif supplied == "" and old_cfg:
+                            # The editor omits/clears redacted secrets when
+                            # editing a different field: preserve saved values.
+                            cfg[key] = old_cfg.get(key, "")
+                    try:
+                        saved = service.save_metadata_provider(cfg)
+                    except (RecursionError, TypeError, ValueError, OverflowError):
+                        return self._json(400, {
+                            "error": "invalid metadata provider configuration"})
                 return self._json(200, {k: ("********" if k in secrets and v
                                             else v)
                                         for k, v in saved.items()})
@@ -8322,17 +8371,18 @@ def make_handler(service: ROMarr):
             if route.path in ("/api/v1/downloadclient", "/api/v1/indexer"):
                 is_indexer = "indexer" in route.path
                 key = "indexers" if is_indexer else "download_clients"
-                existing = service.store.get_item(key, body.get("id")) if body.get("id") else None
-                # Each family merges against its OWN type specs: the
-                # downloaders merge looks secrets up in CLIENT_TYPES, which
-                # has no entry for "prowlarr" -- it silently merged nothing
-                # and stored the form's `********` placeholder as the real
-                # API key (#57). Same split for redaction on the way out.
-                merged = (merge_indexer_secrets(dict(body), existing)
-                          if is_indexer
-                          else merge_secrets(dict(body), existing))
-                saved = service.store.put_item(key, merged)
-                service.reload_clients()
+                with service._metadata_lock:
+                    existing = service.store.get_item(key, body.get("id")) if body.get("id") else None
+                    # Each family merges against its OWN type specs: the
+                    # downloaders merge looks secrets up in CLIENT_TYPES, which
+                    # has no entry for "prowlarr" -- it silently merged nothing
+                    # and stored the form's `********` placeholder as the real
+                    # API key (#57). Same split for redaction on the way out.
+                    merged = (merge_indexer_secrets(dict(body), existing)
+                              if is_indexer
+                              else merge_secrets(dict(body), existing))
+                    saved = service.store.put_item(key, merged)
+                    service.reload_clients()
                 return self._json(200, redact_indexer(saved) if is_indexer
                                   else redact(saved))
             if route.path == "/api/v1/library":
@@ -8460,8 +8510,9 @@ def make_handler(service: ROMarr):
                                 ("/api/v1/indexer/", "indexers")):
                 if route.path.startswith(prefix):
                     item_id = route.path[len(prefix):]
-                    removed = service.store.delete_item(key, item_id)
-                    service.reload_clients()
+                    with service._metadata_lock:
+                        removed = service.store.delete_item(key, item_id)
+                        service.reload_clients()
                     return self._json(200 if removed else 404, {"deleted": removed})
             if route.path.startswith("/api/v1/importlist/"):
                 item_id = route.path[len("/api/v1/importlist/"):]
