@@ -1198,6 +1198,10 @@ function sidebarBindNav(){
 
 /* ---------------- routing ---------------- */
 let activePage=null, pageVersion=0, metadataLookup=null;
+// Keep the last successful Identify result only for the current browser page.
+let metadataFilename='Chrono.Trigger.USA.v1.1.smc';
+let metadataCachedFilename='', metadataCachedResult=null;
+function metadataInvalidate(){metadataCachedFilename='';metadataCachedResult=null;}
 function go(page){
   // Hashes are untrusted input; inherited Object properties are not renderers.
   if(!Object.prototype.hasOwnProperty.call(RENDER,page)) page='library';
@@ -3491,6 +3495,7 @@ async function editItem(kind, item, afterSave){
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify(payload()) });
     if(saved.error){line(false,saved.error);e.target.disabled=false;return;}
+    if(kind==='metadataprovider') metadataInvalidate();
     closeModal(); toast('Saved');
     if(afterSave)await afterSave();
     else go((KINDS[kind] || {}).page || 'clients');
@@ -3499,7 +3504,11 @@ async function editItem(kind, item, afterSave){
   const del = m.querySelector('#m-del');
   if(del) del.onclick = async () => {
     if(!confirm(`Remove ${item.name || spec.label}?`)) return;
-    await fetch(`/api/v1/${kind}/${item.id}`, { method: 'DELETE' });
+    let removed;
+    try{ removed=await fetch(`/api/v1/${kind}/${item.id}`, { method: 'DELETE' }); }
+    catch(e){ toast('Remove failed'); return; }
+    if(!removed||!removed.ok){ toast('Remove failed'); return; }
+    if(kind==='metadataprovider') metadataInvalidate();
     closeModal(); toast('Removed'); go((KINDS[kind] || {}).page || 'clients');
   };
 }
@@ -4640,7 +4649,7 @@ RENDER.metadata=async()=>{
     +'<div class="card"><h3>Try it</h3>'
     +'<p class="help">A live lookup against whatever you have configured.</p>'
     +'<div class="field"><label>Filename</label>'
-    +'<input id="mfn" value="Chrono.Trigger.USA.v1.1.smc"></div>'
+    +'<input id="mfn" value="'+esc(metadataFilename)+'"></div>'
     +'<button class="mini accent" id="mgo">Identify</button>'
     +'<div id="mout" role="status" style="margin-top:12px"></div></div>';
 
@@ -4648,23 +4657,54 @@ RENDER.metadata=async()=>{
   const lookup=async()=>{
     if(!current() || !output.isConnected) return;
     metadataLookup?.abort();
-    const request=new AbortController(), filename=input.value;
+    const filename=input.value.trim();
+    metadataFilename=input.value;
+    if(!filename){
+      metadataLookup=null;
+      output.textContent='Enter a filename to identify.';
+      return;
+    }
+    const request=new AbortController();
     metadataLookup=request;
     output.textContent='Looking up...';
-    const result=await j('/api/v1/metadata/lookup?filename='+encodeURIComponent(filename),
-      {signal:request.signal}).catch(()=>({}));
+    let result, failed=false;
+    try{
+      result=await j('/api/v1/metadata/lookup?filename='
+        +encodeURIComponent(filename),{signal:request.signal});
+      if(result?.error) throw new Error('Lookup returned an error');
+    }catch(e){failed=true;}
     if(metadataLookup!==request) return;
     metadataLookup=null;
-    if(current() && output.isConnected && input.value===filename)
-      output.innerHTML=metaResult(result);
+    if(current() && output.isConnected && input.value.trim()===filename){
+      if(failed){
+        if(metadataCachedFilename===filename) metadataInvalidate();
+        output.textContent='Lookup failed. Click Identify to retry.';
+      }else{
+        output.innerHTML=metaResult(result);
+        if(result?.found && result.title && result.matched_by){
+          metadataCachedFilename=filename;
+          metadataCachedResult=result;
+        }else if(metadataCachedFilename===filename) metadataInvalidate();
+      }
+    }
   };
   input.oninput=()=>{
+    metadataFilename=input.value;
     metadataLookup?.abort();
     metadataLookup=null;
-    output.textContent='Click Identify to run a lookup.';
+    const filename=input.value.trim();
+    if(filename && metadataCachedResult && metadataCachedFilename===filename)
+      output.innerHTML=metaResult(metadataCachedResult);
+    else output.textContent=filename
+      ? 'Click Identify to run a lookup.' : 'Enter a filename to identify.';
+  };
+  input.onkeydown=e=>{
+    if(e.key==='Enter'){e.preventDefault();lookup();}
   };
   $('#mgo').onclick=lookup;
-  lookup();
+  if(metadataCachedResult && metadataCachedFilename===input.value.trim())
+    output.innerHTML=metaResult(metadataCachedResult);
+  else lookup();
   $('#mp-add').onclick=()=>addItem('metadataprovider');
   document.querySelectorAll('[data-mpedit]').forEach(b=>b.onclick=()=>
     editItem('metadataprovider', mine.items[Number(b.dataset.mpedit)]));
