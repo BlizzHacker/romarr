@@ -789,6 +789,41 @@ class GameyfinLibrary(FolderLibrary):
     name = "Gameyfin"
 
 
+class RetroBatLibrary(FolderLibrary):
+    """A local or mounted RetroBat roms directory."""
+
+    name = "RetroBat"
+
+
+# ROMarr slugs that differ from RetroBat's es_systems.cfg system names.
+RETROBAT_FOLDERS = {
+    "amiga": "amiga500",
+    "amiga-cd32": "amigacd32",
+    "acpc": "amstradcpc",
+    "atari-st": "atarist",
+    "atari8bit": "atari800",
+    "cpet": "pet",
+    "dc": "dreamcast",
+    "genesis-slash-megadrive": "megadrive",
+    "neo-geo-cd": "neogeocd",
+    "neo-geo-pocket": "ngp",
+    "neo-geo-pocket-color": "ngpc",
+    "ngc": "gamecube",
+    "pc-fx": "pcfx",
+    "philips-cd-i": "cdi",
+    "sega32": "sega32x",
+    "sharp-x68000": "x68000",
+    "sinclair-zx81": "zx81",
+    "sms": "mastersystem",
+    "turbografx16--1": "pcengine",
+    "turbografx-16-slash-pc-engine-cd": "pcenginecd",
+    "vic-20": "vic20",
+    "win": "windows",
+    "wonderswan-color": "wonderswancolor",
+    "zxs": "zxspectrum",
+}
+
+
 # ------------------------------------------------------- many servers, one arr --
 #
 # One library was a fair simplification until it wasn't. People run more than
@@ -859,6 +894,14 @@ LIBRARY_TYPES = {
         # field would invite somebody to fill it in and then wonder why nothing
         # connects.
         "fields": [f for f in _COMMON_LIBRARY_FIELDS if f["name"] != "url"],
+    },
+    "retrobat": {
+        "label": "RetroBat",
+        "default_port": 0,
+        "fields": [f if f["name"] != "path" else
+                   {**f, "help": "RetroBat's roms folder as ROMarr sees it. "
+                                 "Update the gamelist in RetroBat after importing."}
+                   for f in _COMMON_LIBRARY_FIELDS if f["name"] not in ("url", "layout")],
     },
     "gameyfin": {
         "label": "Gameyfin",
@@ -1023,6 +1066,8 @@ def build_library_from_config(cfg: dict):
         return RetromLibrary(RetromConfig(base_url=url, api_key=key))
     if kind == "folder":
         return FolderLibrary(FolderConfig(root=cfg.get("path", "")))
+    if kind == "retrobat":
+        return RetroBatLibrary(FolderConfig(root=cfg.get("path", "")))
     if kind == "gameyfin":
         return GameyfinLibrary(FolderConfig(root=cfg.get("path", "")))
     if kind == "romm":

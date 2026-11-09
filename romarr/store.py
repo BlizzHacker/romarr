@@ -437,22 +437,26 @@ class Store:
                 "wanted": [asdict(w) for w in self.wanted],
                 "queue": [asdict(q) for q in self.queue[-self.MAX_QUEUE:]],
             }
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            # Atomic: a crash mid-write would otherwise leave truncated JSON and
-            # the service would refuse to start.
-            fd, tmp = tempfile.mkstemp(dir=str(self.path.parent), prefix=".romarr-", suffix=".tmp")
+            tmp = None
             try:
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                # Replace the state only after the new JSON is complete.
+                fd, tmp = tempfile.mkstemp(dir=self.path.parent, prefix=".romarr-",
+                                           suffix=".tmp")
                 with os.fdopen(fd, "w", encoding="utf-8") as fh:
                     json.dump(payload, fh, indent=1)
                 os.replace(tmp, self.path)
+                tmp = None
             except OSError as err:
                 log.warning("could not write %s: %s", self.path, err)
-                try:
-                    os.unlink(tmp)
-                except OSError:
-                    pass
                 if raise_on_error:
                     raise
+            finally:
+                if tmp is not None:
+                    try:
+                        os.unlink(tmp)
+                    except OSError:
+                        pass
 
     # -- history -----------------------------------------------------------
 
@@ -692,15 +696,22 @@ class Store:
             self.save()
         return out
 
-    def delete_item(self, key: str, item_id: str) -> bool:
+    def delete_item(self, key: str, item_id: str, *, require_persist: bool = False) -> bool:
         with self._lock:
             items = self._collection(key)
-            before = len(items)
-            self.settings[key] = [i for i in items if str(i.get("id")) != str(item_id)]
-            changed = len(self.settings[key]) != before
-        if changed:
+            remaining = [i for i in items if str(i.get("id")) != str(item_id)]
+            if len(remaining) == len(items):
+                return False
+            self.settings[key] = remaining
+            if require_persist:
+                try:
+                    self.save(raise_on_error=True)
+                except Exception:
+                    self.settings[key] = items
+                    raise
+        if not require_persist:
             self.save()
-        return changed
+        return True
 
     def update_settings(self, patch: dict[str, Any]) -> dict[str, Any]:
         """Apply a partial settings update.

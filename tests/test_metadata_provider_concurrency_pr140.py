@@ -618,3 +618,23 @@ def test_client_save_and_restore_publish_latest_clients(tmp_path, monkeypatch):
     clients = service.store.list_items('download_clients')
     assert [c['name'] for c in clients] == ['After restore']
     assert [c.romarr_name for c in service.clients] == ['After restore']
+
+
+def test_failed_provider_delete_preserves_saved_chain_and_revision(tmp_path, monkeypatch):
+    service = new_service(tmp_path)
+    saved = service.save_metadata_provider({"type": "rawg", "name": "Original", "enable": False})
+    revision = service.metadata_revision
+    original = service.store.path.read_bytes()
+
+    def fail_create(**kwargs):
+        raise PermissionError("Cannot create a replacement state file")
+
+    with loopback_api(service) as request, monkeypatch.context() as patch:
+        patch.setattr(store_module.tempfile, "mkstemp", fail_create)
+        service.store.save()
+        status, _ = request("/api/v1/metadataprovider/" + saved["id"], "DELETE")
+        assert status == 500
+        assert service.store.path.read_bytes() == original
+        assert service.metadata_revision == revision
+        assert service.store.list_items("metadata_providers") == [saved]
+        assert_consistent(service)

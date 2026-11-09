@@ -50,7 +50,7 @@ import time
 import requests
 
 from .libraries import (
-    LIBRARY_TYPES, build_library, build_library_from_config, library_counts,
+    LIBRARY_TYPES, RETROBAT_FOLDERS, build_library, build_library_from_config, library_counts,
     load_backend_plugins, merge_library_secrets, redact_library, route_library,
 )
 from .clients import QBittorrent, QbitConfig, QbitAuthenticationError, Romm, RommConfig
@@ -1201,6 +1201,8 @@ class ROMarr:
         """The directory shape for one library: its own setting, or the global
         default. `flat` = <root>/<platform>/<rom>, `nested` = the same with a
         `roms/` level, matching RomM's Structure A and B."""
+        if (cfg or {}).get("type") == "retrobat":
+            return "flat"
         return str((cfg or {}).get("layout")
                    or self.store.settings.get("library_layout") or "flat")
 
@@ -1208,6 +1210,7 @@ class ROMarr:
         """Per-platform folder name overrides, merging global and library settings."""
         merged: dict[str, str] = {}
         for source in (self.store.settings.get("platform_folders"),
+                       RETROBAT_FOLDERS if (cfg or {}).get("type") == "retrobat" else {},
                        (cfg or {}).get("platform_folders")):
             if isinstance(source, dict):
                 for k, v in source.items():
@@ -3778,6 +3781,21 @@ class ROMarr:
                 self.metadata, self._metadata_provider_snapshot, self.metadata_revision = (
                     metadata, snapshot, revision)
             return saved
+
+    def delete_metadata_provider(self, provider_id: str) -> bool:
+        """Publish a provider removal only after it has been saved."""
+        with self._metadata_lock:
+            providers = self.store.list_items("metadata_providers")
+            remaining = [p for p in providers if str(p.get("id")) != provider_id]
+            if len(remaining) == len(providers):
+                return False
+            metadata, snapshot = self._prepare_metadata(remaining)
+            if not self.store.delete_item("metadata_providers", provider_id,
+                                          require_persist=True):
+                return False
+            self.metadata, self._metadata_provider_snapshot, self.metadata_revision = (
+                metadata, snapshot, uuid.uuid4().hex)
+            return True
 
     def identify(self, filename: str = "", verification=None) -> dict:
         """Name a game, and say how confidently.
@@ -8536,10 +8554,7 @@ def make_handler(service: ROMarr):
                 return self._json(200 if removed else 404, {"deleted": removed})
             if route.path.startswith("/api/v1/metadataprovider/"):
                 item_id = route.path[len("/api/v1/metadataprovider/"):]
-                with service._metadata_lock:
-                    removed = service.store.delete_item("metadata_providers",
-                                                        item_id)
-                    service.reload_metadata()
+                removed = service.delete_metadata_provider(item_id)
                 return self._json(200 if removed else 404, {"deleted": removed})
             return self._json(404, {"error": "not found"})
 
