@@ -1201,6 +1201,7 @@ let activePage=null, pageVersion=0, metadataLookup=null;
 // Keep the last successful Identify result only for the current browser page.
 let metadataFilename='Chrono.Trigger.USA.v1.1.smc';
 let metadataCachedFilename='', metadataCachedResult=null;
+let metadataProviderRevision='';
 function metadataInvalidate(){metadataCachedFilename='';metadataCachedResult=null;}
 function go(page){
   // Hashes are untrusted input; inherited Object properties are not renderers.
@@ -3507,7 +3508,7 @@ async function editItem(kind, item, afterSave){
     let removed;
     try{ removed=await fetch(`/api/v1/${kind}/${item.id}`, { method: 'DELETE' }); }
     catch(e){ toast('Remove failed'); return; }
-    if(!removed||!removed.ok){ toast('Remove failed'); return; }
+    if(!removed||(!removed.ok && removed.status!==404)){ toast('Remove failed'); return; }
     if(kind==='metadataprovider') metadataInvalidate();
     closeModal(); toast('Removed'); go((KINDS[kind] || {}).page || 'clients');
   };
@@ -4618,6 +4619,10 @@ RENDER.metadata=async()=>{
     j('/api/v1/metadata/schema').catch(()=>({providers:[]}))
   ]);
   if(!current()) return;
+  // A server revision detects changes made by other tabs or API clients.
+  const revision=typeof mine.revision==='string' ? mine.revision : '';
+  if(!revision || revision!==metadataProviderRevision) metadataInvalidate();
+  metadataProviderRevision=revision;
   $('#page').innerHTML='<div class="card"><h3>Configured providers</h3>'
     +'<p class="help"><b>This is where the keys go.</b> Add RAWG (a free key) '
     +'or IGDB (a Twitch client id + bearer token) and lookups, Discover and '

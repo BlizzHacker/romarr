@@ -3726,6 +3726,7 @@ class ROMarr:
     def reload_metadata(self) -> None:
         """Rebuild the provider chain from stored settings."""
         self.metadata = Metadata(self.store.list_items("metadata_providers"))
+        self.metadata_revision = uuid.uuid4().hex
 
     def identify(self, filename: str = "", verification=None) -> dict:
         """Name a game, and say how confidently.
@@ -7237,7 +7238,8 @@ def make_handler(service: ROMarr):
                 for cfg in service.store.list_items("metadata_providers"):
                     items.append({k: ("********" if k in secrets and v else v)
                                   for k, v in cfg.items()})
-                return self._json(200, {"items": items})
+                return self._json(200, {"items": items,
+                                        "revision": service.metadata_revision})
             if route.path == "/api/v1/metadataprovider/schema":
                 # The generic editor's shape: per-type field definitions,
                 # secrets marked so they render as password inputs and are

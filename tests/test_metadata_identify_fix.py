@@ -10,6 +10,7 @@ from romarr import ui
 
 
 def test_metadata_identify_hooks_are_scoped():
+    """Require the expected Metadata handlers in the embedded JavaScript."""
     source=ui.JS
     meta=source[source.index('RENDER.metadata=async()=>{'):source.index('// --- Calendar')]
     assert "metadataCachedFilename===input.value.trim()" in meta
@@ -18,6 +19,7 @@ def test_metadata_identify_hooks_are_scoped():
     assert "input.onkeydown=e=>" in meta
     assert "if(e.key==='Enter')" in meta
     assert "metadataFilename=input.value" in meta
+    assert "revision!==metadataProviderRevision" in meta
     assert "if(kind==='metadataprovider') metadataInvalidate();" in source
     assert "metadataInvalidate();" in source
     assert "metadataLookup?.abort();" in source
@@ -27,6 +29,7 @@ def test_metadata_identify_hooks_are_scoped():
 
 
 def test_metadata_identify_cache_and_stale_requests_in_node():
+    """Exercise filename retention, cache invalidation, and stale requests."""
     node=shutil.which('node')
     if not node:
         pytest.skip('Node.js not installed; browser logic NOT TESTED')
@@ -40,6 +43,7 @@ const assert=require('node:assert/strict');
 const location={hash:'#metadata'};
 const RENDER={};
 let input=null, output=null, identify=null;
+let providerRevision='first';
 const page={};
 let pageHtml='';
 Object.defineProperty(page,'innerHTML',{
@@ -67,7 +71,7 @@ const esc=s=>String(s??'').replace(/[&<>"]/g,c=>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const pending=[];
 const j=(u,options)=>{
-  if(u==='/api/v1/metadataprovider')return Promise.resolve({items:[]});
+  if(u==='/api/v1/metadataprovider')return Promise.resolve({items:[],revision:providerRevision});
   if(u==='/api/v1/metadata/schema')return Promise.resolve({providers:[]});
   if(u.startsWith('/api/v1/metadata/lookup?'))
     return new Promise((resolve,reject)=>pending.push({url:u,signal:options.signal,resolve,reject}));
@@ -164,6 +168,19 @@ const editItem=()=>{};
   pending[9].resolve({matched_by:'filename',found:true,title:'Another new'});
   await tick();
   assert(output.innerHTML.includes('Another new'));
+
+  // A different tab/API client changes a provider: force a fresh lookup.
+  providerRevision='changed-from-another-tab';
+  pageVersion++;
+  await RENDER.metadata();
+  assert.equal(pending.length,11,'provider revision changed: relookup required');
+  pending[10].resolve({matched_by:'filename',found:true,title:'After provider change'});
+  await tick();
+  assert(output.innerHTML.includes('After provider change'));
+  pageVersion++;
+  await RENDER.metadata();
+  assert.equal(pending.length,11,'unchanged provider revision preserves success');
+  assert(output.innerHTML.includes('After provider change'));
   console.log('METADATA_TEST_COMPLETE');
 })().catch(e=>{console.error(e);process.exitCode=1;});
 '''
@@ -199,7 +216,7 @@ const fetch=async(u,opts)=>{
   assert.equal(u,'/api/v1/metadataprovider/example');
   assert.equal(opts.method,'DELETE');
   if(mode==='network')throw Error('connection lost');
-  return {ok:mode==='ok'};
+  return {ok:mode==='ok',status:mode==='absent'?404:mode==='http-error'?500:200};
 };
 ''' + handler + r'''
 (async()=>{
@@ -208,6 +225,10 @@ const fetch=async(u,opts)=>{
   events.length=0; mode='http-error';
   await del.onclick();
   assert.deepEqual(events,['toast:Remove failed'], 'HTTP failures do not close dialog');
+  events.length=0; mode='absent';
+  await del.onclick();
+  assert.deepEqual(events,['invalidate','close','toast:Removed','go:metadata'],
+    '404 means the entry is absent; refresh the list');
   events.length=0; mode='ok';
   await del.onclick();
   assert.deepEqual(events,['invalidate','close','toast:Removed','go:metadata'],
@@ -218,3 +239,21 @@ const fetch=async(u,opts)=>{
     result=subprocess.run([node,'-e',script],text=True,capture_output=True,timeout=30)
     assert result.returncode==0,result.stderr
     assert "METADATA_TEST_COMPLETE" in result.stdout, "JavaScript assertions did not complete"
+
+
+def test_metadata_revision_changes_when_providers_reload(tmp_path):
+    """Use an opaque revision to identify reloads without exposing credentials."""
+    from romarr.app import ROMarr
+
+    service = ROMarr({"ROMARR_DATA": str(tmp_path / "romarr.json")})
+    initial = service.metadata_revision
+    assert len(initial) == 32
+    service.store.put_item("metadata_providers", {
+        "type": "rawg", "name": "Example", "api_key": "secret", "enable": True,
+    })
+    service.reload_metadata()
+    assert service.metadata_revision != initial
+    assert "secret" not in service.metadata_revision
+    current = service.metadata_revision
+    service.reload_metadata()
+    assert service.metadata_revision != current
