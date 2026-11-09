@@ -32,6 +32,7 @@ Routes:
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 import logging
 import os
 import pathlib
@@ -3724,8 +3725,14 @@ class ROMarr:
         return self._source_job_progress(job)
 
     def reload_metadata(self) -> None:
-        """Rebuild the provider chain from stored settings."""
-        self.metadata = Metadata(self.store.list_items("metadata_providers"))
+        """Rebuild metadata only if the stored provider configuration changed."""
+        providers = self.store.list_items("metadata_providers")
+        if (hasattr(self, "metadata")
+                and providers == getattr(self, "_metadata_provider_snapshot", None)):
+            return
+        self.metadata = Metadata(providers)
+        # A separate snapshot catches in-place changes to stored settings.
+        self._metadata_provider_snapshot = deepcopy(providers)
         self.metadata_revision = uuid.uuid4().hex
 
     def identify(self, filename: str = "", verification=None) -> dict:
@@ -7696,6 +7703,7 @@ def make_handler(service: ROMarr):
                 service.store.save()
                 service.reload_clients()
                 service.reload_libraries()
+                service.reload_metadata()
                 return self._json(200, {"ok": True, "warning": warning})
             if route.path == "/api/v1/collection/start":
                 return self._json(200, service.collection_start(

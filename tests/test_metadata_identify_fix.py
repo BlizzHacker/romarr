@@ -19,7 +19,7 @@ def test_metadata_identify_hooks_are_scoped():
     assert "input.onkeydown=e=>" in meta
     assert "if(e.key==='Enter')" in meta
     assert "metadataFilename=input.value" in meta
-    assert "revision!==metadataProviderRevision" in meta
+    assert "mine.revision!==metadataProviderRevision" in meta
     assert "if(kind==='metadataprovider') metadataInvalidate();" in source
     assert "metadataInvalidate();" in source
     assert "metadataLookup?.abort();" in source
@@ -44,6 +44,7 @@ const location={hash:'#metadata'};
 const RENDER={};
 let input=null, output=null, identify=null;
 let providerRevision='first';
+let providerResponse='ok';
 const page={};
 let pageHtml='';
 Object.defineProperty(page,'innerHTML',{
@@ -70,8 +71,16 @@ const document={querySelectorAll:()=>[]};
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const pending=[];
+const fetch=u=>{
+  assert.equal(u,'/api/v1/metadataprovider');
+  if(providerResponse==='offline')return Promise.reject(Error('offline'));
+  if(providerResponse==='http-error')
+    return Promise.resolve({ok:false,json:async()=>({error:'Unavailable'})});
+  if(providerResponse==='malformed')
+    return Promise.resolve({ok:true,json:async()=>({items:[]})});
+  return Promise.resolve({ok:true,json:async()=>({items:[],revision:providerRevision})});
+};
 const j=(u,options)=>{
-  if(u==='/api/v1/metadataprovider')return Promise.resolve({items:[],revision:providerRevision});
   if(u==='/api/v1/metadata/schema')return Promise.resolve({providers:[]});
   if(u.startsWith('/api/v1/metadata/lookup?'))
     return new Promise((resolve,reject)=>pending.push({url:u,signal:options.signal,resolve,reject}));
@@ -181,6 +190,31 @@ const editItem=()=>{};
   await RENDER.metadata();
   assert.equal(pending.length,11,'unchanged provider revision preserves success');
   assert(output.innerHTML.includes('After provider change'));
+
+  // Do not invalidate or consume provider quota when verification fails.
+  for(const failure of ['offline','http-error','malformed']){
+    providerResponse=failure;
+    pageVersion++;
+    await RENDER.metadata();
+    assert.equal(metadataCachedFilename,'Another.sfc');
+    assert.equal(metadataProviderRevision,'changed-from-another-tab');
+    assert.equal(pending.length,11,'failed provider fetch must not auto-lookup');
+    assert(output.textContent.includes('Provider settings unavailable'));
+    assert(!output.innerHTML.includes('After provider change'),
+      'an unverified cached result must not be presented as current');
+  }
+  providerResponse='ok';
+  pageVersion++;
+  await RENDER.metadata();
+  assert.equal(pending.length,11,'unchanged revision after outage reuses cache');
+  assert(output.innerHTML.includes('After provider change'));
+  providerRevision='changed-after-outage';
+  pageVersion++;
+  await RENDER.metadata();
+  assert.equal(pending.length,12,'changed revision after outage must relookup');
+  pending[11].resolve({matched_by:'filename',found:true,title:'Updated after outage'});
+  await tick();
+  assert(output.innerHTML.includes('Updated after outage'));
   console.log('METADATA_TEST_COMPLETE');
 })().catch(e=>{console.error(e);process.exitCode=1;});
 '''
@@ -256,4 +290,59 @@ def test_metadata_revision_changes_when_providers_reload(tmp_path):
     assert "secret" not in service.metadata_revision
     current = service.metadata_revision
     service.reload_metadata()
+    assert service.metadata_revision == current, 'no-op reload should preserve revision'
+    assert service.store.delete_item('metadata_providers', 'absent-provider') is False
+    service.reload_metadata()
+    assert service.metadata_revision == current, 'absent deletion should not rotate revision'
+    # A real change must still rotate the revision, including nested changes.
+    service.store.settings['metadata_providers'][0]['enable'] = False
+    service.reload_metadata()
     assert service.metadata_revision != current
+    assert service.metadata.providers[0]['enable'] is False
+
+
+def test_restore_reloads_metadata_providers_over_http(tmp_path):
+    """A restored provider configuration must update the live chain and revision."""
+    import json
+    import threading
+    import urllib.request
+    from http.server import ThreadingHTTPServer
+    from romarr.app import ROMarr, make_handler
+    from romarr.ops import make_backup
+
+    service=ROMarr({'ROMARR_DATA':str(tmp_path/'settings.json'),
+                    'ROMARR_API_KEY':'testkey'})
+    server=ThreadingHTTPServer(('127.0.0.1',0),make_handler(service))
+    thread=threading.Thread(target=server.serve_forever,daemon=True)
+    thread.start()
+    base=f'http://127.0.0.1:{server.server_address[1]}'
+
+    def request(path,method='GET',body=None):
+        """Use the authenticated loopback endpoint for restore assertions."""
+        data=json.dumps(body).encode() if body is not None else None
+        req=urllib.request.Request(base+path,data=data,method=method,
+             headers={'X-Api-Key':'testkey','Content-Type':'application/json'})
+        with urllib.request.urlopen(req,timeout=10) as response:
+            assert response.status==200
+            return json.load(response)
+
+    try:
+        original=service.metadata_revision
+        new_providers=[{'type':'rawg','name':'Restored','enable':False,
+                        'api_key':'secret'}]
+        body=make_backup({**service.store.settings,
+                          'metadata_providers':new_providers},include_secrets=True)
+        assert request('/api/v1/restore','POST',body)['ok'] is True
+        assert service.metadata.providers==new_providers
+        assert service.metadata_revision!=original
+        payload=request('/api/v1/metadataprovider')
+        assert payload['revision']==service.metadata_revision
+        assert payload['items'][0]['api_key']=='********'
+        assert 'secret' not in payload['revision']
+        restored=service.metadata_revision
+        assert request('/api/v1/restore','POST',body)['ok'] is True
+        assert service.metadata_revision==restored, 'identical restore should not rotate revision'
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)

@@ -4615,21 +4615,32 @@ RENDER.metadata=async()=>{
   const current=()=>version===pageVersion && location.hash==='#metadata';
   $('#page').innerHTML='<div class="empty">Loading metadata settings…</div>';
   const [mine,schema]=await Promise.all([
-    j('/api/v1/metadataprovider').catch(()=>({items:[]})),
+    fetch('/api/v1/metadataprovider').then(r=>{
+      if(!r.ok) throw new Error('Could not load providers');
+      return r.json();
+    }).then(r=>{
+      if(!Array.isArray(r?.items) || typeof r.revision!=='string' || !r.revision)
+        throw new Error('Invalid provider response');
+      return r;
+    }).catch(()=>null),
     j('/api/v1/metadata/schema').catch(()=>({providers:[]}))
   ]);
   if(!current()) return;
-  // A server revision detects changes made by other tabs or API clients.
-  const revision=typeof mine.revision==='string' ? mine.revision : '';
-  if(!revision || revision!==metadataProviderRevision) metadataInvalidate();
-  metadataProviderRevision=revision;
+  // Do not confuse a failed fetch with a provider change.
+  const providerVerified=!!mine;
+  if(providerVerified){
+    if(mine.revision!==metadataProviderRevision) metadataInvalidate();
+    metadataProviderRevision=mine.revision;
+  }
   $('#page').innerHTML='<div class="card"><h3>Configured providers</h3>'
     +'<p class="help"><b>This is where the keys go.</b> Add RAWG (a free key) '
     +'or IGDB (a Twitch client id + bearer token) and lookups, Discover and '
     +'the Calendar light up.</p>'
     +'<div class="row" style="margin-bottom:10px">'
     +'<button class="btn" id="mp-add">Add Provider</button></div>'
-    +((mine.items||[]).length
+    +(!providerVerified ? '<div class="empty">Unable to verify provider settings. '
+      +'The previous Identify result is retained but hidden until they can be verified.</div>' : '')
+    +(providerVerified && mine.items.length
       ?'<table><thead><tr><th>Name</th><th>Type</th><th>Enabled</th><th></th></tr></thead><tbody>'
         +mine.items.map((m,i)=>'<tr><td><b>'+esc(m.name||m.type)+'</b></td>'
           +'<td>'+esc(m.type)+'</td>'
@@ -4637,8 +4648,8 @@ RENDER.metadata=async()=>{
           +'<td style="text-align:right"><div class="rowact">'
           +'<button data-mpedit="'+i+'">Edit</button></div></td></tr>').join('')
         +'</tbody></table>'
-      :'<div class="empty">No provider configured yet — covers, Discover and '
-       +'the Calendar stay dark until one is.</div>')
+      :providerVerified ? '<div class="empty">No provider configured yet — covers, Discover and '
+       +'the Calendar stay dark until one is.</div>' : '')
     +'</div>'
     +'<div class="card"><h3>What each provider needs</h3>'
     +'<p class="help">ROMarr looks a game up by its <b>DAT-verified name</b> when it '
@@ -4686,10 +4697,10 @@ RENDER.metadata=async()=>{
         output.textContent='Lookup failed. Click Identify to retry.';
       }else{
         output.innerHTML=metaResult(result);
-        if(result?.found && result.title && result.matched_by){
+        if(providerVerified && result?.found && result.title && result.matched_by){
           metadataCachedFilename=filename;
           metadataCachedResult=result;
-        }else if(metadataCachedFilename===filename) metadataInvalidate();
+        }else if(providerVerified && metadataCachedFilename===filename) metadataInvalidate();
       }
     }
   };
@@ -4698,7 +4709,9 @@ RENDER.metadata=async()=>{
     metadataLookup?.abort();
     metadataLookup=null;
     const filename=input.value.trim();
-    if(filename && metadataCachedResult && metadataCachedFilename===filename)
+    if(!providerVerified)
+      output.textContent='Provider settings unavailable. Click Identify to try a fresh lookup.';
+    else if(filename && metadataCachedResult && metadataCachedFilename===filename)
       output.innerHTML=metaResult(metadataCachedResult);
     else output.textContent=filename
       ? 'Click Identify to run a lookup.' : 'Enter a filename to identify.';
@@ -4707,7 +4720,9 @@ RENDER.metadata=async()=>{
     if(e.key==='Enter'){e.preventDefault();lookup();}
   };
   $('#mgo').onclick=lookup;
-  if(metadataCachedResult && metadataCachedFilename===input.value.trim())
+  if(!providerVerified)
+    output.textContent='Provider settings unavailable. Click Identify to try a fresh lookup.';
+  else if(metadataCachedResult && metadataCachedFilename===input.value.trim())
     output.innerHTML=metaResult(metadataCachedResult);
   else lookup();
   $('#mp-add').onclick=()=>addItem('metadataprovider');
