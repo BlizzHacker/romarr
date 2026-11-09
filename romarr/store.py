@@ -425,7 +425,7 @@ class Store:
             # every restart anyway.
             self.queue = _rows(raw.get("queue"), QueueItem)
 
-    def save(self) -> None:
+    def save(self, *, raise_on_error: bool = False) -> None:
         with self._lock:
             payload = {
                 "settings": self.settings,
@@ -447,6 +447,8 @@ class Store:
                 os.unlink(tmp)
             except OSError:
                 pass
+            if raise_on_error:
+                raise
 
     # -- history -----------------------------------------------------------
 
@@ -659,11 +661,12 @@ class Store:
                     return dict(item)
         return None
 
-    def put_item(self, key: str, item: dict) -> dict:
-        """Add or replace one entry, returning it with its id."""
+    def put_item(self, key: str, item: dict, *, require_persist: bool = False) -> dict:
+        """Add or replace one entry, rolling back a failed durable write."""
         import uuid
         with self._lock:
             items = self._collection(key)
+            previous = copy.deepcopy(items) if require_persist else None
             if item.get("id"):
                 for i, existing in enumerate(items):
                     if str(existing.get("id")) == str(item["id"]):
@@ -675,7 +678,14 @@ class Store:
                 item["id"] = uuid.uuid4().hex[:12]
                 items.append(item)
             out = dict(item)
-        self.save()
+            if require_persist:
+                try:
+                    self.save(raise_on_error=True)
+                except Exception:
+                    self.settings[key] = previous
+                    raise
+        if not require_persist:
+            self.save()
         return out
 
     def delete_item(self, key: str, item_id: str) -> bool:

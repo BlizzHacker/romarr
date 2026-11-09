@@ -3772,7 +3772,8 @@ class ROMarr:
                 revision = uuid.uuid4().hex
             # Store.put_item also writes the settings file; no published chain
             # changes if preflight cannot build both candidate representations.
-            saved = self.store.put_item("metadata_providers", candidate)
+            saved = self.store.put_item("metadata_providers", candidate,
+                                        require_persist=True)
             if changed:
                 self.metadata, self._metadata_provider_snapshot, self.metadata_revision = (
                     metadata, snapshot, revision)
@@ -8386,19 +8387,20 @@ def make_handler(service: ROMarr):
                 return self._json(200, redact_indexer(saved) if is_indexer
                                   else redact(saved))
             if route.path == "/api/v1/library":
-                existing = (service.store.get_item("libraries", body.get("id"))
-                            if body.get("id") else None)
-                incoming = merge_library_secrets(dict(body), existing)
-                # Exactly one default. Marking a second would make routing
-                # depend on stored order, which is not something anybody can
-                # see, let alone reason about.
-                if incoming.get("is_default"):
-                    for other in service.store.list_items("libraries"):
-                        if other.get("id") != incoming.get("id") and other.get("is_default"):
-                            other["is_default"] = False
-                            service.store.put_item("libraries", other)
-                saved = service.store.put_item("libraries", incoming)
-                service.reload_libraries()
+                with service._metadata_lock:
+                    existing = (service.store.get_item("libraries", body.get("id"))
+                                if body.get("id") else None)
+                    incoming = merge_library_secrets(dict(body), existing)
+                    # Exactly one default. Marking a second would make routing
+                    # depend on stored order, which is not something anybody can
+                    # see, let alone reason about.
+                    if incoming.get("is_default"):
+                        for other in service.store.list_items("libraries"):
+                            if other.get("id") != incoming.get("id") and other.get("is_default"):
+                                other["is_default"] = False
+                                service.store.put_item("libraries", other)
+                    saved = service.store.put_item("libraries", incoming)
+                    service.reload_libraries()
                 return self._json(200, redact_library(saved))
             if route.path == "/api/v1/library/test":
                 existing = (service.store.get_item("libraries", body.get("id"))
@@ -8503,8 +8505,9 @@ def make_handler(service: ROMarr):
                 return self._json(200 if removed else 404, {"deleted": removed})
             if route.path.startswith("/api/v1/library/"):
                 item_id = route.path[len("/api/v1/library/"):]
-                removed = service.store.delete_item("libraries", item_id)
-                service.reload_libraries()
+                with service._metadata_lock:
+                    removed = service.store.delete_item("libraries", item_id)
+                    service.reload_libraries()
                 return self._json(200 if removed else 404, {"deleted": removed})
             for prefix, key in (("/api/v1/downloadclient/", "download_clients"),
                                 ("/api/v1/indexer/", "indexers")):

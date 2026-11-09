@@ -15,6 +15,7 @@ from http.server import ThreadingHTTPServer
 import pytest
 
 from romarr import app as app_module
+from romarr import store as store_module
 from romarr.app import ROMarr, make_handler
 from romarr.metadata import GameInfo
 from romarr.ops import make_backup
@@ -96,9 +97,9 @@ def test_concurrent_get_waits_for_provider_save_and_revision(tmp_path, monkeypat
     release = threading.Event()
     original_put = service.store.put_item
 
-    def paused_put(key, item):
+    def paused_put(key, item, **kwargs):
         """Hold POST after the Store write but before Metadata reload."""
-        out = original_put(key, item)
+        out = original_put(key, item, **kwargs)
         if key == "metadata_providers" and item.get("name") == "A":
             entered.set()
             assert release.wait(8), "Provider save was never released"
@@ -145,9 +146,9 @@ def test_competing_provider_posts_publish_latest_chain(tmp_path, monkeypatch):
             assert release.wait(8), "First provider reload never released"
         return original_metadata(providers)
 
-    def tracked_put(key, item):
+    def tracked_put(key, item, **kwargs):
         """Signal when the competing provider write reaches Store."""
-        out = original_put(key, item)
+        out = original_put(key, item, **kwargs)
         if key == "metadata_providers" and item.get("name") == "Second":
             second_saved.set()
         return out
@@ -374,6 +375,100 @@ def test_reload_metadata_failure_preserves_published_tuple(tmp_path, monkeypatch
     assert service.metadata_revision == revision
 
 
+
+def test_provider_save_failure_keeps_metadata_consistent(tmp_path, monkeypatch):
+    """A failed durable update preserves memory, saved data, and revision."""
+    service = new_service(tmp_path)
+    with loopback_api(service) as request:
+        status, saved = request('/api/v1/metadataprovider', 'POST', {
+            'type': 'rawg', 'name': 'Original', 'enable': False,
+            'api_key': 'synthetic-test-secret',
+        })
+        assert status == 200
+        original_file = service.store.path.read_bytes()
+        original_items = service.store.list_items('metadata_providers')
+        original_metadata = service.metadata
+        original_revision = service.metadata_revision
+
+        def reject_replace(source, destination):
+            raise OSError('Synthetic settings-write failure')
+
+        monkeypatch.setattr(store_module.os, 'replace', reject_replace)
+        status, reply = request('/api/v1/metadataprovider', 'POST', {
+            'id': saved['id'], 'type': 'rawg', 'name': 'Unsaved edit',
+            'enable': False, 'api_key': '********',
+        })
+        assert status == 500 and 'error' in reply
+        status, reply = request('/api/v1/metadataprovider', 'POST', {
+            'type': 'rawg', 'name': 'Unsaved new row', 'enable': False,
+        })
+        assert status == 500 and 'error' in reply
+        status, listed = request('/api/v1/metadataprovider')
+        assert status == 200
+        assert listed['revision'] == original_revision
+        assert listed['items'][0]['name'] == 'Original'
+
+    assert service.store.path.read_bytes() == original_file
+    assert service.store.list_items('metadata_providers') == original_items
+    assert service.metadata is original_metadata
+    assert service.metadata_revision == original_revision
+    assert_consistent(service)
+
+
+def test_library_save_restore_race_preserves_restored_backends(tmp_path, monkeypatch):
+    """A restore cannot be overtaken by an older library backend rebuild."""
+    from types import SimpleNamespace
+
+    service = new_service(tmp_path)
+    entered = threading.Event()
+    release = threading.Event()
+    restore_parsed = threading.Event()
+    original_read_backup = app_module.read_backup
+
+    def tracked_backup(body):
+        result = original_read_backup(body)
+        restore_parsed.set()
+        return result
+
+    def library_factory(cfg):
+        if cfg.get('name') == 'Before restore':
+            entered.set()
+            assert release.wait(8), 'Library rebuild was not released'
+        return SimpleNamespace(name=cfg['name'])
+
+    monkeypatch.setattr(app_module, 'read_backup', tracked_backup)
+    monkeypatch.setattr(app_module, 'build_library_from_config', library_factory)
+    restored = make_backup({**service.store.settings,
+                            'libraries': [{
+                                'id': 'restored-library', 'type': 'folder',
+                                'name': 'After restore', 'enable': True,
+                                'path': str(tmp_path / 'restored-roms'),
+                                'is_default': True,
+                            }]}, include_secrets=True)
+
+    with loopback_api(service) as request, ThreadPoolExecutor(max_workers=2) as pool:
+        edit = pool.submit(request, '/api/v1/library', 'POST', {
+            'id': 'before-library', 'type': 'folder', 'name': 'Before restore',
+            'enable': True, 'path': str(tmp_path / 'before-roms'),
+            'is_default': True,
+        })
+        try:
+            assert entered.wait(5), 'Library edit did not enter rebuild'
+            restore = pool.submit(request, '/api/v1/restore', 'POST', restored)
+            assert restore_parsed.wait(5), 'Restore did not parse backup'
+            escaped = threading.Event()
+            restore.add_done_callback(lambda _: escaped.set())
+            assert not escaped.wait(0.35), 'Restore bypassed in-progress edit'
+        finally:
+            release.set()
+        assert edit.result(timeout=8)[0] == 200
+        status, result = restore.result(timeout=8)
+
+    assert status == 200 and result['ok'] is True
+    assert [x['name'] for x in service.store.list_items('libraries')] == ['After restore']
+    assert [cfg['name'] for cfg, _ in service.game_libraries] == ['After restore']
+    assert service.library == tmp_path / 'restored-roms'
+
 def test_client_save_and_restore_publish_latest_clients(tmp_path, monkeypatch):
     """A blocked client reload cannot overwrite clients published by restore."""
     from types import SimpleNamespace
@@ -381,6 +476,15 @@ def test_client_save_and_restore_publish_latest_clients(tmp_path, monkeypatch):
     service = new_service(tmp_path)
     first_reload = threading.Event()
     release = threading.Event()
+    restore_parsed = threading.Event()
+    original_read_backup = app_module.read_backup
+
+    def tracked_backup(body):
+        result = original_read_backup(body)
+        restore_parsed.set()
+        return result
+
+    monkeypatch.setattr(app_module, 'read_backup', tracked_backup)
 
     def client_factory(cfg):
         """Avoid external download clients and coordinate a deterministic race."""
@@ -403,7 +507,10 @@ def test_client_save_and_restore_publish_latest_clients(tmp_path, monkeypatch):
         try:
             assert first_reload.wait(5), 'Client update did not reach rebuild'
             restore_request = pool.submit(request, '/api/v1/restore', 'POST', restored)
-            assert not restore_request.done(), 'Restore escaped while client reload was blocked'
+            assert restore_parsed.wait(5), 'Restore did not parse backup'
+            escaped = threading.Event()
+            restore_request.add_done_callback(lambda _: escaped.set())
+            assert not escaped.wait(0.35), 'Restore escaped while client reload was blocked'
         finally:
             release.set()
         assert client_request.result(timeout=8)[0] == 200
