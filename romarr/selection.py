@@ -29,7 +29,7 @@ PC_GAME_CATEGORIES = range(4050, 4070)
 # the size is plausible, so nothing else in the scorer rejects it, and you end
 # up importing a Switch package into your SNES folder.
 FOREIGN_PLATFORM_MARKERS = {
-    "nintendo switch", "switch", "nsp", "xci",
+    "nintendo switch 2", "switch 2", "switch2", "nintendo switch", "switch", "nsp", "xci",
     "playstation", "ps1", "ps2", "ps3", "ps4", "ps5", "psp", "psx", "vita",
     # Spelled out, because a listing usually writes the machine in full and
     # the short forms never appear. Without these a PlayStation request took
@@ -571,7 +571,8 @@ def judge(release: Release, wanted: str,
         for marker in sorted(FOREIGN_PLATFORM_MARKERS, key=len, reverse=True):
             if not _mentions(lowered, marker):
                 continue
-            if marker in own or marker in own_words:
+            if marker in own or (marker in own_words
+                                 and (platform.slug, marker) != ("switch-2", "switch")):
                 # This platform's own name. Nothing more specific matched, so
                 # the title is talking about us.
                 break
@@ -720,12 +721,14 @@ def infer_platform(release: Release) -> Platform | None:
 
     Checks in order of specificity:
       1. Unique physical ROM extensions in `release.title` or
-         `release.torrent_file_path` (e.g. `.nsp` -> `switch`, `.sfc` -> `snes`,
+         `release.torrent_file_path` (e.g. `.sfc` -> `snes`,
          `.z64` -> `n64`, `.gba` -> `gba`).
       2. Explicit platform markers/aliases in `release.title` (longest alias
          matched first so `"game boy advance"` resolves to `gba` before
          `"game boy"` resolves to `gb`).
-      3. PC scene/repack markers (`fitgirl`, `dodi`, `elamigos`, `gog`, etc.)
+      3. Shared Switch extensions fall back to the original Switch unless
+         the title or torrent path explicitly identifies Switch 2.
+      4. PC scene/repack markers (`fitgirl`, `dodi`, `elamigos`, `gog`, etc.)
          or Newznab/Torznab PC category IDs (`4050` PC/Games) -> `win`.
     """
     from .platforms import PLATFORMS, resolve
@@ -743,6 +746,11 @@ def infer_platform(release: Release) -> Platform | None:
         if len(owners) == 1 and _has_extension(text, (ext,)):
             return owners[0]
 
+    # The Switch 2 collection folder can identify packages whose own names
+    # omit the console. Check it before the generic Switch package fallback.
+    if any(_mentions(text, name) for name in ("switch 2", "switch2")):
+        return resolve("switch-2")
+
     # 2. Explicit platform name / alias in title (longest first)
     lowered = (release.title or "").lower()
     candidates: list[tuple[int, str, Platform]] = []
@@ -759,7 +767,12 @@ def infer_platform(release: Release) -> Platform | None:
         candidates.sort(key=lambda item: (-item[0], item[1]))
         return candidates[0][2]
 
-    # 3. PC repack / scene markers or PC Torznab category (4050)
+    # Preserve inference for unlabeled Switch packages from older indexers.
+    if any(_has_extension(text, (ext,)) for ext, owners in ext_owners.items()
+           if {p.slug for p in owners} == {"switch", "switch-2"}):
+        return resolve("switch")
+
+    # 4. PC repack / scene markers or PC Torznab category (4050)
     if any(_mentions(lowered, marker) for marker in PC_RELEASE_MARKERS):
         return resolve("win")
     cats = set(release.categories or ())

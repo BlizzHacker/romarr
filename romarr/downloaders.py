@@ -518,6 +518,11 @@ class Transmission:
         self._config = config
         self._session = session or requests.Session()
         self._session_id = ""
+        self._added = threading.local()
+
+    @property
+    def last_job_id(self) -> str:
+        return getattr(self._added, "job_id", "")
 
     @property
     def configured(self) -> bool:
@@ -552,6 +557,7 @@ class Transmission:
             return False
 
     def add(self, magnet_or_url: str, *, save_path: str | None = None) -> bool:
+        self._added.job_id = ""
         arguments = {"filename": magnet_or_url}
         if save_path:
             arguments["download-dir"] = save_path
@@ -569,7 +575,56 @@ class Transmission:
         if body.get("result") != "success":
             log.warning("Transmission refused the torrent: %s", body.get("result"))
             return False
+        added = body.get("arguments") or {}
+        torrent = added.get("torrent-added") or added.get("torrent-duplicate") or {}
+        self._added.job_id = str(torrent.get("hashString") or "").lower()
         return True
+
+    def completed(self) -> list[dict]:
+        if not self.configured:
+            return []
+        body = self._call("torrent-get", {"fields": [
+            "name", "hashString", "downloadDir", "percentDone",
+            "metadataPercentComplete", "files", "labels",
+        ]})
+        if body.get("result") != "success":
+            log.warning("Transmission could not list completed torrents")
+            return []
+
+        category = self._config.category
+        completed = []
+        for torrent in (body.get("arguments") or {}).get("torrents") or []:
+            if torrent.get("percentDone") != 1 or torrent.get("metadataPercentComplete", 1) != 1:
+                continue
+            labels = torrent.get("labels") or []
+            # Transmission 3 supports reading labels but ignores them on add.
+            # Unlabelled jobs still have to match a ROMarr queue row.
+            if category and labels and category not in labels:
+                continue
+            directory = torrent.get("downloadDir")
+            if not directory:
+                continue
+            files = [str(entry.get("name") or "").replace("\\", "/").split("/")
+                     for entry in torrent.get("files") or []]
+            if not files or any(part in ("", ".", "..") or ":" in part or chr(0) in part
+                                for path in files for part in path):
+                continue
+            if len(files) == 1:
+                relative = "/".join(files[0])
+            else:
+                root = files[0][0]
+                if not all(len(path) > 1 and path[0] == root for path in files):
+                    # Never point the importer at a shared downloads folder.
+                    continue
+                relative = root
+            info_hash = str(torrent.get("hashString") or "").lower()
+            completed.append({
+                "id": info_hash, "hash": info_hash, "name": torrent.get("name") or "",
+                "save_path": directory,
+                "content_path": directory.rstrip("/\\") + "/" + relative,
+                "category": category if category in labels else "",
+            })
+        return completed
 
 
 class Vuze(Transmission):

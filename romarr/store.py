@@ -425,7 +425,11 @@ class Store:
             # every restart anyway.
             self.queue = _rows(raw.get("queue"), QueueItem)
 
-    def save(self) -> None:
+    def save(self, *, raise_on_error: bool = False) -> None:
+        """Write state atomically while holding the Store lock through replacement.
+
+        Propagate write errors only for callers requiring durable persistence.
+        """
         with self._lock:
             payload = {
                 "settings": self.settings,
@@ -433,20 +437,26 @@ class Store:
                 "wanted": [asdict(w) for w in self.wanted],
                 "queue": [asdict(q) for q in self.queue[-self.MAX_QUEUE:]],
             }
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        # Atomic: a crash mid-write would otherwise leave truncated JSON and
-        # the service would refuse to start.
-        fd, tmp = tempfile.mkstemp(dir=str(self.path.parent), prefix=".romarr-", suffix=".tmp")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                json.dump(payload, fh, indent=1)
-            os.replace(tmp, self.path)
-        except OSError as err:
-            log.warning("could not write %s: %s", self.path, err)
+            tmp = None
             try:
-                os.unlink(tmp)
-            except OSError:
-                pass
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                # Replace the state only after the new JSON is complete.
+                fd, tmp = tempfile.mkstemp(dir=self.path.parent, prefix=".romarr-",
+                                           suffix=".tmp")
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    json.dump(payload, fh, indent=1)
+                os.replace(tmp, self.path)
+                tmp = None
+            except OSError as err:
+                log.warning("could not write %s: %s", self.path, err)
+                if raise_on_error:
+                    raise
+            finally:
+                if tmp is not None:
+                    try:
+                        os.unlink(tmp)
+                    except OSError:
+                        pass
 
     # -- history -----------------------------------------------------------
 
@@ -659,11 +669,12 @@ class Store:
                     return dict(item)
         return None
 
-    def put_item(self, key: str, item: dict) -> dict:
-        """Add or replace one entry, returning it with its id."""
+    def put_item(self, key: str, item: dict, *, require_persist: bool = False) -> dict:
+        """Add or replace one entry, rolling back a failed durable write."""
         import uuid
         with self._lock:
             items = self._collection(key)
+            previous = copy.deepcopy(items) if require_persist else None
             if item.get("id"):
                 for i, existing in enumerate(items):
                     if str(existing.get("id")) == str(item["id"]):
@@ -675,18 +686,32 @@ class Store:
                 item["id"] = uuid.uuid4().hex[:12]
                 items.append(item)
             out = dict(item)
-        self.save()
+            if require_persist:
+                try:
+                    self.save(raise_on_error=True)
+                except Exception:
+                    items[:] = previous
+                    raise
+        if not require_persist:
+            self.save()
         return out
 
-    def delete_item(self, key: str, item_id: str) -> bool:
+    def delete_item(self, key: str, item_id: str, *, require_persist: bool = False) -> bool:
         with self._lock:
             items = self._collection(key)
-            before = len(items)
-            self.settings[key] = [i for i in items if str(i.get("id")) != str(item_id)]
-            changed = len(self.settings[key]) != before
-        if changed:
+            remaining = [i for i in items if str(i.get("id")) != str(item_id)]
+            if len(remaining) == len(items):
+                return False
+            self.settings[key] = remaining
+            if require_persist:
+                try:
+                    self.save(raise_on_error=True)
+                except Exception:
+                    self.settings[key] = items
+                    raise
+        if not require_persist:
             self.save()
-        return changed
+        return True
 
     def update_settings(self, patch: dict[str, Any]) -> dict[str, Any]:
         """Apply a partial settings update.

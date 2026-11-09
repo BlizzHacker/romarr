@@ -646,11 +646,12 @@ def test_every_platform_declares_a_ceiling_matched_to_its_medium():
         "digital": 300 * GB,
     }
     # Cards one order past the cartridge-era norm. Capped per platform
-    # because the ceiling differs by an order of magnitude between them:
+    # because capacities differ across generations:
     # NDS and 3DS topped out at 8GB, while Switch shipped 32GB cards -- so
     # a single number would either reject real Switch dumps or admit four
     # times the largest NDS/3DS game ever made.
-    big_cards = {"nds": 8 * GB, "3ds": 8 * GB, "switch": 32 * GB, "psvita": 16 * GB}
+    big_cards = {"nds": 8 * GB, "3ds": 8 * GB, "switch": 32 * GB,
+                 "switch-2": 128 * GB, "psvita": 16 * GB}
     # Blu-ray, one medium past every disc the DISC limit was written for: a
     # PS3 dual-layer disc is 50GB and the biggest title in the catalogue
     # measures 44.8GB, so a 16GB ceiling would reject the platform's own
@@ -742,3 +743,31 @@ def test_a_romset_or_anthology_is_refused_too():
                   "SNES Game Collection 2024",
                   "Super Mario Anthology"):
         assert score(rel(title, size=8_000_000), "super mario world", snes) < 0, title
+
+
+@pytest.mark.parametrize(("title", "file_path", "expected"), [
+    ("Game.nsp", "", "switch"),
+    ("Game (Switch).xci", "", "switch"),
+    ("Game (Nintendo Switch 2).nsp", "", "switch-2"),
+    ("Game [Switch2]", "", "switch-2"),
+    ("Game.xcz", "Collection/Nintendo - Switch 2/Game.xcz", "switch-2"),
+])
+def test_infer_switch_generations(title, file_path, expected):
+    from romarr.selection import infer_platform
+
+    release = Release(title=title, download_url="", size=0, seeders=0,
+                      indexer="test", categories=(), protocol="torrent",
+                      torrent_file_path=file_path)
+    assert infer_platform(release).slug == expected
+
+
+def test_switch_release_scoring_distinguishes_the_two_consoles():
+    from romarr.platforms import resolve
+    from romarr.selection import judge
+
+    switch, switch2 = resolve("Nintendo Switch"), resolve("Nintendo Switch 2")
+    for native, foreign, marker in ((switch, switch2, "Switch"),
+                                    (switch2, switch, "Nintendo Switch 2")):
+        release = rel(f"Example Game ({marker}).nsp", size=1024 * 1024)
+        assert judge(release, "Example Game", native).points >= 0
+        assert judge(release, "Example Game", foreign).points < 0

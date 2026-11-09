@@ -242,3 +242,65 @@ def test_the_new_clients_are_picked_for_torrents():
     transmission = build_client({"type": "transmission", "host": "t"})
     assert pick_client("torrent", [transmission]) is transmission
     assert pick_client("usenet", [transmission]) is None
+
+
+def test_transmission_imports_a_completed_job_by_hash_and_mapped_file(tmp_path):
+    from romarr.app import QueueItem, ROMarr
+    from romarr.downloaders import Transmission, TransmissionConfig, hand_off_with_id
+
+    roms = tmp_path / "roms"
+    downloads = tmp_path / "downloads"
+    roms.mkdir()
+    downloads.mkdir()
+    rom = downloads / "Actual File.sfc"
+    rom.write_bytes(b"test ROM bytes")
+    info_hash = "a" * 40
+    torrent = {"hashString": info_hash, "name": "Different client title",
+               "downloadDir": r"D:\completed", "percentDone": 1,
+               "metadataPercentComplete": 1, "files": [{"name": rom.name}],
+               "labels": ["romarr"], "isFinished": False}
+    session = FakeSession([
+        FakeResponse(409, {}, {"X-Transmission-Session-Id": "fixture"}),
+        FakeResponse(body={"result": "success", "arguments": {
+            "torrent-duplicate": {"hashString": info_hash.upper()},
+        }}),
+        FakeResponse(body={"result": "success", "arguments": {"torrents": [torrent]}}),
+    ])
+    client = Transmission(TransmissionConfig("http://transmission:9091"), session)
+    accepted, job_id = hand_off_with_id(client, "http://indexer/game.torrent")
+    assert accepted and job_id == info_hash
+    service = ROMarr({"ROMARR_DATA": str(tmp_path / "state.json"),
+                      "LIBRARY_KIND": "folder", "LIBRARY_PATH": str(roms)})
+    service.store.settings["remote_path_mappings"] = [
+        {"remote": r"D:\completed", "local": str(downloads)},
+    ]
+    service.clients = [client]
+    item = QueueItem("Game", "snes", "Indexer Title", 1, "grabbed",
+                     download_id=job_id)
+    service.queue.append(item)
+
+    result = service.import_finished()
+    assert item.state == "imported", result
+    assert (roms / "snes" / rom.name).read_bytes() == rom.read_bytes()
+    assert json.loads(session.calls[-1]["data"])["method"] == "torrent-get"
+    assert session.calls[-1]["headers"]["X-Transmission-Session-Id"] == "fixture"
+
+
+def test_transmission_only_returns_completed_torrent_content_paths():
+    from romarr.downloaders import Transmission, TransmissionConfig
+
+    row = {"name": "Display name", "downloadDir": "/downloads",
+           "percentDone": 1, "metadataPercentComplete": 1,
+           "files": [{"name": "Folder/A.cue"}, {"name": "Folder/A.bin"}]}
+    session = FakeSession([FakeResponse(body={"result": "success", "arguments": {
+        "torrents": [
+            row, {**row, "percentDone": 0.9}, {**row, "metadataPercentComplete": 0},
+            {**row, "labels": ["other"]}, {**row, "files": []},
+            {**row, "files": [{"name": "../elsewhere.sfc"}]},
+            {**row, "files": [{"name": "A.cue"}, {"name": "A.bin"}]},
+        ],
+    }})])
+    client = Transmission(TransmissionConfig("http://transmission:9091"), session)
+    completed, = client.completed()
+    assert completed["content_path"] == "/downloads/Folder"
+    assert completed["name"] == "Display name"
