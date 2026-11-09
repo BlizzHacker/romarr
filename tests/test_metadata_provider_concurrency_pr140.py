@@ -396,6 +396,7 @@ def test_store_saves_serialize_through_file_replace(tmp_path, monkeypatch):
         """Signal a required writer immediately before it tries the Store lock."""
 
         def __enter__(self):
+            """Signal the competing writer before it attempts the shared lock."""
             if threading.current_thread().name == 'required-provider-writer':
                 writer_attempted_lock.set()
             actual_lock.acquire()

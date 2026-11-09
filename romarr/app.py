@@ -7667,6 +7667,7 @@ def make_handler(service: ROMarr):
             return self.wfile.write(raw)
 
         def _post(self):
+            """Dispatch POST requests, coordinating configuration writes and reloads."""
             route = urlparse(self.path)
             query = parse_qs(route.query)
             length = int(self.headers.get("Content-Length") or 0)
@@ -8447,6 +8448,7 @@ def make_handler(service: ROMarr):
             return self._json(404, {"error": "not found"})
 
         def _delete(self):
+            """Dispatch DELETE requests and serialize backend removal with restore."""
             route = urlparse(self.path)
             query_del = parse_qs(route.query)
             if route.path == "/api/v1/portal/proxy":

@@ -426,6 +426,10 @@ class Store:
             self.queue = _rows(raw.get("queue"), QueueItem)
 
     def save(self, *, raise_on_error: bool = False) -> None:
+        """Write state atomically while holding the Store lock through replacement.
+
+        Propagate write errors only for callers requiring durable persistence.
+        """
         with self._lock:
             payload = {
                 "settings": self.settings,
