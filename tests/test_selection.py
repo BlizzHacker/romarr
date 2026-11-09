@@ -768,8 +768,6 @@ def test_switch_release_scoring_distinguishes_the_two_consoles():
     switch, switch2 = resolve("Nintendo Switch"), resolve("Nintendo Switch 2")
     for native, foreign, marker in ((switch, switch2, "Switch"),
                                     (switch2, switch, "Nintendo Switch 2")):
-        release = Release(title=f"Example Game ({marker}).nsp", download_url="",
-                          size=1024 * 1024, seeders=10, indexer="test", categories=(),
-                          protocol="torrent")
+        release = rel(f"Example Game ({marker}).nsp", size=1024 * 1024)
         assert judge(release, "Example Game", native).points >= 0
         assert judge(release, "Example Game", foreign).points < 0

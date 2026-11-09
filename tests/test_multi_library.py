@@ -306,8 +306,9 @@ def test_retrobat_uses_system_folders_and_keeps_switch_generations_separate(tmp_
              ("switch-2", "switch-2", "game.nsp")]
     for platform, folder, filename in cases:
         source = tmp_path / filename
-        source.write_bytes(platform.encode())
+        payload = platform.encode().ljust(8 * 1024 * 1024, b"\0") if platform == "ngc" else platform.encode()
+        source.write_bytes(payload)
         result = service.adopt(str(source), platform)
         assert result["ok"], result
-        assert (root / folder / filename).read_bytes() == platform.encode()
+        assert (root / folder / filename).read_bytes() == payload
     assert retrobat.count() == len(cases)
