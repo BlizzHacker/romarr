@@ -376,6 +376,94 @@ def test_reload_metadata_failure_preserves_published_tuple(tmp_path, monkeypatch
 
 
 
+def test_store_saves_serialize_through_file_replace(tmp_path, monkeypatch):
+    """A failed required provider write cannot leak through an older save."""
+    service = new_service(tmp_path)
+    store = service.store
+    store.save()
+    original_bytes = store.path.read_bytes()
+    dump_entered = threading.Event()
+    allow_dump = threading.Event()
+    writer_attempted_lock = threading.Event()
+    writer_finished = threading.Event()
+    worker_errors = []
+    expected_failure = []
+    actual_dump = store_module.json.dump
+    actual_replace = store_module.os.replace
+    actual_lock = store._lock
+
+    class ObservedLock:
+        """Signal a required writer immediately before it tries the Store lock."""
+
+        def __enter__(self):
+            if threading.current_thread().name == 'required-provider-writer':
+                writer_attempted_lock.set()
+            actual_lock.acquire()
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            actual_lock.release()
+
+    def blocking_dump(*args, **kwargs):
+        """Hold an ordinary save during serialization to expose lock gaps."""
+        if threading.current_thread().name == 'ordinary-store-writer':
+            dump_entered.set()
+            assert allow_dump.wait(8), 'Ordinary save was not released'
+        return actual_dump(*args, **kwargs)
+
+    def failed_replace(src, dst):
+        """Fail only the required provider write, not the ordinary save."""
+        if threading.current_thread().name == 'required-provider-writer':
+            raise OSError('Synthetic failed required write')
+        return actual_replace(src, dst)
+
+    def ordinary_save():
+        """Execute the ordinary save without swallowing unexpected failures."""
+        try:
+            store.save()
+        except Exception as exc:
+            worker_errors.append(exc)
+
+    def required_save():
+        """Attempt a required write while an ordinary save holds the lock."""
+        try:
+            store.put_item('metadata_providers', {
+                'id': 'blocked-provider', 'name': 'Rejected',
+            }, require_persist=True)
+        except OSError as exc:
+            expected_failure.append(str(exc))
+        except Exception as exc:
+            worker_errors.append(exc)
+        finally:
+            writer_finished.set()
+
+    monkeypatch.setattr(store, '_lock', ObservedLock())
+    monkeypatch.setattr(store_module.json, 'dump', blocking_dump)
+    monkeypatch.setattr(store_module.os, 'replace', failed_replace)
+    ordinary = threading.Thread(target=ordinary_save, name='ordinary-store-writer',
+                                daemon=True)
+    required = threading.Thread(target=required_save, name='required-provider-writer',
+                                daemon=True)
+    ordinary.start()
+    try:
+        assert dump_entered.wait(5), 'Ordinary save did not enter serialization'
+        required.start()
+        assert writer_attempted_lock.wait(5), 'Required save never attempted the lock'
+        assert not writer_finished.wait(0.35), (
+            'Required provider write escaped while an ordinary save was in progress')
+    finally:
+        allow_dump.set()
+        ordinary.join(timeout=8)
+        if required.ident is not None:
+            required.join(timeout=8)
+
+    assert not ordinary.is_alive() and not required.is_alive()
+    assert not worker_errors
+    assert expected_failure == ['Synthetic failed required write']
+    assert store.settings['metadata_providers'] == []
+    assert store.path.read_bytes() == original_bytes
+
+
 def test_provider_save_failure_keeps_metadata_consistent(tmp_path, monkeypatch):
     """A failed durable update preserves memory, saved data, and revision."""
     service = new_service(tmp_path)
@@ -389,8 +477,12 @@ def test_provider_save_failure_keeps_metadata_consistent(tmp_path, monkeypatch):
         original_items = service.store.list_items('metadata_providers')
         original_metadata = service.metadata
         original_revision = service.metadata_revision
+        original_collection = service.store.settings['metadata_providers']
+        replace_destinations = []
 
         def reject_replace(source, destination):
+            """Prove both failed requests reach the atomic replacement."""
+            replace_destinations.append(destination)
             raise OSError('Synthetic settings-write failure')
 
         monkeypatch.setattr(store_module.os, 'replace', reject_replace)
@@ -398,11 +490,13 @@ def test_provider_save_failure_keeps_metadata_consistent(tmp_path, monkeypatch):
             'id': saved['id'], 'type': 'rawg', 'name': 'Unsaved edit',
             'enable': False, 'api_key': '********',
         })
-        assert status == 500 and 'error' in reply
+        assert status == 500 and reply['error'] == 'OSError: Synthetic settings-write failure'
+        assert replace_destinations == [service.store.path]
         status, reply = request('/api/v1/metadataprovider', 'POST', {
             'type': 'rawg', 'name': 'Unsaved new row', 'enable': False,
         })
-        assert status == 500 and 'error' in reply
+        assert status == 500 and reply['error'] == 'OSError: Synthetic settings-write failure'
+        assert replace_destinations == [service.store.path, service.store.path]
         status, listed = request('/api/v1/metadataprovider')
         assert status == 200
         assert listed['revision'] == original_revision
@@ -410,6 +504,7 @@ def test_provider_save_failure_keeps_metadata_consistent(tmp_path, monkeypatch):
 
     assert service.store.path.read_bytes() == original_file
     assert service.store.list_items('metadata_providers') == original_items
+    assert service.store.settings['metadata_providers'] is original_collection
     assert service.metadata is original_metadata
     assert service.metadata_revision == original_revision
     assert_consistent(service)

@@ -433,22 +433,22 @@ class Store:
                 "wanted": [asdict(w) for w in self.wanted],
                 "queue": [asdict(q) for q in self.queue[-self.MAX_QUEUE:]],
             }
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        # Atomic: a crash mid-write would otherwise leave truncated JSON and
-        # the service would refuse to start.
-        fd, tmp = tempfile.mkstemp(dir=str(self.path.parent), prefix=".romarr-", suffix=".tmp")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                json.dump(payload, fh, indent=1)
-            os.replace(tmp, self.path)
-        except OSError as err:
-            log.warning("could not write %s: %s", self.path, err)
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            # Atomic: a crash mid-write would otherwise leave truncated JSON and
+            # the service would refuse to start.
+            fd, tmp = tempfile.mkstemp(dir=str(self.path.parent), prefix=".romarr-", suffix=".tmp")
             try:
-                os.unlink(tmp)
-            except OSError:
-                pass
-            if raise_on_error:
-                raise
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    json.dump(payload, fh, indent=1)
+                os.replace(tmp, self.path)
+            except OSError as err:
+                log.warning("could not write %s: %s", self.path, err)
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
+                if raise_on_error:
+                    raise
 
     # -- history -----------------------------------------------------------
 
@@ -682,7 +682,7 @@ class Store:
                 try:
                     self.save(raise_on_error=True)
                 except Exception:
-                    self.settings[key] = previous
+                    items[:] = previous
                     raise
         if not require_persist:
             self.save()
