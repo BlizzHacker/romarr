@@ -480,9 +480,12 @@ def test_provider_save_failure_keeps_metadata_consistent(tmp_path, monkeypatch):
         original_revision = service.metadata_revision
         original_collection = service.store.settings['metadata_providers']
         replace_destinations = []
+        original_replace = store_module.os.replace
 
         def reject_replace(source, destination):
-            """Prove both failed requests reach the atomic replacement."""
+            """Reject only this store's write, leaving other services untouched."""
+            if destination != service.store.path:
+                return original_replace(source, destination)
             replace_destinations.append(destination)
             raise OSError('Synthetic settings-write failure')
 
