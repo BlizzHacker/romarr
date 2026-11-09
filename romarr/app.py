@@ -456,6 +456,8 @@ class ROMarr:
         # over after the handoff.
         self._automatic_grab_reservations: set[tuple[str, str]] = set()
         self._dat_reload_lock = threading.Lock()
+        # Coordinates provider writes, reloads and revision-bearing reads.
+        self._metadata_lock = threading.RLock()
         self._collection_source_lock = threading.Lock()
         # Lets a configuration change wake the background refresh instead of
         # waiting out its interval. Created before reload_libraries, which sets
@@ -3725,15 +3727,17 @@ class ROMarr:
         return self._source_job_progress(job)
 
     def reload_metadata(self) -> None:
-        """Rebuild metadata only if the stored provider configuration changed."""
-        providers = self.store.list_items("metadata_providers")
-        if (hasattr(self, "metadata")
-                and providers == getattr(self, "_metadata_provider_snapshot", None)):
-            return
-        self.metadata = Metadata(providers)
-        # A separate snapshot catches in-place changes to stored settings.
-        self._metadata_provider_snapshot = deepcopy(providers)
-        self.metadata_revision = uuid.uuid4().hex
+        """Publish a coherent Metadata chain, snapshot and revision."""
+        with self._metadata_lock:
+            providers = self.store.list_items("metadata_providers")
+            if (hasattr(self, "metadata")
+                    and providers == getattr(self, "_metadata_provider_snapshot", None)):
+                return
+            # Readers obtain the chain under this same lock; lookups then run
+            # on that immutable-for-the-request reference without holding it.
+            self.metadata = Metadata(deepcopy(providers))
+            self._metadata_provider_snapshot = deepcopy(providers)
+            self.metadata_revision = uuid.uuid4().hex
 
     def identify(self, filename: str = "", verification=None) -> dict:
         """Name a game, and say how confidently.
@@ -3743,8 +3747,10 @@ class ROMarr:
         A UI that shows a cover without saying which is inviting somebody to
         believe the wrong one.
         """
-        info = self.metadata.identify(verification=verification,
-                                      filename=filename)
+        with self._metadata_lock:
+            metadata = self.metadata
+        info = metadata.identify(verification=verification,
+                                 filename=filename)
         return {
             "found": info.found,
             "title": info.title,
@@ -7241,12 +7247,15 @@ def make_handler(service: ROMarr):
             if route.path == "/api/v1/metadataprovider":
                 from .metadata import PROVIDERS as _MP
                 secrets = {"api_key", "token", "client_id"}
+                with service._metadata_lock:
+                    providers = service.store.list_items("metadata_providers")
+                    revision = service.metadata_revision
                 items = []
-                for cfg in service.store.list_items("metadata_providers"):
+                for cfg in providers:
                     items.append({k: ("********" if k in secrets and v else v)
                                   for k, v in cfg.items()})
                 return self._json(200, {"items": items,
-                                        "revision": service.metadata_revision})
+                                        "revision": revision})
             if route.path == "/api/v1/metadataprovider/schema":
                 # The generic editor's shape: per-type field definitions,
                 # secrets marked so they render as password inputs and are
@@ -7699,11 +7708,12 @@ def make_handler(service: ROMarr):
                     settings, warning = read_backup(body)
                 except ValueError as exc:
                     return self._json(400, {"error": str(exc)})
-                service.store.settings.update(settings)
-                service.store.save()
+                with service._metadata_lock:
+                    service.store.settings.update(settings)
+                    service.store.save()
+                    service.reload_metadata()
                 service.reload_clients()
                 service.reload_libraries()
-                service.reload_metadata()
                 return self._json(200, {"ok": True, "warning": warning})
             if route.path == "/api/v1/collection/start":
                 return self._json(200, service.collection_start(
@@ -7757,21 +7767,22 @@ def make_handler(service: ROMarr):
                     force=bool(body.get("force"))))
             if route.path == "/api/v1/metadataprovider":
                 secrets = {"api_key", "token", "client_id"}
-                cfg = dict(body or {})
-                if cfg.get("id"):
-                    old_cfg = service.store.get_item("metadata_providers",
-                                                     str(cfg["id"])) or {}
-                    for key in secrets:
-                        # A key that is absent counts the same as one sent
-                        # back masked. `put_item` replaces the whole entry,
-                        # so without this a caller renaming a provider wipes
-                        # the credential it was renaming -- and the provider
-                        # then reports itself as unconfigured, which is the
-                        # exact confusion this endpoint keeps producing.
-                        if cfg.get(key, "") in ("********", ""):
-                            cfg[key] = old_cfg.get(key, "")
-                saved = service.store.put_item("metadata_providers", cfg)
-                service.reload_metadata()
+                with service._metadata_lock:
+                    cfg = dict(body or {})
+                    if cfg.get("id"):
+                        old_cfg = service.store.get_item("metadata_providers",
+                                                         str(cfg["id"])) or {}
+                        for key in secrets:
+                            # A key that is absent counts the same as one sent
+                            # back masked. `put_item` replaces the whole entry,
+                            # so without this a caller renaming a provider wipes
+                            # the credential it was renaming -- and the provider
+                            # then reports itself as unconfigured, which is the
+                            # exact confusion this endpoint keeps producing.
+                            if cfg.get(key, "") in ("********", ""):
+                                cfg[key] = old_cfg.get(key, "")
+                    saved = service.store.put_item("metadata_providers", cfg)
+                    service.reload_metadata()
                 return self._json(200, {k: ("********" if k in secrets and v
                                             else v)
                                         for k, v in saved.items()})
@@ -8469,9 +8480,10 @@ def make_handler(service: ROMarr):
                 return self._json(200 if removed else 404, {"deleted": removed})
             if route.path.startswith("/api/v1/metadataprovider/"):
                 item_id = route.path[len("/api/v1/metadataprovider/"):]
-                removed = service.store.delete_item("metadata_providers",
-                                                    item_id)
-                service.reload_metadata()
+                with service._metadata_lock:
+                    removed = service.store.delete_item("metadata_providers",
+                                                        item_id)
+                    service.reload_metadata()
                 return self._json(200 if removed else 404, {"deleted": removed})
             return self._json(404, {"error": "not found"})
 
