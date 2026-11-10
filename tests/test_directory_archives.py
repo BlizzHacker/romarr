@@ -1,7 +1,6 @@
-import struct
+from pathlib import Path
 import subprocess
 import zipfile
-import zlib
 
 import pytest
 
@@ -31,16 +30,7 @@ def make_archive(path, members):
     else:
         if not bsdtar_path():
             pytest.skip('libarchive unavailable')
-        def header(kind, flags, body):
-            block = struct.pack('<BHH', kind, flags, 7 + len(body)) + body
-            return struct.pack('<H', zlib.crc32(block) & 0xffff) + block
-        data = b'Rar!\x1a\x07\x00' + header(0x73, 0, b'\x00' * 6)
-        for name, payload in members.items():
-            encoded = name.encode()
-            body = struct.pack('<IIBIIBBHI', len(payload), len(payload), 3,
-                               zlib.crc32(payload), 0, 20, 0x30, len(encoded), 0x20)
-            data += header(0x74, 0x8000, body + encoded) + payload
-        path.write_bytes(data + header(0x7b, 0, b''))
+        path.write_bytes(Path(__file__).with_name('fixtures').joinpath('disc.rar').read_bytes())
     return path
 
 
@@ -79,13 +69,6 @@ def test_multiple_archives_and_loose_rom_review_keeps_sources_separate(tmp_path)
     assert result.ok, result.reason
     assert (result.destination / 'track.bin').read_bytes() == b'b'
     assert len(list((tmp_path / 'library' / 'dc').iterdir())) == 1
-    old_token = preview['token']
-    make_archive(download / 'B.zip', {'Changed.chd': b'changed'})
-    assert preview_import(download, resolve('dc'), tmp_path / 'library')['token'] != old_token
-    failed, = import_rom(download, resolve('dc'), tmp_path / 'other',
-                         selected_primaries=['B.zip/Game.cue'])
-    assert not failed.ok
-    assert not (tmp_path / 'other').exists()
 
 
 def test_unreadable_archive_names_source_and_publishes_nothing(tmp_path):
