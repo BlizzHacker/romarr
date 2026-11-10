@@ -19,6 +19,7 @@ _FIELDS = (
 
 
 def _generated() -> dict[str, str]:
+    """Read optional build-generated identity fields without guessing defaults."""
     try:
         from . import _build_info
     except ImportError:
