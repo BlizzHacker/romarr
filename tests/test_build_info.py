@@ -126,8 +126,17 @@ def test_pull_request_ref_requires_a_number_and_expected_suffix(monkeypatch):
         assert build_info.get_build_info("0.0.0+unknown")["type"] == "unknown"
 
 
-def test_docker_smoke_enforces_expected_build_kind():
-    """Both image smoke checks must match the expected GitHub ref kind."""
+def test_docker_smoke_enforces_expected_build_identity():
+    """Both image smoke checks must verify exact GitHub build provenance."""
     workflow = (ROOT / ".github/workflows/docker.yml").read_text()
     assert workflow.count('docker exec -e EXPECTED_BUILD_TYPE=') == 2
-    assert workflow.count('b["type"] == os.environ["EXPECTED_BUILD_TYPE"]') == 2
+    checks = {
+        "type": ("EXPECTED_BUILD_TYPE", None),
+        "source_ref": ("EXPECTED_SOURCE_REF", "GITHUB_REF"),
+        "source_revision": ("EXPECTED_SOURCE_REVISION", "GITHUB_SHA"),
+        "source_repository": ("EXPECTED_SOURCE_REPOSITORY", "GITHUB_REPOSITORY"),
+    }
+    for field, (expected, github_env) in checks.items():
+        assert workflow.count(f'b["{field}"] == os.environ["{expected}"]') == 2
+        if github_env is not None:
+            assert workflow.count(f'-e {expected}="${github_env}"') == 2

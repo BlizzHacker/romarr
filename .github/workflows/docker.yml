@@ -139,7 +139,11 @@ jobs:
             || { echo "git missing; catalogue plugins cannot install"; exit 1; }
           docker exec smoke python -c "import requests, rom_hub; from rom_hub.sandbox import install; install()" \
             || { echo "a dependency did not install"; exit 1; }
-          docker exec -e EXPECTED_BUILD_TYPE="${{ startsWith(github.ref, 'refs/tags/') && 'release' || 'development' }}" smoke python -c 'import os; from romarr.build_info import get_build_info; from romarr.version import VERSION; b=get_build_info(VERSION); assert b["type"] == os.environ["EXPECTED_BUILD_TYPE"] and b["source_revision"] and b["source_ref"]; print(b)' \
+          docker exec -e EXPECTED_BUILD_TYPE="${{ startsWith(github.ref, 'refs/tags/') && 'release' || 'development' }}" \
+             -e EXPECTED_SOURCE_REF="$GITHUB_REF" \
+             -e EXPECTED_SOURCE_REVISION="$GITHUB_SHA" \
+             -e EXPECTED_SOURCE_REPOSITORY="$GITHUB_REPOSITORY" \
+             smoke python -c 'import os; from romarr.build_info import get_build_info; from romarr.version import VERSION; b=get_build_info(VERSION); assert b["type"] == os.environ["EXPECTED_BUILD_TYPE"] and b["source_ref"] == os.environ["EXPECTED_SOURCE_REF"] and b["source_revision"] == os.environ["EXPECTED_SOURCE_REVISION"] and b["source_repository"] == os.environ["EXPECTED_SOURCE_REPOSITORY"]; print(b)' \
             || { echo "build identity is missing or inconsistent"; exit 1; }
           docker exec smoke python -c "from pathlib import Path; from rom_hub.catalog_sources import load_all; c=load_all(Path('/tmp/hub-smoke')); print(f'{len(c.entries)} bundled plugins'); assert c.entries" \
             || { echo "ROM Hub installed without its plugin catalogue"; exit 1; }
@@ -244,7 +248,11 @@ jobs:
             sleep 2
           done
           docker exec smoke python -c "import playwright, rom_hub; from playwright.sync_api import sync_playwright"
-          docker exec -e EXPECTED_BUILD_TYPE="${{ startsWith(github.ref, 'refs/tags/') && 'release' || 'development' }}" smoke python -c 'import os; from romarr.build_info import get_build_info; from romarr.version import VERSION; b=get_build_info(VERSION); assert b["type"] == os.environ["EXPECTED_BUILD_TYPE"] and b["source_revision"] and b["source_ref"]; print(b)'
+          docker exec -e EXPECTED_BUILD_TYPE="${{ startsWith(github.ref, 'refs/tags/') && 'release' || 'development' }}" \
+             -e EXPECTED_SOURCE_REF="$GITHUB_REF" \
+             -e EXPECTED_SOURCE_REVISION="$GITHUB_SHA" \
+             -e EXPECTED_SOURCE_REPOSITORY="$GITHUB_REPOSITORY" \
+             smoke python -c 'import os; from romarr.build_info import get_build_info; from romarr.version import VERSION; b=get_build_info(VERSION); assert b["type"] == os.environ["EXPECTED_BUILD_TYPE"] and b["source_ref"] == os.environ["EXPECTED_SOURCE_REF"] and b["source_revision"] == os.environ["EXPECTED_SOURCE_REVISION"] and b["source_repository"] == os.environ["EXPECTED_SOURCE_REPOSITORY"]; print(b)'
           docker exec smoke sh -c 'command -v bsdtar >/dev/null && command -v git >/dev/null'
           docker rm -f smoke
 
