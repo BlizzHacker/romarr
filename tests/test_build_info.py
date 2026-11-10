@@ -97,3 +97,17 @@ def test_build_arguments_are_in_both_images_and_every_publish_leg():
 def test_update_and_status_apis_expose_same_build_metadata():
     source = (ROOT / "romarr/app.py").read_text()
     assert source.count('"build": get_build_info(VERSION),') == 2
+
+
+def test_development_branch_ref_requires_a_name(monkeypatch):
+    for ref in ("refs/heads/", "refs/heads//", "refs/heads/feature/"):
+        monkeypatch.setattr(build_info, "_generated",
+                            lambda ref=ref: generated(ref=ref))
+        assert build_info.get_build_info("0.0.0+unknown")["type"] == "unknown"
+
+
+def test_pull_request_ref_requires_a_number_and_expected_suffix(monkeypatch):
+    for ref in ("refs/pull/", "refs/pull/foo/merge", "refs/pull/145/other"):
+        monkeypatch.setattr(build_info, "_generated",
+                            lambda ref=ref: generated(ref=ref))
+        assert build_info.get_build_info("0.0.0+unknown")["type"] == "unknown"

@@ -59,7 +59,11 @@ def get_build_info(running_version: object) -> dict[str, object]:
         tag = ref[len("refs/tags/"):]
         if tag.lstrip("vV") != str(running_version).strip().lstrip("vV"):
             return unknown
-    elif not (ref.startswith("refs/heads/") or ref.startswith("refs/pull/")):
+    elif ref.startswith("refs/heads/"):
+        branch = ref[len("refs/heads/"):]
+        if not branch or branch.startswith("/") or branch.endswith("/") or "//" in branch:
+            return unknown
+    elif not re.fullmatch(r"refs/pull/[1-9][0-9]*/(?:head|merge)", ref):
         return unknown
 
     return {
