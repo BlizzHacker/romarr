@@ -184,6 +184,11 @@ a:hover{text-decoration:underline;text-underline-offset:2px}
   background:color-mix(in srgb,var(--bg) 80%,transparent);
   -webkit-backdrop-filter:saturate(1.6) blur(12px);
   backdrop-filter:saturate(1.6) blur(12px)}
+/* Align both desktop header dividers at 60px; preserve mobile drawer sizing. */
+@media(min-width:821px){
+  #brand,#top{height:60px;min-height:60px;padding-top:0;padding-bottom:0}
+  #top{border-bottom-color:var(--line-soft)}
+}
 #top h1{font-size:17px;font-weight:650;letter-spacing:-.02em;white-space:nowrap}
 #top input{flex:1;max-width:420px;padding:8px 13px;background:var(--surface);
   color:var(--fg);border:1px solid var(--line);border-radius:var(--r-sm);
@@ -1226,7 +1231,7 @@ function go(page){
     getstarted:'Get Started',setup:'Setup Guide',
     hub:'ROM Hub — Plugins',portal:'Library Shell & Device Fleet'};
   $('#top h1').textContent=titles[page]||'ROMarr';
-  $('#search').classList.toggle('hide', !['library','add'].includes(page));
+  $('#search').classList.toggle('hide', page !== 'library');
   (RENDER[page]||RENDER.library)();
 }
 addEventListener('hashchange',()=>{
