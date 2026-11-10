@@ -109,3 +109,25 @@ def test_generic_catalogue_slug_install_still_works(server):
                         {"slug": "my-plugin", "action": "install"})
     assert code == 200 and result["ok"] is True
     assert installs == ["my-plugin"]
+
+
+def test_archive_login_requires_authentication(server, monkeypatch):
+    base, _, _ = server
+    changes = []
+    monkeypatch.setattr(app.hub, "archive_org_auth_configure",
+                        lambda **kwargs: changes.append(kwargs) or {"ok": True})
+    assert post(base, "/api/v1/hub/archive-org/auth", {}, False)[0] == 401
+    assert changes == []
+    assert post(base, "/api/v1/hub/archive-org/auth",
+                {"email": "account@example.com", "password": "test-password"}) == (200, {"ok": True})
+    assert changes == [{"email": "account@example.com", "password": "test-password", "clear": False}]
+    assert post(base, "/api/v1/hub/archive-org/auth", {"clear": True})[0] == 200
+    assert changes[-1]["clear"] is True
+
+
+def test_archive_login_validation_error_is_reported(server, monkeypatch):
+    base, _, _ = server
+    monkeypatch.setattr(app.hub, "archive_org_auth_configure",
+                        lambda **kwargs: {"ok": False, "error": "Valid email and password are required"})
+    code, result = post(base, "/api/v1/hub/archive-org/auth", {"email": "invalid"})
+    assert code == 400 and result["error"] == "Valid email and password are required"

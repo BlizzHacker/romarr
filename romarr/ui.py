@@ -1274,6 +1274,24 @@ RENDER.hub=async()=>{
         +'data-slug="'+esc(pl.slug)+'">'+(pl.enabled?'Disable':'Enable')+'</button>'
       : '<button class="mini accent" data-act="install" data-slug="'+esc(pl.slug)+'">Install'
         +(pl.key_required?' · key needed':'')+'</button>';
+    const ia=hs.archive_org_auth||{};
+    const authForm=(pl.slug==='archive-org'&&pl.installed)
+      ?'<div style="margin-top:12px"><b>Archive.org login</b>'
+        +'<p class="help">'+(ia.external
+          ?'Managed by external credentials (read-only here).'
+          :ia.configured?'Account credentials saved. Enter both fields to replace them.'
+          :'Optional account for restricted ZIP listings and downloads.')
+        +'</p>'
+        +(ia.error?'<p class="help">'+esc(ia.error)+'</p>':'')
+        +(ia.external?'':'<form id="ia-auth-form" autocomplete="off">'
+          +'<div class="row"><input id="ia-email" type="email" placeholder="Archive.org email" '
+          +'autocomplete="off" required maxlength="320">'
+          +'<input id="ia-password" type="password" placeholder="Password" '
+          +'autocomplete="new-password" required maxlength="4096"></div>'
+          +'<div class="row"><button class="mini accent" type="submit">Save login</button>'
+          +(ia.configured?'<button class="mini" id="ia-auth-clear" type="button">Clear login</button>':'')
+          +'</div></form>')
+        +'</div>' : '';
     return '<div class="pcard'+(pl.installed?' installed':'')+'">'
       +'<h4>'+esc(pl.name)+(pl.author?'<span class="by">by '+esc(pl.author)+'</span>':'')+'</h4>'
       +'<div class="desc">'+esc(pl.description||'No description supplied.')+'</div>'
@@ -1282,7 +1300,8 @@ RENDER.hub=async()=>{
         ?'<a href="'+esc(pl.repository)+'" target="_blank" rel="noopener">Instructions and source</a>':'')
       +(pl.key_required?'<div class="help">Requires an account or key. Check the instructions before installing.</div>':'')
       +'<div class="foot">'+action
-      +(net?'<span class="net">reaches '+esc(net)+'</span>':'')+'</div></div>';
+      +(net?'<span class="net">reaches '+esc(net)+'</span>':'')+'</div>'
+      +authForm+'</div>';
   };
 
   const render=d=>{
@@ -1487,6 +1506,39 @@ RENDER.hub=async()=>{
       cap = cap===c.dataset.cap ? '' : c.dataset.cap; render(await load());});
     p.querySelectorAll('.chip[data-inst]').forEach(c=>c.onclick=async()=>{
       inst = inst===c.dataset.inst ? '' : c.dataset.inst; render(await load());});
+
+    const iaForm=$('#ia-auth-form');
+    if(iaForm) iaForm.onsubmit=async e=>{
+      e.preventDefault();
+      const email=$('#ia-email').value.trim(), password=$('#ia-password').value;
+      if(!email||!password)return;
+      const btn=iaForm.querySelector('button[type="submit"]');
+      btn.disabled=true;
+      try{
+        const response=await fetch('/api/v1/hub/archive-org/auth',{
+          method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({email,password})});
+        const result=await response.json();
+        actionError=result.ok?'':(result.error||'Could not save Archive.org login');
+        if(result.ok)toast('Archive.org credentials saved');
+      }catch(e){actionError='Could not save Archive.org login';}
+      hs=await j('/api/v1/hub/status').catch(()=>hs);
+      render(await load());
+    };
+    const iaClear=$('#ia-auth-clear');
+    if(iaClear) iaClear.onclick=async()=>{
+      iaClear.disabled=true;
+      try{
+        const response=await fetch('/api/v1/hub/archive-org/auth',{
+          method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({clear:true})});
+        const result=await response.json();
+        actionError=result.ok?'':(result.error||'Could not clear Archive.org login');
+        if(result.ok)toast('Archive.org credentials cleared');
+      }catch(e){actionError='Could not clear Archive.org login';}
+      hs=await j('/api/v1/hub/status').catch(()=>hs);
+      render(await load());
+    };
 
     p.querySelectorAll('button[data-act]').forEach(b=>b.onclick=async()=>{
       const slug=b.dataset.slug, action=b.dataset.act;

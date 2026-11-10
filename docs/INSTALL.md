@@ -828,7 +828,7 @@ somebody running it.
 | Imported ROM never appears in the library | The rescan was refused. | RomM: grant the account task permission. Or the ROM landed outside the tree your library scans. |
 | A RAR release split into volumes fails with "split RAR archive" | Neither 7-Zip with RAR support nor `unar` is installed; bsdtar reads one volume at a time. | Use the browser image, or install `unar` or the official `7zz` (see above). Alpine has no package that joins split RAR sets. |
 | Every PlayStation / PS2 / Wii import fails on the archive | `bsdtar` is missing. Those sets ship as `.7z`, and busybox/GNU `tar` is not a substitute — ROMarr will not pretend otherwise. | Docker and the Proxmox installer include it. From source: install `libarchive-tools`. |
-| Hub tab says plugins are unavailable | `rom-hub` is not installed. Expected on armv7, where its `pydantic` dependency has no musl wheel. | Elsewhere: `pip install "rom-hub @ git+https://github.com/BlizzHacker/rom-hub@master"` |
+| Hub tab says plugins are unavailable | `rom-hub` is not installed. Expected on armv7, where its `pydantic` dependency has no musl wheel. | Elsewhere: `pip install "rom-hub @ git+https://github.com/BlizzHacker/rom-hub@02e9a1dbc7ebca5191b4a977233a4d6d0466ed4b"` |
 | ROM imports but will not play in the browser | The platform has no emulator core in your library's web player. | Expected. The ROM is catalogued, not playable in-browser. |
 | Scheduled jobs never run on a freshly rebooted host | Fixed in `5cb6a75`. "Never run" was recorded as time `0.0`, and `time.monotonic()` counts from boot on Linux, so on a machine with less uptime than the job's interval every job looked "not due". | Update. |
 

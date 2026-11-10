@@ -379,6 +379,27 @@ def _unsandboxed() -> bool:
     return not ok
 
 
+def archive_org_auth_status() -> dict:
+    """Expose configuration status, never credentials, to ROMarr's UI."""
+    try:
+        from .ia_auth import status
+    except ImportError:
+        return {"configured": False, "external": False,
+                "error": "Install the pinned ROM Hub version for Archive.org authentication"}
+    return status(HOME)
+
+
+def archive_org_auth_configure(email="", password="", clear=False) -> dict:
+    """UI operation: store in ROM Hub's secret store, NOT in plugin config."""
+    try:
+        from rom_hub.registry import Registry
+        Registry(HOME).get("archive-org")
+    except Exception:
+        return {"ok": False, "error": "Install the Archive.org plugin first"}
+    from .ia_auth import configure
+    return configure(HOME, email=email, password=password, clear=clear)
+
+
 def searchable_plugins() -> list[str]:
     """Slugs of installed, enabled plugins that declare `search`."""
     try:
@@ -421,26 +442,58 @@ def search(query: str, platform: str | None = None, limit: int = 25,
     # shorter than some sources need -- MiNERVA measured 21-25s per query
     # live, and a ReadTimeout inside the plugin surfaced as a plugin failure
     # rather than as a slow source. One timeout to reason about, not two.
-    fetcher = HttpxFetcher(timeout=max(60.0, timeout))
+    from .ia_session import archive_transport
+    from .ia_auth import status as ia_status
+    # ROM Hub shares a fetcher across all plugins in a search fanout.
+    # Split only when IA auth is configured, so another plugin cannot use
+    # the Archive.org cookies through an otherwise allowed archive.org URL.
+    ia = ia_status(HOME)
+    auth_error = ""
+    if ia["error"]:
+        # Never silently downgrade a configured but invalid account to
+        # anonymous access. Other plugins should still return their results.
+        auth_error = "Archive.org authentication: " + ia["error"]
+        plugins = [p for p in plugins if p.slug != "archive-org"]
+    if ia["configured"]:
+        batches = [
+            ([p for p in plugins if p.slug != "archive-org"], None),
+            ([p for p in plugins if p.slug == "archive-org"], "archive-org"),
+        ]
+    else:
+        batches = [(plugins, None)]
     call_limit = 100 if platform else limit
-    try:
-        outcome = search_all(plugins, fetcher=fetcher, query=query,
-                             platform=platform, limit=call_limit, timeout=timeout,
-                             allow_unsandboxed=_unsandboxed())
-    except Exception as exc:
-        return [], f"ROM Hub search failed: {type(exc).__name__}: {exc}"
-    finally:
-        fetcher.close()
-
+    rows = []
+    for group, auth_slug in batches:
+        if not group:
+            continue
+        try:
+            transport = archive_transport(auth_slug, HOME) if auth_slug else None
+            fetcher = HttpxFetcher(timeout=max(60.0, timeout), transport=transport)
+        except Exception as exc:
+            auth_error = f"Archive.org authentication setup failed: {type(exc).__name__}: {exc}"
+            continue
+        try:
+            outcome = search_all(group, fetcher=fetcher, query=query,
+                                 platform=platform, limit=call_limit, timeout=timeout,
+                                 allow_unsandboxed=_unsandboxed())
+        except Exception as exc:
+            auth_error = f"ROM Hub search failed: {type(exc).__name__}: {exc}"
+            continue
+        finally:
+            fetcher.close()
+        for source in getattr(outcome, "statuses", []):
+            if source.slug == "archive-org" and not source.ok:
+                auth_error = f"Archive.org search failed: {source.error}"
+        for r in outcome.results:
+            try:
+                rows.append(r.model_dump())
+            except Exception:  # pragma: no cover -- pydantic model, always dumps
+                rows.append(dict(r))
     resolved_plat = resolve(platform) if platform else None
 
     # Group by plugin to cap at limit and filter collection paths (#118)
     by_plugin: dict[str, list[dict]] = {}
-    for r in outcome.results:
-        try:
-            row = r.model_dump()
-        except Exception:  # pragma: no cover -- pydantic model, always dumps
-            row = dict(r)
+    for row in rows:
         plugin_slug = str(row.get("plugin") or "")
         extra = row.get("extra") if isinstance(row.get("extra"), dict) else {}
         coll_path = extra.get("path")
@@ -469,7 +522,7 @@ def search(query: str, platform: str | None = None, limit: int = 25,
     rows = []
     for plugin_slug, p_rows in by_plugin.items():
         rows.extend(p_rows[:limit])
-    return rows, ""
+    return rows, auth_error
 
 
 def resolve_torrents(rows: list[dict]) -> list[dict]:
@@ -595,7 +648,13 @@ def fetch(row: dict, dest_dir) -> dict:
                 "error": f"plugin {slug!r} is disabled", "files": []}
     dest = Path(dest_dir)
     dest.mkdir(parents=True, exist_ok=True)
-    fetcher = HttpxFetcher()
+    from .ia_session import archive_transport
+    try:
+        fetcher = HttpxFetcher(transport=archive_transport(slug, HOME))
+    except Exception as exc:
+        return {"ok": False,
+                "error": f"Archive.org authentication setup failed: {type(exc).__name__}: {exc}",
+                "files": []}
     try:
         with PluginProcess(plugin_dir=plugin.path, manifest=plugin.manifest,
                            config=getattr(plugin, "config", {}) or {},
@@ -604,7 +663,8 @@ def fetch(row: dict, dest_dir) -> dict:
             plan = proc.plan(result)
             with HttpDownloader(
                     allowlist=list(getattr(plugin.manifest, "network", [])
-                                   or [])) as downloader:
+                                   or []),
+                    transport=archive_transport(slug, HOME)) as downloader:
                 files = []
                 for f in plan.files:
                     saved = downloader.download(f.url,

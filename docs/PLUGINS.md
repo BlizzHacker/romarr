@@ -47,7 +47,7 @@ Install Git using your operating system's package manager. Then install the host
 ```bash
 # Proxmox installation path; change it for your own source checkout.
 /opt/romarr/.venv/bin/python -m pip install \
-  "rom-hub @ https://github.com/BlizzHacker/rom-hub/archive/feb34c2df743c379988b1087dd9c1f560897d657.tar.gz"
+  "rom-hub @ https://github.com/BlizzHacker/rom-hub/archive/02e9a1dbc7ebca5191b4a977233a4d6d0466ed4b.tar.gz"
 ```
 
 For a checkout using `.venv`, use `.venv/bin/python` instead. Installing into system Python or another virtual environment will not make the package available to ROMarr. Refresh the Plugins page after installing; restart ROMarr after a package upgrade if it has already loaded an older module.
@@ -55,7 +55,7 @@ For a checkout using `.venv`, use `.venv/bin/python` instead. Installing into sy
 For the advanced [Windows source helper](INSTALL.md#windows-source-install), run from the repository directory:
 
 ```powershell
-.\.venv-windows\Scripts\python.exe -m pip install "rom-hub @ https://github.com/BlizzHacker/rom-hub/archive/feb34c2df743c379988b1087dd9c1f560897d657.tar.gz"
+.\.venv-windows\Scripts\python.exe -m pip install "rom-hub @ https://github.com/BlizzHacker/rom-hub/archive/02e9a1dbc7ebca5191b4a977233a4d6d0466ed4b.tar.gz"
 ```
 
 Use your chosen virtual-environment path if you changed `-VenvDirectory`. Git must be on `PATH` when installing plugin repositories. The Hub page reports the lack of Linux sandbox support on Windows; do not assume it is confined there.
