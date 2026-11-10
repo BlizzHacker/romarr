@@ -4,7 +4,6 @@ import hashlib
 import json
 from pathlib import Path
 from .library import _source_for, platform_dir, _digital_set_name, _set_name
-from .selection import pick_all_rom_sets
 
 
 def queue_identity(item):
@@ -16,7 +15,7 @@ def queue_identity(item):
 def preview_import(download, platform, library_root, *, layout="flat", platform_folders=None, queue_identity=None):
     source = _source_for(download, platform)
     names = source.names()
-    sets = pick_all_rom_sets(names, platform, read=source.read)
+    sets = source.rom_sets(platform)
     sizes = {}
     identity = []
     # Stat the archive itself or every source member. No game payload is hashed

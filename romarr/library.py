@@ -153,6 +153,9 @@ class _Source:
     def names(self) -> list[str]:
         raise NotImplementedError
 
+    def rom_sets(self, platform):
+        return pick_all_rom_sets(self.names(), platform, read=self.read)
+
     def read(self, name: str) -> bytes | None:
         raise NotImplementedError
 
@@ -374,6 +377,60 @@ class _PathSource(_Source):
         self.transfers[name] = self.last_transfer
 
 
+class _DirectorySource(_PathSource):
+    def __init__(self, path):
+        super().__init__(path)
+        self.members = {}
+        for entry in sorted(path.rglob("*")):
+            if not entry.is_file():
+                continue
+            if not entry.resolve().is_relative_to(path.resolve()):
+                raise ValueError(f"source escapes download directory: {entry}")
+            relative = entry.relative_to(path).as_posix()
+            if entry.suffix.lower() not in ARCHIVE_SUFFIXES:
+                self.members[relative] = (self, relative)
+                continue
+            try:
+                archive = _source_for(entry)
+                for member in archive.names():
+                    name = relative + "/" + member
+                    if name in self.members:
+                        raise ValueError(f"duplicate archive member: {member}")
+                    self.members[name] = (archive, member)
+            except (OSError, ValueError, RuntimeError, zipfile.BadZipFile,
+                    MissingArchiveTool, subprocess.SubprocessError) as exc:
+                detail = getattr(exc, "stderr", None) or str(exc)
+                if isinstance(detail, bytes):
+                    detail = detail.decode(errors="replace")
+                raise ValueError(f"cannot inspect {relative}: {detail}") from exc
+
+    def names(self):
+        return list(self.members)
+
+    def rom_sets(self, platform):
+        groups = {}
+        for name, (source, _) in self.members.items():
+            groups.setdefault(source, []).append(name)
+        return [group for names in groups.values()
+                for group in pick_all_rom_sets(names, platform, read=self.read)]
+
+    def read(self, name):
+        source, member = self.members[name]
+        return super().read(member) if source is self else source.read(member)
+
+    def hash(self, name, suffix=""):
+        source, member = self.members[name]
+        return super().hash(member, suffix) if source is self else source.hash(member, suffix)
+
+    def copy(self, name, destination):
+        source, member = self.members[name]
+        if source is self:
+            super().copy(member, destination)
+        else:
+            source.copy(member, destination)
+            self.transfers[name] = ("extracted", "archive members require extraction")
+
+
 class MissingArchiveTool(Exception):
     """The download is in a format no installed tool can open."""
 
@@ -385,6 +442,8 @@ def _source_for(download: Path, platform: Platform | None = None) -> _Source:
         non_hidden = [p for p in download.iterdir() if not p.name.startswith(".")]
         if len(non_hidden) == 1 and non_hidden[0].is_file():
             single_file = non_hidden[0]
+            if not single_file.resolve().is_relative_to(download.resolve()):
+                raise ValueError(f"source escapes download directory: {single_file}")
             single_suffix = single_file.suffix.lower()
             if single_suffix in _STDLIB_ARCHIVES or single_suffix in ARCHIVE_SUFFIXES:
                 return _source_for(single_file, platform)
@@ -396,6 +455,11 @@ def _source_for(download: Path, platform: Platform | None = None) -> _Source:
     if (platform is not None and platform.archive_is_the_rom
             and download.is_file()):
         return _PathSource(download)
+
+    if (download.is_dir()
+            and (platform is None or (not platform.archive_is_the_rom
+                                      and platform.media != "digital"))):
+        return _DirectorySource(download)
 
     suffix = download.suffix.lower()
     if download.is_file() and suffix in _STDLIB_ARCHIVES:
@@ -598,7 +662,7 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
     except (MissingArchiveTool, OSError, ValueError, zipfile.BadZipFile, RuntimeError, subprocess.SubprocessError) as exc:
         return [ImportResult(False, None, f"source inspection failed: {exc}")]
 
-    chosen_sets = pick_all_rom_sets(candidates, platform, read=source.read)
+    chosen_sets = source.rom_sets(platform)
     if selected_primaries is not None:
         selected = set(selected_primaries)
         available = {group.primary for group in chosen_sets}
