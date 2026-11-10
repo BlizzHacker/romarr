@@ -112,6 +112,7 @@ from .ui import page as ui_page
 from .ui import link_page as ui_link_page
 from .ui import login_page as ui_login_page
 from .version import compare_key, derive_version, is_unknown
+from .build_info import get_build_info
 
 log = logging.getLogger(__name__)
 
@@ -2422,6 +2423,7 @@ class ROMarr:
             "clients": self.download_clients(),
             "ggrequestz": self.ggrequestz(),
             "version": VERSION,
+            "build": get_build_info(VERSION),
             "prowlarr": bool(self.prowlarr._config.api_key),
             "prowlarr_url": self.store.settings.get("_prowlarr_url", ""),
             "qbittorrent": self.qbit.reachable(),
@@ -5787,6 +5789,7 @@ class ROMarr:
         env = selfupdate.detect()
         return {
             "running_version": VERSION,
+            "build": get_build_info(VERSION),
             "latest_version": self.store.settings.get("_latest_version") or "",
             "update_available": bool(
                 self.store.settings.get("_update_available")),

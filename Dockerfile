@@ -83,6 +83,14 @@ COPY romarr/ /app/romarr/
 ARG ROMARR_VERSION=""
 RUN printf '__version__ = "%s"\n' "${ROMARR_VERSION:-0.0.0+unknown}" \
     > /app/romarr/_version.py
+
+# Diagnostic build provenance. Non-tag builds retain the unknown release
+# version while carrying their exact source revision (no fabricated release).
+ARG ROMARR_BUILD_KIND="unknown"
+ARG ROMARR_SOURCE_REF=""
+ARG ROMARR_SOURCE_REVISION=""
+ARG ROMARR_SOURCE_REPOSITORY=""
+RUN python -c 'import os, pathlib; keys = ("ROMARR_BUILD_KIND", "ROMARR_SOURCE_REF", "ROMARR_SOURCE_REVISION", "ROMARR_SOURCE_REPOSITORY"); values = {k.lower(): os.environ.get(k, "") for k in keys}; pathlib.Path("/app/romarr/_build_info.py").write_text("".join(k + " = " + repr(v) + "\n" for k, v in values.items()), encoding="utf-8")'
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh && mkdir -p /config /roms
 
@@ -116,7 +124,8 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 LABEL org.opencontainers.image.title="ROMarr" \
       org.opencontainers.image.description="The *arr for games: request a ROM, ROMarr finds it via Prowlarr, grabs it, and files it into your game library" \
       org.opencontainers.image.source="https://github.com/BlizzHacker/romarr" \
-      org.opencontainers.image.licenses="MIT"
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.revision="${ROMARR_SOURCE_REVISION}"
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["python", "-m", "romarr"]
