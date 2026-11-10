@@ -25,6 +25,14 @@ The top of the Plugins page reports whether plugins can run confined on your hos
 
 A metadata-only plugin does not become a game search source. Other capabilities, including assets and cores, belong to ROM Hub and may require its CLI; installing them does not automatically configure an emulator or frontend. For a plugin marked **key needed**, follow that plugin's repository instructions for credentials/configuration.
 
+### Archive.org login
+
+On the installed Archive.org card, enter your email and password to save a login. Both fields are required when replacing it. Login does not grant access to files restricted by their owners.
+
+For headless installations, set `ROM_HUB_ARCHIVE_ORG_EMAIL_FILE` and `ROM_HUB_ARCHIVE_ORG_PASSWORD_FILE` to files readable by ROMarr. Alternatively, use `ROM_HUB_ARCHIVE_ORG_EMAIL` and `ROM_HUB_ARCHIVE_ORG_PASSWORD`. File settings take precedence for each field; an incomplete external login is an error and does not fall back to saved credentials. The legacy `ROMARR_ARCHIVE_ORG_*` names are also supported, but do not mix the two families.
+
+Credentials are stored by ROM Hub, not in ROMarr's settings or plugin configuration. Plugins run with the ROMarr service account's filesystem access, so only install plugins you trust. On headless Linux, the default store keeps its encryption key beside the encrypted file; use an externally supplied `ROM_HUB_SECRET_KEY` or an OS keyring if filesystem readers are in your threat model. Do not put passwords in the Nix store.
+
 ## Examples in the catalogue
 
 These entries and their tagged source repositories were checked on **2026-10-24**. They are also present in the catalogue pinned by ROMarr's Docker build. This confirms that the plugins are available to install; each upstream service can still be unavailable, change its API, or restrict individual files.
