@@ -659,10 +659,10 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
         if isinstance(source, _PathSource):
             source.prefer_hardlinks = prefer_hardlinks
         candidates = source.names()
+        chosen_sets = source.rom_sets(platform)
     except (MissingArchiveTool, OSError, ValueError, zipfile.BadZipFile, RuntimeError, subprocess.SubprocessError) as exc:
         return [ImportResult(False, None, f"source inspection failed: {exc}")]
 
-    chosen_sets = source.rom_sets(platform)
     if selected_primaries is not None:
         selected = set(selected_primaries)
         available = {group.primary for group in chosen_sets}
