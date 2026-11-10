@@ -18,6 +18,8 @@ Prowlarr and qBittorrent are useful for automatic torrent acquisition. You do no
 
 Open **Settings → Libraries**. Choose **Folder** if you want ROMs saved to a directory for ES-DE, Batocera, EmuDeck, LaunchBox or another frontend. For the README Compose example the path is `/roms`.
 
+For RetroBat, add a **RetroBat** library and point it at the `roms` folder inside your RetroBat installation. If ROMarr runs on a different computer or in Docker, mount that folder with write access and enter the path ROMarr sees. ROMarr files games under RetroBat system folders such as `megadrive`, `gamecube` and `switch`. Restart RetroBat or use **Main Menu → Game Settings → Update Gamelist** after importing. See the [RetroBat game setup guide](https://wiki.retrobat.org/get-started/adding-a-game).
+
 If you use RomM, Gaseous or Retrom, choose that integration and enter its address and credentials. The library's files must also be mounted into ROMarr; a working API connection alone does not give ROMarr filesystem access. Use the library test and confirm the destination is correct.
 
 **Settings → Media Management** contains folder layout options. Check these against your frontend's own platform folder names before importing a collection. Folder support does not promise that every frontend uses identical names. For an existing collection, use the preview-first [safe rename guide](EXISTING-LIBRARY-RENAME.md); it only moves files after you review and select them.

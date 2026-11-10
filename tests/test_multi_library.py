@@ -278,3 +278,37 @@ def test_the_hint_reaches_every_surface_that_reports_the_path(tmp_path):
     assert s.health()["library_path_hint"]
     assert s.status()["library_path_hint"]
     assert s.libraries_status()[0]["path_hint"]
+
+
+def test_retrobat_uses_system_folders_and_keeps_switch_generations_separate(tmp_path):
+    from romarr.libraries import LIBRARY_TYPES, RetroBatLibrary
+
+    root = tmp_path / "RetroBat" / "roms"
+    root.mkdir(parents=True)
+    service = svc(tmp_path)
+    service.store.settings["library_layout"] = "nested"
+    service.store.settings["platform_folders"] = {"ngc": "romm-gamecube"}
+    cfg = service.store.put_item("libraries", {
+        "type": "retrobat", "path": str(root), "is_default": True,
+        "platform_folders": {"snes": "custom-snes"},
+    })
+    service.reload_libraries()
+    fields = {field["name"] for field in LIBRARY_TYPES["retrobat"]["fields"]}
+    assert "path" in fields and "url" not in fields and "layout" not in fields
+    assert service.test_library(cfg)["ok"]
+    retrobat = service.library_for("switch")[1]
+    assert isinstance(retrobat, RetroBatLibrary)
+
+    cases = [("ngc", "gamecube", "game.iso"),
+             ("genesis-slash-megadrive", "megadrive", "game.md"),
+             ("snes", "custom-snes", "game.sfc"),
+             ("switch", "switch", "game.nsp"),
+             ("switch-2", "switch-2", "game.nsp")]
+    for platform, folder, filename in cases:
+        source = tmp_path / filename
+        payload = platform.encode().ljust(8 * 1024 * 1024, b"\0") if platform == "ngc" else platform.encode()
+        source.write_bytes(payload)
+        result = service.adopt(str(source), platform)
+        assert result["ok"], result
+        assert (root / folder / filename).read_bytes() == payload
+    assert retrobat.count() == len(cases)

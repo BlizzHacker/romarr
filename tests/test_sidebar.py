@@ -251,7 +251,7 @@ Object.defineProperty(content,'innerHTML',{set(html){
   for(const child of this.children) child.isConnected=false;
   this.children=[];
   if(html.includes('id="mfn"')){
-    input=make('input',{id:'mfn'},this);input.value='Chrono.Trigger.USA.v1.1.smc';
+    input=make('input',{id:'mfn'},this);input.value=html.match(/id="mfn" value="([^"]*)"/)[1];
     output=make('div',{id:'mout'},this);output.isConnected=true;
     identify=make('button',{id:'mgo'},this);
     make('button',{id:'mp-add'},this);
@@ -259,6 +259,11 @@ Object.defineProperty(content,'innerHTML',{set(html){
 }});
 let pending=[],setupRequests=0;
 const esc=value=>String(value);
+const fetch=url=>{
+  assert.equal(url,'/api/v1/metadataprovider');
+  ++setupRequests;
+  return Promise.resolve({ok:true,json:async()=>({items:[],revision:'fixture'})});
+};
 const j=(url,options)=>{
   if(!url.includes('/lookup?')){++setupRequests;return Promise.resolve({});}
   return new Promise(resolve=>pending.push({url,resolve,signal:options.signal}));
@@ -276,7 +281,7 @@ const tick=()=>new Promise(resolve=>setImmediate(resolve));
   input.value='Manual.smc';input.oninput();
   assert(pending[0].signal.aborted);
   const manual=identify.onclick();
-  pending[1].resolve({matched_by:'filename',title:'Manual result'});
+  pending[1].resolve({found:true,matched_by:'filename',title:'Manual result'});
   await manual;
   pending[0].resolve({matched_by:'filename',title:'Old example'});
   await tick();
@@ -295,5 +300,7 @@ const tick=()=>new Promise(resolve=>setImmediate(resolve));
   await tick();
   assert.equal(output.textContent,'Looking up...');
   assert.equal(setupRequests,4);
+  assert.equal(input.value,'Pending.smc');
+  assert(pending[3].url.includes('Pending.smc'));
 })().catch(e=>{console.error(e);process.exitCode=1;});
 """)
