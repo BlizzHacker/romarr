@@ -292,7 +292,7 @@ def _identify_via_bsdtar(path) -> Sniffed | None:
     """
     import subprocess
 
-    from .library import bsdtar_path
+    from .library import bsdtar_path, bsdtar_pattern
 
     tool = bsdtar_path()
     if tool is None:
@@ -314,7 +314,8 @@ def _identify_via_bsdtar(path) -> Sniffed | None:
 
     proc = None
     try:
-        proc = subprocess.Popen([tool, "-xOf", str(path), member],
+        proc = subprocess.Popen([tool, "-xOf", str(path),
+                                 bsdtar_pattern(member)],
                                 stdout=subprocess.PIPE,
                                 stderr=subprocess.DEVNULL)
         head = proc.stdout.read(HEAD_BYTES)

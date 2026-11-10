@@ -197,6 +197,21 @@ class _ZipSource(_Source):
             return hash_stream(src, suffix=suffix)
 
 
+#: bsdtar treats every member argument as a shell-style glob: `[` opens a
+#: character class, `*`/`?` are wildcards, `\` escapes. Scene names are full of
+#: brackets -- every Switch release ships as
+#: `Title [010012101468C000][v0][US].nsp` -- and the literal member name can
+#: never match the pattern it parses as, so extraction reports "Not found in
+#: archive" for a member that `-tf` lists fine. Backslash-escaping every
+#: metacharacter makes the pattern mean exactly the name.
+_GLOB_METACHARS = re.compile(r"([*?[\]\\])")
+
+
+def bsdtar_pattern(name: str) -> str:
+    """Escape glob metacharacters so bsdtar matches `name` literally."""
+    return _GLOB_METACHARS.sub(r"\\\1", name)
+
+
 class _BsdtarSource(_Source):
     """7z and rar, via libarchive.
 
@@ -220,11 +235,12 @@ class _BsdtarSource(_Source):
                 if n and not n.endswith("/") and is_safe_name(n, self.path.parent)]
 
     def read(self, name):
-        return self._run(["-xOf", str(self.path), name]).stdout
+        return self._run(["-xOf", str(self.path), bsdtar_pattern(name)]).stdout
 
     def copy(self, name, destination):
         with open(destination, "wb") as dst:
-            subprocess.run([self.tool, "-xOf", str(self.path), name],
+            subprocess.run([self.tool, "-xOf", str(self.path),
+                            bsdtar_pattern(name)],
                            stdout=dst, check=True, timeout=600)
 
     #: Seconds `bsdtar` may go without producing a byte before `hash` gives
@@ -243,7 +259,8 @@ class _BsdtarSource(_Source):
         stalled = threading.Event()
         finished = threading.Event()
         last_byte = [time.monotonic()]
-        with subprocess.Popen([self.tool, "-xOf", str(self.path), name],
+        with subprocess.Popen([self.tool, "-xOf", str(self.path),
+                               bsdtar_pattern(name)],
                               stdout=subprocess.PIPE,
                               stderr=subprocess.DEVNULL) as proc:
 
