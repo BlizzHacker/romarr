@@ -381,10 +381,11 @@ class _DirectorySource(_PathSource):
     def __init__(self, path):
         super().__init__(path)
         self.members = {}
+        root = path.resolve()
         for entry in sorted(path.rglob("*")):
             if not entry.is_file():
                 continue
-            if not entry.resolve().is_relative_to(path.resolve()):
+            if not entry.resolve().is_relative_to(root):
                 raise ValueError(f"source escapes download directory: {entry}")
             relative = entry.relative_to(path).as_posix()
             if entry.suffix.lower() not in ARCHIVE_SUFFIXES:
@@ -675,9 +676,9 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
             f"no {platform.name} ROM among {len(candidates)} file(s)")]
 
     results: list[ImportResult] = []
+    planned = []
+    destinations = {}
     for chosen in chosen_sets:
-        if isinstance(source, _PathSource):
-            source.transfers = {}
         try:
             verdict = verify_set(source, chosen.members, dats)
         except (OSError, ValueError, zipfile.BadZipFile, RuntimeError, subprocess.SubprocessError) as exc:
@@ -694,13 +695,12 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
                                   layout=layout, translation=translation,
                                   platform_folders=platform_folders)
 
-        if not chosen.is_multi_file:
-            try:
-                target_dir.mkdir(parents=True, exist_ok=True)
-            except OSError as exc:
-                results.append(ImportResult(False, target_dir, f"destination preparation failed: {exc}"))
-                continue
-            name = _import_name(chosen.primary, verdict, rename=rename)
+        if chosen.is_multi_file:
+            name = (_digital_set_name(download) if platform.media == "digital"
+                    else _set_name(chosen.primary))
+            destination = target_dir / name
+        else:
+            destination = target_dir / _import_name(chosen.primary, verdict, rename=rename)
             if bundle_routes is not None:
                 relative = Path(bundle_routes.get(chosen.primary, ""))
                 if (not str(relative) or str(relative) == "." or relative.is_absolute()
@@ -709,15 +709,23 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
                     results.append(ImportResult(False, None, "invalid reviewed destination; review the bundle again"))
                     continue
                 destination = target_dir / relative
-                target_dir = destination.parent
-                try:
-                    target_dir.mkdir(parents=True, exist_ok=True)
-                except OSError as exc:
-                    results.append(ImportResult(False, destination, f"destination preparation failed: {exc}"))
-                    continue
-                name = destination.name
-            else:
-                destination = target_dir / name
+        if destination in destinations:
+            return [ImportResult(False, destination,
+                                 f"selected ROMs map to the same destination: {destinations[destination]} and {chosen.primary}; select one or give the sources distinct names")]
+        destinations[destination] = chosen.primary
+        planned.append((chosen, verdict, destination))
+
+    for chosen, verdict, destination in planned:
+        if isinstance(source, _PathSource):
+            source.transfers = {}
+        target_dir = destination.parent
+        if not chosen.is_multi_file:
+            try:
+                target_dir.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                results.append(ImportResult(False, target_dir, f"destination preparation failed: {exc}"))
+                continue
+            name = destination.name
             if destination.exists() and (not overwrite or destination.stat().st_size == 0):
                 results.append(ImportResult(False, destination, _existing_destination(destination)))
                 continue
@@ -739,12 +747,6 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
                                         verification=verdict, **_transfer_summary(source)))
             continue
 
-        # A digital set is named after the download, not its primary: every
-        # repack's installer is called setup.exe, and a library of
-        # directories all named "setup" is a library of nothing.
-        set_name = (_digital_set_name(download) if platform.media == "digital"
-                    else _set_name(chosen.primary))
-        destination = target_dir / set_name
         if destination.exists() and any(destination.iterdir()) and not overwrite:
             results.append(ImportResult(False, destination, _existing_destination(destination)))
             continue
