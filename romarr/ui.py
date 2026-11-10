@@ -1223,7 +1223,7 @@ function go(page){
     getstarted:'Get Started',setup:'Setup Guide',
     hub:'ROM Hub — Plugins',portal:'Library Shell & Device Fleet'};
   $('#top h1').textContent=titles[page]||'ROMarr';
-  $('#search').classList.toggle('hide', !['library','add'].includes(page));
+  $('#search').classList.toggle('hide', page !== 'library');
   (RENDER[page]||RENDER.library)();
 }
 addEventListener('hashchange',()=>{
