@@ -154,6 +154,7 @@ class _Source:
         raise NotImplementedError
 
     def rom_sets(self, platform):
+        """Select ROM sets from the members this source exposes."""
         return pick_all_rom_sets(self.names(), platform, read=self.read)
 
     def read(self, name: str) -> bytes | None:
@@ -381,6 +382,7 @@ class _DirectorySource(_PathSource):
     """Index loose files and archives, keeping ROM sets within each source."""
 
     def __init__(self, path):
+        """Index each archive once and keep its members tied to their source."""
         super().__init__(path)
         self.members = {}
         root = path.resolve()
@@ -408,9 +410,11 @@ class _DirectorySource(_PathSource):
                 raise ValueError(f"cannot inspect {relative}: {detail}") from exc
 
     def names(self):
+        """List loose paths and archive members using distinct source paths."""
         return list(self.members)
 
     def rom_sets(self, platform):
+        """Keep companions together without joining files from different archives."""
         groups = {}
         for name, (source, _) in self.members.items():
             groups.setdefault(source, []).append(name)
@@ -418,14 +422,17 @@ class _DirectorySource(_PathSource):
                 for group in pick_all_rom_sets(names, platform, read=self.read)]
 
     def read(self, name):
+        """Read a loose file or delegate an archive member to its archive."""
         source, member = self.members[name]
         return super().read(member) if source is self else source.read(member)
 
     def hash(self, name, suffix=""):
+        """Hash through the owning source so large members can be streamed."""
         source, member = self.members[name]
         return super().hash(member, suffix) if source is self else source.hash(member, suffix)
 
     def copy(self, name, destination):
+        """Extract archive members and record that they cannot be hardlinked."""
         source, member = self.members[name]
         if source is self:
             super().copy(member, destination)
@@ -439,6 +446,7 @@ class MissingArchiveTool(Exception):
 
 
 def _source_for(download: Path, platform: Platform | None = None) -> _Source:
+    """Choose an archive, directory, or plain-file source for this platform."""
     # When the download is a directory whose only non-hidden file is an archive,
     # unwrap it so the import looks inside the selected archive (#115).
     if download.is_dir():

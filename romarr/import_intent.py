@@ -13,6 +13,7 @@ def queue_identity(item):
 
 
 def preview_import(download, platform, library_root, *, layout="flat", platform_folders=None, queue_identity=None):
+    """Build a reviewable preview without hashing game payloads."""
     source = _source_for(download, platform)
     names = source.names()
     sets = source.rom_sets(platform)

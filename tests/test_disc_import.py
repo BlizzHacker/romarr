@@ -161,11 +161,13 @@ def test_list_candidates_reads_a_7z(tmp_path):
 
 
 def test_archive_removed_during_inspection_returns_failure(tmp_path, monkeypatch):
+    """Report a disappearing source as an inspection failure."""
     archive = tmp_path / "Game.zip"
     make_zip(archive, {"Game.chd": b"game bytes"})
     original_names = library._ZipSource.names
 
     def names_then_remove(source):
+        """Simulate an archive disappearing after its members are listed."""
         names = original_names(source)
         source.path.unlink()
         return names

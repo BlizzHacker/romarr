@@ -11,6 +11,7 @@ from tests.test_import_naming import dats_for
 
 
 def make_archive(path, members):
+    """Build test archives; RAR uses the fixed disc fixture."""
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.suffix == '.zip':
         with zipfile.ZipFile(path, 'w') as archive:
@@ -37,6 +38,7 @@ def make_archive(path, members):
 
 @pytest.mark.parametrize('suffix', ['.zip', '.7z', '.rar'])
 def test_directory_archive_imports_complete_disc_and_preserves_download(tmp_path, suffix):
+    """An archived disc imports with its tracks while the download stays intact."""
     download = tmp_path / 'download'
     archive = make_archive(download / 'nested' / ('game' + suffix), {
         'Game.cue': b'FILE "track.bin" BINARY\n', 'track.bin': b'track bytes'})
@@ -57,6 +59,7 @@ def test_directory_archive_imports_complete_disc_and_preserves_download(tmp_path
 
 
 def test_multiple_archives_and_loose_rom_review_keeps_sources_separate(tmp_path):
+    """Review keeps equally named members in separate archives selectable."""
     download = tmp_path / 'download'
     for name, payload in [('A', b'a'), ('B', b'b')]:
         make_archive(download / (name + '.zip'), {
@@ -75,6 +78,7 @@ def test_multiple_archives_and_loose_rom_review_keeps_sources_separate(tmp_path)
 @pytest.mark.parametrize('overwrite', [False, True])
 @pytest.mark.parametrize('disc', [False, True])
 def test_colliding_archive_destinations_publish_nothing(tmp_path, overwrite, disc):
+    """Reject two selected games before either can occupy the same destination."""
     download = tmp_path / 'download'
     originals = {}
     for title, payload in [('A', b'a'), ('B', b'b')]:
@@ -95,6 +99,7 @@ def test_colliding_archive_destinations_publish_nothing(tmp_path, overwrite, dis
 
 @pytest.mark.parametrize('distinct_names', [False, True])
 def test_archive_collisions_use_verified_destination_names(tmp_path, distinct_names):
+    """Compare verified DAT names when planning destinations."""
     download = tmp_path / 'download'
     make_archive(download / 'A.zip', {('Game.gb' if distinct_names else 'First.gb'): b'a'})
     make_archive(download / 'B.zip', {('Game.gb' if distinct_names else 'Second.gb'): b'b'})
@@ -113,6 +118,7 @@ def test_archive_collisions_use_verified_destination_names(tmp_path, distinct_na
 
 @pytest.mark.parametrize('distinct_routes', [False, True])
 def test_archive_collisions_use_reviewed_destinations(tmp_path, distinct_routes):
+    """Compare reviewed routes when planning destinations."""
     download = tmp_path / 'download'
     for title, payload in [('A', b'a'), ('B', b'b')]:
         make_archive(download / (title + '.zip'), {'Game.gb': payload})
@@ -131,6 +137,7 @@ def test_archive_collisions_use_reviewed_destinations(tmp_path, distinct_routes)
 
 
 def test_unreadable_archive_names_source_and_publishes_nothing(tmp_path):
+    """Report the bad archive before publishing any otherwise valid ROM."""
     download = tmp_path / 'download'
     download.mkdir()
     (download / 'bad.zip').write_bytes(b'broken')
@@ -142,6 +149,7 @@ def test_unreadable_archive_names_source_and_publishes_nothing(tmp_path):
 
 @pytest.mark.parametrize("with_extra", [False, True])
 def test_directory_source_refuses_symlink_escape(tmp_path, with_extra):
+    """Refuse a file whose resolved path leaves the download directory."""
     download = tmp_path / 'download'
     download.mkdir()
     (tmp_path / 'outside.chd').write_bytes(b'outside')
@@ -154,6 +162,7 @@ def test_directory_source_refuses_symlink_escape(tmp_path, with_extra):
 
 
 def test_loose_playlist_does_not_hide_archived_game(tmp_path):
+    """A loose playlist cannot absorb a game from another archive."""
     download = tmp_path / 'download'
     make_archive(download / 'Game.zip', {'Archived.chd': b'archived'})
     (download / 'Loose.m3u').write_bytes(b'Loose.chd\n')
