@@ -416,3 +416,74 @@ def test_scheduled_check_waits_for_manual_check_and_applies_once(
     assert all(answer["ok"] for answer in answers)
     assert applied == [{"expected_channel": "stable",
                         "expected_release": "1.8.2"}]
+
+
+def test_disabling_scheduled_check_mid_request_suppresses_notifications_and_apply(
+        tmp_path, monkeypatch):
+    """A preference change during GitHub fetch must stop scheduled side effects."""
+    svc = _svc(tmp_path)
+    monkeypatch.setattr("romarr.app.VERSION", "1.8.1")
+    svc.store.settings.update({"update_check": True, "auto_update": True})
+    notified, applied = [], []
+    monkeypatch.setattr(svc, "notify", lambda *a: notified.append(a))
+    monkeypatch.setattr(svc, "apply_update", lambda **kw: applied.append(kw))
+
+    def disable_during_fetch(*args, **kwargs):
+        """Simulate an operator disabling the daily check before the reply."""
+        with svc._lock:
+            svc.store.settings["update_check"] = False
+        return Release()
+
+    monkeypatch.setattr(requests, "get", disable_during_fetch)
+    result = svc.check_update()
+    assert result["ok"] and result["state"] == "available"
+    assert not notified and not applied
+    assert svc.store.settings.get("_update_notified") != "1.8.2"
+    assert svc.update_status()["settings"]["auto_update_effective"] is False
+
+
+def test_disabling_scheduled_check_at_notification_blocks_git_launch(
+        tmp_path, monkeypatch):
+    """The guarded launcher must reject a disabled schedule after notification."""
+    svc = _svc(tmp_path)
+    monkeypatch.setattr("romarr.app.VERSION", "1.8.1")
+    svc.store.settings.update({"update_check": True, "auto_update": True})
+    monkeypatch.setattr(requests, "get", lambda *a, **kw: Release())
+    env = selfupdate.Environment(kind="git", repo=str(tmp_path), branch="main",
+                                 python="python3", commit="abc", service="romarr")
+    monkeypatch.setattr(selfupdate, "detect", lambda root=None: env)
+    launches = []
+    monkeypatch.setattr(selfupdate, "launch",
+                        lambda *args: launches.append(args) or {"ok": True})
+
+    def disable_after_notice(_message):
+        """Disable the scheduler while the notification callback is running."""
+        with svc._lock:
+            svc.store.settings["update_check"] = False
+        return []
+
+    monkeypatch.setattr(svc, "notify", disable_after_notice)
+    result = svc.check_update()
+    assert result["ok"]
+    assert launches == []
+
+
+def test_explicit_scheduled_apply_checks_enabled_flag_under_launch_lock(
+        tmp_path, monkeypatch):
+    """A previously validated release cannot apply after daily checks are off."""
+    svc = _svc(tmp_path)
+    monkeypatch.setattr("romarr.app.VERSION", "1.8.1")
+    svc.store.settings.update({
+        "auto_update": True, "update_check": False,
+        "update_channel": "stable", "_latest_version": "1.8.2"})
+    env = selfupdate.Environment(kind="git", repo=str(tmp_path), branch="main",
+                                 python="python3", commit="abc", service="romarr")
+    monkeypatch.setattr(selfupdate, "detect", lambda root=None: env)
+    launched = []
+    monkeypatch.setattr(selfupdate, "launch",
+                        lambda *args: launched.append(args) or {"ok": True})
+    result = svc.apply_update(expected_channel="stable",
+                              expected_release="1.8.2")
+    assert result["ok"] is False
+    assert "scheduled update preference" in result["error"]
+    assert launched == []

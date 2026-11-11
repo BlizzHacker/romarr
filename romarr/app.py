@@ -5825,14 +5825,19 @@ class ROMarr:
 
             if newer and not manual:
                 with self._lock:
-                    should_notify = self.store.settings.get("_update_notified") != latest
+                    # Disabled scheduled checks must not send notifications
+                    # or consume the one-per-version notification marker.
+                    should_notify = (
+                        self.store.settings.get("update_check", True)
+                        and self.store.settings.get("_update_notified") != latest)
                     if should_notify:
                         self.store.settings["_update_notified"] = latest
                         self.store.save()
                 if should_notify:
                     self.notify(update_available(VERSION, latest, url))
 
-                if self.store.settings.get("auto_update", False):
+                if (self.store.settings.get("update_check", True)
+                        and self.store.settings.get("auto_update", False)):
                     applied = self.apply_update(expected_channel=channel,
                                                 expected_release=latest)
                     if applied.get("ok"):
@@ -5874,9 +5879,10 @@ class ROMarr:
             if expected_channel and (
                     channel != expected_channel
                     or not self.store.settings.get("auto_update", False)
+                    or not self.store.settings.get("update_check", True)
                     or self.store.settings.get("_latest_version") != expected_release):
                 return {"ok": False,
-                        "error": "update channel, release or auto-update preference "
+                        "error": "update channel, release or scheduled update preference "
                                  "changed after the check; update not launched"}
             try:
                 stall = int(self.store.settings.get(
