@@ -299,6 +299,7 @@ def test_import_finished_does_not_cross_match_client_fallback(tmp_path):
     s.queue = [qbit_row]
 
     class FakeNzbClient(FakeClient):
+        """Stub usenet client ensuring cross-protocol matches are rejected."""
         name = "NZBGet"
         protocol = "usenet"
         romarr_id = "nzb-1"
@@ -306,3 +307,35 @@ def test_import_finished_does_not_cross_match_client_fallback(tmp_path):
     s.clients = [FakeNzbClient([{"name": "Zelda (USA)", "content_path": str(tmp_path / "nowhere")}])]
     assert s.import_finished() == []
     assert qbit_row.state == "import-review"
+
+
+def test_direct_hash_and_job_matches_respect_download_client():
+    """Verify direct hash, job id, and qbit-tag lookups never cross-match a different client."""
+    from romarr.downloaders import match_queue_item
+
+    row_a = QueueItem("Zelda", "nes", "Zelda (USA)", 1, "grabbed",
+                      release_id=f"btih:{HASH}", download_id="qbit-tag:romarr-a",
+                      download_client="qbit-a")
+    row_b = QueueItem("Zelda", "nes", "Zelda (USA)", 2, "grabbed",
+                      release_id=f"btih:{HASH}", download_id="qbit-tag:romarr-b",
+                      download_client="qbit-b")
+
+    # Client B reports by hash without tags -> must select Row B, not Row A.
+    assert match_queue_item([row_a, row_b], {"hash": HASH},
+                            client_id="qbit-b", client_protocol="torrent") is row_b
+    # Client C reports the same hash when only A and B exist -> must not claim either.
+    assert match_queue_item([row_a, row_b], {"hash": HASH},
+                            client_id="qbit-c", client_protocol="torrent") is None
+    # Reporting by job id similarly respects download_client ownership.
+    sab_a = QueueItem("Contra", "nes", "Contra A", 0, "grabbed",
+                      download_id="job-42", download_client="sab-a")
+    sab_b = QueueItem("Contra", "nes", "Contra B", 0, "grabbed",
+                      download_id="job-42", download_client="sab-b")
+    assert match_queue_item([sab_a, sab_b], {"id": "job-42"},
+                            client_id="sab-b", client_protocol="usenet") is sab_b
+    assert match_queue_item([sab_a], {"id": "job-42"},
+                            client_id="sab-b", client_protocol="usenet") is None
+    # Exact client row takes precedence over a legacy unassigned row sharing the hash.
+    legacy = QueueItem("Zelda", "nes", "Zelda Legacy", 1, "grabbed", release_id=f"btih:{HASH}")
+    assert match_queue_item([legacy, row_b], {"hash": HASH},
+                            client_id="qbit-b", client_protocol="torrent") is row_b

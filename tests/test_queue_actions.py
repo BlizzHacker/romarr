@@ -228,6 +228,7 @@ def test_queue_bounds_slow_debrid_probe_and_preserves_cached_completion(tmp_path
         rd._remember(f"slow-{idx}")
 
     class Session:
+        """Fake HTTP session toggling between fast initial reads and slow polls."""
         def __init__(self):
             """Initialize recorded request log and speed toggle."""
             self.calls = []
@@ -356,3 +357,444 @@ def test_queue_preview_and_plan_match_against_full_queue(tmp_path):
     assert [r["can_preview_import"] for r in s.queue_rows()] == [False, True]
     assert not s.queue_import_plan(0, {}).get("ok")
     assert s.queue_import_plan(1, {})["ok"]
+
+
+def test_exhausted_network_budget_still_probes_local_and_cached_debrid_clients(tmp_path):
+    """Verify exhausting the network probe deadline never skips local or cached debrid clients."""
+    import os
+    import time
+    from romarr.clients import QBittorrent, QbitConfig
+    from romarr.downloaders import (
+        Blackhole, BlackholeConfig, RealDebrid, RealDebridConfig, SiteConfig, SiteDownloader,
+    )
+
+    class SlowQbitSession:
+        """Session that consumes the probe budget on the first torrent check."""
+
+        def __init__(self):
+            """Initialize call counter."""
+            self.calls = 0
+
+        def get(self, url, **kwargs):
+            """Sleep longer than QUEUE_PROBE_TIMEOUT then return empty rows."""
+            self.calls += 1
+            time.sleep(0.06)
+            return SimpleNamespace(status_code=200, ok=True, text="[]", json=lambda: [], raise_for_status=lambda: None)
+
+        def post(self, url, **kwargs):
+            """Accept qBittorrent login."""
+            return SimpleNamespace(status_code=200, ok=True, text="Ok.", json=lambda: {}, raise_for_status=lambda: None)
+
+    class TrailingSabSession:
+        """Session that must not be called once network budget is exhausted."""
+
+        def __init__(self):
+            """Track HTTP GET attempts."""
+            self.called = False
+
+        def get(self, url, **kwargs):
+            """Record unexpected network probe after budget exhaustion."""
+            self.called = True
+            raise AssertionError("trailing network client must be skipped")
+
+    from romarr.downloaders import SabConfig, SABnzbd
+
+    slow_qbit = QBittorrent(QbitConfig(base_url="http://qbit", category="romarr", timeout=30), session=SlowQbitSession())
+    slow_qbit._authed = True
+
+    site_dir = tmp_path / "site"
+    site_dir.mkdir()
+    site_file = site_dir / "Site Game.gb"
+    site_file.write_bytes(b"rom")
+    site_client = SiteDownloader(SiteConfig(save_path=str(site_dir)))
+    site_client._write([{"name": "Site Game", "state": "done", "file": str(site_file)}])
+
+    bh_drop = tmp_path / "drop"
+    bh_watch = tmp_path / "watch"
+    bh_drop.mkdir()
+    bh_watch.mkdir()
+    bh_file = bh_watch / "Blackhole Game.gb"
+    bh_file.write_bytes(b"rom")
+    old = bh_file.stat().st_mtime - 600
+    os.utime(bh_file, (old, old))
+    bh_client = Blackhole(BlackholeConfig(drop_path=str(bh_drop), watch_path=str(bh_watch), settle=0))
+
+    rd_dir = tmp_path / "rd"
+    rd_dir.mkdir()
+    rd = RealDebrid(RealDebridConfig(api_token="tok", save_path=str(rd_dir), timeout=30))
+    target = rd_dir / "Debrid Cached"
+    target.mkdir()
+    (target / "Debrid Cached.gb").write_bytes(b"rom")
+    cached_row = {"name": "Debrid Cached", "content_path": str(target), "save_path": str(rd_dir), "state": "downloaded", "hash": "d" * 40}
+    rd._update_fetched_cache(target, resolved={"str:https://rd/1": "Debrid Cached.gb"}, completed_row=cached_row, files=["Debrid Cached.gb"])
+    rd._session = TrailingSabSession()
+
+    sab_sess = TrailingSabSession()
+    sab = SABnzbd(SabConfig(base_url="http://sab", api_key="key"), session=sab_sess)
+
+    s = svc(tmp_path)
+    s.QUEUE_PROBE_TIMEOUT = 0.04
+    s.clients = [slow_qbit, site_client, bh_client, rd, sab]
+    s.queue = [
+        QueueItem("Site", "gb", "Site Game", 1, "grabbed"),
+        QueueItem("BH", "gb", "Blackhole Game", 1, "grabbed"),
+        QueueItem("RD", "gb", "Debrid Cached", 1, "grabbed", release_id="btih:" + "d" * 40),
+        QueueItem("SAB", "gb", "Trailing Sab", 1, "grabbed", download_id="sab-1"),
+    ]
+
+    rows = s.queue_rows()
+    assert [r["can_preview_import"] for r in rows] == [True, True, True, False]
+    assert not sab_sess.called
+
+
+def test_generic_network_clients_receive_bounded_probe_timeout(tmp_path):
+    """Verify generic network clients and unparameterized clients honor QUEUE_PROBE_TIMEOUT."""
+    import time
+    from romarr.downloaders import (
+        Aria2, Aria2Config, Flood, FloodConfig, FreeboxConfig, FreeboxDownload,
+        Hadouken, HadoukenConfig, NZBGet, NZBVortex, NzbVortexConfig, NzbgetConfig,
+        Porla, PorlaConfig, SABnzbd, SabConfig, SynologyConfig, SynologyDownloadStation,
+        Transmission, TransmissionConfig, UTorrent, UTorrentConfig,
+    )
+
+    timeouts: list[float | None] = []
+
+    class RecordingSession:
+        """Fake requests.Session capturing every call timeout."""
+
+        def get(self, url, **kwargs):
+            """Record GET timeout and satisfy handshake/list endpoints."""
+            timeouts.append(kwargs.get("timeout"))
+            if url.endswith("token.html"):
+                body = "<div id='token'>TOK</div>"
+                return SimpleNamespace(status_code=200, text=body, json=lambda: {}, raise_for_status=lambda: None)
+            if url.endswith("/auth/nonce"):
+                return SimpleNamespace(status_code=200, text="{}", json=lambda: {"authNonce": "n"}, raise_for_status=lambda: None)
+            if url.endswith("/auth/login"):
+                return SimpleNamespace(status_code=200, text="{}", json=lambda: {"sessionID": "s"}, raise_for_status=lambda: None)
+            if url.endswith("/login"):
+                return SimpleNamespace(status_code=200, text="{}", json=lambda: {"result": {"challenge": "c"}}, raise_for_status=lambda: None)
+            if url.endswith("auth.cgi"):
+                return SimpleNamespace(status_code=200, text="{}", json=lambda: {"success": True, "data": {"sid": "s"}}, raise_for_status=lambda: None)
+            return SimpleNamespace(status_code=200, text="{}", json=lambda: {"history": {"slots": []}, "result": [], "torrents": {}, "nzbs": [], "data": {"tasks": []}}, raise_for_status=lambda: None)
+
+        def post(self, url, **kwargs):
+            """Record POST timeout and satisfy auth/list RPC endpoints."""
+            timeouts.append(kwargs.get("timeout"))
+            if url.endswith("/auth/authenticate"):
+                return SimpleNamespace(status_code=200, text="{}", json=lambda: {"success": True}, raise_for_status=lambda: None)
+            if url.endswith("/login/session"):
+                return SimpleNamespace(status_code=200, text="{}", json=lambda: {"result": {"session_token": "t"}}, raise_for_status=lambda: None)
+            return SimpleNamespace(status_code=200, text="{}", json=lambda: {"result": "success", "arguments": {"torrents": []}, "torrents": {}}, raise_for_status=lambda: None)
+
+    sess = RecordingSession()
+    clients = [
+        SABnzbd(SabConfig(base_url="http://sab", api_key="k", timeout=30), session=sess),
+        NZBGet(NzbgetConfig(base_url="http://nzbget", timeout=30), session=sess),
+        NZBVortex(NzbVortexConfig(base_url="https://nzbvortex", api_key="k", timeout=30), session=sess),
+        Transmission(TransmissionConfig(base_url="http://tx", timeout=30), session=sess),
+        SynologyDownloadStation(SynologyConfig(base_url="http://syno", username="u", password="p", timeout=30), session=sess),
+        Aria2(Aria2Config(base_url="http://aria2", timeout=30), session=sess),
+        Flood(FloodConfig(base_url="http://flood", username="u", password="p", timeout=30), session=sess),
+        FreeboxDownload(FreeboxConfig(base_url="http://fbx", app_id="a", app_token="t", timeout=30), session=sess),
+        Hadouken(HadoukenConfig(base_url="http://hdk", timeout=30), session=sess),
+        UTorrent(UTorrentConfig(base_url="http://ut", timeout=30), session=sess),
+        Porla(PorlaConfig(base_url="http://porla", api_token="t", timeout=30), session=sess),
+    ]
+
+    for idx, client in enumerate(clients):
+        timeouts.clear()
+        s = svc(tmp_path / f"c{idx}")
+        s.QUEUE_PROBE_TIMEOUT = 0.05
+        s.clients = [client]
+        s.queue = [QueueItem("Game", "gb", "Rel", 1, "grabbed")]
+        s.queue_rows()
+        assert timeouts, f"{client.name} made no HTTP calls"
+        assert all(isinstance(t, float) and t <= 0.05 + 1e-6 for t in timeouts), f"{client.name} exceeded probe timeout: {timeouts}"
+
+    # Verify a slow custom client whose completed() accepts no timeout parameter is still bounded.
+    s = svc(tmp_path / "slow-custom")
+    s.QUEUE_PROBE_TIMEOUT = 0.05
+    s.clients = [SimpleNamespace(configured=True, name="Custom", completed=lambda: (time.sleep(0.35), [])[1])]
+    s.queue = [QueueItem("Game", "gb", "Rel", 1, "grabbed")]
+    started = time.monotonic()
+    assert s.queue_rows()[0]["can_preview_import"] is False
+    assert (time.monotonic() - started) < 0.25
+
+
+def test_qbittorrent_selective_completed_shares_single_deadline():
+    """Verify selective_completed shares one deadline and stops probing further hashes cleanly."""
+    import time
+    from romarr.clients import QBittorrent, QbitConfig
+
+    calls: list[tuple[str, float | None]] = []
+
+    class SlowQbitSession:
+        """Fake qBittorrent session recording per-request timeouts across collection hashes."""
+
+        def get(self, url, **kwargs):
+            """Delay slightly on torrents/files so the second hash sees an expired deadline."""
+            calls.append((url.rsplit("/", 1)[-1], kwargs.get("timeout")))
+            if url.endswith("/torrents/info"):
+                return SimpleNamespace(
+                    ok=True, status_code=200,
+                    json=lambda: [
+                        {"hash": "h1", "category": "romarr", "tags": "romarr-collection-1"},
+                        {"hash": "h2", "category": "romarr", "tags": "romarr-collection-2"},
+                    ],
+                    raise_for_status=lambda: None,
+                )
+            if url.endswith("/torrents/files"):
+                time.sleep(0.06)
+                return SimpleNamespace(
+                    ok=True, status_code=200,
+                    json=lambda: [{"index": 0, "name": "a.gb", "size": 10, "priority": 1, "progress": 1.0}],
+                    raise_for_status=lambda: None,
+                )
+            raise AssertionError(f"unexpected URL {url}")
+
+    qbit = QBittorrent(QbitConfig(base_url="http://qbit", category="romarr", timeout=30), session=SlowQbitSession())
+    qbit.romarr_id = "q1"
+    qbit._authed = True
+    owners = [
+        QueueItem("G1", "gb", "C1", 1, "grabbed", download_client="q1", download_id="romarr-collection-1", selected_file={"hash": "h1", "index": 0, "path": "a.gb", "size": 10}),
+        QueueItem("G2", "gb", "C2", 1, "grabbed", download_client="q1", download_id="romarr-collection-2", selected_file={"hash": "h2", "index": 0, "path": "b.gb", "size": 10}),
+    ]
+    rows = qbit.selective_completed(owners, ownership=owners, update_cache=False, timeout=0.05)
+    assert not any(r.get("_romarr_selection_error") for r in rows)
+    assert all(t is not None and t <= 0.05 + 1e-6 for _, t in calls)
+    assert [u for u, _ in calls].count("files") <= 1
+
+
+def test_qbittorrent_login_and_session_refresh_respect_deadline():
+    """Verify qBittorrent initial login and 403 re-login retry share the active probe timeout."""
+    from romarr.clients import QBittorrent, QbitConfig
+
+    recorded: list[tuple[str, float | None]] = []
+    state = {"get_count": 0}
+
+    class RefreshSession:
+        """Fake session requiring login on start and returning 403 once to force re-login."""
+
+        def post(self, url, **kwargs):
+            """Record auth/login timeout."""
+            recorded.append(("post:" + url.rsplit("/", 1)[-1], kwargs.get("timeout")))
+            return SimpleNamespace(ok=True, status_code=200, text="Ok.", json=lambda: {}, raise_for_status=lambda: None)
+
+        def get(self, url, **kwargs):
+            """Force 403 on first GET, succeed on retry."""
+            recorded.append(("get:" + url.rsplit("/", 1)[-1], kwargs.get("timeout")))
+            state["get_count"] += 1
+            if state["get_count"] == 1:
+                return SimpleNamespace(ok=False, status_code=403, text="Forbidden", json=lambda: [], raise_for_status=lambda: None)
+            return SimpleNamespace(ok=True, status_code=200, text="[]", json=lambda: [], raise_for_status=lambda: None)
+
+    qbit = QBittorrent(QbitConfig(base_url="http://qbit", username="admin", password="pw", timeout=30), session=RefreshSession())
+    assert qbit.completed(repair=False, timeout=0.05) == []
+    assert len(recorded) == 4  # initial login + initial 403 GET + refresh login + retry GET
+    assert all(t is not None and t <= 0.05 + 1e-6 for _, t in recorded)
+
+
+def test_debrid_concurrent_completed_calls_isolate_thread_deadlines(tmp_path):
+    """Verify concurrent DebridClient.completed() calls keep probe deadlines isolated per thread."""
+    import threading
+    from romarr.downloaders import DebridClient, DebridConfig
+
+    rd = DebridClient(DebridConfig(api_token="tok", save_path=str(tmp_path)))
+    rd.configured  # verify property works
+    entered = threading.Barrier(2)
+    finished_short = threading.Event()
+    observed: list[float | None] = []
+
+    def fake_finished():
+        """Synchronize two overlapping probes so short finishes while long still executes."""
+        if threading.current_thread().name == "long":
+            entered.wait(timeout=2)
+            assert finished_short.wait(timeout=2)
+            observed.append(rd._get_probe_deadline())
+            return []
+        entered.wait(timeout=2)
+        return []
+
+    rd._finished = fake_finished
+    # Force fallback to _finished() by adding one uncached folder on disk.
+    uncached = tmp_path / "Uncached"
+    uncached.mkdir()
+    (uncached / "f.bin").write_bytes(b"1")
+
+    t_long = threading.Thread(name="long", target=lambda: rd.completed(fetch=False, timeout=2.0))
+    t_long.start()
+    rd.completed(fetch=False, timeout=0.02)
+    finished_short.set()
+    t_long.join(timeout=3)
+    assert observed and observed[0] is not None and not rd._probe_timed_out()
+    assert rd._get_probe_deadline() is None
+
+
+def test_debrid_non_timeout_scan_failure_still_merges_cached_rows(tmp_path):
+    """Verify DebridClient.completed(fetch=False) merges verified cache rows after HTTP errors."""
+    import requests as _req
+    from romarr.downloaders import RealDebrid, RealDebridConfig
+
+    save_dir = tmp_path / "rd"
+    save_dir.mkdir()
+    target = save_dir / "Cached Game"
+    target.mkdir()
+    (target / "Cached Game.gb").write_bytes(b"rom")
+
+    rd = RealDebrid(RealDebridConfig(api_token="tok", save_path=str(save_dir), timeout=30))
+    cached_row = {"name": "Cached Game", "content_path": str(target), "save_path": str(save_dir), "state": "downloaded"}
+    rd._update_fetched_cache(target, resolved={"str:https://rd/1": "Cached Game.gb"}, completed_row=cached_row, files=["Cached Game.gb"])
+    rd._remember("failing-id")
+    # Uncached dir forces live scan instead of fast-pathing from cache.
+    other = save_dir / "Other Dir"
+    other.mkdir()
+    (other / "a.bin").write_bytes(b"1")
+
+    class ErrorSession:
+        """Session failing immediately so _probe_timed_out() remains False."""
+
+        def get(self, url, **kwargs):
+            """Raise connection error before timeout expires."""
+            raise _req.ConnectionError("transient offline")
+
+    rd._session = ErrorSession()
+    rows = rd.completed(fetch=False, timeout=5.0)
+    assert [r["name"] for r in rows] == ["Cached Game"]
+
+
+def test_debrid_rejects_filename_collisions_before_caching(tmp_path):
+    """Verify DebridClient rejects releases whose resolved links collide on filename."""
+    from romarr.downloaders import RealDebrid, RealDebridConfig
+
+    save_dir = tmp_path / "rd"
+    save_dir.mkdir()
+    rd = RealDebrid(RealDebridConfig(api_token="tok", save_path=str(save_dir)))
+    rd._finished = lambda: [("Colliding Release", ["https://rd/1", "https://rd/2"])]
+    rd._resolve = lambda link: ("SameName.gb", f"https://cdn/{link.rsplit('/', 1)[-1]}")
+    rd._download = lambda url, dest: dest.parent.mkdir(parents=True, exist_ok=True) or dest.write_bytes(b"rom") or True
+
+    assert rd.completed(fetch=True) == []
+    assert rd._cached_completed_rows() == {}
+    assert rd.completed(fetch=False) == []
+    # Also ensure _expected_filenames rejects duplicate tuple filenames even on fetch=False.
+    dup_dir = save_dir / "Dup"
+    dup_dir.mkdir()
+    (dup_dir / "rom.gb").write_bytes(b"rom")
+    assert rd._expected_filenames([("rom.gb", "1"), ("rom.gb", "2")], dup_dir, fetch=False) is None
+
+
+def test_putio_withholds_transfer_when_subfolder_traversal_is_incomplete(tmp_path):
+    """Verify PutIo withholds a multi-folder transfer when a subfolder GET fails or times out."""
+    from romarr.downloaders import DebridConfig, PutIo
+
+    class PartialPutIoSession:
+        """Fake put.io API failing only on the nested subfolder listing."""
+
+        def get(self, url, params=None, **kwargs):
+            """Serve transfer and top folder, fail nested subfolder listing."""
+            if url.endswith("/transfers/1"):
+                return SimpleNamespace(raise_for_status=lambda: None, json=lambda: {"transfer": {"id": 1, "name": "Multi", "status": "COMPLETED", "file_id": 10}})
+            if url.endswith("/files/list") and (params or {}).get("parent_id") == 10:
+                return SimpleNamespace(raise_for_status=lambda: None, json=lambda: {"files": [
+                    {"id": 11, "name": "disc1.bin", "file_type": "FILE"},
+                    {"id": 12, "name": "sub", "file_type": "FOLDER"},
+                ]})
+            raise OSError("subfolder lookup failed")
+
+    # Wrap OSError cleanly as RequestException via session error
+    import requests as _req
+
+    class TimeoutSubfolderSession(PartialPutIoSession):
+        """Raise RequestException when querying the nested subfolder."""
+
+        def get(self, url, params=None, **kwargs):
+            """Fail nested subfolder listing via requests.Timeout."""
+            if url.endswith("/files/list") and (params or {}).get("parent_id") == 12:
+                raise _req.Timeout("subfolder timeout")
+            return super().get(url, params=params, **kwargs)
+
+    client = PutIo(DebridConfig(api_token="tok", save_path=str(tmp_path), base_url="https://api.put.io/v2"), session=TimeoutSubfolderSession())
+    client._remember("1")
+    assert client.completed(fetch=False) == []
+
+
+def test_queue_renderer_includes_refresh_button_and_live_poll_in_browser_mode():
+    """Verify RENDER.queue provides manual Refresh and auto-refreshes pending rows when eligible."""
+    import json
+    import shutil
+    import subprocess
+    from romarr import ui
+
+    node = shutil.which("node")
+    if not node:
+        return
+    start = ui.JS.index("RENDER.queue=async()=>{")
+    end = ui.JS.index("RENDER.history=async()=>{", start)
+    queue_fn = ui.JS[start:end]
+    pending = [{"game": "Game", "platform": "snes", "release": "Rel", "seeders": 2, "state": "grabbed", "can_preview_import": False}]
+    ready = [{"game": "Game", "platform": "snes", "release": "Rel", "seeders": 2, "state": "grabbed", "can_preview_import": True}]
+    script = f"""
+const assert = require('assert');
+const pageEl = {{ innerHTML: '' }};
+const qImportEl = {{ onclick: null }};
+const qRefreshEl = {{ disabled: false, onclick: null }};
+const $ = sel => sel === '#page' ? pageEl : sel === '#q-import' ? qImportEl : sel === '#q-refresh' ? qRefreshEl : null;
+const esc = s => String(s ?? '');
+const document = {{ hidden: false, querySelectorAll: () => [] }};
+const window = {{}};
+const activePage = 'queue';
+let pageVersion = 1;
+const RENDER = {{}};
+let goes = [];
+const go = p => goes.push(p);
+let pollCount = 0;
+let intervalCb = null;
+let cleared = 0;
+global.setInterval = (fn) => {{ intervalCb = fn; return 99; }};
+global.clearInterval = (id) => {{ if (id === 99) {{ cleared++; intervalCb = null; }} }};
+const j = async () => ({{ items: pollCount++ === 0 ? {json.dumps(pending)} : {json.dumps(ready)} }});
+{queue_fn}
+(async () => {{
+  await RENDER.queue();
+  assert(pageEl.innerHTML.includes('id="q-refresh"'), 'Refresh button must render');
+  assert(!pageEl.innerHTML.includes('data-qplan="0"'), 'initial pending row has no Preview button');
+  assert(typeof qRefreshEl.onclick === 'function', 'Refresh click handler attached');
+  qRefreshEl.onclick();
+  assert.deepStrictEqual(goes, ['queue']);
+  assert(typeof intervalCb === 'function', 'live poll interval scheduled for pending rows');
+  await intervalCb();
+  await new Promise(r => setTimeout(r, 20));
+  assert(cleared >= 1, 'timer cleared once queue snapshot changed');
+  assert(pageEl.innerHTML.includes('data-qplan="0"'), 'Preview button appears after completion update');
+}})().catch(err => {{ console.error(err); process.exit(1); }});
+"""
+    res = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=15)
+    assert res.returncode == 0, res.stderr
+
+
+def test_rtorrent_completed_builds_fresh_bounded_proxy_after_cached_reachable():
+    """Rtorrent.completed(timeout=...) must not reuse an unbounded cached _proxy."""
+    from romarr.downloaders import Rtorrent, RtorrentConfig
+
+    built = []
+
+    class FakeProxy:
+        """Minimal stub mimicking an XML-RPC ServerProxy."""
+
+        def __init__(self, timeout_val):
+            """Record the socket timeout bound to this proxy instance."""
+            self.timeout_val = timeout_val
+            self.system = SimpleNamespace(client_version=lambda: "0.9.8")
+            self.d = SimpleNamespace(multicall2=lambda *a: [["Game", 1, "/dl", "romarr"]])
+
+    rt = Rtorrent(RtorrentConfig(base_url="http://rt.test/RPC2", timeout=30))
+    rt._build_proxy = lambda base_url, timeout: built.append(timeout) or FakeProxy(timeout)
+    assert rt.reachable() is True
+    assert built == [30.0]
+    rows = rt.completed(timeout=0.05)
+    assert len(rows) == 1
+    assert built == [30.0, 0.05]
+    # Zero or non-positive timeout skips XML-RPC altogether.
+    assert rt.completed(timeout=0.0) == []
+    assert len(built) == 2

@@ -193,7 +193,19 @@ class QBittorrent:
     def _url(self, path: str) -> str:
         return f"{self._config.base_url.rstrip('/')}/api/v2/{path.lstrip('/')}"
 
-    def login(self) -> bool:
+    def _deadline_timeout(self, deadline: float | None,
+                          fallback: float | None = None) -> float:
+        """Return bounded request timeout before `deadline`, raising on expiry."""
+        base = float(self._config.timeout if fallback is None else fallback)
+        if deadline is None:
+            return base
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise requests.Timeout("qBittorrent probe deadline exceeded")
+        return max(0.01, min(base, remaining))
+
+    def login(self, *, _deadline: float | None = None) -> bool:
+        """Authenticate with qBittorrent WebUI, honoring any active probe deadline."""
         # A qBittorrent with WebUI auth disabled for localhost answers every
         # endpoint without a session cookie, so a failed login is not fatal.
         if not self._config.username:
@@ -202,7 +214,7 @@ class QBittorrent:
         response = self._session.post(
             self._url("auth/login"),
             data={"username": self._config.username, "password": self._config.password},
-            timeout=self._config.timeout,
+            timeout=self._deadline_timeout(_deadline),
         )
         self._authed = response.ok and (response.status_code == 204 or response.text.strip() == "Ok.")
         if not self._authed:
@@ -217,23 +229,39 @@ class QBittorrent:
         expired SID turns every health check and import poll into a permanent
         401/403 until ROMarr is restarted.
         """
-        response = self._session.get(self._url(path), **kwargs)
+        deadline = kwargs.pop("_deadline", None)
+        base_timeout = kwargs.get("timeout")
+        req_kwargs = dict(kwargs)
+        if deadline is not None:
+            req_kwargs["timeout"] = self._deadline_timeout(deadline, base_timeout)
+        response = self._session.get(self._url(path), **req_kwargs)
         if response.status_code not in (401, 403) or not self._config.username:
             return response
         self._authed = False
-        if not self.login():
+        logged_in = self.login() if deadline is None else self.login(_deadline=deadline)
+        if not logged_in:
             return response
-        return self._session.get(self._url(path), **kwargs)
+        if deadline is not None:
+            req_kwargs["timeout"] = self._deadline_timeout(deadline, base_timeout)
+        return self._session.get(self._url(path), **req_kwargs)
 
     def _post(self, path: str, **kwargs):
         """POST once more after refreshing an expired WebUI session."""
-        response = self._session.post(self._url(path), **kwargs)
+        deadline = kwargs.pop("_deadline", None)
+        base_timeout = kwargs.get("timeout")
+        req_kwargs = dict(kwargs)
+        if deadline is not None:
+            req_kwargs["timeout"] = self._deadline_timeout(deadline, base_timeout)
+        response = self._session.post(self._url(path), **req_kwargs)
         if response.status_code not in (401, 403) or not self._config.username:
             return response
         self._authed = False
-        if not self.login():
+        logged_in = self.login() if deadline is None else self.login(_deadline=deadline)
+        if not logged_in:
             return response
-        return self._session.post(self._url(path), **kwargs)
+        if deadline is not None:
+            req_kwargs["timeout"] = self._deadline_timeout(deadline, base_timeout)
+        return self._session.post(self._url(path), **req_kwargs)
 
     def add(self, magnet_or_url: str, *, save_path: str | None = None) -> bool:
         if not self._authed:
@@ -555,13 +583,20 @@ class QBittorrent:
         self._added.error = ""
         return True
 
-    def _collection_owners(self, row, owners, *, timeout: float | None = None):
+    def _collection_owners(self, row, owners, *, timeout: float | None = None,
+                           _deadline: float | None = None):
         """Fetch files and live torrent metadata and validate retained collection ownership."""
         from .retained_collection import validate_owners
         torrent_hash = str(row.get("hash") or "")
-        files = (self.torrent_files(torrent_hash) if timeout is None
-                 else self.torrent_files(torrent_hash, timeout=timeout))
-        torrent_rows = self.torrents() if timeout is None else self.torrents(timeout=timeout)
+        if _deadline is not None:
+            files = self.torrent_files(torrent_hash, timeout=timeout, _deadline=_deadline)
+            torrent_rows = self.torrents(timeout=timeout, _deadline=_deadline)
+        elif timeout is not None:
+            files = self.torrent_files(torrent_hash, timeout=timeout)
+            torrent_rows = self.torrents(timeout=timeout)
+        else:
+            files = self.torrent_files(torrent_hash)
+            torrent_rows = self.torrents()
         fresh = [r for r in torrent_rows if str(r.get("hash") or "") == torrent_hash]
         if len(fresh) != 1:
             raise ValueError("retained torrent disappeared or became ambiguous")
@@ -647,10 +682,13 @@ class QBittorrent:
             self._selective_hashes = selective_hashes
         if not matching:
             return []
-        torrent_rows = self.torrents() if timeout is None else self.torrents(timeout=timeout)
+        deadline = None if timeout is None else time.monotonic() + max(0.0, float(timeout))
+        torrent_rows = self.torrents() if deadline is None else self.torrents(_deadline=deadline)
         rows = {str(r.get("hash") or ""): r for r in torrent_rows}
         out = []
         for torrent_hash in selective_hashes:
+            if deadline is not None and time.monotonic() >= deadline:
+                break
             row = rows.get(torrent_hash)
             if not row:
                 continue
@@ -658,8 +696,16 @@ class QBittorrent:
                 files = self._collection_owners(
                     row,
                     ownership if ownership is not None else matching,
-                    **({"timeout": timeout} if timeout is not None else {}),
+                    **({"_deadline": deadline} if deadline is not None else {}),
                 )
+            except requests.Timeout as exc:
+                if deadline is not None:
+                    break
+                for owner in matching:
+                    if owner["selected_file"].get("hash") == torrent_hash:
+                        out.append(dict(row, tags=owner["download_id"][9:], id=owner["download_id"],
+                                        _romarr_selection_error=f"Retained collection needs review: {exc}"))
+                continue
             except (ValueError, KeyError, TypeError, requests.RequestException) as exc:
                 for owner in matching:
                     if owner["selected_file"].get("hash") == torrent_hash:
@@ -676,24 +722,40 @@ class QBittorrent:
                     out.append(dict(row, tags=tag, id=owner["download_id"]))
         return out
 
-    def torrents(self, timeout: float | None = None) -> list[dict]:
+    def torrents(self, timeout: float | None = None, *,
+                 _deadline: float | None = None) -> list[dict]:
         """Return the client's torrent list for an explicit collection plan."""
-        if not self._authed and not self.login():
+        logged_in = True
+        if not self._authed:
+            logged_in = self.login() if _deadline is None else self.login(_deadline=_deadline)
+        if not logged_in:
             raise QbitAuthenticationError("qBittorrent authentication failed")
-        response = self._get(
-            "torrents/info",
-            timeout=self._config.timeout if timeout is None else timeout,
-        )
+        get_kwargs = {"timeout": (self._deadline_timeout(_deadline, timeout)
+                                  if _deadline is not None
+                                  else (self._config.timeout if timeout is None else timeout))}
+        if _deadline is not None:
+            get_kwargs["_deadline"] = _deadline
+        response = self._get("torrents/info", **get_kwargs)
         response.raise_for_status()
         return [row for row in response.json() if isinstance(row, dict)]
 
-    def torrent_files(self, torrent_hash: str, timeout: float | None = None) -> list[dict]:
+    def torrent_files(self, torrent_hash: str, timeout: float | None = None, *,
+                      _deadline: float | None = None) -> list[dict]:
         """Return the file entries for one torrent hash."""
-        if not self._authed and not self.login():
+        logged_in = True
+        if not self._authed:
+            logged_in = self.login() if _deadline is None else self.login(_deadline=_deadline)
+        if not logged_in:
             raise QbitAuthenticationError("qBittorrent authentication failed")
-        response = self._get("torrents/files",
-                             params={"hash": torrent_hash},
-                             timeout=self._config.timeout if timeout is None else timeout)
+        get_kwargs = {
+            "params": {"hash": torrent_hash},
+            "timeout": (self._deadline_timeout(_deadline, timeout)
+                        if _deadline is not None
+                        else (self._config.timeout if timeout is None else timeout)),
+        }
+        if _deadline is not None:
+            get_kwargs["_deadline"] = _deadline
+        response = self._get("torrents/files", **get_kwargs)
         response.raise_for_status()
         return [row for row in response.json() if isinstance(row, dict)]
 
@@ -813,13 +875,21 @@ class QBittorrent:
         offered to the importer: it reports as finished with nothing on disk,
         so passing it on produces an import of a file that was never fetched.
         """
+        deadline = None if timeout is None else time.monotonic() + max(0.0, float(timeout))
         if not self._authed:
-            self.login()
-        response = self._get(
-            "torrents/info",
-            params={"category": self._config.category, "filter": "completed"},
-            timeout=self._config.timeout if timeout is None else timeout,
-        )
+            if deadline is None:
+                self.login()
+            else:
+                self.login(_deadline=deadline)
+        get_kwargs = {
+            "params": {"category": self._config.category, "filter": "completed"},
+            "timeout": (self._deadline_timeout(deadline)
+                        if deadline is not None
+                        else self._config.timeout),
+        }
+        if deadline is not None:
+            get_kwargs["_deadline"] = deadline
+        response = self._get("torrents/info", **get_kwargs)
         response.raise_for_status()
         done = []
         for row in response.json():

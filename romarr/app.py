@@ -31,6 +31,7 @@ Routes:
 
 from __future__ import annotations
 
+import inspect
 import json
 from copy import deepcopy
 import logging
@@ -60,7 +61,7 @@ from .dat import DatIndex, parse_dat
 from .decompress import run_batch as run_decompress_batch, scan_compressed
 from .titled import TitleDBIndex, build_index as build_titled_index, validate_switch_rom
 from .downloaders import (
-    CLIENT_TYPES, DebridClient, HubDownloader, NZBGet, NzbgetConfig, SABnzbd, SabConfig, SiteDownloader, build_client,
+    Blackhole, CLIENT_TYPES, DebridClient, HubDownloader, NZBGet, NzbgetConfig, SABnzbd, SabConfig, SiteDownloader, build_client,
     hand_off_with_id, match_queue_item, merge_secrets, pick_client, redact,
 )
 from .indexers import INDEXER_TYPES, build_indexer, merge_indexer_secrets, redact_indexer
@@ -2195,6 +2196,36 @@ class ROMarr:
             "items": items,
         }
 
+    @staticmethod
+    def _accepts_timeout_arg(fn) -> bool:
+        """Return True when `fn` declares an explicit `timeout` parameter."""
+        try:
+            return "timeout" in inspect.signature(fn).parameters
+        except (TypeError, ValueError):
+            return False
+
+    @staticmethod
+    def _call_with_timeout(fn, timeout: float):
+        """Run a zero-argument completion probe within a bounded wall-clock wait."""
+        result: dict[str, object] = {}
+        done = threading.Event()
+
+        def _runner():
+            """Execute the client probe and capture either its value or exception."""
+            try:
+                result["value"] = fn()
+            except BaseException as exc:
+                result["exc"] = exc
+            finally:
+                done.set()
+
+        threading.Thread(target=_runner, daemon=True).start()
+        if not done.wait(timeout=max(0.01, float(timeout))):
+            raise TimeoutError("client completed() probe timed out")
+        if "exc" in result:
+            raise result["exc"]  # type: ignore[misc]
+        return result["value"]
+
     def _completed_queue_downloads(self, items, *, ownership=None, timeout: float | None = None):
         """Yield `(client, completed_rows)` for queue preview checks without fetch or repair writes."""
         if ownership is None:
@@ -2205,10 +2236,11 @@ class ROMarr:
             if not getattr(client, "configured", True):
                 continue
             remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
-            if remaining is not None and remaining <= 0:
-                break
+            budget_exhausted = remaining is not None and remaining <= 0
             try:
                 if isinstance(client, QBittorrent):
+                    if budget_exhausted:
+                        continue
                     raw_timeout = getattr(getattr(client, "_config", None), "timeout", 5) or 5
                     probe_timeout = min(float(raw_timeout), self.QUEUE_PROBE_TIMEOUT)
                     if remaining is not None:
@@ -2224,23 +2256,50 @@ class ROMarr:
                         if left <= 0:
                             candidates = selective
                         else:
-                            candidates = selective + client.completed(
-                                repair=False, timeout=max(0.01, min(probe_timeout, left)),
-                            )
+                            try:
+                                candidates = selective + client.completed(
+                                    repair=False, timeout=max(0.01, min(probe_timeout, left)),
+                                )
+                            except Exception as exc:
+                                log.warning("%s completed() failed: %s", getattr(client, "name", client), exc)
+                                candidates = selective
                     else:
-                        candidates = selective + client.completed(
-                            repair=False, timeout=max(0.01, probe_timeout),
-                        )
+                        try:
+                            candidates = selective + client.completed(
+                                repair=False, timeout=max(0.01, probe_timeout),
+                            )
+                        except Exception as exc:
+                            log.warning("%s completed() failed: %s", getattr(client, "name", client), exc)
+                            candidates = selective
                 elif isinstance(client, DebridClient):
+                    if budget_exhausted:
+                        candidates = client.completed(fetch=False, timeout=0.0)
+                    else:
+                        raw_timeout = getattr(getattr(client, "_config", None), "timeout", 5) or 5
+                        probe_timeout = min(float(raw_timeout), self.QUEUE_PROBE_TIMEOUT)
+                        if remaining is not None:
+                            probe_timeout = min(probe_timeout, remaining)
+                        candidates = client.completed(fetch=False, timeout=max(0.01, probe_timeout))
+                elif isinstance(client, (SiteDownloader, HubDownloader)):
+                    candidates = client.completed(fetch=False)
+                elif isinstance(client, Blackhole):
+                    candidates = client.completed()
+                else:
+                    if budget_exhausted:
+                        continue
+                    completed_fn = getattr(client, "completed", None)
+                    if not callable(completed_fn):
+                        continue
                     raw_timeout = getattr(getattr(client, "_config", None), "timeout", 5) or 5
                     probe_timeout = min(float(raw_timeout), self.QUEUE_PROBE_TIMEOUT)
                     if remaining is not None:
                         probe_timeout = min(probe_timeout, remaining)
-                    candidates = client.completed(fetch=False, timeout=max(0.01, probe_timeout))
-                elif isinstance(client, (SiteDownloader, HubDownloader)):
-                    candidates = client.completed(fetch=False)
-                else:
-                    candidates = client.completed()
+                    if self._accepts_timeout_arg(completed_fn):
+                        candidates = completed_fn(timeout=max(0.01, probe_timeout))
+                    elif remaining is not None:
+                        candidates = self._call_with_timeout(completed_fn, probe_timeout)
+                    else:
+                        candidates = completed_fn()
             except Exception as exc:
                 log.warning("%s completed() failed: %s", getattr(client, "name", client), exc)
                 continue
@@ -6835,7 +6894,9 @@ def is_portal_subpath(path: str) -> bool:
 
 
 def make_handler(service: ROMarr):
+    """Build the HTTP request handler class bound to `service`."""
     class Handler(BaseHTTPRequestHandler):
+        """HTTP handler serving the ROMarr UI and REST API endpoints."""
         server_version = "ROMarr"
         _is_portal_subpath = staticmethod(is_portal_subpath)
 

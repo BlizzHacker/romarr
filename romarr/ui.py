@@ -1211,6 +1211,7 @@ function metadataInvalidate(){metadataCachedFilename='';metadataCachedResult=nul
 function go(page){
   // Hashes are untrusted input; inherited Object properties are not renderers.
   if(!Object.prototype.hasOwnProperty.call(RENDER,page)) page='library';
+  if(typeof RENDER!=='undefined'&&RENDER._queueTimer){clearInterval(RENDER._queueTimer);RENDER._queueTimer=null;}
   activePage=page;
   ++pageVersion;
   metadataLookup?.abort();
@@ -3276,10 +3277,14 @@ RENDER.stats=async()=>{
 };
 
 RENDER.queue=async()=>{
+  clearInterval(RENDER._queueTimer); RENDER._queueTimer=null;
+  const ver=typeof pageVersion==='number'?pageVersion:0;
   const d=await j('/api/v1/queue');
+  if((typeof activePage!=='undefined'&&activePage!=='queue')||(typeof pageVersion==='number'&&pageVersion!==ver)) return;
   const failed=(d.items||[]).filter(i=>i.state==='failed').length;
   $('#page').innerHTML=`<div class="row" style="margin-bottom:12px">
       <button class="btn ghost" id="q-import">Import completed now</button>
+      <button class="btn ghost" id="q-refresh">Refresh</button>
       ${failed?`<button class="btn ghost" id="q-clearfail">Clear ${failed} failed</button>`:''}
       <span class="help" style="margin:0">${(d.items||[]).length} in flight</span>
     </div>`+(d.items.length?`<table><thead><tr><th>Game</th>
@@ -3297,20 +3302,25 @@ RENDER.queue=async()=>{
     :'<div class="empty">Queue is empty. Requests in flight show up here.</div>');
 
   $('#q-import').onclick=async e=>{
+    clearInterval(RENDER._queueTimer); RENDER._queueTimer=null;
     e.target.disabled=true; e.target.textContent='Importing…';
     const r=await j('/api/v1/command',{method:'POST',
       headers:{'content-type':'application/json'},
       body:JSON.stringify({name:'ImportCompleted'})});
     toast(r.message||'Done'); go('queue'); refreshCounts();
   };
+  const qr=$('#q-refresh');
+  if(qr) qr.onclick=()=>{qr.disabled=true; go('queue');};
   const cf=$('#q-clearfail');
   if(cf) cf.onclick=async()=>{
+    clearInterval(RENDER._queueTimer); RENDER._queueTimer=null;
     await j('/api/v1/queue/clear',{method:'POST',
       headers:{'content-type':'application/json'},
       body:JSON.stringify({state:'failed'})});
     go('queue'); refreshCounts();
   };
   const act=async(index,action)=>{
+    clearInterval(RENDER._queueTimer); RENDER._queueTimer=null;
     const r=await j('/api/v1/queue/action',{method:'POST',
       headers:{'content-type':'application/json'},
       body:JSON.stringify({index:Number(index),action})});
@@ -3318,6 +3328,7 @@ RENDER.queue=async()=>{
     go('queue'); refreshCounts();
   };
   document.querySelectorAll('[data-qplan]').forEach(b=>b.onclick=async()=>{
+    clearInterval(RENDER._queueTimer); RENDER._queueTimer=null;
     const index=Number(b.dataset.qplan);
     const post=body=>j('/api/v1/queue/import-plan',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({index,...body})});
     const data=await j('/api/v1/queue/import-plan?index='+index);
@@ -3359,6 +3370,27 @@ RENDER.queue=async()=>{
   document.querySelectorAll('[data-qresume]').forEach(b=>b.onclick=()=>act(b.dataset.qresume,'resume-retained'));
   document.querySelectorAll('[data-qretry]').forEach(b=>b.onclick=()=>act(b.dataset.qretry,'retry'));
   document.querySelectorAll('[data-qremove]').forEach(b=>b.onclick=()=>act(b.dataset.qremove,'remove'));
+  const snap=JSON.stringify(d.items||[]);
+  if(typeof window!=='undefined'&&typeof activePage!=='undefined'&&(d.items||[]).some(i=>!['imported','failed'].includes(i.state))){
+    let polling=false;
+    RENDER._queueTimer=setInterval(async()=>{
+      if(activePage!=='queue'||(typeof pageVersion==='number'&&pageVersion!==ver)||!$('#q-import')){
+        clearInterval(RENDER._queueTimer); RENDER._queueTimer=null; return;
+      }
+      if(polling||document.hidden) return;
+      polling=true;
+      try{
+        const next=await j('/api/v1/queue').catch(()=>null);
+        if(!next||!Array.isArray(next.items)) return;
+        if(activePage!=='queue'||(typeof pageVersion==='number'&&pageVersion!==ver)||!$('#q-import')) return;
+        if(JSON.stringify(next.items)!==snap){
+          clearInterval(RENDER._queueTimer); RENDER._queueTimer=null;
+          if(typeof refreshCounts==='function') refreshCounts();
+          RENDER.queue();
+        }
+      }finally{polling=false;}
+    },5000);
+  }
 };
 
 RENDER.history=async()=>{
