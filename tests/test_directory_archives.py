@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import subprocess
 import zipfile
 
@@ -130,21 +131,20 @@ def test_duplicate_archive_members_are_rejected_before_publication(tmp_path):
     assert not (tmp_path / 'library').exists()
 
 
-def test_directory_selects_cartridge_beside_pc_compilation(tmp_path):
+def test_real_title_fixture_selects_cartridge_beside_pc_compilation(tmp_path):
+    releases = json.loads(Path(__file__).with_name('fixtures').joinpath('directory_releases.json').read_text())
     download = tmp_path / 'download'
-    make_archive(download / 'SEGA Genesis Classics Phantasy Star IV.zip', {
-        'setup.exe': b'PC installer fixture'})
-    make_archive(download / 'Phantasy Star IV - Mega Drive - Genesis.zip', {
-        'Phantasy Star IV (USA).smd': b'cartridge fixture'})
-    primary = 'Phantasy Star IV - Mega Drive - Genesis.zip/Phantasy Star IV (USA).smd'
+    for release in releases['archives']:
+        make_archive(download / release['name'], {
+            name: payload.encode() for name, payload in release['members'].items()})
 
     preview = preview_import(download, resolve('genesis'), tmp_path / 'library')
 
-    assert [item['primary'] for item in preview['items']] == [primary]
+    assert [item['primary'] for item in preview['items']] == [releases['selected_primary']]
     assert preview['items'][0]['selected']
     assert not preview['requires_review']
     result, = import_rom(download, resolve('genesis'), tmp_path / 'library',
-                         selected_primaries=[primary])
+                         selected_primaries=[releases['selected_primary']])
     assert result.ok, result.reason
     assert result.destination.read_bytes() == b'cartridge fixture'
 

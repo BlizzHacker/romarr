@@ -1,0 +1,13 @@
+{
+  "archives": [
+    {
+      "name": "SEGA Genesis Classics Phantasy Star IV.zip",
+      "members": {"setup.exe": "PC installer fixture"}
+    },
+    {
+      "name": "Phantasy Star IV - Mega Drive - Genesis.zip",
+      "members": {"Phantasy Star IV (USA).smd": "cartridge fixture"}
+    }
+  ],
+  "selected_primary": "Phantasy Star IV - Mega Drive - Genesis.zip/Phantasy Star IV (USA).smd"
+}
