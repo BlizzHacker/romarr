@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from threading import Lock
 from urllib.parse import (
     parse_qsl, unquote_plus, urlencode, urljoin, urlsplit, urlunsplit,
 )
@@ -228,8 +229,8 @@ class Prowlarr:
         self._config = config
         self._owns_session = session is None
         self._session = session or requests.Session()
-        # indexerId -> is-private, resolved lazily and cached. See _private_ids.
         self._privacy: dict[int, bool] | None = None
+        self._privacy_lock = Lock()
 
     def _url(self, path: str, **params) -> str:
         base = self._config.base_url.rstrip("/")
@@ -243,29 +244,29 @@ class Prowlarr:
         two decisions downstream need it per result -- whether a zero seeder
         count is fatal, and whether a magnet may be rebuilt from an infohash.
 
-        Fetched once and cached for the life of the client. A failure is not
-        fatal: an empty map means every result is treated as public, which is
-        the behaviour that existed before this and is the safe direction to be
-        wrong in -- it can refuse a usable private release, but it cannot
-        invent a public magnet for one.
+        Successful lookups are cached for the life of the client. A failure
+        treats results as public for this search and leaves the cache cold
+        so the next search can retry.
         """
-        if self._privacy is not None:
-            return self._privacy
-        privacy: dict[int, bool] = {}
-        try:
-            url = f"{self._config.base_url.rstrip('/')}/api/v1/indexer"
-            response = self._session.get(
-                url, headers={"X-Api-Key": self._config.api_key},
-                timeout=self._config.timeout)
-            response.raise_for_status()
-            for row in response.json():
-                if isinstance(row, dict) and row.get("id") is not None:
-                    privacy[int(row["id"])] = str(row.get("privacy", "")).lower() == "private"
-        except (requests.RequestException, ValueError) as err:
-            log.warning("could not read indexer privacy from prowlarr: %s",
-                        err.__class__.__name__)
-        self._privacy = privacy
-        return privacy
+        with self._privacy_lock:
+            if self._privacy is not None:
+                return self._privacy
+            privacy: dict[int, bool] = {}
+            try:
+                url = f"{self._config.base_url.rstrip('/')}/api/v1/indexer"
+                response = self._session.get(
+                    url, headers={"X-Api-Key": self._config.api_key},
+                    timeout=self._config.timeout)
+                response.raise_for_status()
+                for row in response.json():
+                    if isinstance(row, dict) and row.get("id") is not None:
+                        privacy[int(row["id"])] = str(row.get("privacy", "")).lower() == "private"
+            except (requests.RequestException, ValueError) as err:
+                log.warning("could not read indexer privacy from prowlarr: %s",
+                            err.__class__.__name__)
+                return {}
+            self._privacy = privacy
+            return privacy
 
     def search(self, term: str, *, limit: int = 100) -> list[Release]:
         """Search every configured indexer for a game."""

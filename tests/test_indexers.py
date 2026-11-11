@@ -213,6 +213,28 @@ def test_privacy_failure_does_not_break_search():
     assert client._private_ids() == {}
 
 
+@pytest.mark.parametrize("rows", [[], [{"id": 7, "privacy": "private"}]])
+def test_privacy_lookup_retries_after_failure_and_caches_success(rows):
+    import requests
+
+    class Session(_FakeSession):
+        def get(self, url, **kwargs):
+            if self.calls == 0:
+                self.calls += 1
+                raise requests.ConnectionError("temporarily unavailable")
+            return super().get(url, **kwargs)
+
+    session = Session(rows)
+    client = Prowlarr(ProwlarrConfig(base_url="http://p:9696", api_key="k"), session)
+    expected = {row["id"]: True for row in rows}
+
+    assert client._private_ids() == {}
+    assert client._privacy is None
+    assert client._private_ids() == expected
+    assert client._private_ids() == expected
+    assert session.calls == 2
+
+
 # --- credential hygiene ------------------------------------------------------
 
 def test_api_keys_are_stripped_before_display():

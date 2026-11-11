@@ -1803,16 +1803,15 @@ class ROMarr:
                 for label, source in sources:
                     client = source
                     try:
-                        # Worker copies keep requests.Session and Prowlarr's
-                        # lazily-filled privacy cache out of shared state.
-                        if getattr(source, "_owns_session", False):
+                        if isinstance(source, Prowlarr) or getattr(source, "_owns_session", False):
                             client = copy(source)
+                        if getattr(source, "_owns_session", False):
                             client._session = sessions.enter_context(requests.Session())
+                        if isinstance(client, Prowlarr):
+                            client._privacy = privacy
                         releases.extend(client.search(term))
                     except Exception as err:
                         log.warning("%s search failed for %r: %s", label, term, err)
-                    if isinstance(client, Prowlarr) and source._privacy is None:
-                        source._privacy = client._privacy
             return releases
 
         # Enabled ROM Hub plugins are searched alongside the indexers: the
@@ -1820,9 +1819,16 @@ class ROMarr:
         # Interactive Search page. One query, not per-term: the Hub's own
         # fan-out already merges every plugin's answer for it.
         with ThreadPoolExecutor(max_workers=3) as pool:
+            hub_search = pool.submit(self._hub_releases, game, platform)
+            privacy = {}
+            if isinstance(self.prowlarr, Prowlarr):
+                try:
+                    privacy = self.prowlarr._private_ids()
+                except Exception as err:
+                    log.warning("prowlarr privacy lookup failed: %r", err)
             searches = [pool.submit(search_term, game),
                         pool.submit(search_term, f"{game} {platform.name}"),
-                        pool.submit(self._hub_releases, game, platform)]
+                        hub_search]
         seen: set[tuple[str, str]] = set()
         merged = []
         for search in searches:

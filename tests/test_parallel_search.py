@@ -1,6 +1,9 @@
 from threading import Barrier, Event
 from types import SimpleNamespace
 
+import pytest
+import requests
+
 from romarr.app import ROMarr
 from romarr.indexers import Prowlarr, ProwlarrConfig
 from romarr.platforms import resolve
@@ -103,6 +106,13 @@ def test_prowlarr_workers_use_own_sessions_and_warm_shared_privacy(tmp_path, mon
 
     prowlarr = Prowlarr(ProwlarrConfig(base_url="http://prowlarr:9696", api_key="k"))
     shared_session = prowlarr._session
+    privacy_calls = []
+
+    def get_privacy(url, **kwargs):
+        privacy_calls.append(url)
+        return Response([{"id": 7, "privacy": "private"}])
+
+    monkeypatch.setattr(shared_session, "get", get_privacy)
     service.prowlarr = prowlarr
     service.indexers = []
     service._hub_releases = lambda *args: []
@@ -113,11 +123,13 @@ def test_prowlarr_workers_use_own_sessions_and_warm_shared_privacy(tmp_path, mon
     assert all(session.closed for session in sessions)
     assert prowlarr._session is shared_session
     assert prowlarr._privacy == {7: True}
+    assert len(privacy_calls) == 1
 
     sessions.clear()
     service._search_releases("Game", resolve("psx"))
     assert not any(url.endswith("/api/v1/indexer")
                    for session in sessions for url in session.urls)
+    assert len(privacy_calls) == 1
 
 
 def test_failed_direct_indexer_does_not_hide_other_sources(tmp_path):
@@ -133,3 +145,67 @@ def test_failed_direct_indexer_does_not_hide_other_sources(tmp_path):
                         SimpleNamespace(name="working", search=lambda term: [direct])]
     service._hub_releases = lambda *args: []
     assert service._search_releases("Game", resolve("psx")) == [found, direct]
+
+
+@pytest.mark.parametrize("owns_session", [False, True])
+@pytest.mark.parametrize("lookup_error", [requests.ConnectionError, RuntimeError])
+def test_search_terms_share_privacy_and_retry_on_the_next_search(tmp_path, monkeypatch,
+                                                               owns_session, lookup_error):
+    from romarr import app
+
+    barrier = Barrier(2, timeout=5)
+    hub_started = Event()
+    privacy_calls = []
+
+    class Response:
+        def __init__(self, body):
+            self.body = body
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return self.body
+
+    class Session:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def get(self, url, **kwargs):
+            if url.endswith("/api/v1/indexer"):
+                assert hub_started.wait(5)
+                privacy_calls.append(url)
+                if len(privacy_calls) == 1:
+                    raise lookup_error("temporarily unavailable")
+                return Response([{"id": 7, "privacy": "private"}])
+            barrier.wait()
+            return Response([{"title": url, "indexerId": 7, "seeders": 0,
+                              "downloadUrl": "http://prowlarr:9696/download"}])
+
+    service = ROMarr({"ROMARR_DATA": str(tmp_path / "state.json")})
+    monkeypatch.setattr(app.requests, "Session", Session)
+    config = ProwlarrConfig(base_url="http://prowlarr:9696", api_key="k")
+    service.prowlarr = Prowlarr(config, None if owns_session else Session())
+    service.indexers = []
+
+    def hub_search(*args):
+        hub_started.set()
+        return []
+
+    service._hub_releases = hub_search
+
+    first = service._search_releases("Game", resolve("psx"))
+    assert len(first) == 2
+    assert [result.private for result in first] == [False, False]
+    assert len(privacy_calls) == 1
+    assert service.prowlarr._privacy is None
+
+    for _ in range(2):
+        results = service._search_releases("Game", resolve("psx"))
+        assert len(results) == 2
+        assert all(result.private for result in results)
+        assert len(privacy_calls) == 2
+        assert service.prowlarr._privacy == {7: True}
