@@ -1,5 +1,6 @@
 """Build identity must be truthful for tagged, development, and older images."""
 from pathlib import Path
+import re
 
 from romarr import build_info
 
@@ -99,9 +100,43 @@ def test_build_arguments_are_in_both_images_and_every_publish_leg():
             assert "ARG " + name in source
         assert "_build_info.py" in source
     workflow = (ROOT / ".github/workflows/docker.yml").read_text()
-    for name in ("ROMARR_BUILD_KIND", "ROMARR_SOURCE_REF",
-                 "ROMARR_SOURCE_REVISION", "ROMARR_SOURCE_REPOSITORY"):
-        assert workflow.count(name + "=") == 4
+    expected = {
+        "ROMARR_BUILD_KIND": "${{ startsWith(github.ref, 'refs/tags/') && 'release' || 'development' }}",
+        "ROMARR_SOURCE_REF": "${{ github.ref }}",
+        "ROMARR_SOURCE_REVISION": "${{ github.sha }}",
+        "ROMARR_SOURCE_REPOSITORY": "${{ github.repository }}",
+    }
+    steps = re.split(r"(?m)(?=^      - (?:name|id|uses):)", workflow)
+    build_roles = set()
+    for step in steps:
+        if not re.search(r"(?m)^        uses: docker/build-push-action@[^\s]+$", step):
+            continue
+        marker = re.search(r"(?m)^          build-args: \|[+-]?[ \t]*$", step)
+        assert marker is not None, "Docker build step has no build-args"
+        arguments = {}
+        for line in step[marker.end():].splitlines():
+            if not line.strip():
+                continue
+            indentation = len(line) - len(line.lstrip(" "))
+            if indentation <= 10:
+                break
+            if line.lstrip().startswith("#"):
+                continue
+            assert indentation == 12, "Unexpected Docker build argument indentation"
+            key, separator, value = line.strip().partition("=")
+            assert separator and key not in arguments, "Invalid or duplicate build argument"
+            arguments[key] = value
+        for name, value in expected.items():
+            assert arguments.get(name) == value, f"Incorrect {name} in Docker build step"
+        dockerfile = ("Dockerfile.browser" if re.search(
+            r"(?m)^          file: Dockerfile\.browser[ \t]*$", step
+        ) else "Dockerfile")
+        role = "publish" if re.search(r"(?m)^          push: ", step) else "smoke"
+        build_roles.add((dockerfile, role))
+    assert build_roles >= {
+        ("Dockerfile", "smoke"), ("Dockerfile", "publish"),
+        ("Dockerfile.browser", "smoke"), ("Dockerfile.browser", "publish"),
+    }, "Expected standard/browser smoke and publish build steps"
 
 
 def test_update_and_status_apis_expose_same_build_metadata():
