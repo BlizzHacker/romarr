@@ -394,6 +394,7 @@ class ROMarr:
     QUEUE_PROBE_TIMEOUT = 5.0
 
     def __init__(self, env: dict[str, str] | None = None):
+        """Initialize the service state, download/library clients, and persistent store."""
         e = env if env is not None else os.environ
         # Kept so reload_libraries can seed from the environment on first run
         # without the caller having to hand it back in.
@@ -455,6 +456,8 @@ class ROMarr:
         self._candidates: dict[str, dict] = {}
         self._lock = threading.Lock()
         self._collection_lock = threading.RLock()
+        self._probe_lock = threading.Lock()
+        self._inflight_probes: dict[int, tuple[object, threading.Event, dict[str, object]]] = {}
         # Background sweeps overlap, and client I/O happens before the queue row
         # exists. Reserve a game during that gap, then let the queue row take
         # over after the handoff.
@@ -2204,27 +2207,46 @@ class ROMarr:
         except (TypeError, ValueError):
             return False
 
-    @staticmethod
-    def _call_with_timeout(fn, timeout: float):
-        """Run a zero-argument completion probe within a bounded wall-clock wait."""
-        result: dict[str, object] = {}
-        done = threading.Event()
+    def _call_with_timeout(self, client, fn, timeout: float):
+        """Run a completion probe within a wall-clock wait, capping to one in-flight probe per client."""
+        lock = getattr(self, "_probe_lock", None)
+        inflight = getattr(self, "_inflight_probes", None)
+        if lock is None or inflight is None:
+            lock = threading.Lock()
+            inflight = {}
+            self._probe_lock = lock
+            self._inflight_probes = inflight
+        key = id(client)
+        with lock:
+            existing = inflight.get(key)
+            if existing is not None and existing[0] is client:
+                entry = existing
+                spawn = False
+            else:
+                entry = (client, threading.Event(), {})
+                inflight[key] = entry
+                spawn = True
+        if spawn:
+            def _runner():
+                """Execute the client probe and publish its outcome to its single-flight entry."""
+                _, done_ev, box = entry
+                try:
+                    box["value"] = fn()
+                except BaseException as exc:
+                    box["exc"] = exc
+                finally:
+                    with lock:
+                        done_ev.set()
+                        if inflight.get(key) is entry:
+                            inflight.pop(key, None)
 
-        def _runner():
-            """Execute the client probe and capture either its value or exception."""
-            try:
-                result["value"] = fn()
-            except BaseException as exc:
-                result["exc"] = exc
-            finally:
-                done.set()
-
-        threading.Thread(target=_runner, daemon=True).start()
-        if not done.wait(timeout=max(0.01, float(timeout))):
+            threading.Thread(target=_runner, daemon=True).start()
+        _, done_ev, box = entry
+        if not done_ev.wait(timeout=max(0.01, float(timeout))):
             raise TimeoutError("client completed() probe timed out")
-        if "exc" in result:
-            raise result["exc"]  # type: ignore[misc]
-        return result["value"]
+        if "exc" in box:
+            raise box["exc"]  # type: ignore[misc]
+        return box["value"]
 
     def _completed_queue_downloads(self, items, *, ownership=None, timeout: float | None = None):
         """Yield `(client, completed_rows)` for queue preview checks without fetch or repair writes."""
@@ -2245,32 +2267,34 @@ class ROMarr:
                     probe_timeout = min(float(raw_timeout), self.QUEUE_PROBE_TIMEOUT)
                     if remaining is not None:
                         probe_timeout = min(probe_timeout, remaining)
-                    selective = client.selective_completed(
-                        items,
-                        ownership=ownership,
-                        update_cache=False,
-                        timeout=max(0.01, probe_timeout),
-                    )
-                    if deadline is not None:
-                        left = deadline - time.monotonic()
-                        if left <= 0:
-                            candidates = selective
+                    bounded = max(0.01, probe_timeout)
+
+                    def _probe_qbit(c=client, pt=bounded):
+                        """Query selective and general qBittorrent completions within `pt`."""
+                        local_deadline = time.monotonic() + pt
+                        selective = c.selective_completed(
+                            items,
+                            ownership=ownership,
+                            update_cache=False,
+                            timeout=pt,
+                        )
+                        if deadline is not None:
+                            left = local_deadline - time.monotonic()
+                            if left <= 0:
+                                return selective
+                            next_timeout = max(0.01, min(pt, left))
                         else:
-                            try:
-                                candidates = selective + client.completed(
-                                    repair=False, timeout=max(0.01, min(probe_timeout, left)),
-                                )
-                            except Exception as exc:
-                                log.warning("%s completed() failed: %s", getattr(client, "name", client), exc)
-                                candidates = selective
-                    else:
+                            next_timeout = pt
                         try:
-                            candidates = selective + client.completed(
-                                repair=False, timeout=max(0.01, probe_timeout),
-                            )
+                            return selective + c.completed(repair=False, timeout=next_timeout)
                         except Exception as exc:
-                            log.warning("%s completed() failed: %s", getattr(client, "name", client), exc)
-                            candidates = selective
+                            log.warning("%s completed() failed: %s", getattr(c, "name", c), exc)
+                            return selective
+
+                    candidates = (
+                        self._call_with_timeout(client, _probe_qbit, bounded)
+                        if deadline is not None else _probe_qbit()
+                    )
                 elif isinstance(client, DebridClient):
                     if budget_exhausted:
                         candidates = client.completed(fetch=False, timeout=0.0)
@@ -2279,7 +2303,24 @@ class ROMarr:
                         probe_timeout = min(float(raw_timeout), self.QUEUE_PROBE_TIMEOUT)
                         if remaining is not None:
                             probe_timeout = min(probe_timeout, remaining)
-                        candidates = client.completed(fetch=False, timeout=max(0.01, probe_timeout))
+                        bounded = max(0.01, probe_timeout)
+                        try:
+                            candidates = (
+                                self._call_with_timeout(
+                                    client,
+                                    lambda c=client, pt=bounded: c.completed(fetch=False, timeout=pt),
+                                    bounded,
+                                )
+                                if deadline is not None
+                                else client.completed(fetch=False, timeout=bounded)
+                            )
+                        except TimeoutError as exc:
+                            log.warning(
+                                "%s completed() timed out; using cached files: %s",
+                                getattr(client, "name", client),
+                                exc,
+                            )
+                            candidates = client.completed(fetch=False, timeout=0.0)
                 elif isinstance(client, (SiteDownloader, HubDownloader)):
                     candidates = client.completed(fetch=False)
                 elif isinstance(client, Blackhole):
@@ -2294,12 +2335,16 @@ class ROMarr:
                     probe_timeout = min(float(raw_timeout), self.QUEUE_PROBE_TIMEOUT)
                     if remaining is not None:
                         probe_timeout = min(probe_timeout, remaining)
-                    if self._accepts_timeout_arg(completed_fn):
-                        candidates = completed_fn(timeout=max(0.01, probe_timeout))
-                    elif remaining is not None:
-                        candidates = self._call_with_timeout(completed_fn, probe_timeout)
-                    else:
-                        candidates = completed_fn()
+                    bounded = max(0.01, probe_timeout)
+                    probe_call = (
+                        (lambda fn=completed_fn, pt=bounded: fn(timeout=pt))
+                        if self._accepts_timeout_arg(completed_fn)
+                        else completed_fn
+                    )
+                    candidates = (
+                        self._call_with_timeout(client, probe_call, bounded)
+                        if deadline is not None else probe_call()
+                    )
             except Exception as exc:
                 log.warning("%s completed() failed: %s", getattr(client, "name", client), exc)
                 continue

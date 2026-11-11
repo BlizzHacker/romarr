@@ -557,13 +557,13 @@ def test_qbittorrent_selective_completed_shares_single_deadline():
     qbit.romarr_id = "q1"
     qbit._authed = True
     owners = [
-        QueueItem("G1", "gb", "C1", 1, "grabbed", download_client="q1", download_id="romarr-collection-1", selected_file={"hash": "h1", "index": 0, "path": "a.gb", "size": 10}),
-        QueueItem("G2", "gb", "C2", 1, "grabbed", download_client="q1", download_id="romarr-collection-2", selected_file={"hash": "h2", "index": 0, "path": "b.gb", "size": 10}),
+        QueueItem("G1", "gb", "C1", 1, "grabbed", download_client="q1", download_id="qbit-tag:romarr-collection-1", selected_file={"hash": "h1", "index": 0, "path": "a.gb", "size": 10}),
+        QueueItem("G2", "gb", "C2", 1, "grabbed", download_client="q1", download_id="qbit-tag:romarr-collection-2", selected_file={"hash": "h2", "index": 0, "path": "b.gb", "size": 10}),
     ]
     rows = qbit.selective_completed(owners, ownership=owners, update_cache=False, timeout=0.05)
     assert not any(r.get("_romarr_selection_error") for r in rows)
     assert all(t is not None and t <= 0.05 + 1e-6 for _, t in calls)
-    assert [u for u, _ in calls].count("files") <= 1
+    assert [u for u, _ in calls] == ["info", "files"]
 
 
 def test_qbittorrent_login_and_session_refresh_respect_deadline():
@@ -708,15 +708,24 @@ def test_putio_withholds_transfer_when_subfolder_traversal_is_incomplete(tmp_pat
     class TimeoutSubfolderSession(PartialPutIoSession):
         """Raise RequestException when querying the nested subfolder."""
 
+        def __init__(self):
+            """Track API requests to prove the nested folder lookup executes."""
+            self.calls = []
+
         def get(self, url, params=None, **kwargs):
             """Fail nested subfolder listing via requests.Timeout."""
+            self.calls.append((url, params))
             if url.endswith("/files/list") and (params or {}).get("parent_id") == 12:
                 raise _req.Timeout("subfolder timeout")
             return super().get(url, params=params, **kwargs)
 
-    client = PutIo(DebridConfig(api_token="tok", save_path=str(tmp_path), base_url="https://api.put.io/v2"), session=TimeoutSubfolderSession())
+    session = TimeoutSubfolderSession()
+    client = PutIo(DebridConfig(api_token="tok", save_path=str(tmp_path), base_url="https://api.put.io/v2"), session=session)
     client._remember("1")
+    (tmp_path / "Multi").mkdir()
+    (tmp_path / "Multi" / "disc1.bin").write_bytes(b"rom")
     assert client.completed(fetch=False) == []
+    assert ("https://api.put.io/v2/files/list", {"parent_id": 12}) in session.calls
 
 
 def test_queue_renderer_includes_refresh_button_and_live_poll_in_browser_mode():
@@ -798,3 +807,140 @@ def test_rtorrent_completed_builds_fresh_bounded_proxy_after_cached_reachable():
     # Zero or non-positive timeout skips XML-RPC altogether.
     assert rt.completed(timeout=0.0) == []
     assert len(built) == 2
+
+
+def test_timeout_aware_probe_enforces_wall_clock_and_caps_inflight_per_client(tmp_path):
+    """Slow trickle probes accepting `timeout` are wall-clock bounded and deduplicated per client."""
+    import threading
+    import time
+    from romarr.downloaders import Blackhole, BlackholeConfig
+
+    release_probe = threading.Event()
+    calls = 0
+
+    class TrickleClient:
+        """Timeout-aware client whose completed() ignores its timeout arg until released."""
+
+        configured = True
+        name = "Trickle"
+        protocol = "torrent"
+        romarr_id = "trickle-1"
+
+        def completed(self, timeout: float | None = None):
+            """Block past the queue probe timeout until released by the test."""
+            nonlocal calls
+            calls += 1
+            release_probe.wait(timeout=2.0)
+            return []
+
+    watch = tmp_path / "watch"
+    watch.mkdir()
+    done_dir = watch / "Ready Game (USA)"
+    done_dir.mkdir()
+    (done_dir / "Ready Game (USA).sfc").write_bytes(b"rom")
+
+    s = svc(tmp_path)
+    s.QUEUE_PROBE_TIMEOUT = 0.05
+    s.clients = [
+        TrickleClient(),
+        Blackhole(BlackholeConfig(drop_path=str(watch), watch_path=str(watch), settle=0.0)),
+    ]
+    s.queue = [
+        QueueItem("Pending", "gb", "Pending Rel", 1, "grabbed", download_client="trickle-1"),
+        QueueItem("Ready", "snes", "Ready Game (USA)", 1, "grabbed"),
+    ]
+
+    try:
+        started = time.monotonic()
+        rows_first = s.queue_rows()
+        elapsed = time.monotonic() - started
+        assert elapsed < 0.3
+        assert rows_first[0]["can_preview_import"] is False
+        assert rows_first[1]["can_preview_import"] is True
+        # A second poll while the first TrickleClient probe is still hung must not spawn a 2nd thread.
+        rows_second = s.queue_rows()
+        assert rows_second[1]["can_preview_import"] is True
+        assert calls == 1
+    finally:
+        release_probe.set()
+
+
+def test_preview_import_invalidates_inflight_poll_and_stale_render():
+    """Clicking Preview import must cancel in-flight queue polls so stale renders never clobber the form."""
+    import json
+    import shutil
+    import subprocess
+    from romarr import ui
+
+    node = shutil.which("node")
+    if not node:
+        return
+    start = ui.JS.index("RENDER.queue=async()=>{")
+    end = ui.JS.index("RENDER.history=async()=>{", start)
+    queue_fn = ui.JS[start:end]
+    ready = [{"game": "Game", "platform": "snes", "release": "Rel", "seeders": 2, "state": "grabbed", "can_preview_import": True}]
+    updated = [{"game": "Game", "platform": "snes", "release": "Rel2", "seeders": 3, "state": "grabbed", "can_preview_import": True}]
+    script = f"""
+const assert = require('assert');
+const pageEl = {{ innerHTML: '' }};
+const qImportEl = {{ onclick: null }};
+const planBtn = {{ dataset: {{ qplan: '0' }}, onclick: null }};
+const dummyEl = {{ value: '', onchange: null, onclick: null, checked: false }};
+const $ = sel => sel === '#page' ? pageEl : sel === '#q-import' ? qImportEl : dummyEl;
+const esc = s => String(s ?? '');
+const document = {{
+  hidden: false,
+  querySelectorAll: sel => sel === '[data-qplan]' ? [planBtn] : [],
+  querySelector: () => dummyEl,
+}};
+const window = {{}};
+const activePage = 'queue';
+let pageVersion = 1;
+const RENDER = {{}};
+const toast = () => {{}};
+let resolveStaleQueue = null;
+let pollFetches = 0;
+let intervalCb = null;
+global.setInterval = fn => {{ intervalCb = fn; return 77; }};
+global.clearInterval = () => {{}};
+const j = (url) => {{
+  if (url === '/api/v1/queue') {{
+    pollFetches++;
+    if (pollFetches === 1) return Promise.resolve({{ items: {json.dumps(ready)} }});
+    // Hold the second /api/v1/queue read (triggered by an in-flight poll or stale RENDER.queue)
+    return new Promise(res => {{ resolveStaleQueue = () => res({{ items: {json.dumps(updated)} }}); }});
+  }}
+  if (url.startsWith('/api/v1/queue/import-plan')) {{
+    return Promise.resolve({{
+      preview: {{
+        note: 'preview ok',
+        token: 'tok1',
+        romm_routing: false,
+        items: [{{ primary: 'Game.sfc', evidence: 'ok', confidence: 'high', bytes: 10, members: ['Game.sfc'], role: 'base', destination: 'snes/Game.sfc', selected: true }}],
+        extras: [],
+      }}
+    }});
+  }}
+  return Promise.resolve({{}});
+}};
+{queue_fn}
+(async () => {{
+  await RENDER.queue();
+  assert(typeof planBtn.onclick === 'function');
+  // Start a background poll fetch that hangs until after Preview import starts.
+  const pollPromise = intervalCb();
+  await new Promise(r => setTimeout(r, 10));
+  const staleRenderPromise = RENDER.queue();
+  await new Promise(r => setTimeout(r, 10));
+  // User clicks Preview import while both pollPromise and staleRenderPromise are still awaiting /api/v1/queue.
+  await planBtn.onclick();
+  assert(pageEl.innerHTML.includes('Choose what enters the library'), 'preview form should render');
+  // Now resolve the stale poll and stale render fetches.
+  if (resolveStaleQueue) resolveStaleQueue();
+  await pollPromise.catch(() => {{}});
+  await staleRenderPromise.catch(() => {{}});
+  assert(pageEl.innerHTML.includes('Choose what enters the library'), 'stale render must NOT overwrite preview form');
+}})().catch(err => {{ console.error(err); process.exit(1); }});
+"""
+    res = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=15)
+    assert res.returncode == 0, res.stderr
