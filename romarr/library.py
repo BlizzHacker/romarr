@@ -423,7 +423,9 @@ class _DirectorySource(_PathSource):
 
     def read(self, name):
         """Read a loose file or delegate an archive member to its archive."""
-        source, member = self.members[name]
+        source, member = self.members.get(name, (None, None))
+        if source is None:
+            return None
         return super().read(member) if source is self else source.read(member)
 
     def hash(self, name, suffix=""):
@@ -719,10 +721,11 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
                     results.append(ImportResult(False, None, "invalid reviewed destination; review the bundle again"))
                     continue
                 destination = target_dir / relative
-        if destination in destinations:
+        destination_key = str(destination).casefold()
+        if destination_key in destinations:
             return [ImportResult(False, destination,
-                                 f"selected ROMs map to the same destination: {destinations[destination]} and {chosen.primary}; select one or give the sources distinct names")]
-        destinations[destination] = chosen.primary
+                                 f"selected ROMs map to the same destination: {destinations[destination_key]} and {chosen.primary}; select one or give the sources distinct names")]
+        destinations[destination_key] = chosen.primary
         planned.append((chosen, verdict, destination))
 
     for chosen, verdict, destination in planned:

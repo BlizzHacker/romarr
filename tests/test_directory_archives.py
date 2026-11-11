@@ -5,7 +5,7 @@ import zipfile
 import pytest
 
 from romarr.import_intent import preview_import
-from romarr.library import bsdtar_path, import_rom
+from romarr.library import _DirectorySource, bsdtar_path, import_rom
 from romarr.platforms import resolve
 from tests.test_import_naming import dats_for
 
@@ -95,6 +95,28 @@ def test_colliding_archive_destinations_publish_nothing(tmp_path, overwrite, dis
     assert 'B.zip/' + primary in result.reason
     assert not (tmp_path / 'library').exists()
     assert all(archive.read_bytes() == original for archive, original in originals.items())
+
+
+def test_case_insensitive_destination_collision_publishes_nothing(tmp_path):
+    download = tmp_path / 'download'
+    make_archive(download / 'A.zip', {'Game.gb': b'a'})
+    make_archive(download / 'B.zip', {'game.gb': b'b'})
+
+    result, = import_rom(download, resolve('gb'), tmp_path / 'library')
+
+    assert not result.ok
+    assert 'same destination' in result.reason
+    assert not (tmp_path / 'library').exists()
+
+
+def test_directory_source_read_unknown_member_returns_none(tmp_path):
+    download = tmp_path / 'download'
+    download.mkdir()
+    (download / 'Game.gb').write_bytes(b'game')
+    source = _DirectorySource(download)
+
+    assert source.read('Game.gb') == b'game'
+    assert source.read('missing.gb') is None
 
 
 @pytest.mark.parametrize('distinct_names', [False, True])
