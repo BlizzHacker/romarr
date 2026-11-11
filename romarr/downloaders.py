@@ -3394,7 +3394,7 @@ def match_queue_item(queue, download: dict):
 
     name = download.get("name", "")
     title_matches = [item for item in queue
-                     if item.state == "grabbed" and item.release == name
+                     if item.state in ("grabbed", "import-review", "import-failed") and item.release == name
                      and not identity_conflicts(item)]
     return title_matches[0] if len(title_matches) == 1 else None
 

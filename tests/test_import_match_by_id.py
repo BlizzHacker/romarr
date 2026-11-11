@@ -13,6 +13,8 @@ identify the download; the name is only the fallback.
 
 from __future__ import annotations
 
+import pytest
+
 from romarr.app import QueueItem, ROMarr
 from romarr.downloaders import SabConfig, SABnzbd
 
@@ -215,18 +217,26 @@ def test_qbittorrent_tag_takes_precedence_over_another_rows_title():
         "name": "torrent name B", "tags": "romarr-a"}) is tagged
 
 
-def test_conflicting_download_identity_cannot_claim_an_exact_title():
+@pytest.mark.parametrize("state", ["grabbed", "import-review", "import-failed"])
+def test_conflicting_download_identity_cannot_claim_an_exact_title(state):
     from romarr.downloaders import match_queue_item
     rows_and_downloads = [
-        (QueueItem("A", "nes", "same title", 0, "grabbed",
+        (QueueItem("A", "nes", "same title", 0, state,
                    release_id=f"btih:{HASH}"), {"hash": "f" * 40}),
-        (QueueItem("A", "nes", "same title", 0, "grabbed",
+        (QueueItem("A", "nes", "same title", 0, state,
                    download_id="SABnzbd_nzo_one"), {"id": "SABnzbd_nzo_two"}),
-        (QueueItem("A", "nes", "same title", 0, "grabbed",
+        (QueueItem("A", "nes", "same title", 0, state,
                    download_id="qbit-tag:romarr-one"), {"tags": "romarr-two"}),
     ]
     for item, identity in rows_and_downloads:
         assert match_queue_item([item], {"name": "same title", **identity}) is None
+
+
+@pytest.mark.parametrize("state", ["grabbed", "import-review", "import-failed"])
+def test_ambiguous_titles_cannot_claim_a_download(state):
+    from romarr.downloaders import match_queue_item
+    rows = [QueueItem(game, "gb", "same title", 1, state) for game in ("A", "B")]
+    assert match_queue_item(rows, {"name": "same title"}) is None
 
 
 def test_unrelated_hash_and_same_size_cannot_claim_a_grabbed_row():
