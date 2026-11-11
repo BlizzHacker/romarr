@@ -432,6 +432,8 @@ class _DirectorySource(_PathSource):
 
     def hash(self, name, suffix=""):
         """Hash through the owning source so large members can be streamed."""
+        if name not in self.members:
+            return None
         source, member = self.members[name]
         return super().hash(member, suffix) if source is self else source.hash(member, suffix)
 
@@ -442,7 +444,8 @@ class _DirectorySource(_PathSource):
             super().copy(member, destination)
         else:
             source.copy(member, destination)
-            self.transfers[name] = ("extracted", "archive members require extraction")
+            self.last_transfer = ("extracted", "archive members require extraction")
+            self.transfers[name] = self.last_transfer
 
 
 class MissingArchiveTool(Exception):

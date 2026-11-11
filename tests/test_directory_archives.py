@@ -1,5 +1,6 @@
 from pathlib import Path
 import json
+import shutil
 import subprocess
 import zipfile
 
@@ -23,13 +24,15 @@ def make_archive(path, members):
             pytest.skip('libarchive unavailable')
         staging = path.parent / 'staging'
         staging.mkdir()
-        for name, data in members.items():
-            (staging / name).write_bytes(data)
-        subprocess.run([bsdtar_path(), '--format=7zip', '-cf', str(path),
-                        '-C', str(staging), *members], check=True)
-        for entry in staging.iterdir():
-            entry.unlink()
-        staging.rmdir()
+        try:
+            for name, data in members.items():
+                target = staging / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+            subprocess.run([bsdtar_path(), '--format=7zip', '-cf', str(path),  # noqa: S603
+                            '-C', str(staging), *members], check=True)
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
     return path
 
 
@@ -104,6 +107,7 @@ def test_colliding_archive_destinations_publish_nothing(tmp_path, overwrite, dis
 @pytest.mark.parametrize('overwrite', [False, True])
 @pytest.mark.parametrize('disc', [False, True])
 def test_case_insensitive_destination_collision_publishes_nothing(tmp_path, overwrite, disc):
+    """Reject case-only destination collisions before copying or overwriting."""
     download = tmp_path / 'download'
     for archive, title, payload in [('A', 'Game', b'a'), ('B', 'game', b'b')]:
         members = {title + '.cue': b'FILE "track.bin" BINARY\n', 'track.bin': payload} if disc else {title + '.gb': payload}
@@ -118,6 +122,7 @@ def test_case_insensitive_destination_collision_publishes_nothing(tmp_path, over
 
 
 def test_duplicate_archive_members_are_rejected_before_publication(tmp_path):
+    """Fail cleanly when an archive lists the same member path more than once."""
     download = tmp_path / 'download'
     archive = make_archive(download / 'Game.zip', {'Game.gb': b'first'})
     with zipfile.ZipFile(archive, 'a') as handle, pytest.warns(UserWarning, match='Duplicate name'):
@@ -132,6 +137,7 @@ def test_duplicate_archive_members_are_rejected_before_publication(tmp_path):
 
 
 def test_real_title_fixture_selects_cartridge_beside_pc_compilation(tmp_path):
+    """Prefer the real cartridge title over a PC compilation release in preview and import."""
     releases = json.loads(Path(__file__).with_name('fixtures').joinpath('directory_releases.json').read_text())
     download = tmp_path / 'download'
     for release in releases['archives']:
@@ -151,6 +157,7 @@ def test_real_title_fixture_selects_cartridge_beside_pc_compilation(tmp_path):
 
 @pytest.mark.parametrize('archived', [False, True])
 def test_directory_source_read_unknown_member_returns_none(tmp_path, archived):
+    """Missing names return None for both read and hash without raising KeyError."""
     download = tmp_path / 'download'
     if archived:
         make_archive(download / 'Game.zip', {'Game.gb': b'game'})
@@ -161,6 +168,7 @@ def test_directory_source_read_unknown_member_returns_none(tmp_path, archived):
 
     assert source.read('Game.zip/Game.gb' if archived else 'Game.gb') == b'game'
     assert source.read('missing.gb') is None
+    assert source.hash('missing.gb', '.gb') is None
 
 
 @pytest.mark.parametrize('distinct_names', [False, True])
@@ -204,6 +212,7 @@ def test_archive_collisions_use_reviewed_destinations(tmp_path, second_route):
 
 @pytest.mark.parametrize('overwrite', [False, True])
 def test_symlink_destination_collision_publishes_nothing(tmp_path, overwrite):
+    """Reject reviewed routes that alias through a library symlink before writes."""
     download = tmp_path / 'download'
     for title, payload in [('A', b'a'), ('B', b'b')]:
         make_archive(download / (title + '.zip'), {'Game.gb': payload})
@@ -225,6 +234,7 @@ def test_symlink_destination_collision_publishes_nothing(tmp_path, overwrite):
 @pytest.mark.parametrize('overwrite', [False, True])
 @pytest.mark.parametrize('reverse', [False, True])
 def test_file_and_child_destinations_publish_nothing(tmp_path, overwrite, reverse):
+    """Reject file/directory ancestor conflicts regardless of route ordering."""
     download = tmp_path / 'download'
     for title, payload in [('A', b'a'), ('B', b'b')]:
         make_archive(download / (title + '.zip'), {'Game.gb': payload})
