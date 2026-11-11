@@ -1,7 +1,6 @@
 # Review a completed bundle before importing
 
-Open **Queue → Preview import** on a completed download that paused for review
-or already has a saved selection. ROMarr lists each
+Open **Queue → Preview import** on a completed download. ROMarr lists each
 platform-compatible game/package, its required companions, proposed destination,
 and expanded bytes when available. Manuals, artwork and unrelated console
 executables appear under excluded files. PC installers remain part of their game
