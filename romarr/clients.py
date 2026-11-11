@@ -114,6 +114,20 @@ QBITTORRENT_ADD_CONFIRM_TIMEOUT = 10.0
 QBITTORRENT_ADD_POLL_INTERVAL = 0.25
 QBITTORRENT_FILE_METADATA_TIMEOUT = 120.0
 QBITTORRENT_FILE_METADATA_POLL_INTERVAL = 0.25
+QBITTORRENT_RESUME_CONFIRM_TIMEOUT = 10.0
+QBITTORRENT_RESUME_POLL_INTERVAL = 0.25
+
+_QBITTORRENT_PAUSED_STATES = frozenset({
+    "pausedDL", "pausedUP", "stoppedDL", "stoppedUP",
+})
+_QBITTORRENT_RUNNING_STATES = frozenset({
+    "downloading", "stalledDL", "queuedDL", "forcedDL",
+    "uploading", "stalledUP", "queuedUP", "forcedUP",
+})
+_QBITTORRENT_TRANSITIONAL_STATES = frozenset({
+    "checkingResumeData", "checkingDL", "checkingUP",
+    "allocating", "moving", "metaDL", "forcedMetaDL",
+})
 
 
 def _normalise_torrent_path(value: str) -> str:
@@ -167,12 +181,19 @@ class QBittorrent:
         return bool(self._config.base_url)
 
     def __init__(self, config: QbitConfig, session: requests.Session | None = None):
+        """Initialize a qBittorrent API client with its config and HTTP session."""
         self._config = config
         self._session = session or requests.Session()
         self._authed = False
         self._added = threading.local()
         self._selection_lock = threading.RLock()
         self._selective_hashes = set()
+        self._resumed_at: dict[str, float] = {}
+
+    @staticmethod
+    def _resumed_key(torrent_hash: str) -> str:
+        """Normalize a torrent infohash for resume-grace tracking."""
+        return str(torrent_hash or "").strip().casefold()
 
     @property
     def last_job_id(self) -> str:
@@ -376,8 +397,7 @@ class QBittorrent:
                     self._added.error = "ambiguous retained collection; review ownership"
                     return False
                 if existing:
-                    with self._selection_lock:
-                        return self._reuse_collection(existing[0], wanted_path, owned_selections or [])
+                    return self._reuse_collection(existing[0], wanted_path, owned_selections or [])
             except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
                 self._added.error = f"retained collection needs review: {exc}"
                 return False
@@ -575,6 +595,15 @@ class QBittorrent:
                 return fail("qBittorrent refused to resume the selected file")
         except requests.RequestException:
             return fail("qBittorrent failed while resuming the selected file")
+        resumed_row, confirmed = self._await_resumed_row(owned_hash, tag=tag)
+        if not confirmed:
+            self._resumed_at[self._resumed_key(owned_hash)] = time.monotonic()
+            log.warning(
+                "qBittorrent accepted resume for %s, but state stayed %r within %.1fs",
+                owned_hash[:12],
+                (resumed_row or {}).get("state", ""),
+                QBITTORRENT_RESUME_CONFIRM_TIMEOUT,
+            )
         self._added.selected_file = {
             "path": str(selected.get("name") or ""), "index": selected_id,
             "size": selected.get("size"), "hash": owned_hash,
@@ -582,6 +611,57 @@ class QBittorrent:
         self._added.job_id = "qbit-tag:" + tag
         self._added.error = ""
         return True
+
+    def _recently_resumed(self, torrent_hash: str) -> bool:
+        """Whether ROMarr resumed `torrent_hash` within the confirmation grace window."""
+        key = self._resumed_key(torrent_hash)
+        stamp = self._resumed_at.get(key)
+        if stamp is None:
+            return False
+        if (time.monotonic() - stamp) < QBITTORRENT_RESUME_CONFIRM_TIMEOUT:
+            return True
+        self._resumed_at.pop(key, None)
+        return False
+
+    def _await_resumed_row(self, torrent_hash: str, *, tag: str = "",
+                           timeout: float | None = None) -> tuple[dict | None, bool]:
+        """Poll read-only `torrents/info` until the torrent leaves paused/transitional states."""
+        wait_timeout = QBITTORRENT_RESUME_CONFIRM_TIMEOUT if timeout is None else max(0.0, float(timeout))
+        request_timeout = min(max(int(self._config.timeout), 1), 5)
+        deadline = time.monotonic() + wait_timeout
+        key = self._resumed_key(torrent_hash)
+        last_row: dict | None = None
+        while True:
+            try:
+                if tag:
+                    response = self._get(
+                        "torrents/info",
+                        params={"tag": tag},
+                        timeout=request_timeout,
+                    )
+                    rows = response.json() if response.ok else []
+                    matched = [
+                        row for row in (rows if isinstance(rows, list) else [])
+                        if isinstance(row, dict)
+                        and _row_has_tag(row, tag)
+                        and self._resumed_key(str(row.get("hash") or "")) == key
+                    ]
+                else:
+                    matched = [
+                        row for row in self.torrents()
+                        if self._resumed_key(str(row.get("hash") or "")) == key
+                    ]
+            except (QbitAuthenticationError, requests.RequestException, ValueError):
+                matched = []
+            if len(matched) == 1:
+                last_row = matched[0]
+                if str(last_row.get("state") or "") in _QBITTORRENT_RUNNING_STATES:
+                    self._resumed_at.pop(key, None)
+                    return last_row, True
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return last_row, False
+            time.sleep(min(QBITTORRENT_RESUME_POLL_INTERVAL, remaining))
 
     def _collection_owners(self, row, owners, *, timeout: float | None = None,
                            _deadline: float | None = None):
@@ -604,6 +684,7 @@ class QBittorrent:
         return files
 
     def _reuse_collection(self, row, wanted, owners):
+        """Select one more file on an existing retained collection torrent without resetting prior selections."""
         fresh = [r for r in self.torrents() if r.get("hash") == row.get("hash")]
         if len(fresh) != 1:
             raise ValueError("retained torrent disappeared")
@@ -612,10 +693,19 @@ class QBittorrent:
         torrent_hash = str(row["hash"])
         self._added.retained_hash = torrent_hash
         state = str(row.get("state") or "")
-        if state in {"pausedDL", "pausedUP", "stoppedDL", "stoppedUP"}:
+        if state in _QBITTORRENT_TRANSITIONAL_STATES or (
+                state in _QBITTORRENT_PAUSED_STATES and self._recently_resumed(torrent_hash)):
+            updated_row, confirmed = self._await_resumed_row(torrent_hash)
+            if updated_row is not None:
+                row = updated_row
+                state = str(row.get("state") or "")
+            if confirmed:
+                files = self._collection_owners(row, owners)
+        if state in _QBITTORRENT_PAUSED_STATES:
+            self._resumed_at.pop(self._resumed_key(torrent_hash), None)
             self._added.error = "Retained collection is stopped. Use Resume retained torrent in Queue, then retry this grab."
             return False
-        if state not in {"downloading", "stalledDL", "queuedDL", "forcedDL", "uploading", "stalledUP", "queuedUP", "forcedUP"}:
+        if state not in _QBITTORRENT_RUNNING_STATES:
             self._added.error = "retained collection is not ready for selection; review its downloader state"
             return False
         matches = [f for f in files if _normalise_torrent_path(f.get("name", "")) == wanted
@@ -661,12 +751,19 @@ class QBittorrent:
         return True
 
     def resume_retained_collection(self, identity, owners):
+        """Resume a stopped retained collection torrent and wait briefly for running state."""
         with self._selection_lock:
             rows = [r for r in self.torrents() if r.get("hash") == identity.get("hash")]
             if len(rows) != 1:
                 raise ValueError("retained collection cannot be identified")
             self._collection_owners(rows[0], owners)
-            return self.resume_torrent(identity["hash"])
+            torrent_hash = str(identity["hash"])
+            if not self.resume_torrent(torrent_hash):
+                return False
+            _, confirmed = self._await_resumed_row(torrent_hash)
+            if not confirmed:
+                self._resumed_at[self._resumed_key(torrent_hash)] = time.monotonic()
+            return True
 
     def selective_completed(self, owners, *, ownership=None,
                             update_cache: bool = True,
@@ -785,7 +882,11 @@ class QBittorrent:
             data={"hashes": torrent_hash,
                   "deleteFiles": "true" if delete_files else "false"},
             timeout=self._config.timeout)
-        return bool(response.ok)
+        if not response.ok:
+            return False
+        for part in str(torrent_hash or "").split("|"):
+            self._resumed_at.pop(self._resumed_key(part), None)
+        return True
 
     def remove_download(self, download_id: str, *,
                         delete_files: bool = False) -> bool:
@@ -832,6 +933,7 @@ class QBittorrent:
         return self.torrents()
 
     def pause_torrent(self, torrent_hash: str) -> bool:
+        """Ask qBittorrent to pause or stop a torrent and clear any resume grace."""
         response = self._post("torrents/pause",
                               data={"hashes": torrent_hash},
                               timeout=self._config.timeout)
@@ -839,9 +941,14 @@ class QBittorrent:
             response = self._post("torrents/stop",
                                   data={"hashes": torrent_hash},
                                   timeout=self._config.timeout)
-        return bool(response.ok)
+        if not response.ok:
+            return False
+        for part in str(torrent_hash or "").split("|"):
+            self._resumed_at.pop(self._resumed_key(part), None)
+        return True
 
     def resume_torrent(self, torrent_hash: str) -> bool:
+        """Ask qBittorrent to resume or start a torrent and record the resume timestamp."""
         response = self._post("torrents/resume",
                               data={"hashes": torrent_hash},
                               timeout=self._config.timeout)
@@ -849,7 +956,13 @@ class QBittorrent:
             response = self._post("torrents/start",
                                   data={"hashes": torrent_hash},
                                   timeout=self._config.timeout)
-        return bool(response.ok)
+        if response.ok:
+            for part in str(torrent_hash or "").split("|"):
+                key = self._resumed_key(part)
+                if key:
+                    self._resumed_at[key] = time.monotonic()
+            return True
+        return False
 
     def reachable(self) -> bool:
         """Whether the download client answers at all.

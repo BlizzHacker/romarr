@@ -266,3 +266,157 @@ def test_rejected_nonmagnet_does_not_inherit_previous_retained_job():
     assert not client.add_magnet_selective("https://example.test/not-a-magnet","Collection/C.zip",owned_selections=[owner()])
     assert client.last_retained_hash=="" and client.last_selected_file=={} and client.last_job_id==""
     assert session.posts==[]
+
+
+def test_back_to_back_grabs_from_new_collection_wait_for_resumed_state(tmp_path, monkeypatch):
+    """Issue #149: second grab must not fail with 'Retained collection is stopped' while first resume lags."""
+    from romarr import clients as clients_mod
+    monkeypatch.setattr(clients_mod, "QBITTORRENT_RESUME_POLL_INTERVAL", 0.005)
+    monkeypatch.setattr(clients_mod, "QBITTORRENT_RESUME_CONFIRM_TIMEOUT", 1.0)
+
+    class LaggyNewCollectionSession:
+        """Fake qBittorrent session that delays transitioning from pausedDL after resume."""
+
+        def __init__(self):
+            """Initialize synthetic collection files and transition counters."""
+            self.files = [
+                dict(index=0, name="Collection/A.zip", size=100, priority=1, progress=0),
+                dict(index=1, name="Collection/B.zip", size=100, priority=1, progress=0),
+                dict(index=2, name="Collection/C.zip", size=100, priority=1, progress=0),
+            ]
+            self.row = None
+            self.posts = []
+            self.resume_reads_remaining = 0
+
+        def get(self, url, *, params=None, **kwargs):
+            """Serve synthetic torrent files and lagged resume states."""
+            endpoint = url.split("/api/v2/")[-1]
+            if endpoint == "torrents/files":
+                return Response(self.files if self.row else [])
+            if endpoint == "torrents/info":
+                if self.row is None:
+                    return Response([])
+                if self.resume_reads_remaining > 0:
+                    self.resume_reads_remaining -= 1
+                    if self.resume_reads_remaining == 0:
+                        self.row["state"] = "downloading"
+                return Response([self.row])
+            raise AssertionError(endpoint)
+
+        def post(self, url, *, data=None, **kwargs):
+            """Record torrent mutations and simulate delayed state transitions."""
+            endpoint = url.split("/api/v2/")[-1]
+            self.posts.append((endpoint, deepcopy(data)))
+            if endpoint == "torrents/add":
+                self.row = dict(
+                    hash=HASH, tags=data["tags"], category="romarr",
+                    state="pausedDL", name="Collection",
+                    save_path="/downloads", content_path="/downloads/Collection",
+                )
+            elif endpoint == "torrents/filePrio":
+                for index in map(int, data["id"].split("|")):
+                    self.files[index]["priority"] = int(data["priority"])
+            elif endpoint in ("torrents/pause", "torrents/stop"):
+                self.row["state"] = "pausedDL"
+            elif endpoint in ("torrents/resume", "torrents/start"):
+                # qBittorrent accepts HTTP 200 resume, then still reports pausedDL
+                # for several status-update polls before flipping to downloading.
+                self.resume_reads_remaining = 3
+            elif endpoint == "torrents/addTags":
+                self.row["tags"] += "," + data["tags"]
+            else:
+                raise AssertionError("unexpected operation: " + endpoint)
+            return Response()
+
+    session = LaggyNewCollectionSession()
+    client = QBittorrent(QbitConfig("http://synthetic-qbit"), session=session)
+    client.romarr_id = "qbit-one"
+    service = ROMarr({"ROMARR_DATA": str(tmp_path / "state.json")})
+    service.clients = [client]
+
+    first = service.grab(release("A"), "A", "gb")
+    second = service.grab(release("B"), "B", "gb")
+    assert first["ok"] is True
+    assert second["ok"] is True, f"second grab failed: {second!r} ({client.last_error})"
+    assert [f["priority"] for f in session.files] == [1, 1, 0]
+    assert sum(1 for endpoint, _ in session.posts if endpoint == "torrents/resume") == 1
+    assert not any(endpoint == "torrents/delete" for endpoint, _ in session.posts)
+
+
+def test_reuse_waits_for_checking_resume_data_and_lagged_resume_retained(tmp_path, monkeypatch):
+    """Issue #149: transitional states and recently-resumed paused rows settle before failing reuse."""
+    from romarr import clients as clients_mod
+    monkeypatch.setattr(clients_mod, "QBITTORRENT_RESUME_POLL_INTERVAL", 0.005)
+    monkeypatch.setattr(clients_mod, "QBITTORRENT_RESUME_CONFIRM_TIMEOUT", 1.0)
+
+    service, client, session = service_with_retained(tmp_path)
+    session.row["state"] = "checkingResumeData"
+    checks = {"n": 0}
+    orig_get = session.get
+
+    def transitional_get(url, *, params=None, **kwargs):
+        """Transition checkingResumeData to stalledDL after repeated reads."""
+        if url.endswith("torrents/info") and session.row["state"] == "checkingResumeData":
+            checks["n"] += 1
+            if checks["n"] >= 3:
+                session.row["state"] = "stalledDL"
+        return orig_get(url, params=params, **kwargs)
+
+    monkeypatch.setattr(session, "get", transitional_get)
+    res = service.grab(release("B"), "B", "gb")
+    assert res["ok"] is True
+    assert [f["priority"] for f in session.files] == [7, 1, 0]
+
+
+def test_manually_stopped_torrent_after_resume_fails_without_polling(tmp_path, monkeypatch):
+    """A torrent stopped by the operator after running must still fail immediately with Resume guidance."""
+    from romarr import clients as clients_mod
+    sleeps = []
+    monkeypatch.setattr(clients_mod.time, "sleep", lambda s: sleeps.append(s))
+
+    service, client, session = service_with_retained(tmp_path)
+    session.row["state"] = "stoppedUP"
+    assert service.queue_action(0, "resume-retained")["ok"]
+    assert sleeps == []
+    # Operator pauses the torrent again after it had confirmed running.
+    session.row["state"] = "stoppedDL"
+    result = service.grab(release("B"), "B", "gb")
+    assert result["ok"] is False
+    assert "Resume retained torrent" in client.last_error
+    assert sleeps == []
+
+
+def test_lagging_resume_retained_followed_by_grab_waits_grace_window(tmp_path, monkeypatch):
+    """Issue #149: if resume_retained_collection finishes polling before state flips, reuse still waits."""
+    from romarr import clients as clients_mod
+    monkeypatch.setattr(clients_mod, "QBITTORRENT_RESUME_POLL_INTERVAL", 0.005)
+    monkeypatch.setattr(clients_mod, "QBITTORRENT_RESUME_CONFIRM_TIMEOUT", 0.03)
+
+    service, client, session = service_with_retained(tmp_path)
+    session.row["state"] = "stoppedUP"
+    orig_post = session.post
+    orig_get = session.get
+    reads = {"n": 0}
+
+    def sticky_resume(url, *, data=None, **kwargs):
+        """Accept resume while temporarily keeping the row in its stopped state."""
+        if url.endswith("torrents/resume"):
+            session.posts.append(("torrents/resume", deepcopy(data)))
+            return Response()
+        return orig_post(url, data=data, **kwargs)
+
+    def delayed_info(url, *, params=None, **kwargs):
+        """Flip row state to downloading once reuse polls past the initial window."""
+        if url.endswith("torrents/info") and any(p[0] == "torrents/resume" for p in session.posts):
+            reads["n"] += 1
+            # Flip after the first poll window would have expired, on reuse's poll.
+            if reads["n"] >= 8:
+                session.row["state"] = "downloading"
+        return orig_get(url, params=params, **kwargs)
+
+    monkeypatch.setattr(session, "post", sticky_resume)
+    monkeypatch.setattr(session, "get", delayed_info)
+    assert service.queue_action(0, "resume-retained")["ok"]
+    monkeypatch.setattr(clients_mod, "QBITTORRENT_RESUME_CONFIRM_TIMEOUT", 0.5)
+    assert service.grab(release("B"), "B", "gb")["ok"]
+    assert [f["priority"] for f in session.files] == [7, 1, 0]
