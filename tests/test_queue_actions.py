@@ -898,17 +898,21 @@ const activePage = 'queue';
 let pageVersion = 1;
 const RENDER = {{}};
 const toast = () => {{}};
-let resolveStaleQueue = null;
+const staleQueueResolvers = [];
 let pollFetches = 0;
 let intervalCb = null;
+let verified = false;
+process.on('exit', () => {{ if (!verified) process.exitCode = 1; }});
 global.setInterval = fn => {{ intervalCb = fn; return 77; }};
 global.clearInterval = () => {{}};
 const j = (url) => {{
   if (url === '/api/v1/queue') {{
     pollFetches++;
     if (pollFetches === 1) return Promise.resolve({{ items: {json.dumps(ready)} }});
-    // Hold the second /api/v1/queue read (triggered by an in-flight poll or stale RENDER.queue)
-    return new Promise(res => {{ resolveStaleQueue = () => res({{ items: {json.dumps(updated)} }}); }});
+    // Retain every deferred /api/v1/queue resolver (triggered by an in-flight poll or stale RENDER.queue)
+    return new Promise(res => {{
+      staleQueueResolvers.push(() => res({{ items: {json.dumps(updated)} }}));
+    }});
   }}
   if (url.startsWith('/api/v1/queue/import-plan')) {{
     return Promise.resolve({{
@@ -932,14 +936,15 @@ const j = (url) => {{
   await new Promise(r => setTimeout(r, 10));
   const staleRenderPromise = RENDER.queue();
   await new Promise(r => setTimeout(r, 10));
+  assert.strictEqual(staleQueueResolvers.length, 2, 'expected both deferred queue reads to be pending');
   // User clicks Preview import while both pollPromise and staleRenderPromise are still awaiting /api/v1/queue.
   await planBtn.onclick();
   assert(pageEl.innerHTML.includes('Choose what enters the library'), 'preview form should render');
-  // Now resolve the stale poll and stale render fetches.
-  if (resolveStaleQueue) resolveStaleQueue();
-  await pollPromise.catch(() => {{}});
-  await staleRenderPromise.catch(() => {{}});
+  // Resolve both deferred queue fetches and await both promises cleanly before checking the preview form.
+  while (staleQueueResolvers.length) staleQueueResolvers.shift()();
+  await Promise.all([pollPromise, staleRenderPromise]);
   assert(pageEl.innerHTML.includes('Choose what enters the library'), 'stale render must NOT overwrite preview form');
+  verified = true;
 }})().catch(err => {{ console.error(err); process.exit(1); }});
 """
     res = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=15)
