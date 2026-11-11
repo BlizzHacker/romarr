@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 import subprocess
 import zipfile
 
@@ -11,7 +12,7 @@ from tests.test_import_naming import dats_for
 
 
 def make_archive(path, members):
-    """Build test archives; RAR uses the fixed disc fixture."""
+    """Build ZIP and 7z archives from the supplied members."""
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.suffix == '.zip':
         with zipfile.ZipFile(path, 'w') as archive:
@@ -29,10 +30,6 @@ def make_archive(path, members):
         for entry in staging.iterdir():
             entry.unlink()
         staging.rmdir()
-    else:
-        if not bsdtar_path():
-            pytest.skip('libarchive unavailable')
-        path.write_bytes(Path(__file__).with_name('fixtures').joinpath('disc.rar').read_bytes())
     return path
 
 
@@ -40,8 +37,15 @@ def make_archive(path, members):
 def test_directory_archive_imports_complete_disc_and_preserves_download(tmp_path, suffix):
     """An archived disc imports with its tracks while the download stays intact."""
     download = tmp_path / 'download'
-    archive = make_archive(download / 'nested' / ('game' + suffix), {
-        'Game.cue': b'FILE "track.bin" BINARY\n', 'track.bin': b'track bytes'})
+    archive = download / 'nested' / ('game' + suffix)
+    if suffix == '.rar':
+        if not bsdtar_path():
+            pytest.skip('libarchive unavailable')
+        archive.parent.mkdir(parents=True)
+        archive.write_bytes(Path(__file__).with_name('fixtures').joinpath('disc.rar').read_bytes())
+    else:
+        make_archive(archive, {
+            'Game.cue': b'FILE "track.bin" BINARY\n', 'track.bin': b'track bytes'})
     (download / 'art.jpg').write_bytes(b'art')
     original = archive.read_bytes()
     preview = preview_import(download, resolve('dc'), tmp_path / 'library')
@@ -97,25 +101,65 @@ def test_colliding_archive_destinations_publish_nothing(tmp_path, overwrite, dis
     assert all(archive.read_bytes() == original for archive, original in originals.items())
 
 
-def test_case_insensitive_destination_collision_publishes_nothing(tmp_path):
+@pytest.mark.parametrize('overwrite', [False, True])
+@pytest.mark.parametrize('disc', [False, True])
+def test_case_insensitive_destination_collision_publishes_nothing(tmp_path, overwrite, disc):
     download = tmp_path / 'download'
-    make_archive(download / 'A.zip', {'Game.gb': b'a'})
-    make_archive(download / 'B.zip', {'game.gb': b'b'})
+    for archive, title, payload in [('A', 'Game', b'a'), ('B', 'game', b'b')]:
+        members = {title + '.cue': b'FILE "track.bin" BINARY\n', 'track.bin': payload} if disc else {title + '.gb': payload}
+        make_archive(download / (archive + '.zip'), members)
 
-    result, = import_rom(download, resolve('gb'), tmp_path / 'library')
+    result, = import_rom(download, resolve('dc' if disc else 'gb'), tmp_path / 'library',
+                         overwrite=overwrite)
 
     assert not result.ok
     assert 'same destination' in result.reason
     assert not (tmp_path / 'library').exists()
 
 
-def test_directory_source_read_unknown_member_returns_none(tmp_path):
+def test_duplicate_archive_members_are_rejected_before_publication(tmp_path):
     download = tmp_path / 'download'
-    download.mkdir()
-    (download / 'Game.gb').write_bytes(b'game')
+    archive = make_archive(download / 'Game.zip', {'Game.gb': b'first'})
+    with zipfile.ZipFile(archive, 'a') as handle, pytest.warns(UserWarning, match='Duplicate name'):
+        handle.writestr('Game.gb', b'second')
+    (download / 'readme.txt').write_bytes(b'readme')
+
+    result, = import_rom(download, resolve('gb'), tmp_path / 'library')
+
+    assert not result.ok
+    assert 'duplicate archive member: Game.gb' in result.reason
+    assert not (tmp_path / 'library').exists()
+
+
+def test_real_title_fixture_selects_cartridge_beside_pc_compilation(tmp_path):
+    releases = json.loads(Path(__file__).with_name('fixtures').joinpath('directory_releases.json').read_text())
+    download = tmp_path / 'download'
+    for release in releases['archives']:
+        make_archive(download / release['name'], {
+            name: payload.encode() for name, payload in release['members'].items()})
+
+    preview = preview_import(download, resolve('genesis'), tmp_path / 'library')
+
+    assert [item['primary'] for item in preview['items']] == [releases['selected_primary']]
+    assert preview['items'][0]['selected']
+    assert not preview['requires_review']
+    result, = import_rom(download, resolve('genesis'), tmp_path / 'library',
+                         selected_primaries=[releases['selected_primary']])
+    assert result.ok, result.reason
+    assert result.destination.read_bytes() == b'cartridge fixture'
+
+
+@pytest.mark.parametrize('archived', [False, True])
+def test_directory_source_read_unknown_member_returns_none(tmp_path, archived):
+    download = tmp_path / 'download'
+    if archived:
+        make_archive(download / 'Game.zip', {'Game.gb': b'game'})
+    else:
+        download.mkdir()
+        (download / 'Game.gb').write_bytes(b'game')
     source = _DirectorySource(download)
 
-    assert source.read('Game.gb') == b'game'
+    assert source.read('Game.zip/Game.gb' if archived else 'Game.gb') == b'game'
     assert source.read('missing.gb') is None
 
 
@@ -138,17 +182,17 @@ def test_archive_collisions_use_verified_destination_names(tmp_path, distinct_na
         assert not (tmp_path / 'library').exists()
 
 
-@pytest.mark.parametrize('distinct_routes', [False, True])
-def test_archive_collisions_use_reviewed_destinations(tmp_path, distinct_routes):
+@pytest.mark.parametrize('second_route', ['A/Game.gb', 'a/game.gb', 'B/Game.gb'])
+def test_archive_collisions_use_reviewed_destinations(tmp_path, second_route):
     """Compare reviewed routes when planning destinations."""
     download = tmp_path / 'download'
     for title, payload in [('A', b'a'), ('B', b'b')]:
         make_archive(download / (title + '.zip'), {'Game.gb': payload})
     routes = {'A.zip/Game.gb': 'A/Game.gb',
-              'B.zip/Game.gb': ('B' if distinct_routes else 'A') + '/Game.gb'}
+              'B.zip/Game.gb': second_route}
     results = import_rom(download, resolve('gb'), tmp_path / 'library',
                          selected_primaries=list(routes), bundle_routes=routes)
-    if distinct_routes:
+    if second_route == 'B/Game.gb':
         assert all(result.ok for result in results)
         assert (tmp_path / 'library/gb/A/Game.gb').read_bytes() == b'a'
         assert (tmp_path / 'library/gb/B/Game.gb').read_bytes() == b'b'

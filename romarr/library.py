@@ -393,6 +393,8 @@ class _DirectorySource(_PathSource):
                 raise ValueError(f"source escapes download directory: {entry}")
             relative = entry.relative_to(path).as_posix()
             if entry.suffix.lower() not in ARCHIVE_SUFFIXES:
+                if relative in self.members:
+                    raise ValueError(f"duplicate source member: {relative}")
                 self.members[relative] = (self, relative)
                 continue
             try:
@@ -423,9 +425,9 @@ class _DirectorySource(_PathSource):
 
     def read(self, name):
         """Read a loose file or delegate an archive member to its archive."""
-        source, member = self.members.get(name, (None, None))
-        if source is None:
+        if name not in self.members:
             return None
+        source, member = self.members[name]
         return super().read(member) if source is self else source.read(member)
 
     def hash(self, name, suffix=""):
