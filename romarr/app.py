@@ -124,9 +124,14 @@ VERSION = derive_version()
 
 def _comparable_version(value: object) -> bool:
     """Only well-formed, named versions may be ordered against release tags."""
-    text = str(value or "").strip().lstrip("vV")
+    text = str(value or "").strip()
+    if text[:1].lower() == "v":
+        text = text[1:]
+    # Local build metadata (+gSHA, +dirty) is not a stable release identity.
+    # Use only the release/pre/post spellings supported by compare_key.
     return not is_unknown(value) and bool(re.fullmatch(
-        r"\d+(?:\.\d+)*(?:[.+_-]?[A-Za-z][A-Za-z0-9]*|[.+_-]\d+)*", text))
+        r"\d+(?:\.\d+)*(?:(?:[._-]?(?:dev|alpha|beta|preview|pre|rc|a|b|c)\.?\d*)|(?:[._-]?post\.?\d+))*",
+        text, flags=re.IGNORECASE))
 
 # What ROMarr labels its own downloads with, so its jobs are distinguishable
 # from everything else in a shared client -- the same reason Radarr and Sonarr
@@ -5693,6 +5698,9 @@ class ROMarr:
             state, reason = "unknown", "invalid_saved_status"
         elif state in ("available", "current") and not _comparable_version(VERSION):
             state, reason = "unknown", "running_version_unknown"
+        elif state in ("available", "current") and (
+                get_build_info(VERSION).get("type") == "development"):
+            state, reason = "unknown", "development_build"
         elif state != "never_checked" and (
                 settings.get("_update_checked_version") != VERSION
                 or settings.get("_update_checked_channel") != channel):
@@ -5718,7 +5726,10 @@ class ROMarr:
         """
         import requests as _requests
 
-        if not self._update_check_lock.acquire(blocking=False):
+        # A scheduled daily sweep must not be skipped because a manual check
+        # already owns the request; wait for it and perform scheduled actions.
+        # Manual callers return busy immediately rather than block the UI.
+        if not self._update_check_lock.acquire(blocking=not manual):
             return {"ok": False, "busy": True, "update_available": False,
                     "message": "an update check is already in progress"}
         try:
@@ -5727,6 +5738,7 @@ class ROMarr:
                               or "stable").lower()
 
             def failed(reason: str, message: str) -> dict:
+                """Record a failed attempt while retaining the last good release."""
                 self._record_update_check("error", reason,
                                           checked_channel=channel,
                                           error=message)
@@ -5786,14 +5798,21 @@ class ROMarr:
                         "indeterminate": True, "update_available": False,
                         "message": ("latest stable release is " + latest +
                                     "; nightly revision checks are not yet supported")}
-            if not _comparable_version(VERSION):
-                self._record_update_check("unknown", "running_version_unknown",
+            development = get_build_info(VERSION).get("type") == "development"
+            if not _comparable_version(VERSION) or development:
+                reason = ("development_build" if development
+                          else "running_version_unknown")
+                self._record_update_check("unknown", reason,
                                           latest=latest, checked_channel=channel)
+                message = (f"latest stable release is {latest}; this is a "
+                           "development build, so stable update availability "
+                           "is unknown and nothing was changed" if development else
+                           f"latest is {latest}; this build does not know its "
+                           "own version, so it cannot say whether it is "
+                           "behind, and nothing was changed")
                 return {"ok": True, "state": "unknown", "latest": latest,
                         "indeterminate": True, "update_available": False,
-                        "message": (f"latest is {latest}; this build does not know its "
-                                    "own version, so it cannot say whether it is "
-                                    "behind, and nothing was changed")}
+                        "message": message}
 
             newer = compare_key(latest) > compare_key(VERSION)
             state = "available" if newer else "current"
@@ -5889,17 +5908,23 @@ class ROMarr:
         env = selfupdate.detect()
         check = self._update_check_view()
         configured = bool(self.store.settings.get("auto_update", False))
-        effective = (configured and env.can_apply
+        scheduled = bool(self.store.settings.get("update_check", True))
+        development = get_build_info(VERSION).get("type") == "development"
+        effective = (configured and scheduled and env.can_apply
                      and check["channel"] == "stable"
-                     and _comparable_version(VERSION))
+                     and _comparable_version(VERSION) and not development)
         if not configured:
             capability_reason = "disabled"
+        elif not scheduled:
+            capability_reason = "update_check_disabled"
         elif not env.can_apply:
             capability_reason = "install_cannot_self_update"
         elif check["channel"] != "stable":
             capability_reason = "nightly_revision_check_not_supported"
         elif not _comparable_version(VERSION):
             capability_reason = "running_version_unknown"
+        elif development:
+            capability_reason = "development_build"
         else:
             capability_reason = "enabled"
         return {
@@ -5913,8 +5938,7 @@ class ROMarr:
                         "branch": env.branch, "commit": env.commit,
                         "repo": env.repo, "can_apply": env.can_apply},
             "settings": {
-                "update_check": bool(
-                    self.store.settings.get("update_check", True)),
+                "update_check": scheduled,
                 "auto_update": configured,
                 "auto_update_effective": effective,
                 "auto_update_reason": capability_reason,
