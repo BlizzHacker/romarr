@@ -638,6 +638,7 @@ class QBittorrent:
                         "torrents/info",
                         params={"tag": tag},
                         timeout=request_timeout,
+                        _deadline=deadline,
                     )
                     rows = response.json() if response.ok else []
                     matched = [
@@ -648,7 +649,9 @@ class QBittorrent:
                     ]
                 else:
                     matched = [
-                        row for row in self.torrents()
+                        row for row in self.torrents(
+                            timeout=request_timeout, _deadline=deadline
+                        )
                         if self._resumed_key(str(row.get("hash") or "")) == key
                     ]
             except (QbitAuthenticationError, requests.RequestException, ValueError):

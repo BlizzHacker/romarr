@@ -344,27 +344,30 @@ def test_back_to_back_grabs_from_new_collection_wait_for_resumed_state(tmp_path,
 
 
 def test_reuse_waits_for_checking_resume_data_and_lagged_resume_retained(tmp_path, monkeypatch):
-    """Issue #149: transitional states and recently-resumed paused rows settle before failing reuse."""
+    """Issue #149: transitional states settle inside `_await_resumed_row()` polling."""
     from romarr import clients as clients_mod
-    monkeypatch.setattr(clients_mod, "QBITTORRENT_RESUME_POLL_INTERVAL", 0.005)
-    monkeypatch.setattr(clients_mod, "QBITTORRENT_RESUME_CONFIRM_TIMEOUT", 1.0)
 
+    clock = {"now": 100.0}
+    sleeps: list[float] = []
     service, client, session = service_with_retained(tmp_path)
     session.row["state"] = "checkingResumeData"
-    checks = {"n": 0}
-    orig_get = session.get
 
-    def transitional_get(url, *, params=None, **kwargs):
-        """Transition checkingResumeData to stalledDL after repeated reads."""
-        if url.endswith("torrents/info") and session.row["state"] == "checkingResumeData":
-            checks["n"] += 1
-            if checks["n"] >= 3:
-                session.row["state"] = "stalledDL"
-        return orig_get(url, params=params, **kwargs)
+    def fake_monotonic():
+        """Return deterministic monotonic time."""
+        return clock["now"]
 
-    monkeypatch.setattr(session, "get", transitional_get)
+    def fake_sleep(seconds):
+        """Advance clock and flip state only once reuse polling has started."""
+        sleeps.append(seconds)
+        clock["now"] += seconds
+        if len(sleeps) >= 2:
+            session.row["state"] = "stalledDL"
+
+    monkeypatch.setattr(clients_mod.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(clients_mod.time, "sleep", fake_sleep)
     res = service.grab(release("B"), "B", "gb")
     assert res["ok"] is True
+    assert len(sleeps) == 2
     assert [f["priority"] for f in session.files] == [7, 1, 0]
 
 
@@ -389,34 +392,92 @@ def test_manually_stopped_torrent_after_resume_fails_without_polling(tmp_path, m
 def test_lagging_resume_retained_followed_by_grab_waits_grace_window(tmp_path, monkeypatch):
     """Issue #149: if resume_retained_collection finishes polling before state flips, reuse still waits."""
     from romarr import clients as clients_mod
-    monkeypatch.setattr(clients_mod, "QBITTORRENT_RESUME_POLL_INTERVAL", 0.005)
-    monkeypatch.setattr(clients_mod, "QBITTORRENT_RESUME_CONFIRM_TIMEOUT", 0.03)
+
+    clock = {"now": 1000.0}
+    phase = {"stage": "resume"}
+    resume_sleeps: list[float] = []
+    reuse_sleeps: list[float] = []
 
     service, client, session = service_with_retained(tmp_path)
     session.row["state"] = "stoppedUP"
     orig_post = session.post
-    orig_get = session.get
-    reads = {"n": 0}
+
+    def fake_monotonic():
+        """Return deterministic monotonic time."""
+        return clock["now"]
+
+    def fake_sleep(seconds):
+        """Advance fake clock and flip state only once reuse enters polling."""
+        clock["now"] += seconds
+        if phase["stage"] == "resume":
+            resume_sleeps.append(seconds)
+        else:
+            reuse_sleeps.append(seconds)
+            if len(reuse_sleeps) >= 2:
+                session.row["state"] = "downloading"
 
     def sticky_resume(url, *, data=None, **kwargs):
-        """Accept resume while temporarily keeping the row in its stopped state."""
+        """Accept resume while keeping the row stopped through the initial window."""
         if url.endswith("torrents/resume"):
             session.posts.append(("torrents/resume", deepcopy(data)))
             return Response()
         return orig_post(url, data=data, **kwargs)
 
-    def delayed_info(url, *, params=None, **kwargs):
-        """Flip row state to downloading once reuse polls past the initial window."""
-        if url.endswith("torrents/info") and any(p[0] == "torrents/resume" for p in session.posts):
-            reads["n"] += 1
-            # Flip after the first poll window would have expired, on reuse's poll.
-            if reads["n"] >= 8:
-                session.row["state"] = "downloading"
+    monkeypatch.setattr(clients_mod.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(clients_mod.time, "sleep", fake_sleep)
+    monkeypatch.setattr(session, "post", sticky_resume)
+
+    assert service.queue_action(0, "resume-retained")["ok"]
+    assert resume_sleeps
+    assert session.row["state"] == "stoppedUP"
+    assert client._recently_resumed(session.row["hash"])
+
+    clock["now"] += 2.0
+    phase["stage"] = "reuse"
+    assert service.grab(release("B"), "B", "gb")["ok"]
+    assert len(reuse_sleeps) == 2
+    assert [f["priority"] for f in session.files] == [7, 1, 0]
+
+
+def test_await_resumed_row_applies_confirmation_deadline_to_requests(tmp_path, monkeypatch):
+    """`_await_resumed_row` bounds both tagged and hash-only requests by the confirmation deadline."""
+    from romarr import clients as clients_mod
+
+    clock = {"now": 50.0}
+    seen_timeouts: list[float] = []
+    service, client, session = service_with_retained(tmp_path)
+    session.row["state"] = "pausedDL"
+    client._config = QbitConfig("http://synthetic-qbit", timeout=30)
+
+    def fake_monotonic():
+        """Return deterministic monotonic time."""
+        return clock["now"]
+
+    def fake_sleep(seconds):
+        """Advance fake clock by each polling wait."""
+        clock["now"] += seconds
+
+    orig_get = session.get
+
+    def recording_get(url, *, params=None, timeout=None, **kwargs):
+        """Record per-request timeout bounds passed from `_await_resumed_row`."""
+        seen_timeouts.append(timeout)
         return orig_get(url, params=params, **kwargs)
 
-    monkeypatch.setattr(session, "post", sticky_resume)
-    monkeypatch.setattr(session, "get", delayed_info)
-    assert service.queue_action(0, "resume-retained")["ok"]
-    monkeypatch.setattr(clients_mod, "QBITTORRENT_RESUME_CONFIRM_TIMEOUT", 0.5)
-    assert service.grab(release("B"), "B", "gb")["ok"]
-    assert [f["priority"] for f in session.files] == [7, 1, 0]
+    monkeypatch.setattr(clients_mod.time, "monotonic", fake_monotonic)
+    monkeypatch.setattr(clients_mod.time, "sleep", fake_sleep)
+    monkeypatch.setattr(session, "get", recording_get)
+
+    _, confirmed = client._await_resumed_row(session.row["hash"], timeout=1.0)
+    assert confirmed is False
+    assert seen_timeouts
+    assert all(t <= 1.0 for t in seen_timeouts)
+
+    seen_timeouts.clear()
+    clock["now"] = 50.0
+    _, confirmed_tag = client._await_resumed_row(
+        session.row["hash"], tag="romarr-collection-keep", timeout=1.0
+    )
+    assert confirmed_tag is False
+    assert seen_timeouts
+    assert all(t <= 1.0 for t in seen_timeouts)
