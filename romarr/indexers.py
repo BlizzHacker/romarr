@@ -226,6 +226,7 @@ class Prowlarr:
     """Minimal Prowlarr client: search, and grab server-side."""
 
     def __init__(self, config: ProwlarrConfig, session: requests.Session | None = None):
+        """Initialize Prowlarr client with optional shared HTTP session."""
         self._config = config
         self._owns_session = session is None
         self._session = session or requests.Session()
@@ -547,6 +548,7 @@ class Torznab:
     _ATTR_SUFFIX = "attr"
 
     def __init__(self, config: TorznabConfig, session: requests.Session | None = None):
+        """Initialize Torznab client with optional shared HTTP session."""
         self._config = config
         self._owns_session = session is None
         self._session = session or requests.Session()
@@ -695,6 +697,7 @@ class TorrentRss:
 
     def __init__(self, config: TorrentRssConfig,
                  session: requests.Session | None = None):
+        """Initialize TorrentRss feed client with optional shared HTTP session."""
         self._config = config
         self._owns_session = session is None
         self._session = session or requests.Session()
@@ -784,6 +787,7 @@ class TorrentPotato:
 
     def __init__(self, config: TorrentPotatoConfig,
                  session: requests.Session | None = None):
+        """Initialize TorrentPotato client with optional shared HTTP session."""
         self._config = config
         self._owns_session = session is None
         self._session = session or requests.Session()

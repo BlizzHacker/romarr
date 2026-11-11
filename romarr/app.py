@@ -1793,11 +1793,13 @@ class ROMarr:
         # must never lose another's results -- an indexer that is down, rate
         # limited or mid-login is the normal case across a dozen trackers, not
         # an outage worth abandoning the search for.
-        sources: list[tuple[str, object]] = [("prowlarr", self.prowlarr)]
+        prowlarr = self.prowlarr
+        sources: list[tuple[str, object]] = [("prowlarr", prowlarr)]
         sources += [(getattr(i, "name", "indexer"), i)
                     for i in getattr(self, "indexers", [])]
 
         def search_term(term):
+            """Query all captured indexer sources for one search string."""
             releases = []
             with ExitStack() as sessions:
                 for label, source in sources:
@@ -1807,7 +1809,7 @@ class ROMarr:
                             client = copy(source)
                         if getattr(source, "_owns_session", False):
                             client._session = sessions.enter_context(requests.Session())
-                        if isinstance(client, Prowlarr):
+                        if isinstance(client, Prowlarr) and source is prowlarr:
                             client._privacy = privacy
                         releases.extend(client.search(term))
                     except Exception as err:
@@ -1821,9 +1823,9 @@ class ROMarr:
         with ThreadPoolExecutor(max_workers=3) as pool:
             hub_search = pool.submit(self._hub_releases, game, platform)
             privacy = {}
-            if isinstance(self.prowlarr, Prowlarr):
+            if isinstance(prowlarr, Prowlarr):
                 try:
-                    privacy = self.prowlarr._private_ids()
+                    privacy = prowlarr._private_ids()
                 except Exception as err:
                     log.warning("prowlarr privacy lookup failed: %r", err)
             searches = [pool.submit(search_term, game),
