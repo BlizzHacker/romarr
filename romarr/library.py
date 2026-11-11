@@ -692,6 +692,8 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
     results: list[ImportResult] = []
     planned = []
     destinations = {}
+    file_destinations = {}
+    destination_parents = {}
     for chosen in chosen_sets:
         try:
             verdict = verify_set(source, chosen.members, dats)
@@ -723,11 +725,25 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
                     results.append(ImportResult(False, None, "invalid reviewed destination; review the bundle again"))
                     continue
                 destination = target_dir / relative
-        destination_key = str(destination).casefold()
-        if destination_key in destinations:
-            return [ImportResult(False, destination,
-                                 f"selected ROMs map to the same destination: {destinations[destination_key]} and {chosen.primary}; select one or give the sources distinct names")]
-        destinations[destination_key] = chosen.primary
+        destination_keys = {Path(str(destination).casefold())}
+        if not chosen.is_multi_file and bundle_routes is not None:
+            destination_keys.add(Path(str(destination.parent.resolve() / destination.name).casefold()))
+        for key in destination_keys:
+            if key in destinations:
+                return [ImportResult(False, destination,
+                                     f"selected ROMs map to the same destination: {destinations[key]} and {chosen.primary}; select one or give the sources distinct names")]
+            conflict = destination_parents.get(key) if not chosen.is_multi_file else None
+            for parent in key.parents:
+                conflict = conflict or file_destinations.get(parent)
+            if conflict is not None:
+                return [ImportResult(False, destination,
+                                     f"selected ROMs have conflicting destinations: {conflict} and {chosen.primary}; a file cannot also be a destination directory")]
+        for key in destination_keys:
+            destinations[key] = chosen.primary
+            if not chosen.is_multi_file:
+                file_destinations[key] = chosen.primary
+            for parent in key.parents:
+                destination_parents[parent] = chosen.primary
         planned.append((chosen, verdict, destination))
 
     for chosen, verdict, destination in planned:

@@ -202,6 +202,46 @@ def test_archive_collisions_use_reviewed_destinations(tmp_path, second_route):
         assert not (tmp_path / 'library').exists()
 
 
+@pytest.mark.parametrize('overwrite', [False, True])
+def test_symlink_destination_collision_publishes_nothing(tmp_path, overwrite):
+    download = tmp_path / 'download'
+    for title, payload in [('A', b'a'), ('B', b'b')]:
+        make_archive(download / (title + '.zip'), {'Game.gb': payload})
+    library = tmp_path / 'library'
+    target = library / 'gb'
+    (target / 'B').mkdir(parents=True)
+    (target / 'A').symlink_to('B', target_is_directory=True)
+    routes = {'A.zip/Game.gb': 'A/Game.gb', 'B.zip/Game.gb': 'B/Game.gb'}
+
+    result, = import_rom(download, resolve('gb'), library,
+                         bundle_routes=routes, overwrite=overwrite)
+
+    assert not result.ok
+    assert 'same destination' in result.reason
+    assert not list(library.rglob('*.gb'))
+    assert (target / 'A').is_symlink()
+
+
+@pytest.mark.parametrize('overwrite', [False, True])
+@pytest.mark.parametrize('reverse', [False, True])
+def test_file_and_child_destinations_publish_nothing(tmp_path, overwrite, reverse):
+    download = tmp_path / 'download'
+    for title, payload in [('A', b'a'), ('B', b'b')]:
+        make_archive(download / (title + '.zip'), {'Game.gb': payload})
+    paths = ['Game.gb', 'Game.gb/Other.gb']
+    if reverse:
+        paths.reverse()
+    routes = dict(zip(['A.zip/Game.gb', 'B.zip/Game.gb'], paths))
+    library = tmp_path / 'library'
+
+    result, = import_rom(download, resolve('gb'), library,
+                         bundle_routes=routes, overwrite=overwrite)
+
+    assert not result.ok
+    assert 'conflicting destinations' in result.reason
+    assert not library.exists()
+
+
 def test_unreadable_archive_names_source_and_publishes_nothing(tmp_path):
     """Report the bad archive before publishing any otherwise valid ROM."""
     download = tmp_path / 'download'
