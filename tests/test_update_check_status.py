@@ -2,10 +2,18 @@
 
 import threading
 
+import pytest
 import requests
 
 from romarr import selfupdate
 from romarr.app import ROMarr
+from romarr.scheduler import Scheduler
+
+
+@pytest.fixture(autouse=True)
+def _disable_scheduler(monkeypatch):
+    """Keep each test service from spawning a long-lived daily scheduler."""
+    monkeypatch.setattr(Scheduler, "start", lambda self: None)
 
 
 def _svc(tmp_path):
@@ -24,6 +32,7 @@ class Release:
 
 
 def test_initial_status_is_never_checked_even_with_legacy_cached_flag(tmp_path):
+    """Ignore legacy cached availability until a validated comparison exists."""
     svc = _svc(tmp_path)
     svc.store.settings["_latest_version"] = "9.9.9"
     svc.store.settings["_update_available"] = True
@@ -34,6 +43,7 @@ def test_initial_status_is_never_checked_even_with_legacy_cached_flag(tmp_path):
 
 
 def test_manual_command_cannot_notify_or_auto_apply(tmp_path, monkeypatch):
+    """Keep an operator-triggered check from notifying or launching an update."""
     svc = _svc(tmp_path)
     monkeypatch.setattr("romarr.app.VERSION", "1.8.1")
     svc.store.settings["auto_update"] = True
@@ -51,13 +61,14 @@ def test_manual_command_cannot_notify_or_auto_apply(tmp_path, monkeypatch):
 
 
 def test_scheduled_check_preserves_opted_in_apply_and_notify_once(tmp_path, monkeypatch):
+    """Preserve scheduled application and one notification per release."""
     svc = _svc(tmp_path)
     monkeypatch.setattr("romarr.app.VERSION", "1.8.1")
     svc.store.settings["auto_update"] = True
     monkeypatch.setattr(requests, "get", lambda *a, **kw: Release())
     notified, applied = [], []
     monkeypatch.setattr(svc, "notify", lambda *a: notified.append(a))
-    monkeypatch.setattr(svc, "apply_update", lambda: applied.append(True)
+    monkeypatch.setattr(svc, "apply_update", lambda **kwargs: applied.append(kwargs)
                         or {"ok": True, "message": "started"})
     assert svc.check_update()["ok"]
     assert svc.check_update()["ok"]
@@ -67,6 +78,7 @@ def test_scheduled_check_preserves_opted_in_apply_and_notify_once(tmp_path, monk
 
 def test_failed_check_clears_availability_without_erasing_last_success(
         tmp_path, monkeypatch):
+    """Keep the previous successful comparison while recording network failure."""
     svc = _svc(tmp_path)
     monkeypatch.setattr("romarr.app.VERSION", "1.8.1")
     monkeypatch.setattr(svc, "notify", lambda *a: [])
@@ -89,6 +101,7 @@ def test_failed_check_clears_availability_without_erasing_last_success(
 
 
 def test_unknown_build_has_unknown_state_not_current(tmp_path, monkeypatch):
+    """Expose unversioned builds as unknown rather than current."""
     svc = _svc(tmp_path)
     monkeypatch.setattr("romarr.app.VERSION", "0.0.0+unknown")
     monkeypatch.setattr(requests, "get", lambda *a, **kw: Release())
@@ -99,6 +112,7 @@ def test_unknown_build_has_unknown_state_not_current(tmp_path, monkeypatch):
 
 
 def test_nightly_channel_requires_separate_revision_check(tmp_path, monkeypatch):
+    """Avoid comparing a nightly checkout with a stable release tag."""
     svc = _svc(tmp_path)
     monkeypatch.setattr("romarr.app.VERSION", "1.8.1")
     svc.store.settings.update({"update_channel": "nightly", "auto_update": True})
@@ -114,6 +128,7 @@ def test_nightly_channel_requires_separate_revision_check(tmp_path, monkeypatch)
 
 
 def test_docker_configured_auto_apply_is_not_effective(tmp_path, monkeypatch):
+    """Expose a saved preference without claiming Docker can self-update."""
     svc = _svc(tmp_path)
     monkeypatch.setattr("romarr.app.VERSION", "1.8.1")
     svc.store.settings["auto_update"] = True
@@ -127,11 +142,13 @@ def test_docker_configured_auto_apply_is_not_effective(tmp_path, monkeypatch):
 
 def test_in_flight_manual_check_returns_busy_without_second_request(
         tmp_path, monkeypatch):
+    """Reject overlapping manual checks without extra network requests."""
     svc = _svc(tmp_path)
     monkeypatch.setattr("romarr.app.VERSION", "1.8.1")
     started, release = threading.Event(), threading.Event()
     count = []
     def blocking_get(*args, **kwargs):
+        """Hold the first fetch until another request attempts the check."""
         count.append(1)
         started.set()
         assert release.wait(5)
@@ -139,6 +156,7 @@ def test_in_flight_manual_check_returns_busy_without_second_request(
     monkeypatch.setattr(requests, "get", blocking_get)
     errors = []
     def run_first():
+        """Collect any failure from the in-flight worker thread."""
         try:
             svc.run_command("UpdateCheck")
         except BaseException as err:
@@ -160,6 +178,7 @@ def test_in_flight_manual_check_returns_busy_without_second_request(
 
 def test_saved_verdict_is_invalid_after_channel_or_build_change(
         tmp_path, monkeypatch):
+    """Invalidate previous verdicts after changing the comparator identity."""
     svc = _svc(tmp_path)
     monkeypatch.setattr("romarr.app.VERSION", "1.8.1")
     monkeypatch.setattr(requests, "get", lambda *a, **kw: Release())
@@ -175,6 +194,7 @@ def test_saved_verdict_is_invalid_after_channel_or_build_change(
 
 def test_invalid_release_payload_does_not_overwrite_known_latest(
         tmp_path, monkeypatch):
+    """Reject malformed GitHub metadata without destroying cached release data."""
     svc = _svc(tmp_path)
     monkeypatch.setattr("romarr.app.VERSION", "1.8.1")
     monkeypatch.setattr(requests, "get", lambda *a, **kw: Release())
@@ -191,6 +211,7 @@ def test_invalid_release_payload_does_not_overwrite_known_latest(
 
 def test_channel_change_during_network_request_never_applies_old_result(
         tmp_path, monkeypatch):
+    """Discard an in-flight check when its configured channel changes."""
     svc = _svc(tmp_path)
     monkeypatch.setattr("romarr.app.VERSION", "1.8.1")
     svc.store.settings["auto_update"] = True
@@ -199,6 +220,7 @@ def test_channel_change_during_network_request_never_applies_old_result(
     monkeypatch.setattr(svc, "apply_update", lambda: applied.append(True))
 
     def switch_channel(*args, **kwargs):
+        """Change the channel before returning a successful release response."""
         svc.store.settings["update_channel"] = "nightly"
         return Release()
 
@@ -209,3 +231,47 @@ def test_channel_change_during_network_request_never_applies_old_result(
     status = svc.update_status()
     assert status["check_status"]["reason"] == "build_or_channel_changed"
     assert status["update_available"] is False
+
+
+def test_notify_channel_switch_blocks_unchecked_nightly_launch(
+        tmp_path, monkeypatch):
+    """Notification-time channel changes cannot redirect a stable update."""
+    svc = _svc(tmp_path)
+    monkeypatch.setattr("romarr.app.VERSION", "1.8.1")
+    svc.store.settings["auto_update"] = True
+    monkeypatch.setattr(requests, "get", lambda *a, **kw: Release())
+    env = selfupdate.Environment(kind="git", repo=str(tmp_path), branch="main",
+                                 python="python3", commit="abc", service="romarr")
+    monkeypatch.setattr(selfupdate, "detect", lambda root=None: env)
+    launched = []
+    monkeypatch.setattr(selfupdate, "launch",
+                        lambda *a: launched.append(a) or {"ok": True})
+
+    def change_channel(_message):
+        """Simulate a preference change after the release was checked."""
+        svc.store.settings["update_channel"] = "nightly"
+        return []
+
+    monkeypatch.setattr(svc, "notify", change_channel)
+    outcome = svc.check_update()
+    assert outcome["ok"] is True
+    assert "auto-update did not run" in outcome["message"]
+    assert launched == []
+
+
+def test_unknown_unparseable_running_version_never_offers_update(
+        tmp_path, monkeypatch):
+    """Malformed local version data cannot compare as an old release."""
+    svc = _svc(tmp_path)
+    monkeypatch.setattr("romarr.app.VERSION", "development")
+    svc.store.settings["auto_update"] = True
+    monkeypatch.setattr(requests, "get", lambda *a, **kw: Release())
+    triggered = []
+    monkeypatch.setattr(svc, "notify", lambda *a: triggered.append(True))
+    monkeypatch.setattr(svc, "apply_update", lambda: triggered.append(True))
+    result = svc.check_update()
+    assert result["indeterminate"]
+    status = svc.update_status()
+    assert status["check_status"]["state"] == "unknown"
+    assert status["settings"]["auto_update_effective"] is False
+    assert not triggered

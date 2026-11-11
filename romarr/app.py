@@ -121,6 +121,13 @@ log = logging.getLogger(__name__)
 # upgrade to the build already running. See version.py.
 VERSION = derive_version()
 
+
+def _comparable_version(value: object) -> bool:
+    """Only well-formed, named versions may be ordered against release tags."""
+    text = str(value or "").strip().lstrip("vV")
+    return not is_unknown(value) and bool(re.fullmatch(
+        r"\d+(?:\.\d+)*(?:[.+_-]?[A-Za-z][A-Za-z0-9]*|[.+_-]\d+)*", text))
+
 # What ROMarr labels its own downloads with, so its jobs are distinguishable
 # from everything else in a shared client -- the same reason Radarr and Sonarr
 # each use a category of their own.
@@ -5684,6 +5691,8 @@ class ROMarr:
         reason = str(settings.get("_update_reason") or "not_checked")
         if state not in ("never_checked", "available", "current", "unknown", "error"):
             state, reason = "unknown", "invalid_saved_status"
+        elif state in ("available", "current") and not _comparable_version(VERSION):
+            state, reason = "unknown", "running_version_unknown"
         elif state != "never_checked" and (
                 settings.get("_update_checked_version") != VERSION
                 or settings.get("_update_checked_channel") != channel):
@@ -5755,7 +5764,7 @@ class ROMarr:
                 return failed("invalid_response", "github.com returned invalid release data")
             latest = str(body.get("tag_name") or "").lstrip("vV")
             url = str(body.get("html_url") or "")
-            if not re.fullmatch(r"\d+(?:\.\d+)*(?:[.+_-][A-Za-z0-9]+)*", latest):
+            if not _comparable_version(latest):
                 return failed("invalid_release",
                               "github.com answered without a valid release tag")
 
@@ -5777,7 +5786,7 @@ class ROMarr:
                         "indeterminate": True, "update_available": False,
                         "message": ("latest stable release is " + latest +
                                     "; nightly revision checks are not yet supported")}
-            if is_unknown(VERSION):
+            if not _comparable_version(VERSION):
                 self._record_update_check("unknown", "running_version_unknown",
                                           latest=latest, checked_channel=channel)
                 return {"ok": True, "state": "unknown", "latest": latest,
@@ -5801,7 +5810,8 @@ class ROMarr:
                     self.notify(update_available(VERSION, latest, url))
 
                 if self.store.settings.get("auto_update", False):
-                    applied = self.apply_update()
+                    applied = self.apply_update(expected_channel=channel,
+                                                expected_release=latest)
                     if applied.get("ok"):
                         return {"ok": True, "state": state, "latest": latest,
                                 "update_available": True,
@@ -5818,15 +5828,13 @@ class ROMarr:
         finally:
             self._update_check_lock.release()
 
-    def apply_update(self) -> dict:
-        """Update THIS ROMarr from its own GitHub repo, now.
+    def apply_update(self, *, expected_channel: str = "",
+                     expected_release: str = "") -> dict:
+        """Launch an explicit Git update; scheduled calls pin the checked target.
 
-        git installs: resolve the channel's target ref, refuse while the
-        queue is busy, then launch the detached updater (fetch, ff-only
-        merge, pip, service restart). Docker installs: cannot, and the
-        reply says exactly what the host must run instead. Nothing here
-        guesses -- the install shape is detected, and an unknown shape
-        refuses with the reason.
+        The optional expectation is only passed by a completed stable check.
+        Manual ApplyUpdate retains its original setting-driven behavior. The
+        channel, queue and target are validated under one lock through launch.
         """
         from . import selfupdate
 
@@ -5835,32 +5843,37 @@ class ROMarr:
             return selfupdate.docker_guidance()
         if not env.can_apply:
             return {"ok": False, "error": env.detail}
-        channel = str(self.store.settings.get("update_channel")
-                      or "stable").lower()
-        if channel not in ("stable", "nightly"):
-            return {"ok": False, "error": f"unknown update channel {channel!r}"}
         with self._lock:
-            # The stall timeout is passed so a grabbed row that died days ago
-            # does not defer the update forever -- see queue_busy.
+            channel = str(self.store.settings.get("update_channel")
+                          or "stable").lower()
+            if channel not in ("stable", "nightly"):
+                return {"ok": False, "error": f"unknown update channel {channel!r}"}
+            if expected_channel and (
+                    channel != expected_channel
+                    or not self.store.settings.get("auto_update", False)
+                    or self.store.settings.get("_latest_version") != expected_release):
+                return {"ok": False,
+                        "error": "update channel, release or auto-update preference "
+                                 "changed after the check; update not launched"}
             try:
                 stall = int(self.store.settings.get(
                     "stalled_timeout_minutes") or 0)
             except (TypeError, ValueError):
                 stall = 0
-            busy = selfupdate.queue_busy(self.queue, stall_minutes=stall)
-        if busy:
-            return {"ok": False, "deferred": True,
-                    "error": "downloads or imports are in flight; the update "
-                             "will apply on the next daily check"}
-        latest = str(self.store.settings.get("_latest_version") or "")
-        if channel == "nightly":
-            # Nightly tracks main, so "newer" is not a version question:
-            # fetch and let --ff-only decide whether anything moved.
-            latest = latest or VERSION
-        target, why = selfupdate.resolve_target(env, channel, latest)
-        if not target:
-            return {"ok": False, "error": why}
-        result = selfupdate.launch(env, target)
+            if selfupdate.queue_busy(self.queue, stall_minutes=stall):
+                return {"ok": False, "deferred": True,
+                        "error": "downloads or imports are in flight; the update "
+                                 "will apply on the next daily check"}
+            latest = (expected_release if expected_channel else
+                      str(self.store.settings.get("_latest_version") or ""))
+            if channel == "nightly":
+                latest = latest or VERSION
+            target, why = selfupdate.resolve_target(env, channel, latest)
+            if not target:
+                return {"ok": False, "error": why}
+            # The same lock protects HTTP settings writes. The target remains
+            # pinned to the checked release, never re-read as origin/main.
+            result = selfupdate.launch(env, target)
         if result.get("ok"):
             self.store.record(Event(kind="update", game="", platform="",
                                     release=VERSION,
@@ -5878,14 +5891,14 @@ class ROMarr:
         configured = bool(self.store.settings.get("auto_update", False))
         effective = (configured and env.can_apply
                      and check["channel"] == "stable"
-                     and not is_unknown(VERSION))
+                     and _comparable_version(VERSION))
         if not configured:
             capability_reason = "disabled"
         elif not env.can_apply:
             capability_reason = "install_cannot_self_update"
         elif check["channel"] != "stable":
             capability_reason = "nightly_revision_check_not_supported"
-        elif is_unknown(VERSION):
+        elif not _comparable_version(VERSION):
             capability_reason = "running_version_unknown"
         else:
             capability_reason = "enabled"
@@ -8693,7 +8706,9 @@ def make_handler(service: ROMarr):
                 secret = body.get("_oidc_client_secret")
                 if "_oidc_client_secret" in body and secret in ("", "********"):
                     body.pop("_oidc_client_secret")
-                updated = service.store.update_settings(body)
+                # Serialize public settings writes with the updater launch.
+                with service._lock:
+                    updated = service.store.update_settings(body)
                 if any(str(k).startswith("oidc") or k == "_oidc_client_secret"
                        for k in body):
                     # An SSO change takes effect at the next login attempt,
