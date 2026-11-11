@@ -224,3 +224,128 @@ def test_an_unexpected_error_in_the_retry_thread_is_logged_not_raised():
     romm._headers = broken
     timers.fire()
     assert romm._deferred_scan == {"gba"}
+
+
+def test_rescan_with_custom_fs_slug_sends_folder_name_verbatim():
+    """Issue #154 Bug A: custom platform_folders must be forwarded verbatim."""
+    romm, session = client({"/api/tasks/scan": Resp(200, {"status": "queued"})})
+    assert romm.rescan("psx", fs_slug="Sony - PSX") is True
+    assert session.posts == [
+        ("/api/tasks/scan", {"type": "quick", "platform_fs_slugs": ["Sony - PSX"]})]
+    session.posts.clear()
+    assert romm.rescan("genesis-slash-megadrive", fs_slug="Sega - Genesis") is True
+    assert session.posts == [
+        ("/api/tasks/scan", {"type": "quick", "platform_fs_slugs": ["Sega - Genesis"]})]
+
+
+def test_rescan_fallback_and_deferred_retry_preserve_custom_fs_slug():
+    """Issue #154 Bug A: legacy fallback and 409 deferred retry preserve custom folders."""
+    romm, session = client({"/api/tasks/run/scan_library": Resp(200, {})})
+    # Force legacy path directly.
+    romm._scan_endpoint = False
+    romm._scan_task = "scan_library"
+    assert romm.rescan("psx", fs_slug="Sony - PSX") is True
+    assert session.posts == [
+        ("/api/tasks/run/scan_library", {"scan_type": "quick", "platforms": ["Sony - PSX"]})]
+
+    romm2, session2, timers = busy_client(BUSY, Resp(202, {}))
+    assert romm2.rescan("psx", fs_slug="Sony - PSX") is True
+    timers.fire()
+    assert session2.posts[-1] == (
+        "/api/tasks/scan", {"type": "quick", "platform_fs_slugs": ["Sony - PSX"]})
+
+
+def test_rescan_rejects_unsafe_fs_slug():
+    """Path separators or traversal segments must fail closed without calling RomM."""
+    romm, session = client({"/api/tasks/scan": Resp(200, {"status": "queued"})})
+    for bad in ("../outside", "a/b", "a\\b", ".", "..", "foo\x00bar", ""):
+        assert romm.rescan("psx", fs_slug=bad) is False
+    assert session.posts == []
+
+
+def test_service_rescan_passes_platform_folder_on_adopt_and_import(tmp_path):
+    """Issue #154 Bug A: adopt() and import_finished() pass custom fs_slug to RomM rescan."""
+    import types
+    from romarr.app import ROMarr
+
+    romm, session = client({"/api/tasks/scan": Resp(200, {"status": "queued"})})
+    svc = ROMarr(env={"ROMARR_DATA": str(tmp_path / "s.json"),
+                      "LIBRARY_PATH": str(tmp_path / "lib")})
+    svc.store.update_settings({"platform_folders": {"psx": "Sony - PSX"}})
+    svc.reload_policy()
+
+    # Check both with Romm backend and with a minimal test double lacking fs_slug.
+    svc._rescan_library(romm, None, "psx")
+    assert session.posts == [
+        ("/api/tasks/scan", {"type": "quick", "platform_fs_slugs": ["Sony - PSX"]})]
+
+    calls = []
+    minimal = types.SimpleNamespace(rescan=lambda slug: calls.append(slug) or True)
+    svc._rescan_library(minimal, None, "psx")
+    assert calls == ["psx"]
+
+    # Real adopt() path hits _rescan_library -> RomM receives Sony - PSX.
+    session.posts.clear()
+    (tmp_path / "lib").mkdir(parents=True, exist_ok=True)
+    src = tmp_path / "Game (USA).bin"
+    src.write_bytes(b"DISC" * 2048)
+    svc.game_libraries = [({"id": "primary", "type": "romm", "path": str(tmp_path / "lib")}, romm)]
+    svc.game_library = svc.romm = romm
+    res = svc.adopt(str(src), "psx")
+    assert res["ok"], res
+    assert session.posts == [
+        ("/api/tasks/scan", {"type": "quick", "platform_fs_slugs": ["Sony - PSX"]})]
+
+    # Real import_finished() path also forwards Sony - PSX to RomM rescan.
+    from romarr.store import QueueItem
+    import types as _types
+
+    session.posts.clear()
+    dl_file = tmp_path / "completed" / "Castlevania (USA).chd"
+    dl_file.parent.mkdir(parents=True, exist_ok=True)
+    dl_file.write_bytes(b"CHD" * 2048)
+    svc.queue.append(QueueItem(
+        game="Castlevania", platform="psx",
+        release="Castlevania (USA).chd", seeders=1, state="grabbed",
+        download_id="dl-154", download_client="stub", indexer="test",
+    ))
+    svc.clients = [_types.SimpleNamespace(
+        configured=True, romarr_id="stub", protocol="usenet",
+        completed=lambda: [{
+            "id": "dl-154", "name": "Castlevania (USA).chd",
+            "content_path": str(dl_file), "category": "romarr",
+        }],
+    )]
+    imp = svc.import_finished()
+    assert imp and imp[0]["ok"], imp
+    assert session.posts == [
+        ("/api/tasks/scan", {"type": "quick", "platform_fs_slugs": ["Sony - PSX"]})]
+
+
+def test_rescan_uses_import_time_platform_folders_snapshot(tmp_path, monkeypatch):
+    """Changing platform_folders mid-import must not redirect the post-import rescan."""
+    import romarr.app as app_mod
+
+    romm, session = client({"/api/tasks/scan": Resp(200, {"status": "queued"})})
+    svc = app_mod.ROMarr(env={"ROMARR_DATA": str(tmp_path / "s.json"),
+                              "LIBRARY_PATH": str(tmp_path / "lib")})
+    svc.store.update_settings({"platform_folders": {"psx": "Sony - PSX"}})
+    (tmp_path / "lib").mkdir(parents=True, exist_ok=True)
+    src = tmp_path / "Game (USA).bin"
+    src.write_bytes(b"DISC" * 2048)
+    svc.game_libraries = [({"id": "primary", "type": "romm", "path": str(tmp_path / "lib")}, romm)]
+    svc.game_library = svc.romm = romm
+
+    real_import = app_mod.import_rom
+
+    def mutating_import(*args, **kwargs):
+        """Mutate platform_folders during import to simulate concurrent config edit."""
+        out = real_import(*args, **kwargs)
+        svc.store.settings["platform_folders"] = {"psx": "Changed Mid-Import"}
+        return out
+
+    monkeypatch.setattr(app_mod, "import_rom", mutating_import)
+    res = svc.adopt(str(src), "psx")
+    assert res["ok"], res
+    assert session.posts == [
+        ("/api/tasks/scan", {"type": "quick", "platform_fs_slugs": ["Sony - PSX"]})]

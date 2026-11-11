@@ -196,3 +196,84 @@ def test_audit_exact_duplicates_include_copier_header_bytes(tmp_path):
     state = _wait_done(svc)
     assert state["scanned"] == 2
     assert state["duplicates"] == []
+
+
+def test_audit_and_quarantine_work_with_custom_platform_folders(tmp_path):
+    """Issue #154: audit, duplicate quarantine, and restore honor platform_folders."""
+    import hashlib
+    import zlib
+    from romarr.dat import DatIndex
+
+    body = b"CUSTOMFOLDER"
+    xml = ('<datafile><header><name>Custom Folder Audit</name></header>'
+           '<game name="Game (USA)">'
+           '<rom name="Game.smc" size="' + str(len(body)) + '" crc="'
+           + f"{zlib.crc32(body) & 0xFFFFFFFF:08x}" + '" md5="'
+           + hashlib.md5(body).hexdigest() + '" sha1="'
+           + hashlib.sha1(body).hexdigest() + '"/></game></datafile>')
+    svc = _svc(tmp_path)
+    svc.store.update_settings({"platform_folders": {"snes": "Nintendo - Super Nintendo"}})
+    index = DatIndex()
+    index.add(parse_dat(xml))
+    svc.dats = index
+
+    shelf = tmp_path / "lib" / "Nintendo - Super Nintendo"
+    shelf.mkdir(parents=True)
+    (shelf / "Game (USA).smc").write_bytes(body)
+    (shelf / "Copy.smc").write_bytes(body)
+
+    svc.audit_library("snes")
+    state = _wait_done(svc)
+    assert state["scanned"] == 2
+    assert len(state["duplicates"]) == 1
+    moved = svc.quarantine_duplicates("snes", [{"file": state["duplicates"][0]["file"]}])
+    assert moved["ok"], moved
+    assert not (shelf / moved["entries"][0]["original"]).exists()
+    restored = svc.restore_duplicate(moved["manifest_id"], moved["entries"][0]["id"])
+    assert restored["ok"]
+    assert (shelf / moved["entries"][0]["original"]).read_bytes() == body
+
+
+def test_audit_keeps_library_root_snapshot_if_library_changes_mid_audit(tmp_path, monkeypatch):
+    """Changing svc.library mid-audit must not raise ValueError on path.relative_to."""
+    import hashlib
+    import zlib
+    import romarr.dat as dat_mod
+    from romarr.dat import DatIndex
+
+    body = b"SNAPSHOTTEST"
+    xml = ('<datafile><header><name>Snapshot Audit</name></header>'
+           '<game name="Good (USA)">'
+           '<rom name="Good.smc" size="' + str(len(body)) + '" crc="'
+           + f"{zlib.crc32(body) & 0xFFFFFFFF:08x}" + '" md5="'
+           + hashlib.md5(body).hexdigest() + '" sha1="'
+           + hashlib.sha1(body).hexdigest() + '"/></game></datafile>')
+    svc = _svc(tmp_path)
+    index = DatIndex()
+    index.add(parse_dat(xml))
+    svc.dats = index
+
+    shelf = tmp_path / "lib" / "snes"
+    shelf.mkdir(parents=True)
+    (shelf / "Good.smc").write_bytes(body)
+    (shelf / "Dup.smc").write_bytes(body)
+    (shelf / "Bad.smc").write_bytes(b"WRONGBYTES12")
+
+    real_hash_file = dat_mod.hash_file
+    relocated = tmp_path / "other-lib"
+    relocated.mkdir(parents=True)
+
+    def mutate_library_on_hash(path, **kwargs):
+        """Swap svc.library to a sibling directory while audit is running."""
+        svc.library = relocated
+        return real_hash_file(path, **kwargs)
+
+    monkeypatch.setattr(dat_mod, "hash_file", mutate_library_on_hash)
+    out = svc.audit_library("snes")
+    assert "error" not in out
+    state = _wait_done(svc)
+    assert state["status"] == "done"
+    assert state["scanned"] == 3
+    assert state["verified"] == 2
+    assert state["bad"] == 1
+    assert len(state["duplicates"]) == 1

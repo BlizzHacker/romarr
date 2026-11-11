@@ -312,3 +312,87 @@ def test_retrobat_uses_system_folders_and_keeps_switch_generations_separate(tmp_
         assert result["ok"], result
         assert (root / folder / filename).read_bytes() == payload
     assert retrobat.count() == len(cases)
+
+
+def test_romm_test_library_warns_on_platform_binding_and_duplicate_folder_mismatch(tmp_path):
+    """Issue #154 minor: warn when RomM fs_slug bindings or disk folders diverge from platform_folders."""
+    from romarr.clients import Romm
+
+    root = tmp_path / "roms"
+    (root / "Sony - PSX").mkdir(parents=True)
+    service = svc(tmp_path)
+
+    class Resp:
+        def __init__(self, payload, status=200):
+            self._payload = payload
+            self.status_code = status
+            self.ok = status < 400
+            self.text = ""
+
+        def json(self):
+            return self._payload
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError(self.status_code)
+
+    class FakeSession:
+        def __init__(self, platforms_payload):
+            self.platforms_payload = platforms_payload
+
+        def get(self, url, params=None, headers=None, timeout=None, verify=None):
+            if url.endswith("/api/platforms"):
+                return Resp(self.platforms_payload)
+            return Resp({"items": [], "total": 0})
+
+    class StubRomm(Romm):
+        def reachable(self):
+            return True
+
+    # 1. ROMarr sets Sony - PSX, RomM still binds psx -> psx, AND stray psx/ exists on disk.
+    (root / "psx").mkdir()
+    service.store.update_settings({"platform_folders": {"psx": "Sony - PSX"}})
+    cfg = {"id": "romm-1", "type": "romm", "url": "http://romm.example",
+           "api_token": "tok", "path": str(root)}
+    backend_mismatch = StubRomm(
+        type("Cfg", (), {"base_url": "http://romm.example", "timeout": 5, "username": "", "password": "", "api_token": "tok"})(),
+        session=FakeSession([{"slug": "psx", "fs_slug": "psx", "display_name": "PlayStation", "rom_count": 5}]),
+    )
+    import romarr.app as app_mod
+    orig_builder = app_mod.build_library_from_config
+    try:
+        app_mod.build_library_from_config = lambda _c: backend_mismatch
+        res1 = service.test_library(cfg)
+        assert res1["ok"] is True and res1["path_ok"] is True
+        assert "Sony - PSX" in res1["message"]
+        assert res1["warnings"]
+
+        # 2. RomM expects Sony - PSX, ROMarr has no platform_folders override.
+        (root / "psx").rmdir()
+        service.store.update_settings({"platform_folders": {}})
+        backend_romm_custom = StubRomm(
+            type("Cfg", (), {"base_url": "http://romm.example", "timeout": 5, "username": "", "password": "", "api_token": "tok"})(),
+            session=FakeSession([{"slug": "psx", "fs_slug": "Sony - PSX", "display_name": "PlayStation", "rom_count": 0}]),
+        )
+        app_mod.build_library_from_config = lambda _c: backend_romm_custom
+        res2 = service.test_library(cfg)
+        assert res2["ok"] is True
+        assert "Sony - PSX" in res2["message"]
+
+        # 3. Both aligned (platform_folders=Sony - PSX, RomM fs_slug=Sony - PSX, no stray psx/),
+        # plus empty sibling RomM platforms like nintendo-dsi must not cause false warnings.
+        (root / "Nintendo - DS").mkdir()
+        service.store.update_settings({"platform_folders": {"psx": "Sony - PSX", "nds": "Nintendo - DS"}})
+        backend_aligned = StubRomm(
+            type("Cfg", (), {"base_url": "http://romm.example", "timeout": 5, "username": "", "password": "", "api_token": "tok"})(),
+            session=FakeSession([
+                {"slug": "psx", "fs_slug": "Sony - PSX", "display_name": "PlayStation", "rom_count": 5},
+                {"slug": "nds", "fs_slug": "Nintendo - DS", "display_name": "Nintendo DS", "rom_count": 0},
+                {"slug": "nintendo-dsi", "fs_slug": "nintendo-dsi", "display_name": "Nintendo DSi", "rom_count": 0},
+            ]),
+        )
+        app_mod.build_library_from_config = lambda _c: backend_aligned
+        res3 = service.test_library(cfg)
+        assert res3 == {"ok": True, "path_ok": True, "message": "Connected"}
+    finally:
+        app_mod.build_library_from_config = orig_builder

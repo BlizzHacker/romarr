@@ -1373,8 +1373,28 @@ class Romm:
     # this off whichever library is attached, so it is part of the protocol.
     BACKGROUND_TIMEOUT = DEFAULT_BACKGROUND_TIMEOUT
 
+    def _fetch_platforms(self) -> list[dict]:
+        """Fetch raw platform records from RomM's `/api/platforms` endpoint."""
+        url = f"{self._config.base_url.rstrip('/')}/api/platforms"
+        response = self._get(url, {}, self.HEALTH_TIMEOUT)
+        response.raise_for_status()
+        payload = response.json()
+        rows = payload if isinstance(payload, list) else payload.get("items", [])
+        out = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            out.append({
+                "platform": str(row.get("display_name") or row.get("name")
+                                or row.get("slug") or ""),
+                "slug": str(row.get("slug") or ""),
+                "fs_slug": str(row.get("fs_slug") or ""),
+                "count": int(row.get("rom_count") or 0),
+            })
+        return out
+
     def platforms(self) -> list[dict]:
-        """Every platform and its rom count, in one fast call.
+        """Every populated platform and its rom count, in one fast call.
 
         The shelf's platform chips used to be derived from whatever rows the
         background walk had cached so far, which meant a 166,578-game
@@ -1386,27 +1406,18 @@ class Romm:
         request against an endpoint with no rows in it, and the answer is
         the whole truth rather than a prefix of it.
         """
-        url = f"{self._config.base_url.rstrip('/')}/api/platforms"
-        response = self._get(url, {}, self.HEALTH_TIMEOUT)
-        response.raise_for_status()
-        payload = response.json()
-        rows = payload if isinstance(payload, list) else payload.get("items", [])
-        out = []
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            count = int(row.get("rom_count") or 0)
-            # Platforms RomM defines but holds nothing for are noise: it
-            # ships 393 of them and this library has content in 84.
-            if count <= 0:
-                continue
-            out.append({
-                "platform": str(row.get("display_name") or row.get("name")
-                                or row.get("slug") or ""),
-                "slug": str(row.get("slug") or ""),
-                "count": count,
-            })
+        # Platforms RomM defines but holds nothing for are noise: it
+        # ships 393 of them and this library has content in 84.
+        out = [row for row in self._fetch_platforms() if row["count"] > 0]
         return sorted(out, key=lambda p: (-p["count"], p["platform"]))
+
+    def platform_bindings(self) -> list[dict]:
+        """Return every RomM platform binding, including empty platforms.
+
+        Used to detect folder-name mismatches against ROMarr's configured
+        `platform_folders` before imports create duplicate platforms in RomM.
+        """
+        return [row for row in self._fetch_platforms() if row["slug"]]
 
     def hashes(self, limit: int = 500, offset: int = 0,
                timeout: int | None = None) -> tuple[list[dict], int]:
@@ -1621,7 +1632,7 @@ class Romm:
             # rescan() folds the rest of the set back in.
             slug = self._deferred_scan.pop()
         try:
-            ok = self.rescan(slug)
+            ok = self.rescan(fs_slug=slug) if slug is not None else self.rescan()
         except Exception as err:  # a timer thread has no caller to raise to
             log.warning("romm deferred rescan failed: %s", err)
             ok = False
@@ -1631,7 +1642,8 @@ class Romm:
             with self._deferred_lock:
                 self._deferred_scan.add(slug)
 
-    def rescan(self, platform_slug: str | None = None) -> bool:
+    def rescan(self, platform_slug: str | None = None, *,
+               fs_slug: str | None = None) -> bool:
         """Ask RomM to pick up newly-imported files.
 
         Optional by design. The import has already put the ROM in the library
@@ -1640,13 +1652,25 @@ class Romm:
         logged and reported, never raised, because a successful import must not
         be reported as a failure over a courtesy call.
 
+        When `fs_slug` is provided (from `platform_folders`), it is sent verbatim
+        as RomM's folder identifier rather than translated via `romm_fs_slug`.
+
         RomM 4.x to 5.3 runs this through its task runner; 5.4 refuses
         `scan_library` there and takes `POST /api/tasks/scan` instead. The
         older /api/scan is gone and returned 404, which looked like a broken
         service rather than a moved endpoint.
         """
-        from .platforms import romm_fs_slug
-        platform_slug = romm_fs_slug(platform_slug) if platform_slug else None
+        if fs_slug is not None:
+            if (not isinstance(fs_slug, str) or not fs_slug
+                    or fs_slug != fs_slug.strip() or fs_slug in (".", "..")
+                    or "/" in fs_slug or "\\" in fs_slug
+                    or any(ord(c) < 32 for c in fs_slug)):
+                log.warning("refusing unsafe romm rescan folder %r", fs_slug)
+                return False
+            platform_slug = fs_slug
+        else:
+            from .platforms import romm_fs_slug
+            platform_slug = romm_fs_slug(platform_slug) if platform_slug else None
         base = self._config.base_url.rstrip("/")
         response = None
         # RomM 5.4 stopped running `scan_library` on demand through the
