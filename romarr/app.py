@@ -451,6 +451,8 @@ class ROMarr:
         # carrying Prowlarr's API key.
         self._candidates: dict[str, dict] = {}
         self._lock = threading.Lock()
+        # A manual check and the daily sweep must never overlap or auto-apply twice.
+        self._update_check_lock = threading.Lock()
         self._collection_lock = threading.RLock()
         # Background sweeps overlap, and client I/O happens before the queue row
         # exists. Reserve a game during that gap, then let the queue row take
@@ -5173,7 +5175,7 @@ class ROMarr:
         split = self.library_split()
         return {
             "version": VERSION,
-            "update_available": bool(self.store.settings.get("_update_available")),
+            "update_available": self._update_check_view()["update_available"],
             "latest_version": self.store.settings.get("_latest_version", ""),
             "uptime_seconds": int(time.monotonic() - self._started),
             "library_games": games,
@@ -5649,86 +5651,158 @@ class ROMarr:
             base = f"{scheme}://{request_host}"
         return f"{base}/oidc/callback" if base else "/oidc/callback"
 
-    def check_update(self) -> dict:
-        """Ask github.com whether a newer ROMarr exists, and -- only when the
-        operator turned auto_update on -- apply it through apply_update()."""
+    def _record_update_check(self, state: str, reason: str, *,
+                             latest: str = "", error: str = "") -> None:
+        """Persist one completed check without erasing the last good comparison.
+
+        The legacy Boolean is cleared for unknown/error outcomes, rather than
+        presenting a cached availability flag as a new successful check.
+        """
+        stamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        with self._lock:
+            settings = self.store.settings
+            settings["_update_state"] = state
+            settings["_update_reason"] = reason
+            settings["_update_last_attempt"] = stamp
+            settings["_update_error"] = error
+            settings["_update_checked_version"] = VERSION
+            settings["_update_checked_channel"] = str(
+                settings.get("update_channel") or "stable").lower()
+            settings["_update_available"] = state == "available"
+            if latest:
+                settings["_latest_version"] = latest
+            if state in ("current", "available"):
+                settings["_update_last_success"] = stamp
+            self.store.save()
+
+    def _update_check_view(self) -> dict:
+        """Snapshot the check verdict; invalidate it after a build/channel change."""
+        with self._lock:
+            settings = dict(self.store.settings)
+        channel = str(settings.get("update_channel") or "stable").lower()
+        state = str(settings.get("_update_state") or "never_checked")
+        reason = str(settings.get("_update_reason") or "not_checked")
+        if state not in ("never_checked", "available", "current", "unknown", "error"):
+            state, reason = "unknown", "invalid_saved_status"
+        elif state != "never_checked" and (
+                settings.get("_update_checked_version") != VERSION
+                or settings.get("_update_checked_channel") != channel):
+            state, reason = "unknown", "build_or_channel_changed"
+        return {
+            "state": state,
+            "reason": reason,
+            "channel": channel,
+            "last_attempt_at": settings.get("_update_last_attempt") or "",
+            "last_success_at": settings.get("_update_last_success") or "",
+            "last_error": (settings.get("_update_error") or ""
+                           if state == "error" else ""),
+            "latest_version": settings.get("_latest_version") or "",
+            "update_available": state == "available",
+            "in_progress": self._update_check_lock.locked(),
+        }
+
+    def check_update(self, *, manual: bool = False) -> dict:
+        """Check the stable release without concurrent requests or stale writes.
+
+        The explicit command is check-only; the daily scheduler may notify or
+        apply under the existing opt-in. Nightly revision discovery is separate.
+        """
         import requests as _requests
-        headers = {"Accept": "application/vnd.github+json"}
-        # Unauthenticated GitHub API calls are rate limited to 60/hour per
-        # IP, and a homelab NAT shares one IP across every container that
-        # ever touched the API. A token lifts that to 5,000/hour; without
-        # one a 403 is almost always the limit, and saying "could not
-        # reach github.com" sent operators hunting for a network fault
-        # that did not exist.
-        token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
-        if token:
-            headers["Authorization"] = f"Bearer {token}"
+
+        if not self._update_check_lock.acquire(blocking=False):
+            return {"ok": False, "busy": True, "update_available": False,
+                    "message": "an update check is already in progress"}
         try:
-            response = _requests.get(self.RELEASES_URL, timeout=10,
-                                     headers=headers)
-            if response.status_code in (403, 429) and not token:
-                reset = response.headers.get("X-RateLimit-Reset") or ""
-                return {"ok": False,
-                        "message": "github.com rate-limited this address "
+            def failed(reason: str, message: str) -> dict:
+                self._record_update_check("error", reason, error=message)
+                return {"ok": False, "state": "error", "reason": reason,
+                        "update_available": False, "message": message}
+
+            headers = {"Accept": "application/vnd.github+json"}
+            token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+            try:
+                response = _requests.get(self.RELEASES_URL, timeout=10,
+                                         headers=headers)
+                if response.status_code in (403, 429):
+                    reset = response.headers.get("X-RateLimit-Reset") or ""
+                    if response.status_code == 429 or not token:
+                        message = ("github.com rate-limited this address "
                                    "(unauthenticated API: 60 requests/hour "
                                    "per IP, shared across your network). "
                                    "Set GITHUB_TOKEN in the environment to "
-                                   "lift it to 5,000/hour"
-                                   + (f"; limit resets at {reset}" if reset
-                                      else "")}
-            response.raise_for_status()
-            body = response.json()
-        except Exception as err:
-            return {"ok": False,
-                    "message": f"could not reach github.com: {err.__class__.__name__}"}
-        latest = str(body.get("tag_name") or "").lstrip("vV")
-        url = str(body.get("html_url") or "")
-        if not latest:
-            return {"ok": False, "message": "github.com answered without a tag"}
+                                   "lift it to 5,000/hour" if not token else
+                                   "github.com rate-limited the update check")
+                        if reset:
+                            message += f"; limit resets at {reset}"
+                        return failed("rate_limited", message)
+                    return failed("request_denied",
+                                  "github.com denied the update check (HTTP 403)")
+                response.raise_for_status()
+                body = response.json()
+            except Exception as err:
+                return failed("request_failed",
+                              f"could not reach github.com: {err.__class__.__name__}")
 
-        if is_unknown(VERSION):
-            # Refuse before any side effect, never after. Every real release
-            # outranks 0.0.0+unknown, so this build would otherwise report a
-            # permanent update, notify once per release about news it cannot
-            # verify, and -- with auto_update on -- start an update from a
-            # version it cannot name. Record "no update" so a stale banner from
-            # a previous build clears, and say plainly why nothing was done.
-            self.store.settings["_latest_version"] = latest
-            self.store.settings["_update_available"] = False
-            self.store.save()
-            return {"ok": True, "latest": latest, "update_available": False,
-                    "indeterminate": True,
-                    "message": (f"latest is {latest}; this build does not know its "
-                                f"own version, so it cannot say whether it is "
-                                f"behind, and nothing was changed")}
+            if not isinstance(body, dict):
+                return failed("invalid_response", "github.com returned invalid release data")
+            latest = str(body.get("tag_name") or "").lstrip("vV")
+            url = str(body.get("html_url") or "")
+            if not re.fullmatch(r"\d+(?:\.\d+)*(?:[.+_-][A-Za-z0-9]+)*", latest):
+                return failed("invalid_release",
+                              "github.com answered without a valid release tag")
 
-        # compare_key normalizes trailing zeros, ranks a final release above
-        # its prereleases, and ranks .post releases after the release they patch.
-        newer = compare_key(latest) > compare_key(VERSION)
-        self.store.settings["_latest_version"] = latest
-        self.store.settings["_update_available"] = newer
-        if newer and self.store.settings.get("_update_notified") != latest:
-            # Once per version, not once per day: the daily check repeating
-            # the same news is an alarm everybody learns to ignore.
-            self.store.settings["_update_notified"] = latest
-            self.notify(update_available(VERSION, latest, url))
-        self.store.save()
-        # Auto-apply is the operator's explicit choice, checked once per day
-        # here and never in a request path. A busy queue defers to the next
-        # sweep rather than restarting mid-import.
-        if newer and self.store.settings.get("auto_update", False):
-            applied = self.apply_update()
-            if applied.get("ok"):
-                return {"ok": True, "latest": latest, "update_available": True,
-                        "message": applied["message"]}
-            message = (f"{latest} is available; auto-update did not run: "
-                       f"{applied.get('error', '')}")
-            return {"ok": True, "latest": latest, "update_available": True,
-                    "message": message}
-        message = (f"{latest} is available (running {VERSION})" if newer
-                   else f"up to date ({VERSION})")
-        return {"ok": True, "latest": latest, "update_available": newer,
-                "message": message}
+            channel = str(self.store.settings.get("update_channel")
+                          or "stable").lower()
+            if channel != "stable":
+                # A stable GitHub release is not a comparison against origin/main.
+                self._record_update_check("unknown",
+                                          "nightly_revision_not_checked",
+                                          latest=latest)
+                return {"ok": True, "state": "unknown", "latest": latest,
+                        "indeterminate": True, "update_available": False,
+                        "message": ("latest stable release is " + latest +
+                                    "; nightly revision checks are not yet supported")}
+            if is_unknown(VERSION):
+                self._record_update_check("unknown", "running_version_unknown",
+                                          latest=latest)
+                return {"ok": True, "state": "unknown", "latest": latest,
+                        "indeterminate": True, "update_available": False,
+                        "message": (f"latest is {latest}; this build does not know its "
+                                    "own version, so it cannot say whether it is "
+                                    "behind, and nothing was changed")}
+
+            newer = compare_key(latest) > compare_key(VERSION)
+            state = "available" if newer else "current"
+            self._record_update_check(state, "stable_release_version", latest=latest)
+
+            if newer and not manual:
+                with self._lock:
+                    should_notify = self.store.settings.get("_update_notified") != latest
+                    if should_notify:
+                        self.store.settings["_update_notified"] = latest
+                        self.store.save()
+                if should_notify:
+                    self.notify(update_available(VERSION, latest, url))
+
+                if self.store.settings.get("auto_update", False):
+                    applied = self.apply_update()
+                    if applied.get("ok"):
+                        return {"ok": True, "state": state, "latest": latest,
+                                "update_available": True,
+                                "message": applied["message"]}
+                    return {"ok": True, "state": state, "latest": latest,
+                            "update_available": True,
+                            "message": (f"{latest} is available; auto-update did "
+                                        f"not run: {applied.get('error', '')}")}
+
+            message = (f"{latest} is available (running {VERSION})" if newer
+                       else f"up to date ({VERSION})")
+            return {"ok": True, "state": state, "latest": latest,
+                    "update_available": newer, "message": message}
+        finally:
+            self._update_check_lock.release()
 
     def apply_update(self) -> dict:
         """Update THIS ROMarr from its own GitHub repo, now.
@@ -5782,27 +5856,42 @@ class ROMarr:
         return result
 
     def update_status(self) -> dict:
-        """Everything the Update page shows: install shape, channel, the
-        last check's verdict, and the tail of the last self-update log."""
+        """Expose the current verdict separately from cached release and errors."""
         from . import selfupdate
 
         env = selfupdate.detect()
+        check = self._update_check_view()
+        configured = bool(self.store.settings.get("auto_update", False))
+        effective = (configured and env.can_apply
+                     and check["channel"] == "stable"
+                     and not is_unknown(VERSION))
+        if not configured:
+            capability_reason = "disabled"
+        elif not env.can_apply:
+            capability_reason = "install_cannot_self_update"
+        elif check["channel"] != "stable":
+            capability_reason = "nightly_revision_check_not_supported"
+        elif is_unknown(VERSION):
+            capability_reason = "running_version_unknown"
+        else:
+            capability_reason = "enabled"
         return {
             "running_version": VERSION,
             "build": get_build_info(VERSION),
-            "latest_version": self.store.settings.get("_latest_version") or "",
-            "update_available": bool(
-                self.store.settings.get("_update_available")),
+            "latest_version": check["latest_version"],
+            "update_available": check["update_available"],
+            "check_status": {key: value for key, value in check.items()
+                             if key not in ("latest_version", "update_available")},
             "install": {"kind": env.kind, "detail": env.detail,
                         "branch": env.branch, "commit": env.commit,
                         "repo": env.repo, "can_apply": env.can_apply},
             "settings": {
                 "update_check": bool(
                     self.store.settings.get("update_check", True)),
-                "auto_update": bool(
-                    self.store.settings.get("auto_update", False)),
-                "update_channel": str(
-                    self.store.settings.get("update_channel") or "stable"),
+                "auto_update": configured,
+                "auto_update_effective": effective,
+                "auto_update_reason": capability_reason,
+                "update_channel": check["channel"],
                 "auto_update_plugins": bool(
                     self.store.settings.get("auto_update_plugins", False)),
             },
@@ -6249,7 +6338,7 @@ class ROMarr:
         if name == "ListSync":
             return self.list_sync()
         if name == "UpdateCheck":
-            return self.check_update()
+            return self.check_update(manual=True)
         if name == "ApplyUpdate":
             return self.apply_update()
         if name == "PluginUpdate":
