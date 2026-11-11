@@ -320,3 +320,32 @@ def test_service_rescan_passes_platform_folder_on_adopt_and_import(tmp_path):
     assert imp and imp[0]["ok"], imp
     assert session.posts == [
         ("/api/tasks/scan", {"type": "quick", "platform_fs_slugs": ["Sony - PSX"]})]
+
+
+def test_rescan_uses_import_time_platform_folders_snapshot(tmp_path, monkeypatch):
+    """Changing platform_folders mid-import must not redirect the post-import rescan."""
+    import romarr.app as app_mod
+
+    romm, session = client({"/api/tasks/scan": Resp(200, {"status": "queued"})})
+    svc = app_mod.ROMarr(env={"ROMARR_DATA": str(tmp_path / "s.json"),
+                              "LIBRARY_PATH": str(tmp_path / "lib")})
+    svc.store.update_settings({"platform_folders": {"psx": "Sony - PSX"}})
+    (tmp_path / "lib").mkdir(parents=True, exist_ok=True)
+    src = tmp_path / "Game (USA).bin"
+    src.write_bytes(b"DISC" * 2048)
+    svc.game_libraries = [({"id": "primary", "type": "romm", "path": str(tmp_path / "lib")}, romm)]
+    svc.game_library = svc.romm = romm
+
+    real_import = app_mod.import_rom
+
+    def mutating_import(*args, **kwargs):
+        """Mutate platform_folders during import to simulate concurrent config edit."""
+        out = real_import(*args, **kwargs)
+        svc.store.settings["platform_folders"] = {"psx": "Changed Mid-Import"}
+        return out
+
+    monkeypatch.setattr(app_mod, "import_rom", mutating_import)
+    res = svc.adopt(str(src), "psx")
+    assert res["ok"], res
+    assert session.posts == [
+        ("/api/tasks/scan", {"type": "quick", "platform_fs_slugs": ["Sony - PSX"]})]

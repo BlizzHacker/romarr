@@ -1238,13 +1238,15 @@ class ROMarr:
         return merged
 
     def _rescan_library(self, target_lib, target_cfg: dict | None,
-                        platform_slug: str) -> None:
+                        platform_slug: str, *,
+                        platform_folders: dict[str, str] | None = None) -> None:
         """Trigger a library rescan, forwarding custom `platform_folders` when supported."""
         rescan = getattr(target_lib, "rescan", None)
         if not callable(rescan):
             return
-        custom = _custom_platform_folder(
-            platform_slug, self.platform_folders(target_cfg))
+        folders = (platform_folders if platform_folders is not None
+                   else self.platform_folders(target_cfg))
+        custom = _custom_platform_folder(platform_slug, folders)
         if custom:
             try:
                 params = inspect.signature(rescan).parameters
@@ -3350,6 +3352,7 @@ class ROMarr:
                     "reason": "no library configured to import into"}
         target_cfg, target_lib = target
         label = target_cfg.get("name") or getattr(target_lib, "name", "library")
+        target_folders = self.platform_folders(target_cfg)
 
         outcomes = import_rom(source, platform, self.library_root(target_cfg),
                               dats=self.dats,
@@ -3358,7 +3361,7 @@ class ROMarr:
                 prefer_hardlinks=bool(self.store.settings.get("prefer_hardlinks", False)),
                               layout=self.library_layout(target_cfg),
                               translation=is_translation(source.name),
-                              platform_folders=self.platform_folders(target_cfg))
+                              platform_folders=target_folders)
 
         imported, refused = [], []
         for outcome in outcomes:
@@ -3410,7 +3413,8 @@ class ROMarr:
             })
 
         if imported and self.store.settings.get("rescan_after_import", True):
-            self._rescan_library(target_lib, target_cfg, platform.slug)
+            self._rescan_library(target_lib, target_cfg, platform.slug,
+                                 platform_folders=target_folders)
         self.store.save()
 
         result = {
@@ -5556,7 +5560,8 @@ class ROMarr:
             return {"error": "no DATs loaded -- set the DAT directory under "
                              "Settings -> Media Management first"}
 
-        root = platform_dir(self.library, platform,
+        library_root = self.library
+        root = platform_dir(library_root, platform,
                             platform_folders=self.platform_folders())
         state = {"status": "running", "platform": platform.slug,
                  "scanned": 0, "verified": 0, "bad": 0, "unknown": 0,
@@ -5597,7 +5602,7 @@ class ROMarr:
                     state["bad"] += 1
                     if len(state["bad_files"]) < 200:
                         state["bad_files"].append({
-                            "file": path.relative_to(self.library).as_posix(),
+                            "file": path.relative_to(library_root).as_posix(),
                             "detail": verdict.detail or ""})
                 else:
                     state["unknown"] += 1
@@ -5609,7 +5614,7 @@ class ROMarr:
                     self.hashes.add(
                         sha, verdict.game or path.stem, platform.slug,
                         verdict.status == VERIFIED,
-                        path.relative_to(self.library).as_posix())
+                        path.relative_to(library_root).as_posix())
                 # DAT verification strips copier headers on some platforms.
                 # Quarantine candidates must match every physical byte instead.
                 try:
@@ -5620,11 +5625,11 @@ class ROMarr:
                 key = (raw_sha, raw_size)
                 if key in seen:
                     state["duplicates"].append({
-                        "file": path.relative_to(self.library).as_posix(),
+                        "file": path.relative_to(library_root).as_posix(),
                         "same_as": seen[key], "sha1": raw_sha,
                         "size": raw_size})
                 else:
-                    seen[key] = path.relative_to(self.library).as_posix()
+                    seen[key] = path.relative_to(library_root).as_posix()
             self.hashes.save()
             state["status"] = "done"
             state["indexed"] = len(self.hashes)
@@ -6883,6 +6888,7 @@ class ROMarr:
             target_cfg, target_lib = target
             label = target_cfg.get("name") or getattr(target_lib, "name", "library")
 
+            target_folders = self.platform_folders(target_cfg)
             selected_primaries = None
             bundle_routes = None
             if queue_item is not None and path.exists():
@@ -6894,11 +6900,11 @@ class ROMarr:
                 try:
                     preview = preview_import(path, platform, self.library_root(target_cfg),
                                              layout=self.library_layout(target_cfg),
-                                             platform_folders=self.platform_folders(target_cfg),
+                                             platform_folders=target_folders,
                                              queue_identity=queue_identity(queue_item))
                     preview = decorate_preview(preview, platform, self.library_root(target_cfg),
                                                kind=target_cfg.get("type", ""), layout=self.library_layout(target_cfg),
-                                               platform_folders=self.platform_folders(target_cfg), translation=is_translation(name))
+                                               platform_folders=target_folders, translation=is_translation(name))
                 except (OSError, ValueError, RuntimeError, MissingArchiveTool,
                         zipfile.BadZipFile, subprocess.SubprocessError) as exc:
                     # A bad archive belongs to this row, not to every completed
@@ -6936,7 +6942,7 @@ class ROMarr:
                 prefer_hardlinks=bool(self.store.settings.get("prefer_hardlinks", False)),
                 layout=self.library_layout(target_cfg),
                 translation=is_translation(name),
-                platform_folders=self.platform_folders(target_cfg),
+                platform_folders=target_folders,
                 **({"selected_primaries": selected_primaries} if selected_primaries is not None else {}),
                 **({"bundle_routes": bundle_routes} if bundle_routes is not None else {}))
             game_title = (queue_item.game if queue_item and getattr(queue_item, "game", "") else name)
@@ -6996,7 +7002,8 @@ class ROMarr:
                                             queue_item.download_id, err)
             if all_ok:
                 if self.store.settings.get("rescan_after_import", True):
-                    self._rescan_library(target_lib, target_cfg, platform.slug)
+                    self._rescan_library(target_lib, target_cfg, platform.slug,
+                                         platform_folders=target_folders)
                 # The absolute destinations this release was imported to.
                 # Cartridge streams them back to the player; external
                 # platforms poll the assets endpoint.
