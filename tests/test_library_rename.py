@@ -494,3 +494,86 @@ def test_service_partial_rollback_reconciles_restored_files_and_audit(
     assert service.hashes.by_sha1(index.sha1).path == "nes/archive.nes"
     assert ROMarr._audit_state["status"] == "stale"
     assert source.read_bytes() == body and not target.exists()
+
+
+def test_plan_apply_and_rollback_support_custom_platform_folders(tmp_path):
+    """Issue #154 Bug B: Fix existing filenames must resolve custom platform_folders."""
+    import hashlib
+    import zlib
+    from romarr.dat import DatIndex, parse_dat
+
+    body = b"PSX-ROM-DATA"
+    xml = (
+        '<datafile><header><name>PSX Test</name></header>'
+        '<game name="Castlevania (USA)">'
+        f'<rom name="Castlevania (USA).nes" size="{len(body)}" '
+        f'crc="{zlib.crc32(body) & 0xFFFFFFFF:08x}" '
+        f'md5="{hashlib.md5(body).hexdigest()}" '
+        f'sha1="{hashlib.sha1(body).hexdigest()}"/>'
+        '</game></datafile>'
+    )
+    index = DatIndex()
+    index.add(parse_dat(xml))
+
+    library = tmp_path / "library"
+    psx_dir = library / "Sony - PSX"
+    psx_dir.mkdir(parents=True)
+    source = psx_dir / "old-name.nes"
+    source.write_bytes(body)
+    folders = {"psx": "Sony - PSX"}
+
+    preview = plan(library, "psx", index, platform_folders=folders)
+    assert preview["eligible"] == 1
+    assert preview["folder"] == "Sony - PSX"
+    row = preview["entries"][0]
+    assert row["file"] == "Sony - PSX/old-name.nes"
+    assert row["target"] == "Sony - PSX/Castlevania (USA).nes"
+
+    applied = apply(library, "psx", [row["file"]], preview["entries"],
+                    platform_folders=folders)
+    assert applied["ok"]
+    renamed = psx_dir / "Castlevania (USA).nes"
+    assert renamed.read_bytes() == body and not source.exists()
+
+    # Service wrapper end-to-end (preview -> apply -> hash index -> rollback).
+    service = ROMarr(env={"ROMARR_DATA": str(tmp_path / "s.json"),
+                          "LIBRARY_PATH": str(library)})
+    service.store.update_settings({"platform_folders": folders})
+    service.reload_policy()
+    service.dats = index
+    service.hashes = HashIndex(tmp_path / "hashes.json")
+    service.hashes.add(hashlib.sha1(body).hexdigest(), "Castlevania (USA)",
+                       "psx", True, "Sony - PSX/Castlevania (USA).nes")
+
+    rolled = service.rollback_library_renames(applied["manifest_id"])
+    assert rolled["ok"]
+    assert source.read_bytes() == body and not renamed.exists()
+    assert service.hashes.by_sha1(hashlib.sha1(body).hexdigest()).path == "Sony - PSX/old-name.nes"
+
+    service.preview_library_renames("psx")
+    service._library_rename_thread.join(timeout=5)
+    svc_preview = service.library_rename_state()["preview"]
+    assert svc_preview["status"] == "done" and svc_preview["eligible"] == 1
+    svc_applied = service.apply_library_renames("psx", ["Sony - PSX/old-name.nes"])
+    assert svc_applied["ok"]
+    assert service.hashes.by_sha1(hashlib.sha1(body).hexdigest()).path == "Sony - PSX/Castlevania (USA).nes"
+
+
+def test_custom_platform_folder_rejects_unsafe_or_changed_folders(tmp_path):
+    """Issue #154 Bug B: unsafe folder names fail closed; folder changes invalidate preview."""
+    library, _, source, index, body = fixture(tmp_path)
+    (library / "nes2").mkdir()
+    (library / "nes2" / "archive.nes").write_bytes(body)
+
+    for bad in ("../escape", "a/b", ".romarr-renames", "CON", "bad:dir"):
+        with pytest.raises(ValueError, match="unavailable or unsafe"):
+            plan(library, "nes", index, platform_folders={"nes": bad})
+
+    service = ROMarr(env={"ROMARR_DATA": str(tmp_path / "s.json"),
+                          "LIBRARY_PATH": str(library)})
+    service.dats = index
+    service.preview_library_renames("nes")
+    service._library_rename_thread.join(timeout=5)
+    service.store.update_settings({"platform_folders": {"nes": "nes2"}})
+    result = service.apply_library_renames("nes", ["nes/archive.nes"])
+    assert "changed since preview" in result["error"]

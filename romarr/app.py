@@ -68,7 +68,7 @@ from .downloaders import (
 )
 from .indexers import INDEXER_TYPES, build_indexer, merge_indexer_secrets, redact_indexer
 from .indexers import Prowlarr, ProwlarrConfig, ProwlarrDownloadError
-from .library import import_rom, map_remote_path, platform_dir
+from .library import _custom_platform_folder, import_rom, map_remote_path, platform_dir
 from .selective_import import selected_import_path
 from .collections import is_translation
 from .auth import DISABLED as AUTH_DISABLED
@@ -92,7 +92,7 @@ from .metadata import discover as metadata_discover
 from .openapi import spec as openapi_spec
 from .ops import (LogRing, RateLimiter, make_backup, read_backup,
                   render_metrics, to_csv)
-from .platforms import PLATFORMS, resolve
+from .platforms import PLATFORMS, by_slug, resolve, romm_fs_slug
 from .sso import ForwardAuth
 from .totp import Totp
 from .playability import (
@@ -1212,13 +1212,16 @@ class ROMarr:
         `roms/` level, matching RomM's Structure A and B."""
         if (cfg or {}).get("type") == "retrobat":
             return "flat"
-        return str((cfg or {}).get("layout")
-                   or self.store.settings.get("library_layout") or "flat")
+        store = getattr(self, "store", None)
+        fallback = store.settings.get("library_layout") if store is not None else "flat"
+        return str((cfg or {}).get("layout") or fallback or "flat")
 
     def platform_folders(self, cfg: dict | None = None) -> dict[str, str]:
         """Per-platform folder name overrides, merging global and library settings."""
         merged: dict[str, str] = {}
-        for source in (self.store.settings.get("platform_folders"),
+        store = getattr(self, "store", None)
+        global_folders = store.settings.get("platform_folders") if store is not None else {}
+        for source in (global_folders,
                        RETROBAT_FOLDERS if (cfg or {}).get("type") == "retrobat" else {},
                        (cfg or {}).get("platform_folders")):
             if isinstance(source, dict):
@@ -1233,6 +1236,27 @@ class ROMarr:
                         if k and v:
                             merged[str(k)] = str(v)
         return merged
+
+    def _rescan_library(self, target_lib, target_cfg: dict | None,
+                        platform_slug: str) -> None:
+        """Trigger a library rescan, forwarding custom `platform_folders` when supported."""
+        rescan = getattr(target_lib, "rescan", None)
+        if not callable(rescan):
+            return
+        custom = _custom_platform_folder(
+            platform_slug, self.platform_folders(target_cfg))
+        if custom:
+            try:
+                params = inspect.signature(rescan).parameters
+                accepts_fs_slug = ("fs_slug" in params or any(
+                    p.kind == inspect.Parameter.VAR_KEYWORD
+                    for p in params.values()))
+            except (TypeError, ValueError):
+                accepts_fs_slug = False
+            if accepts_fs_slug:
+                rescan(platform_slug, fs_slug=custom)
+                return
+        rescan(platform_slug)
 
     def path_hint(self, root: Path) -> str:
         """Why a library path is missing, and which fix applies.
@@ -1552,6 +1576,71 @@ class ROMarr:
         return {"ok": bool(ok),
                 "message": "Connected" if ok else "Could not connect or authenticate"}
 
+    def _library_folder_warnings(self, backend, cfg: dict,
+                                 root: Path) -> list[str]:
+        """Warn when RomM folder bindings or disk folders diverge from `platform_folders`."""
+        warnings: list[str] = []
+        seen: set[str] = set()
+
+        def _add(msg: str) -> None:
+            if msg not in seen:
+                seen.add(msg)
+                warnings.append(msg)
+
+        folders = self.platform_folders(cfg)
+        known_romm = {p.slug: p for p in PLATFORMS}
+        known_romm.update({romm_fs_slug(p.slug): p for p in PLATFORMS})
+        lister = (getattr(backend, "platform_bindings", None)
+                  or getattr(backend, "platforms", None))
+        if callable(lister):
+            try:
+                rows = lister() or []
+            except Exception as err:
+                log.debug("romm binding check skipped: %s", err)
+                rows = []
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                raw_slug = str(row.get("slug") or "").strip()
+                fs_slug = str(row.get("fs_slug") or "").strip()
+                if not raw_slug or not fs_slug:
+                    continue
+                label = str(row.get("platform") or raw_slug)
+                plat = known_romm.get(raw_slug.lower())
+                if plat is None and int(row.get("count") or 0) <= 0:
+                    continue
+                if plat is None:
+                    plat = resolve(raw_slug)
+                canon = plat.slug if plat is not None else raw_slug.lower()
+                custom = _custom_platform_folder(canon, folders)
+                default_slug = romm_fs_slug(canon)
+                if custom:
+                    # Only compare populated rows or canonical slug entries so an empty
+                    # sibling platform in RomM (e.g. `nintendo-dsi`) does not falsely
+                    # flag an `nds` custom folder override.
+                    if fs_slug != custom and (raw_slug.lower() in {canon, default_slug}
+                                              or int(row.get("count") or 0) > 0):
+                        _add(f"RomM binds '{label}' ({raw_slug}) to '{fs_slug}', "
+                             f"while ROMarr's platform_folders uses '{custom}'")
+                elif plat is not None and fs_slug not in {default_slug, canon, raw_slug.lower()}:
+                    _add(f"RomM binds '{label}' ({raw_slug}) to '{fs_slug}', "
+                         f"while ROMarr will write to '{default_slug}' without a "
+                         "platform_folders override")
+
+        checked_canon: set[str] = set()
+        for raw_key in folders:
+            plat = resolve(raw_key) or by_slug(str(raw_key).strip().lower())
+            if plat is None or plat.slug in checked_canon:
+                continue
+            checked_canon.add(plat.slug)
+            custom = _custom_platform_folder(plat.slug, folders)
+            default_slug = romm_fs_slug(plat.slug)
+            if custom and custom != default_slug and (root / default_slug).is_dir():
+                _add(f"Default folder '{default_slug}' exists alongside "
+                     f"platform_folders '{custom}' and may cause duplicate "
+                     "platforms in RomM")
+        return warnings
+
     def test_library(self, cfg: dict) -> dict:
         """Try a library configuration without saving it.
 
@@ -1583,6 +1672,19 @@ class ROMarr:
             return {"ok": False, "path_ok": False,
                     "message": f"Connected, but {root} does not exist here. "
                                "Mount it into ROMarr, or correct the path."}
+        if str(cfg.get("type") or "romm").lower() == "romm":
+            try:
+                warnings = self._library_folder_warnings(backend, cfg, root)
+            except Exception as err:
+                log.debug("library folder warning check failed: %s", err)
+                warnings = []
+            if warnings:
+                summary = "; ".join(warnings[:3])
+                if len(warnings) > 3:
+                    summary += f" (+{len(warnings) - 3} more)"
+                return {"ok": True, "path_ok": True,
+                        "message": f"Connected -- Warning: {summary}",
+                        "warnings": warnings}
         return {"ok": True, "path_ok": True, "message": "Connected"}
 
     # -- operations --------------------------------------------------------
@@ -3308,7 +3410,7 @@ class ROMarr:
             })
 
         if imported and self.store.settings.get("rescan_after_import", True):
-            target_lib.rescan(platform.slug)
+            self._rescan_library(target_lib, target_cfg, platform.slug)
         self.store.save()
 
         result = {
@@ -5495,7 +5597,7 @@ class ROMarr:
                     state["bad"] += 1
                     if len(state["bad_files"]) < 200:
                         state["bad_files"].append({
-                            "file": str(path.relative_to(self.library)),
+                            "file": path.relative_to(self.library).as_posix(),
                             "detail": verdict.detail or ""})
                 else:
                     state["unknown"] += 1
@@ -5507,7 +5609,7 @@ class ROMarr:
                     self.hashes.add(
                         sha, verdict.game or path.stem, platform.slug,
                         verdict.status == VERIFIED,
-                        str(path.relative_to(self.library)))
+                        path.relative_to(self.library).as_posix())
                 # DAT verification strips copier headers on some platforms.
                 # Quarantine candidates must match every physical byte instead.
                 try:
@@ -5518,11 +5620,11 @@ class ROMarr:
                 key = (raw_sha, raw_size)
                 if key in seen:
                     state["duplicates"].append({
-                        "file": str(path.relative_to(self.library)),
+                        "file": path.relative_to(self.library).as_posix(),
                         "same_as": seen[key], "sha1": raw_sha,
                         "size": raw_size})
                 else:
-                    seen[key] = str(path.relative_to(self.library))
+                    seen[key] = path.relative_to(self.library).as_posix()
             self.hashes.save()
             state["status"] = "done"
             state["indexed"] = len(self.hashes)
@@ -5552,7 +5654,8 @@ class ROMarr:
         state = self._audit_state or {}
         if state.get("status") != "done" or state.get("platform") != platform_slug:
             return {"error": "run a completed audit for this platform first"}
-        root = self.library / platform_slug
+        root = platform_dir(self.library, platform_slug,
+                            platform_folders=self.platform_folders())
         if not root.is_dir():
             return {"error": "audited platform directory is unavailable"}
         try:
@@ -5580,6 +5683,17 @@ class ROMarr:
         return (self.library_root(cfg).resolve(), self.library_layout(cfg),
                 str(cfg.get("id") or ""))
 
+    def _library_rename_folders(self, platform_slug: str) -> dict[str, str]:
+        """Return effective `platform_folders` overrides for the routed rename library."""
+        configured = getattr(self, "game_libraries", None) or []
+        if not configured:
+            return self.platform_folders()
+        routed = self.library_for(platform_slug)
+        if routed is None:
+            return self.platform_folders()
+        cfg, _backend = routed
+        return self.platform_folders(cfg)
+
     def _library_rename_roots(self) -> list[Path]:
         roots = [Path(self.library)]
         roots.extend(self.library_root(cfg)
@@ -5601,6 +5715,7 @@ class ROMarr:
                                 scope: str = "", offset: int = 0) -> dict:
         """Build a DAT-verified, read-only preview in a background thread."""
         import threading as _threading
+        from .library_rename import plan, resolve_platform_folder
 
         active = getattr(self, "_library_rename_thread", None)
         if active is not None and active.is_alive():
@@ -5613,10 +5728,13 @@ class ROMarr:
             return {"error": "load DATs under Settings -> Media Management first"}
         try:
             library_root, layout, library_id = self._library_rename_target(platform.slug)
+            folders = self._library_rename_folders(platform.slug)
+            expected_folder = resolve_platform_folder(platform.slug, folders)
         except (OSError, ValueError) as err:
             return {"error": str(err)}
         dats = self.dats
         state = {"status": "running", "platform": platform.slug,
+                 "folder": expected_folder,
                  "library_id": library_id, "layout": layout,
                  "scanned": 0, "entries": []}
         self._library_rename_root = library_root
@@ -5624,9 +5742,10 @@ class ROMarr:
 
         def run():
             try:
-                from .library_rename import plan
+                kwargs = {"platform_folders": folders} if folders else {}
                 state.update(plan(library_root, platform.slug, dats,
-                                   scope=scope, offset=offset, layout=layout))
+                                   scope=scope, offset=offset, layout=layout,
+                                   **kwargs))
             except (OSError, ValueError) as err:
                 state.update(status="failed", error=str(err))
 
@@ -5650,7 +5769,7 @@ class ROMarr:
     def apply_library_renames(self, platform_slug: str,
                               files: list[str]) -> dict:
         import uuid as _uuid
-        from .library_rename import apply, manifest_for
+        from .library_rename import apply, manifest_for, resolve_platform_folder
         state = getattr(self, "_library_rename_state", {}) or {}
         if state.get("status") != "done" or state.get("platform") != platform_slug:
             return {"error": "run a completed preview for this platform first"}
@@ -5660,12 +5779,18 @@ class ROMarr:
         manifest_id = _uuid.uuid4().hex
         try:
             current_root, current_layout, current_id = self._library_rename_target(platform_slug)
+            current_folders = self._library_rename_folders(platform_slug)
+            current_folder = resolve_platform_folder(platform_slug, current_folders)
             if (current_root != Path(preview_root).resolve()
                     or current_layout != state.get("layout", "flat")
-                    or current_id != state.get("library_id", "")):
-                return {"error": "library route or layout changed since preview; run a new preview"}
+                    or current_id != state.get("library_id", "")
+                    or current_folder != state.get("folder", current_folder)):
+                return {"error": "library route, folder, or layout changed since preview; run a new preview"}
+            apply_kwargs = ({"platform_folders": current_folders}
+                            if current_folders else {})
             result = apply(preview_root, platform_slug, files,
-                           state.get("entries") or [], manifest_id=manifest_id)
+                           state.get("entries") or [], manifest_id=manifest_id,
+                           **apply_kwargs)
             self.hashes.move_paths({
                 entry["original"]: entry["target"]
                 for entry in result.get("entries", [])
@@ -5673,6 +5798,7 @@ class ROMarr:
                 root=preview_root)
             self._library_rename_state = {
                 "status": "applied", "platform": platform_slug,
+                "folder": current_folder,
                 "library_id": current_id, "layout": current_layout,
                 "entries": result.get("entries", [])}
             ROMarr._audit_state = {
@@ -6870,7 +6996,7 @@ class ROMarr:
                                             queue_item.download_id, err)
             if all_ok:
                 if self.store.settings.get("rescan_after_import", True):
-                    target_lib.rescan(platform.slug)
+                    self._rescan_library(target_lib, target_cfg, platform.slug)
                 # The absolute destinations this release was imported to.
                 # Cartridge streams them back to the player; external
                 # platforms poll the assets endpoint.

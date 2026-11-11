@@ -196,3 +196,39 @@ def test_audit_exact_duplicates_include_copier_header_bytes(tmp_path):
     state = _wait_done(svc)
     assert state["scanned"] == 2
     assert state["duplicates"] == []
+
+
+def test_audit_and_quarantine_work_with_custom_platform_folders(tmp_path):
+    """Issue #154: audit, duplicate quarantine, and restore honor platform_folders."""
+    import hashlib
+    import zlib
+    from romarr.dat import DatIndex
+
+    body = b"CUSTOMFOLDER"
+    xml = ('<datafile><header><name>Custom Folder Audit</name></header>'
+           '<game name="Game (USA)">'
+           '<rom name="Game.smc" size="' + str(len(body)) + '" crc="'
+           + f"{zlib.crc32(body) & 0xFFFFFFFF:08x}" + '" md5="'
+           + hashlib.md5(body).hexdigest() + '" sha1="'
+           + hashlib.sha1(body).hexdigest() + '"/></game></datafile>')
+    svc = _svc(tmp_path)
+    svc.store.update_settings({"platform_folders": {"snes": "Nintendo - Super Nintendo"}})
+    index = DatIndex()
+    index.add(parse_dat(xml))
+    svc.dats = index
+
+    shelf = tmp_path / "lib" / "Nintendo - Super Nintendo"
+    shelf.mkdir(parents=True)
+    (shelf / "Game (USA).smc").write_bytes(body)
+    (shelf / "Copy.smc").write_bytes(body)
+
+    svc.audit_library("snes")
+    state = _wait_done(svc)
+    assert state["scanned"] == 2
+    assert len(state["duplicates"]) == 1
+    moved = svc.quarantine_duplicates("snes", [{"file": state["duplicates"][0]["file"]}])
+    assert moved["ok"], moved
+    assert not (shelf / moved["entries"][0]["original"]).exists()
+    restored = svc.restore_duplicate(moved["manifest_id"], moved["entries"][0]["id"])
+    assert restored["ok"]
+    assert (shelf / moved["entries"][0]["original"]).read_bytes() == body

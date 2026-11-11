@@ -56,6 +56,64 @@ def _safe_basename(name: str) -> str:
     return name
 
 
+def resolve_platform_folder(platform_slug: str, platform_folders=None) -> str:
+    """Resolve the on-disk directory name for `platform_slug`.
+
+    Accepts custom `platform_folders` overrides (dict or list of rows),
+    normalizing keys through `platforms.resolve()` while validating any custom
+    directory name as a safe single folder segment. Falls back to
+    `romm_fs_slug(platform_slug)` when no custom override is set.
+    """
+    slug = str(platform_slug or "")
+    if not _valid_slug(slug):
+        raise ValueError("invalid platform")
+    from .platforms import resolve, romm_fs_slug
+
+    if not platform_folders:
+        return romm_fs_slug(slug)
+
+    target_plat = resolve(slug)
+    canonical = target_plat.slug if target_plat is not None else slug.lower()
+    if isinstance(platform_folders, dict):
+        items = list(platform_folders.items())
+    elif isinstance(platform_folders, list):
+        items = [
+            (row.get("platform") or row.get("slug") or "",
+             row.get("folder") or row.get("name") or "")
+            for row in platform_folders if isinstance(row, dict)
+        ]
+    else:
+        return romm_fs_slug(slug)
+
+    overrides: dict[str, str] = {}
+    for k, v in items:
+        key_str = str(k or "").strip()
+        if not key_str or v is None:
+            continue
+        raw_val = str(v)
+        if not raw_val.strip():
+            continue
+        resolved = resolve(key_str)
+        norm_key = resolved.slug if resolved is not None else key_str.lower()
+        overrides[norm_key] = raw_val
+        overrides[key_str.lower()] = raw_val
+
+    matched = overrides.get(canonical)
+    if matched is None:
+        matched = overrides.get(slug.lower())
+    if matched is None:
+        return romm_fs_slug(slug)
+
+    folder = matched.strip()
+    if folder != matched or folder.startswith(".romarr-"):
+        raise ValueError("platform directory is unavailable or unsafe")
+    try:
+        _safe_basename(folder)
+    except ValueError as err:
+        raise ValueError("platform directory is unavailable or unsafe") from err
+    return folder
+
+
 def _reference_paths(platform_root: Path) -> set[Path]:
     """Files named by CUE/GDI/M3U manifests; never move referenced media."""
     protected: set[Path] = set()
@@ -120,18 +178,18 @@ def _sha1_index(dat_index) -> dict[str, list]:
 
 def plan(library: Path, platform_slug: str, dat_index, *,
          scope: str = "", offset: int = 0,
-         page_size: int = 500, layout: str = "flat") -> dict:
+         page_size: int = 500, layout: str = "flat",
+         platform_folders=None) -> dict:
     """Hash one platform subtree and propose safe, paged single-file renames."""
     library = Path(library).resolve()
-    if not _valid_slug(str(platform_slug or "")):
-        raise ValueError("invalid platform")
+    folder = resolve_platform_folder(platform_slug, platform_folders)
     if offset < 0 or page_size < 1 or page_size > PAGE_SIZE:
         raise ValueError("invalid preview page")
     if str(layout or "flat").strip().lower() != "flat":
         raise ValueError(
             "Safe renames currently support flat library layouts. "
             "Switch this library to flat or keep its current names.")
-    root = library / platform_slug
+    root = library / folder
     if root.is_symlink() or not root.is_dir() or root.resolve().parent != library:
         raise ValueError("platform directory is unavailable or unsafe")
     scan_root = root
@@ -242,7 +300,7 @@ def plan(library: Path, platform_slug: str, dat_index, *,
     eligible = sum(bool(row["eligible"]) for row in entries)
     next_offset = offset + len(page)
     has_more = next_offset < len(disk_files) or truncated
-    return {"platform": platform_slug, "scope": scope, "status": "done",
+    return {"platform": platform_slug, "folder": folder, "scope": scope, "status": "done",
             "scanned": len(page), "candidate_count": len(disk_files),
             "eligible": eligible, "blocked": len(entries) - eligible,
             "offset": offset, "next_offset": next_offset,
@@ -380,21 +438,33 @@ def manifests(library: Path) -> list[dict]:
 
 
 def apply(library: Path, platform_slug: str, selected: list[str],
-          planned_entries: list[dict], *, manifest_id: str | None = None) -> dict:
+          planned_entries: list[dict], *, manifest_id: str | None = None,
+          platform_folders=None) -> dict:
+    """Execute verified single-file renames under a custom or default platform folder."""
     library = Path(library).resolve()
     ident = str(manifest_id or uuid.uuid4().hex)
     if not ident.isalnum():
         raise ValueError("invalid rename journal id")
     with _journal_lock(library, ident):
+        if platform_folders is None:
+            return _apply_locked(library, platform_slug, selected,
+                                 planned_entries, ident)
         return _apply_locked(library, platform_slug, selected,
-                             planned_entries, ident)
+                             planned_entries, ident,
+                             platform_folders=platform_folders)
 
 
 def _apply_locked(library: Path, platform_slug: str, selected: list[str],
-                  planned_entries: list[dict], ident: str) -> dict:
+                  planned_entries: list[dict], ident: str, *,
+                  platform_folders=None) -> dict:
     if not selected or len(selected) != len(set(map(str, selected))):
         raise ValueError("select one or more unique files")
     library = Path(library).resolve()
+    target_folder = resolve_platform_folder(platform_slug, platform_folders)
+    platform_root = library / target_folder
+    if (platform_root.is_symlink() or not platform_root.is_dir()
+            or platform_root.resolve().parent != library):
+        raise ValueError("platform directory is unavailable or unsafe")
     approved = {str(row.get("file")): row for row in planned_entries
                 if row.get("eligible") is True}
     chosen = []
@@ -417,8 +487,8 @@ def _apply_locked(library: Path, platform_slug: str, selected: list[str],
                        "target": str(row["target"]), "sha1": row["sha1"],
                        "size": int(row.get("size") or 0),
                        "fingerprint": row["fingerprint"], "status": "pending"})
-    if any(not item["original"].startswith(platform_slug + "/")
-           or not item["target"].startswith(platform_slug + "/") for item in chosen):
+    if any(not item["original"].startswith(target_folder + "/")
+           or not item["target"].startswith(target_folder + "/") for item in chosen):
         raise ValueError("selected paths are outside the chosen platform")
     folder = library / ROOT_NAME
     if folder.is_symlink():
@@ -428,8 +498,8 @@ def _apply_locked(library: Path, platform_slug: str, selected: list[str],
     manifest_path = folder / f"manifest-{ident}.json"
     if manifest_path.exists() or manifest_path.is_symlink():
         raise ValueError("rename journal already exists")
-    data = {"version": 1, "platform": platform_slug, "status": "moving",
-            "created_at": datetime.now(timezone.utc).isoformat(),
+    data = {"version": 1, "platform": platform_slug, "folder": target_folder,
+            "status": "moving", "created_at": datetime.now(timezone.utc).isoformat(),
             "entries": chosen}
     _atomic_json(manifest_path, data)
     try:
