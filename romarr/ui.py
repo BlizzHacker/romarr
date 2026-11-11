@@ -3290,7 +3290,7 @@ RENDER.queue=async()=>{
       ${i.detail?`<div style="color:var(--dim);font-size:11.5px">${esc(i.detail)}</div>`:''}
       </td><td style="text-align:right"><div class="rowact">
         ${['failed','import-failed'].includes(i.state)?`<button data-qretry="${n}">Retry</button>`:''}
-        ${i.state!=='imported'&&i.import_preview?.items?.length?`<button data-qplan="${n}">Preview import</button>`:''}
+        ${i.can_preview_import?`<button data-qplan="${n}">Preview import</button>`:''}
         ${i.selected_file?.hash||i.retained_torrent_hash?`<button data-qresume="${n}">Resume retained torrent</button>`:''}
         <button data-qremove="${n}">Remove</button></div></td></tr>`).join('')}
       </tbody></table>`

@@ -60,7 +60,7 @@ from .dat import DatIndex, parse_dat
 from .decompress import run_batch as run_decompress_batch, scan_compressed
 from .titled import TitleDBIndex, build_index as build_titled_index, validate_switch_rom
 from .downloaders import (
-    CLIENT_TYPES, NZBGet, NzbgetConfig, SABnzbd, SabConfig, build_client,
+    CLIENT_TYPES, DebridClient, HubDownloader, NZBGet, NzbgetConfig, SABnzbd, SabConfig, SiteDownloader, build_client,
     hand_off_with_id, match_queue_item, merge_secrets, pick_client, redact,
 )
 from .indexers import INDEXER_TYPES, build_indexer, merge_indexer_secrets, redact_indexer
@@ -2182,6 +2182,36 @@ class ROMarr:
             "items": items,
         }
 
+    def _completed_queue_downloads(self, items):
+        for client in self.clients:
+            if not getattr(client, "configured", True):
+                continue
+            try:
+                if isinstance(client, QBittorrent):
+                    ownership = list(self.store.settings.get("retained_collection_owners", [])) + list(self.queue)
+                    candidates = client.selective_completed(items, ownership=ownership) + client.completed(repair=False)
+                elif isinstance(client, (DebridClient, SiteDownloader, HubDownloader)):
+                    candidates = client.completed(fetch=False)
+                else:
+                    candidates = client.completed()
+            except Exception as exc:
+                log.warning("%s completed() failed: %s", getattr(client, "name", client), exc)
+                continue
+            yield client, candidates
+
+    def queue_rows(self) -> list[dict]:
+        with self._lock:
+            items = list(self.queue)
+            rows = [asdict(item) for item in items]
+        pending = [item for item in items if item.state != "imported"]
+        completed = [download for _, downloads in self._completed_queue_downloads(pending)
+                     for download in downloads] if pending else []
+        for item, row in zip(items, rows):
+            row["can_preview_import"] = row["state"] != "imported" and any(
+                match_queue_item([item], download) is item and not download.get("_romarr_selection_error")
+                for download in completed)
+        return rows
+
     def queue_import_plan(self, index: int, body: dict) -> dict:
         from .import_intent import preview_import, choose_import, queue_identity
         from .romm_bundle import decorate_preview, route_selection
@@ -2201,11 +2231,8 @@ class ROMarr:
             return {"error": "configure a platform and library first"}
         torrent = None
         source_client = None
-        for client in self.clients:
-            if not getattr(client, "configured", True):
-                continue
-            candidates = (client.selective_completed([item], ownership=self._retained_owners()) if isinstance(client, QBittorrent) else [])
-            for candidate in candidates + client.completed():
+        for client, candidates in self._completed_queue_downloads([item]):
+            for candidate in candidates:
                 if match_queue_item([item], candidate) is item:
                     torrent = candidate
                     source_client = client
@@ -7111,7 +7138,7 @@ def make_handler(service: ROMarr):
             if route.path == "/api/v1/queue/import-plan":
                 return self._json(200, service.queue_import_plan(int((query.get("index") or ["-1"])[0]), {}))
             if route.path == "/api/v1/queue":
-                return self._json(200, {"items": [asdict(i) for i in service.queue]})
+                return self._json(200, {"items": service.queue_rows()})
             if route.path == "/api/v1/history":
                 limit = int((query.get("limit") or ["100"])[0])
                 return self._json(200, {"items": service.store.history(limit)})

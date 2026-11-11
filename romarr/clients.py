@@ -790,7 +790,7 @@ class QBittorrent:
             log.warning("qbittorrent unreachable: %s", err)
             return False
 
-    def completed(self) -> list[dict]:
+    def completed(self, *, repair=True) -> list[dict]:
         """Torrents in our category that have finished.
 
         A torrent qBittorrent emptied is repaired and withheld rather than
@@ -810,7 +810,8 @@ class QBittorrent:
             if _deselected(row):
                 if (row.get("hash") in self._selective_hashes or "romarr-collection-" in str(row.get("tags") or "")):
                     continue
-                self.reselect(row)
+                if repair:
+                    self.reselect(row)
             else:
                 done.append(row)
         return done

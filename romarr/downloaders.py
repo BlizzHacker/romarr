@@ -1776,7 +1776,7 @@ class DebridClient:
             return link
         return _basename_of(str(link)), str(link)
 
-    def completed(self) -> list[dict]:
+    def completed(self, *, fetch=True) -> list[dict]:
         """Fetch what the cloud has finished, then report it like a local client."""
         if not self.configured:
             return []
@@ -1786,7 +1786,7 @@ class DebridClient:
             # third element; the others still return `(name, links)`.
             name, links, *rest = entry
             target = Path(self._config.save_path) / name
-            if self._fetch_links(links, target):
+            if self._fetch_links(links, target, fetch=fetch):
                 row = {"name": name, "content_path": str(target),
                        "save_path": self._config.save_path,
                        "state": self.DONE_STATE}
@@ -1795,7 +1795,7 @@ class DebridClient:
                 out.append(row)
         return out
 
-    def _fetch_links(self, links: list, target) -> bool:
+    def _fetch_links(self, links: list, target, *, fetch=True) -> bool:
         """Download every link into `target/`. True if all the files are
         present afterwards, counting ones a previous sweep already fetched."""
         ok = True
@@ -1807,7 +1807,7 @@ class DebridClient:
             destination = target / (filename or "download.bin")
             if destination.exists():
                 continue
-            if not self._download(url, destination):
+            if not fetch or not self._download(url, destination):
                 ok = False
         return ok
 
@@ -2978,7 +2978,7 @@ class SiteDownloader:
         self._write(rows)
         return True
 
-    def completed(self) -> list[dict]:
+    def completed(self, *, fetch=True) -> list[dict]:
         """Fetch what is pending, then report everything already here.
 
         Reports rather than pops: the importer sweeps repeatedly and decides
@@ -2990,6 +2990,8 @@ class SiteDownloader:
         rows = self._read()
         fetched = 0
         for row in rows:
+            if not fetch:
+                break
             if row.get("state") != "pending":
                 continue
             if fetched >= self._config.max_active:
@@ -3271,13 +3273,15 @@ class HubDownloader:
         self._write(rows)
         return True
 
-    def completed(self) -> list[dict]:
+    def completed(self, *, fetch=True) -> list[dict]:
         """Fetch what is pending, then report everything already here."""
         if not self.configured:
             return []
         rows = self._read()
         fetched = 0
         for row in rows:
+            if not fetch:
+                break
             if row.get("state") != "pending":
                 continue
             if fetched >= self._config.max_active:
