@@ -5736,6 +5736,19 @@ class ROMarr:
             with self._lock:
                 channel = str(self.store.settings.get("update_channel")
                               or "stable").lower()
+            if channel != "stable":
+                # A stable release endpoint cannot answer whether the Git
+                # source revision on the nightly channel has advanced.
+                reason = ("nightly_revision_not_checked" if channel == "nightly"
+                          else "unsupported_update_channel")
+                self._record_update_check("unknown", reason,
+                                          checked_channel=channel)
+                message = ("nightly revision checking is not yet supported; "
+                           "no stable-release request was made" if channel == "nightly"
+                           else f"unknown update channel {channel!r}; no check was made")
+                return {"ok": True, "state": "unknown", "latest": "",
+                        "indeterminate": True, "update_available": False,
+                        "message": message}
 
             def failed(reason: str, message: str) -> dict:
                 """Record a failed attempt while retaining the last good release."""
@@ -5789,15 +5802,6 @@ class ROMarr:
                 return {"ok": True, "state": "unknown", "latest": latest,
                         "indeterminate": True, "update_available": False,
                         "message": "update channel changed during the check; no action taken"}
-            if channel != "stable":
-                # A stable GitHub release is not a comparison against origin/main.
-                self._record_update_check("unknown",
-                                          "nightly_revision_not_checked",
-                                          latest=latest, checked_channel=channel)
-                return {"ok": True, "state": "unknown", "latest": latest,
-                        "indeterminate": True, "update_available": False,
-                        "message": ("latest stable release is " + latest +
-                                    "; nightly revision checks are not yet supported")}
             development = get_build_info(VERSION).get("type") == "development"
             if not _comparable_version(VERSION) or development:
                 reason = ("development_build" if development

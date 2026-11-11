@@ -125,7 +125,8 @@ def test_nightly_channel_requires_separate_revision_check(tmp_path, monkeypatch)
     svc = _svc(tmp_path)
     monkeypatch.setattr("romarr.app.VERSION", "1.8.1")
     svc.store.settings.update({"update_channel": "nightly", "auto_update": True})
-    monkeypatch.setattr(requests, "get", lambda *a, **kw: Release())
+    monkeypatch.setattr(requests, "get", lambda *a, **kw: (_ for _ in ()).throw(
+        AssertionError("nightly checks must not query stable releases")))
     monkeypatch.setattr(svc, "apply_update", lambda: (_ for _ in ()).throw(
         AssertionError("nightly check must not auto-apply a stable tag")))
     out = svc.check_update()
@@ -342,9 +343,30 @@ def test_scheduled_check_waits_for_manual_check_and_applies_once(
     svc = _svc(tmp_path)
     monkeypatch.setattr("romarr.app.VERSION", "1.8.1")
     svc.store.settings["auto_update"] = True
-    fetched, release, started, finished = (
+    fetched, release, lock_attempted, finished = (
         threading.Event(), threading.Event(), threading.Event(), threading.Event())
     requests_seen, applied, errors, answers = [], [], [], []
+
+    real_lock = svc._update_check_lock
+
+    class ObservedLock:
+        """Watch the scheduled acquisition without changing mutex behavior."""
+
+        def acquire(self, blocking=True):
+            """Signal only when the scheduler tries a held mutex."""
+            if blocking and real_lock.locked():
+                lock_attempted.set()
+            return real_lock.acquire(blocking=blocking)
+
+        def release(self):
+            """Release the actual service mutex."""
+            return real_lock.release()
+
+        def locked(self):
+            """Report whether the actual service mutex is held."""
+            return real_lock.locked()
+
+    svc._update_check_lock = ObservedLock()
 
     def controlled_get(*args, **kwargs):
         """Hold only the first (manual) GitHub request during overlap."""
@@ -363,7 +385,6 @@ def test_scheduled_check_waits_for_manual_check_and_applies_once(
 
     def scheduled():
         """Start the daily sweep while manual checking owns its lock."""
-        started.set()
         try:
             answers.append(svc.check_update())
         except BaseException as err:
@@ -382,8 +403,8 @@ def test_scheduled_check_waits_for_manual_check_and_applies_once(
     try:
         assert fetched.wait(5)
         second.start()
-        assert started.wait(5)
-        assert not finished.wait(0.05)
+        assert lock_attempted.wait(5), "scheduled check never reached the mutex"
+        assert not finished.is_set(), "scheduled check bypassed the held mutex"
     finally:
         release.set()
         first.join(5)
