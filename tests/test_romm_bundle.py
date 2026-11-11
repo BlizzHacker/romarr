@@ -80,6 +80,23 @@ def service_fixture(tmp_path,monkeypatch,names=None):
     return service,row,source
 
 
+def test_hub_empty_preview_remains_accessible_after_review_pause(tmp_path, monkeypatch):
+    """Verify hub bundles paused in import-review remain previewable even when items list is empty."""
+    from romarr.downloaders import HubConfig, HubDownloader
+    service, row, source = service_fixture(tmp_path, monkeypatch, ("manual.pdf",))
+    row.download_id = ""
+    client = HubDownloader(HubConfig(save_path=str(tmp_path)))
+    client._write([{"name": "bundle", "state": "done", "file": str(source)}])
+    service.clients = [client]
+    service.store.settings["auto_import"] = False
+    assert service.queue_rows()[0]["can_preview_import"]
+    assert service.queue_import_plan(0, {})["preview"]["extras"] == ["manual.pdf"]
+    assert not service.import_finished()[0]["ok"]
+    assert row.state == "import-review" and row.import_preview["items"] == []
+    assert service.queue_rows()[0]["can_preview_import"]
+    assert service.queue_import_plan(0, {})["preview"]["extras"] == ["manual.pdf"]
+
+
 def test_http_requires_final_tree_review_and_persists_roles(tmp_path,monkeypatch):
     import requests,threading
     from http.server import ThreadingHTTPServer

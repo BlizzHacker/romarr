@@ -31,6 +31,7 @@ Routes:
 
 from __future__ import annotations
 
+import inspect
 import json
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
@@ -62,7 +63,7 @@ from .dat import DatIndex, parse_dat
 from .decompress import run_batch as run_decompress_batch, scan_compressed
 from .titled import TitleDBIndex, build_index as build_titled_index, validate_switch_rom
 from .downloaders import (
-    CLIENT_TYPES, NZBGet, NzbgetConfig, SABnzbd, SabConfig, build_client,
+    Blackhole, CLIENT_TYPES, DebridClient, HubDownloader, NZBGet, NzbgetConfig, SABnzbd, SabConfig, SiteDownloader, build_client,
     hand_off_with_id, match_queue_item, merge_secrets, pick_client, redact,
 )
 from .indexers import INDEXER_TYPES, build_indexer, merge_indexer_secrets, redact_indexer
@@ -392,7 +393,10 @@ class ProxyResponse(tuple):
 class ROMarr:
     """The service. Holds config, clients, and the in-flight queue."""
 
+    QUEUE_PROBE_TIMEOUT = 5.0
+
     def __init__(self, env: dict[str, str] | None = None):
+        """Initialize the service state, download/library clients, and persistent store."""
         e = env if env is not None else os.environ
         # Kept so reload_libraries can seed from the environment on first run
         # without the caller having to hand it back in.
@@ -454,6 +458,8 @@ class ROMarr:
         self._candidates: dict[str, dict] = {}
         self._lock = threading.Lock()
         self._collection_lock = threading.RLock()
+        self._probe_lock = threading.Lock()
+        self._inflight_probes: dict[int, tuple[object, threading.Event, dict[str, object]]] = {}
         # Background sweeps overlap, and client I/O happens before the queue row
         # exists. Reserve a game during that gap, then let the queue row take
         # over after the handoff.
@@ -1959,6 +1965,17 @@ class ROMarr:
         if changed:
             self.store.save()
 
+    def _retained_owners_readonly(self, items: list[QueueItem] | None = None) -> list[dict]:
+        """Return retained-collection ownership records without mutating or saving store state."""
+        from .retained_collection import owner_records
+        ledger = list(self.store.settings.get("retained_collection_owners", []))
+        known = {r.get("download_id") for r in ledger}
+        queue_items = self.queue if items is None else items
+        return ledger + [
+            record for record in owner_records(queue_items)
+            if record["download_id"] not in known
+        ]
+
     def _retained_owners(self):
         self._remember_collection_owners()
         return list(self.store.settings.get("retained_collection_owners", []))
@@ -2208,7 +2225,186 @@ class ROMarr:
             "items": items,
         }
 
+    @staticmethod
+    def _accepts_timeout_arg(fn) -> bool:
+        """Return True when `fn` declares an explicit `timeout` parameter."""
+        try:
+            return "timeout" in inspect.signature(fn).parameters
+        except (TypeError, ValueError):
+            return False
+
+    def _call_with_timeout(self, client, fn, timeout: float):
+        """Run a completion probe within a wall-clock wait, capping to one in-flight probe per client."""
+        lock = getattr(self, "_probe_lock", None)
+        inflight = getattr(self, "_inflight_probes", None)
+        if lock is None or inflight is None:
+            lock = threading.Lock()
+            inflight = {}
+            self._probe_lock = lock
+            self._inflight_probes = inflight
+        key = id(client)
+        with lock:
+            existing = inflight.get(key)
+            if existing is not None and existing[0] is client:
+                entry = existing
+                spawn = False
+            else:
+                entry = (client, threading.Event(), {})
+                inflight[key] = entry
+                spawn = True
+        if spawn:
+            def _runner():
+                """Execute the client probe and publish its outcome to its single-flight entry."""
+                _, done_ev, box = entry
+                try:
+                    box["value"] = fn()
+                except BaseException as exc:
+                    box["exc"] = exc
+                finally:
+                    with lock:
+                        done_ev.set()
+                        if inflight.get(key) is entry:
+                            inflight.pop(key, None)
+
+            threading.Thread(target=_runner, daemon=True).start()
+        _, done_ev, box = entry
+        if not done_ev.wait(timeout=max(0.01, float(timeout))):
+            raise TimeoutError("client completed() probe timed out")
+        if "exc" in box:
+            raise box["exc"]  # type: ignore[misc]
+        return box["value"]
+
+    def _completed_queue_downloads(self, items, *, ownership=None, timeout: float | None = None):
+        """Yield `(client, completed_rows)` for queue preview checks without fetch or repair writes."""
+        if ownership is None:
+            with self._lock:
+                ownership = self._retained_owners_readonly(list(self.queue))
+        deadline = None if timeout is None else time.monotonic() + max(0.0, float(timeout))
+        for client in self.clients:
+            if not getattr(client, "configured", True):
+                continue
+            remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
+            budget_exhausted = remaining is not None and remaining <= 0
+            try:
+                if isinstance(client, QBittorrent):
+                    if budget_exhausted:
+                        continue
+                    raw_timeout = getattr(getattr(client, "_config", None), "timeout", 5) or 5
+                    probe_timeout = min(float(raw_timeout), self.QUEUE_PROBE_TIMEOUT)
+                    if remaining is not None:
+                        probe_timeout = min(probe_timeout, remaining)
+                    bounded = max(0.01, probe_timeout)
+
+                    def _probe_qbit(c=client, pt=bounded):
+                        """Query selective and general qBittorrent completions within `pt`."""
+                        local_deadline = time.monotonic() + pt
+                        selective = c.selective_completed(
+                            items,
+                            ownership=ownership,
+                            update_cache=False,
+                            timeout=pt,
+                        )
+                        if deadline is not None:
+                            left = local_deadline - time.monotonic()
+                            if left <= 0:
+                                return selective
+                            next_timeout = max(0.01, min(pt, left))
+                        else:
+                            next_timeout = pt
+                        try:
+                            return selective + c.completed(repair=False, timeout=next_timeout)
+                        except Exception as exc:
+                            log.warning("%s completed() failed: %s", getattr(c, "name", c), exc)
+                            return selective
+
+                    candidates = (
+                        self._call_with_timeout(client, _probe_qbit, bounded)
+                        if deadline is not None else _probe_qbit()
+                    )
+                elif isinstance(client, DebridClient):
+                    if budget_exhausted:
+                        candidates = client.completed(fetch=False, timeout=0.0)
+                    else:
+                        raw_timeout = getattr(getattr(client, "_config", None), "timeout", 5) or 5
+                        probe_timeout = min(float(raw_timeout), self.QUEUE_PROBE_TIMEOUT)
+                        if remaining is not None:
+                            probe_timeout = min(probe_timeout, remaining)
+                        bounded = max(0.01, probe_timeout)
+                        try:
+                            candidates = (
+                                self._call_with_timeout(
+                                    client,
+                                    lambda c=client, pt=bounded: c.completed(fetch=False, timeout=pt),
+                                    bounded,
+                                )
+                                if deadline is not None
+                                else client.completed(fetch=False, timeout=bounded)
+                            )
+                        except TimeoutError as exc:
+                            log.warning(
+                                "%s completed() timed out; using cached files: %s",
+                                getattr(client, "name", client),
+                                exc,
+                            )
+                            candidates = client.completed(fetch=False, timeout=0.0)
+                elif isinstance(client, (SiteDownloader, HubDownloader)):
+                    candidates = client.completed(fetch=False)
+                elif isinstance(client, Blackhole):
+                    candidates = client.completed()
+                else:
+                    if budget_exhausted:
+                        continue
+                    completed_fn = getattr(client, "completed", None)
+                    if not callable(completed_fn):
+                        continue
+                    raw_timeout = getattr(getattr(client, "_config", None), "timeout", 5) or 5
+                    probe_timeout = min(float(raw_timeout), self.QUEUE_PROBE_TIMEOUT)
+                    if remaining is not None:
+                        probe_timeout = min(probe_timeout, remaining)
+                    bounded = max(0.01, probe_timeout)
+                    probe_call = (
+                        (lambda fn=completed_fn, pt=bounded: fn(timeout=pt))
+                        if self._accepts_timeout_arg(completed_fn)
+                        else completed_fn
+                    )
+                    candidates = (
+                        self._call_with_timeout(client, probe_call, bounded)
+                        if deadline is not None else probe_call()
+                    )
+            except Exception as exc:
+                log.warning("%s completed() failed: %s", getattr(client, "name", client), exc)
+                continue
+            yield client, candidates
+
+    def queue_rows(self) -> list[dict]:
+        """Return queue items annotated with read-only `can_preview_import` flags."""
+        with self._lock:
+            items = list(self.queue)
+            rows = [asdict(item) for item in items]
+            ownership = self._retained_owners_readonly(items)
+        pending = [item for item in items if item.state not in ("imported", "failed")]
+        completed = (
+            [(client, download)
+             for client, downloads in self._completed_queue_downloads(
+                 pending, ownership=ownership, timeout=self.QUEUE_PROBE_TIMEOUT)
+             for download in downloads]
+            if pending else []
+        )
+        for item, row in zip(items, rows):
+            row["can_preview_import"] = row["state"] not in ("imported", "failed") and any(
+                match_queue_item(
+                    items,
+                    download,
+                    client_id=str(getattr(client, "romarr_id", "") or getattr(client, "config_id", "") or ""),
+                    client_protocol=str(getattr(client, "protocol", "") or ""),
+                ) is item
+                and not download.get("_romarr_selection_error")
+                for client, download in completed
+            )
+        return rows
+
     def queue_import_plan(self, index: int, body: dict) -> dict:
+        """Build or confirm an interactive import plan for one queued release."""
         from .import_intent import preview_import, choose_import, queue_identity
         from .romm_bundle import decorate_preview, route_selection
         from .library import MissingArchiveTool
@@ -2216,26 +2412,30 @@ class ROMarr:
         import zipfile
         import subprocess
         with self._lock:
-            if not 0 <= index < len(self.queue):
+            items = list(self.queue)
+            if not 0 <= index < len(items):
                 return {"error": "no such queue item"}
-            item = self.queue[index]
+            item = items[index]
             if item.state == "imported":
                 return {"error": "this item has already imported"}
+            ownership = self._retained_owners_readonly(items)
         platform = resolve(item.platform)
         target = self.library_for(item.platform) if platform else None
         if target is None:
             return {"error": "configure a platform and library first"}
         torrent = None
         source_client = None
-        for client in self.clients:
-            if not getattr(client, "configured", True):
-                continue
-            candidates = (client.selective_completed([item], ownership=self._retained_owners()) if isinstance(client, QBittorrent) else [])
-            for candidate in candidates + client.completed():
-                if match_queue_item([item], candidate) is item:
+        for client, candidates in self._completed_queue_downloads(
+                [item], ownership=ownership, timeout=self.QUEUE_PROBE_TIMEOUT):
+            client_id = str(getattr(client, "romarr_id", "") or getattr(client, "config_id", "") or "")
+            client_protocol = str(getattr(client, "protocol", "") or "")
+            for candidate in candidates:
+                if match_queue_item(items, candidate, client_id=client_id, client_protocol=client_protocol) is item:
                     torrent = candidate
                     source_client = client
                     break
+            if torrent is not None:
+                break
         if torrent is None:
             return {"error": "download is not complete or cannot be found"}
         if torrent.get("_romarr_selection_error"):
@@ -2275,7 +2475,7 @@ class ROMarr:
                     item.import_intent = intent
                     item.state = "grabbed"
                     item.detail = "Import selection saved; source download will be retained"
-                item.import_preview = preview
+                    item.import_preview = preview
                 self.store.save()
             return {"ok": True, "preview": preview}
         except (OSError, ValueError, RuntimeError, TypeError, MissingArchiveTool, RequestException, zipfile.BadZipFile, subprocess.SubprocessError) as exc:
@@ -2815,11 +3015,13 @@ class ROMarr:
         for client in self.clients:
             if not getattr(client, "configured", True):
                 continue
+            client_id = str(getattr(client, "romarr_id", "") or getattr(client, "config_id", "") or "")
+            client_protocol = str(getattr(client, "protocol", "") or "")
             try:
                 completed = getattr(client, "completed", None)
                 if callable(completed):
                     for item in completed():
-                        if match_queue_item([row], item) is not None:
+                        if match_queue_item([row], item, client_id=client_id, client_protocol=client_protocol) is not None:
                             return True
             except Exception:
                 pass
@@ -2828,7 +3030,7 @@ class ROMarr:
                              or getattr(client, "torrents", None))
                 if callable(active_fn):
                     for item in active_fn():
-                        if match_queue_item([row], item) is None:
+                        if match_queue_item([row], item, client_id=client_id, client_protocol=client_protocol) is None:
                             continue
                         progress = float(item.get("progress", 0) or 0)
                         if progress >= 1.0:
@@ -2865,12 +3067,13 @@ class ROMarr:
                 except Exception as err:
                     log.warning("could not remove dead download %r from %s: %s",
                                 row.download_id, getattr(client, "name", client), err)
+            client_protocol = str(getattr(client, "protocol", "") or "")
             deleter = getattr(client, "delete_torrent", None)
             torrents_fn = getattr(client, "torrents", None)
             if callable(deleter) and callable(torrents_fn):
                 try:
                     for item in torrents_fn():
-                        if match_queue_item([row], item) is not None:
+                        if match_queue_item([row], item, client_id=str(client_id), client_protocol=client_protocol) is not None:
                             thash = str(item.get("hash") or "").strip()
                             if thash and deleter(thash):
                                 removed = True
@@ -6437,8 +6640,21 @@ class ROMarr:
             name = torrent.get("name", "")
             platform = None
             queue_item = None
+            source_client = torrent.get("_romarr_client")
+            client_id = str(
+                getattr(source_client, "romarr_id", "")
+                or getattr(source_client, "config_id", "")
+                or torrent.get("_romarr_client_id")
+                or ""
+            )
+            client_protocol = str(getattr(source_client, "protocol", "") or "")
             with self._lock:
-                match = match_queue_item(self.queue, torrent)
+                match = match_queue_item(
+                    self.queue,
+                    torrent,
+                    client_id=client_id,
+                    client_protocol=client_protocol,
+                )
                 if match is not None:
                     queue_item = match
                     if match.state not in ("imported", "import-failed"):
@@ -6749,7 +6965,9 @@ def is_portal_subpath(path: str) -> bool:
 
 
 def make_handler(service: ROMarr):
+    """Build the HTTP request handler class bound to `service`."""
     class Handler(BaseHTTPRequestHandler):
+        """HTTP handler serving the ROMarr UI and REST API endpoints."""
         server_version = "ROMarr"
         _is_portal_subpath = staticmethod(is_portal_subpath)
 
@@ -7077,6 +7295,7 @@ def make_handler(service: ROMarr):
             return self._gate(self._delete)
 
         def _get(self):
+            """Serve UI HTML pages and JSON API GET endpoints."""
             route = urlparse(self.path)
             query = parse_qs(route.query)
             if route.path in ("/favicon.ico", "/favicon.svg"):
@@ -7137,7 +7356,7 @@ def make_handler(service: ROMarr):
             if route.path == "/api/v1/queue/import-plan":
                 return self._json(200, service.queue_import_plan(int((query.get("index") or ["-1"])[0]), {}))
             if route.path == "/api/v1/queue":
-                return self._json(200, {"items": [asdict(i) for i in service.queue]})
+                return self._json(200, {"items": service.queue_rows()})
             if route.path == "/api/v1/history":
                 limit = int((query.get("limit") or ["100"])[0])
                 return self._json(200, {"items": service.store.history(limit)})

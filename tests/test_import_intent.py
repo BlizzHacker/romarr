@@ -127,6 +127,7 @@ def test_bad_archive_does_not_abort_next_completed_import(tmp_path, monkeypatch)
 
 
 def test_http_preview_is_read_only_and_confirm_survives_restart(tmp_path, monkeypatch):
+    """Verify HTTP queue preview is read-only and saved import intent survives restarts."""
     from romarr.app import make_handler
     from http.server import ThreadingHTTPServer
     import threading
@@ -145,6 +146,7 @@ def test_http_preview_is_read_only_and_confirm_survives_restart(tmp_path, monkey
     base = f"http://127.0.0.1:{server.server_address[1]}/api/v1/queue/import-plan"
     headers = {"X-Api-Key": "testkey"}
     try:
+        assert requests.get(base.rsplit("/", 1)[0], headers=headers).json()["items"][0]["can_preview_import"]
         response = requests.get(base, params={"index": 0}, headers=headers)
         assert response.status_code == 200
         plan = response.json()["preview"]

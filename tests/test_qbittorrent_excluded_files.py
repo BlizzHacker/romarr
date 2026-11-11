@@ -151,6 +151,14 @@ def test_an_emptied_torrent_is_not_offered_to_the_importer():
     assert client(server).completed() == []
 
 
+def test_read_only_completion_check_leaves_excluded_files_alone():
+    """Verify completed(repair=False) does not issue filePrio repairs."""
+    server = _Qbittorrent()
+    server.seed("ccc", "Vagrant Story [PSX]", [("Vagrant Story.iso", 89_000)])
+    assert client(server).completed(repair=False) == []
+    assert server.prio_calls == []
+
+
 def test_the_repaired_torrent_reports_its_real_size_afterwards():
     """`size` is what qBittorrent will fetch, so it moving off zero is the
     proof that the release is actually going to download now."""

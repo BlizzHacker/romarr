@@ -13,6 +13,8 @@ identify the download; the name is only the fallback.
 
 from __future__ import annotations
 
+import pytest
+
 from romarr.app import QueueItem, ROMarr
 from romarr.downloaders import SabConfig, SABnzbd
 
@@ -215,18 +217,37 @@ def test_qbittorrent_tag_takes_precedence_over_another_rows_title():
         "name": "torrent name B", "tags": "romarr-a"}) is tagged
 
 
-def test_conflicting_download_identity_cannot_claim_an_exact_title():
+@pytest.mark.parametrize("state", ["grabbed", "import-review", "import-failed"])
+def test_conflicting_download_identity_cannot_claim_an_exact_title(state):
+    """Refuse fallback title matching when recorded download identity conflicts."""
     from romarr.downloaders import match_queue_item
     rows_and_downloads = [
-        (QueueItem("A", "nes", "same title", 0, "grabbed",
+        (QueueItem("A", "nes", "same title", 0, state,
                    release_id=f"btih:{HASH}"), {"hash": "f" * 40}),
-        (QueueItem("A", "nes", "same title", 0, "grabbed",
+        (QueueItem("A", "nes", "same title", 0, state,
                    download_id="SABnzbd_nzo_one"), {"id": "SABnzbd_nzo_two"}),
-        (QueueItem("A", "nes", "same title", 0, "grabbed",
+        (QueueItem("A", "nes", "same title", 0, state,
                    download_id="qbit-tag:romarr-one"), {"tags": "romarr-two"}),
     ]
     for item, identity in rows_and_downloads:
         assert match_queue_item([item], {"name": "same title", **identity}) is None
+
+
+@pytest.mark.parametrize("state", ["grabbed", "import-review", "import-failed"])
+def test_ambiguous_titles_cannot_claim_a_download(state):
+    """Refuse fallback title matching when multiple rows share the same release title."""
+    from romarr.downloaders import match_queue_item
+    rows = [QueueItem(game, "gb", "same title", 1, state) for game in ("A", "B")]
+    assert match_queue_item(rows, {"name": "same title"}) is None
+
+
+@pytest.mark.parametrize("older_state", ["import-review", "import-failed"])
+def test_grabbed_row_takes_precedence_over_older_review_or_failed_title(older_state):
+    """Prefer a fresh grabbed row when an older import-failed or import-review row shares its title."""
+    from romarr.downloaders import match_queue_item
+    older = QueueItem("A", "gb", "same title", 1, older_state)
+    fresh = QueueItem("A", "gb", "same title", 1, "grabbed")
+    assert match_queue_item([older, fresh], {"name": "same title"}) is fresh
 
 
 def test_unrelated_hash_and_same_size_cannot_claim_a_grabbed_row():
@@ -245,3 +266,76 @@ def test_ambiguous_qbittorrent_tags_cannot_claim_a_download():
                       download_id="qbit-tag:romarr-b")]
     assert match_queue_item(rows, {
         "name": "release A", "tags": "romarr-a,romarr-b"}) is None
+
+
+@pytest.mark.parametrize("state", ["grabbed", "import-review", "import-failed"])
+def test_title_fallback_rejects_different_download_client(state):
+    """Refuse untagged fallback title matches from a different client id or protocol."""
+    from romarr.downloaders import match_queue_item
+
+    qbit_row = QueueItem("Zelda", "nes", "Zelda (USA)", 1, state,
+                         download_id="qbit-tag:romarr-q1", download_client="qbit-1")
+    # Different client_id and protocol.
+    assert match_queue_item([qbit_row], {"name": "Zelda (USA)"},
+                            client_id="nzb-1", client_protocol="usenet") is None
+    # Same protocol rejection even when download_client is blank on an older qbit row.
+    legacy_qbit_row = QueueItem("Zelda", "nes", "Zelda (USA)", 1, state,
+                                download_id="qbit-tag:romarr-q1")
+    assert match_queue_item([legacy_qbit_row], {"name": "Zelda (USA)"},
+                            client_id="nzb-1", client_protocol="usenet") is None
+    # Same client fallback still matches when no tags/hash are present.
+    assert match_queue_item([qbit_row], {"name": "Zelda (USA)"},
+                            client_id="qbit-1", client_protocol="torrent") is qbit_row
+
+
+def test_import_finished_does_not_cross_match_client_fallback(tmp_path):
+    """Verify ROMarr.import_finished() never imports an NZBGet title under a qBittorrent queue item."""
+    from types import SimpleNamespace
+
+    s = svc(tmp_path)
+    s.library_for = lambda slug: ({"path": str(tmp_path / "lib")}, SimpleNamespace(rescan=lambda slug: None))
+    qbit_row = QueueItem("Zelda", "nes", "Zelda (USA)", 1, "import-review",
+                         download_id="qbit-tag:romarr-q1", download_client="qbit-1")
+    s.queue = [qbit_row]
+
+    class FakeNzbClient(FakeClient):
+        """Stub usenet client ensuring cross-protocol matches are rejected."""
+        name = "NZBGet"
+        protocol = "usenet"
+        romarr_id = "nzb-1"
+
+    s.clients = [FakeNzbClient([{"name": "Zelda (USA)", "content_path": str(tmp_path / "nowhere")}])]
+    assert s.import_finished() == []
+    assert qbit_row.state == "import-review"
+
+
+def test_direct_hash_and_job_matches_respect_download_client():
+    """Verify direct hash, job id, and qbit-tag lookups never cross-match a different client."""
+    from romarr.downloaders import match_queue_item
+
+    row_a = QueueItem("Zelda", "nes", "Zelda (USA)", 1, "grabbed",
+                      release_id=f"btih:{HASH}", download_id="qbit-tag:romarr-a",
+                      download_client="qbit-a")
+    row_b = QueueItem("Zelda", "nes", "Zelda (USA)", 2, "grabbed",
+                      release_id=f"btih:{HASH}", download_id="qbit-tag:romarr-b",
+                      download_client="qbit-b")
+
+    # Client B reports by hash without tags -> must select Row B, not Row A.
+    assert match_queue_item([row_a, row_b], {"hash": HASH},
+                            client_id="qbit-b", client_protocol="torrent") is row_b
+    # Client C reports the same hash when only A and B exist -> must not claim either.
+    assert match_queue_item([row_a, row_b], {"hash": HASH},
+                            client_id="qbit-c", client_protocol="torrent") is None
+    # Reporting by job id similarly respects download_client ownership.
+    sab_a = QueueItem("Contra", "nes", "Contra A", 0, "grabbed",
+                      download_id="job-42", download_client="sab-a")
+    sab_b = QueueItem("Contra", "nes", "Contra B", 0, "grabbed",
+                      download_id="job-42", download_client="sab-b")
+    assert match_queue_item([sab_a, sab_b], {"id": "job-42"},
+                            client_id="sab-b", client_protocol="usenet") is sab_b
+    assert match_queue_item([sab_a], {"id": "job-42"},
+                            client_id="sab-b", client_protocol="usenet") is None
+    # Exact client row takes precedence over a legacy unassigned row sharing the hash.
+    legacy = QueueItem("Zelda", "nes", "Zelda Legacy", 1, "grabbed", release_id=f"btih:{HASH}")
+    assert match_queue_item([legacy, row_b], {"hash": HASH},
+                            client_id="qbit-b", client_protocol="torrent") is row_b

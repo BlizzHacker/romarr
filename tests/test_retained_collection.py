@@ -100,6 +100,19 @@ def service_with_retained(tmp_path):
     return service, client, session
 
 
+def test_queue_preview_tracks_selected_file_completion_without_writes(tmp_path):
+    """Verify queue_rows() reflects per-file completion without mutating qBittorrent or store state."""
+    service, client, session = service_with_retained(tmp_path)
+    service.queue.append(owner("B", 1, tag="romarr-collection-B"))
+    session.row["tags"] += ",romarr-collection-B"
+    session.files[1]["priority"] = 1
+    original = (tmp_path / "state.json").read_bytes()
+    assert [r["can_preview_import"] for r in service.queue_rows()] == [True, False]
+    assert session.posts == []
+    assert client._selective_hashes == set()
+    assert (tmp_path / "state.json").read_bytes() == original
+
+
 def release(name):
     return Release(title=name,size=100,seeders=1,categories=(1000,),download_url=MAGNET,
                    protocol="torrent",indexer="hub:minerva-archive",

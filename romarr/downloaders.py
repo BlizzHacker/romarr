@@ -47,6 +47,17 @@ import requests
 log = logging.getLogger(__name__)
 
 
+def _bounded_timeout(base: float, deadline: float | None) -> float | None:
+    """Return bounded request timeout before `deadline`, or None if expired."""
+    base_val = float(base or 30)
+    if deadline is None:
+        return base_val
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return None
+    return max(0.01, min(base_val, remaining))
+
+
 @dataclass(frozen=True)
 class SabConfig:
     base_url: str
@@ -81,12 +92,15 @@ class SABnzbd:
     def configured(self) -> bool:
         return bool(self._config.base_url and self._config.api_key)
 
-    def _call(self, mode: str, _timeout: int | None = None, **params) -> dict | None:
+    def _call(self, mode: str, _timeout: float | None = None, **params) -> dict | None:
+        """Query the SABnzbd HTTP API with an optional bounded timeout."""
+        if _timeout is not None and float(_timeout) <= 0:
+            return None
         url = f"{self._config.base_url.rstrip('/')}/api"
         query = {"mode": mode, "output": "json", "apikey": self._config.api_key, **params}
+        req_timeout = self._config.timeout if _timeout is None else max(0.01, min(float(self._config.timeout), float(_timeout)))
         try:
-            response = self._session.get(url, params=query,
-                                         timeout=_timeout or self._config.timeout)
+            response = self._session.get(url, params=query, timeout=req_timeout)
             response.raise_for_status()
             return response.json()
         except (requests.RequestException, ValueError) as err:
@@ -122,11 +136,11 @@ class SABnzbd:
         self._added.job_id = str(ids[0]) if ids else ""
         return True
 
-    def completed(self) -> list[dict]:
+    def completed(self, timeout: float | None = None) -> list[dict]:
         """Finished items in our category, shaped like qBittorrent's."""
         if not self.configured:
             return []
-        out = self._call("history", limit=100, category=self._config.category)
+        out = self._call("history", _timeout=timeout, limit=100, category=self._config.category)
         slots = ((out or {}).get("history") or {}).get("slots") or []
         return [
             {
@@ -255,15 +269,20 @@ class NZBGet:
     def configured(self) -> bool:
         return bool(self._config.base_url)
 
-    def _rpc(self, method: str, params: list | None = None):
+    def _rpc(self, method: str, params: list | None = None, _timeout: float | None = None):
+        """Send one NZBGet JSON-RPC request with an optional bounded timeout."""
+        if _timeout is not None and float(_timeout) <= 0:
+            return None
         url = f"{self._config.base_url.rstrip('/')}/jsonrpc"
         auth = None
         if self._config.username:
             auth = (self._config.username, self._config.password)
+        req_timeout = (self._config.timeout if _timeout is None
+                       else max(0.01, min(float(self._config.timeout), float(_timeout))))
         try:
             response = self._session.post(
                 url, json={"method": method, "params": params or [], "id": 1},
-                auth=auth, timeout=self._config.timeout)
+                auth=auth, timeout=req_timeout)
             response.raise_for_status()
             return response.json().get("result")
         except (requests.RequestException, ValueError) as err:
@@ -289,8 +308,11 @@ class NZBGet:
             return False
         return True
 
-    def completed(self) -> list[dict]:
-        rows = self._rpc("history", [False]) or []
+    def completed(self, timeout: float | None = None) -> list[dict]:
+        """Finished NZBGet items, shaped like qBittorrent's."""
+        if not self.configured:
+            return []
+        rows = self._rpc("history", [False], _timeout=timeout) or []
         out = []
         for row in rows:
             if not isinstance(row, dict):
@@ -363,10 +385,14 @@ class NZBVortex:
     def _url(self, path: str) -> str:
         return f"{self._config.base_url.rstrip('/')}/api/{path.lstrip('/')}"
 
-    def _fetch(self, path: str, **kwargs) -> dict | None:
+    def _fetch(self, path: str, *, _deadline: float | None = None, **kwargs) -> dict | None:
+        """Fetch one NZBVortex endpoint JSON payload before `_deadline`."""
+        req_timeout = _bounded_timeout(self._config.timeout, _deadline)
+        if req_timeout is None:
+            return None
         try:
             response = self._session.get(
-                self._url(path), timeout=self._config.timeout,
+                self._url(path), timeout=req_timeout,
                 verify=self._config.verify_tls, **kwargs)
             response.raise_for_status()
             return response.json()
@@ -374,8 +400,9 @@ class NZBVortex:
             log.warning("nzbvortex %s failed: %s", path, err.__class__.__name__)
             return None
 
-    def _login(self) -> bool:
-        body = self._fetch("auth/nonce")
+    def _login(self, *, _deadline: float | None = None) -> bool:
+        """Authenticate NZBVortex via challenge-response nonce exchange."""
+        body = self._fetch("auth/nonce", _deadline=_deadline)
         nonce = (body or {}).get("authNonce") or (body or {}).get("authnonce")
         if not nonce:
             log.warning("nzbvortex would not issue a nonce")
@@ -386,7 +413,7 @@ class NZBVortex:
         cnonce = secrets.token_hex(16)
         digest = hashlib.sha256(
             f"{nonce}:{cnonce}:{self._config.api_key}".encode()).digest()
-        body = self._fetch("auth/login", params={
+        body = self._fetch("auth/login", _deadline=_deadline, params={
             "nonce": nonce, "cnonce": cnonce,
             "hash": base64.b64encode(digest).decode(),
         })
@@ -399,18 +426,22 @@ class NZBVortex:
         return bool(self._sid)
 
     def _call(self, path: str, *, params: dict | None = None,
-              files=None) -> dict:
+              files=None, _deadline: float | None = None) -> dict:
+        """Call NZBVortex API with session re-authentication on expired sessions."""
         for attempt in range(2):
-            if not self._sid and not self._login():
+            if not self._sid and not self._login(_deadline=_deadline):
                 return {}
             query = {"sessionid": self._sid, **(params or {})}
             if files is None:
-                body = self._fetch(path, params=query)
+                body = self._fetch(path, params=query, _deadline=_deadline)
             else:
+                req_timeout = _bounded_timeout(self._config.timeout, _deadline)
+                if req_timeout is None:
+                    return {}
                 try:
                     response = self._session.post(
                         self._url(path), params=query, files=files,
-                        timeout=self._config.timeout,
+                        timeout=req_timeout,
                         verify=self._config.verify_tls)
                     response.raise_for_status()
                     body = response.json()
@@ -464,13 +495,15 @@ class NZBVortex:
             return False
         return True
 
-    def completed(self) -> list[dict]:
+    def completed(self, timeout: float | None = None) -> list[dict]:
+        """Finished NZBVortex items, bounded by an optional timeout."""
         if not self.configured:
             return []
+        deadline = None if timeout is None else time.monotonic() + max(0.0, float(timeout))
         params = {"limitDone": 100}
         if self._config.category:
             params["groupName"] = self._config.category
-        body = self._call("nzb", params=params)
+        body = self._call("nzb", params=params, _deadline=deadline)
         out = []
         for item in (body or {}).get("nzbs") or []:
             if not isinstance(item, dict):
@@ -528,18 +561,23 @@ class Transmission:
     def configured(self) -> bool:
         return bool(self._config.base_url)
 
-    def _call(self, method: str, arguments: dict) -> dict:
+    def _call(self, method: str, arguments: dict, *,
+              _deadline: float | None = None) -> dict:
+        """Issue one Transmission JSON-RPC request, handling the 409 session handshake."""
         url = self._config.base_url.rstrip("/") + self.RPC_PATH
         payload = json.dumps({"method": method, "arguments": arguments})
         auth = ((self._config.username, self._config.password)
                 if self._config.username else None)
         for attempt in range(2):
+            req_timeout = _bounded_timeout(self._config.timeout, _deadline)
+            if req_timeout is None:
+                return {}
             headers = {"Content-Type": "application/json"}
             if self._session_id:
                 headers[self.SESSION_HEADER] = self._session_id
             response = self._session.post(
                 url, data=payload, headers=headers, auth=auth,
-                timeout=self._config.timeout)
+                timeout=req_timeout)
             if getattr(response, "status_code", 200) == 409 and attempt == 0:
                 self._session_id = response.headers.get(self.SESSION_HEADER, "")
                 continue
@@ -580,13 +618,15 @@ class Transmission:
         self._added.job_id = str(torrent.get("hashString") or "").lower()
         return True
 
-    def completed(self) -> list[dict]:
+    def completed(self, timeout: float | None = None) -> list[dict]:
+        """Finished Transmission downloads carrying our category, bounded by `timeout`."""
         if not self.configured:
             return []
+        deadline = None if timeout is None else time.monotonic() + max(0.0, float(timeout))
         body = self._call("torrent-get", {"fields": [
             "name", "hashString", "downloadDir", "percentDone",
             "metadataPercentComplete", "files", "labels",
-        ]})
+        ]}, _deadline=deadline)
         if body.get("result") != "success":
             log.warning("Transmission could not list completed torrents")
             return []
@@ -769,18 +809,45 @@ class Rtorrent:
     name = "rTorrent"
 
     def __init__(self, config: RtorrentConfig, proxy=None):
+        """Initialize the rTorrent client with its configuration and optional proxy."""
         self._config = config
         self._proxy = proxy  # tests inject one; live use builds lazily
+        self._injected_proxy = proxy is not None
 
     @property
     def configured(self) -> bool:
         return bool(self._config.base_url)
 
-    def _server(self):
+    @staticmethod
+    def _build_proxy(base_url: str, timeout: float):
+        """Build an XML-RPC ServerProxy enforcing `timeout` on sockets."""
+        import xmlrpc.client
+
+        is_https = str(base_url).lower().startswith("https://")
+        base_cls = xmlrpc.client.SafeTransport if is_https else xmlrpc.client.Transport
+
+        class _TimeoutTransport(base_cls):
+            """XML-RPC transport applying an explicit per-request timeout."""
+
+            def make_connection(self, host):
+                """Return a connection whose timeout matches the configured cap."""
+                conn = super().make_connection(host)
+                conn.timeout = timeout
+                return conn
+
+        return xmlrpc.client.ServerProxy(
+            base_url, transport=_TimeoutTransport(), allow_none=True)
+
+    def _server(self, *, timeout: float | None = None):
+        """Return the active XML-RPC proxy or build one bounded by `timeout`."""
+        if self._injected_proxy:
+            return self._proxy
+        if timeout is not None:
+            eff_timeout = max(0.01, min(float(self._config.timeout or 30), float(timeout)))
+            return self._build_proxy(self._config.base_url, eff_timeout)
         if self._proxy is None:
-            import xmlrpc.client
-            self._proxy = xmlrpc.client.ServerProxy(
-                self._config.base_url, allow_none=True)
+            self._proxy = self._build_proxy(
+                self._config.base_url, float(self._config.timeout or 30))
         return self._proxy
 
     def reachable(self) -> bool:
@@ -809,12 +876,14 @@ class Rtorrent:
             log.warning("rTorrent refused the torrent: %s", exc)
             return False
 
-    def completed(self) -> list[dict]:
+    def completed(self, timeout: float | None = None) -> list[dict]:
         """Finished downloads carrying our label, shaped like qBittorrent's."""
         if not self.configured:
             return []
+        if timeout is not None and float(timeout) <= 0:
+            return []
         try:
-            rows = self._server().d.multicall2(
+            rows = self._server(timeout=timeout).d.multicall2(
                 "", "main", "d.name=", "d.complete=", "d.directory=",
                 "d.custom1=")
         except Exception as exc:
@@ -868,7 +937,11 @@ class SynologyDownloadStation:
     def configured(self) -> bool:
         return bool(self._config.base_url and self._config.username)
 
-    def _login(self) -> bool:
+    def _login(self, *, _deadline: float | None = None) -> bool:
+        """Obtain a Download Station session id, honoring any probe deadline."""
+        req_timeout = _bounded_timeout(self._config.timeout, _deadline)
+        if req_timeout is None:
+            return False
         url = f"{self._config.base_url.rstrip('/')}/webapi/auth.cgi"
         try:
             response = self._session.get(url, params={
@@ -876,7 +949,7 @@ class SynologyDownloadStation:
                 "account": self._config.username,
                 "passwd": self._config.password,
                 "session": "DownloadStation", "format": "sid",
-            }, timeout=self._config.timeout)
+            }, timeout=req_timeout)
             body = response.json()
         except (requests.RequestException, ValueError) as err:
             log.warning("Download Station login failed: %s", err.__class__.__name__)
@@ -887,16 +960,21 @@ class SynologyDownloadStation:
                         (body.get("error") or {}).get("code"))
         return bool(self._sid)
 
-    def _call(self, method: str, extra: dict | None = None) -> dict:
+    def _call(self, method: str, extra: dict | None = None, *,
+              _deadline: float | None = None) -> dict:
+        """Call a Download Station task API method, retrying stale session ids once."""
         url = f"{self._config.base_url.rstrip('/')}/webapi/DownloadStation/task.cgi"
         for attempt in range(2):
-            if not self._sid and not self._login():
+            if not self._sid and not self._login(_deadline=_deadline):
+                return {}
+            req_timeout = _bounded_timeout(self._config.timeout, _deadline)
+            if req_timeout is None:
                 return {}
             params = {"api": "SYNO.DownloadStation.Task", "version": "1",
                       "method": method, "_sid": self._sid, **(extra or {})}
             try:
                 body = self._session.get(url, params=params,
-                                         timeout=self._config.timeout).json()
+                                         timeout=req_timeout).json()
             except (requests.RequestException, ValueError) as err:
                 log.warning("Download Station %s failed: %s", method,
                             err.__class__.__name__)
@@ -924,8 +1002,10 @@ class SynologyDownloadStation:
             return False
         return True
 
-    def completed(self) -> list[dict]:
-        body = self._call("list", {"additional": "detail"})
+    def completed(self, timeout: float | None = None) -> list[dict]:
+        """Finished Download Station tasks, bounded by `timeout`."""
+        deadline = None if timeout is None else time.monotonic() + max(0.0, float(timeout))
+        body = self._call("list", {"additional": "detail"}, _deadline=deadline)
         tasks = ((body.get("data") or {}).get("tasks") or [])
         out = []
         for task in tasks:
@@ -978,7 +1058,13 @@ class Aria2:
     def configured(self) -> bool:
         return bool(self._config.base_url)
 
-    def _rpc(self, method: str, params: list | None = None):
+    def _rpc(self, method: str, params: list | None = None, *,
+             _timeout: float | None = None):
+        """Send one aria2 JSON-RPC request with optional timeout bound."""
+        if _timeout is not None and float(_timeout) <= 0:
+            return None
+        req_timeout = (self._config.timeout if _timeout is None
+                       else max(0.01, min(float(self._config.timeout), float(_timeout))))
         url = self._config.base_url.rstrip("/") + self.RPC_PATH
         args = list(params or [])
         if self._config.secret:
@@ -987,7 +1073,7 @@ class Aria2:
             response = self._session.post(
                 url, json={"jsonrpc": "2.0", "id": "romarr",
                            "method": method, "params": args},
-                timeout=self._config.timeout)
+                timeout=req_timeout)
             response.raise_for_status()
             body = response.json() or {}
         except (requests.RequestException, ValueError) as err:
@@ -1015,10 +1101,11 @@ class Aria2:
         # to come after it -- aria2 reads its parameters by position.
         return bool(self._rpc("aria2.addUri", [[magnet_or_url], options]))
 
-    def completed(self) -> list[dict]:
+    def completed(self, timeout: float | None = None) -> list[dict]:
+        """Finished aria2 downloads, bounded by `timeout`."""
         if not self.configured:
             return []
-        rows = self._rpc("aria2.tellStopped", [0, 1000]) or []
+        rows = self._rpc("aria2.tellStopped", [0, 1000], _timeout=timeout) or []
         out = []
         for row in rows:
             if not isinstance(row, dict) or row.get("status") != "complete":
@@ -1082,13 +1169,17 @@ class Flood:
     def _url(self, path: str) -> str:
         return f"{self._config.base_url.rstrip('/')}/api{path}"
 
-    def _login(self) -> bool:
+    def _login(self, *, _deadline: float | None = None) -> bool:
+        """Authenticate Flood session cookie within any active probe deadline."""
+        req_timeout = _bounded_timeout(self._config.timeout, _deadline)
+        if req_timeout is None:
+            return False
         try:
             response = self._session.post(
                 self._url("/auth/authenticate"),
                 json={"username": self._config.username,
                       "password": self._config.password},
-                timeout=self._config.timeout)
+                timeout=req_timeout)
             response.raise_for_status()
         except requests.RequestException as err:
             log.warning("flood rejected the credentials: %s",
@@ -1098,13 +1189,18 @@ class Flood:
         self._authed = True
         return True
 
-    def _call(self, method: str, path: str, payload: dict | None = None):
+    def _call(self, method: str, path: str, payload: dict | None = None, *,
+              _deadline: float | None = None):
+        """Send a Flood REST call, re-authenticating once on expired cookies."""
         for attempt in range(2):
-            if not self._authed and not self._login():
+            if not self._authed and not self._login(_deadline=_deadline):
+                return None
+            req_timeout = _bounded_timeout(self._config.timeout, _deadline)
+            if req_timeout is None:
                 return None
             try:
                 caller = getattr(self._session, method)
-                kwargs = {"timeout": self._config.timeout}
+                kwargs = {"timeout": req_timeout}
                 if payload is not None:
                     kwargs["json"] = payload
                 response = caller(self._url(path), **kwargs)
@@ -1139,10 +1235,12 @@ class Flood:
             return False
         return True
 
-    def completed(self) -> list[dict]:
+    def completed(self, timeout: float | None = None) -> list[dict]:
+        """Finished Flood torrents carrying our tag, bounded by `timeout`."""
         if not self.configured:
             return []
-        body = self._call("get", "/torrents") or {}
+        deadline = None if timeout is None else time.monotonic() + max(0.0, float(timeout))
+        body = self._call("get", "/torrents", _deadline=deadline) or {}
         out = []
         for torrent in (body.get("torrents") or {}).values():
             if not isinstance(torrent, dict):
@@ -1207,20 +1305,27 @@ class FreeboxDownload:
     def _url(self, path: str) -> str:
         return f"{self._config.base_url.rstrip('/')}/{path.lstrip('/')}"
 
-    def _open_session(self) -> bool:
+    def _open_session(self, *, _deadline: float | None = None) -> bool:
+        """Negotiate a Freebox challenge-response session within any probe deadline."""
         try:
+            req_timeout = _bounded_timeout(self._config.timeout, _deadline)
+            if req_timeout is None:
+                return False
             challenge = self._session.get(
-                self._url("login"), timeout=self._config.timeout).json()
+                self._url("login"), timeout=req_timeout).json()
             phrase = ((challenge.get("result") or {}).get("challenge") or "")
             if not phrase:
                 log.warning("freebox issued no challenge")
                 return False
             password = hmac.new(self._config.app_token.encode("ascii"),
                                 phrase.encode("ascii"), hashlib.sha1).hexdigest()
+            req_timeout = _bounded_timeout(self._config.timeout, _deadline)
+            if req_timeout is None:
+                return False
             body = self._session.post(
                 self._url("login/session"),
                 json={"app_id": self._config.app_id, "password": password},
-                timeout=self._config.timeout).json()
+                timeout=req_timeout).json()
         except (requests.RequestException, ValueError, AttributeError) as err:
             log.warning("freebox login failed: %s", err.__class__.__name__)
             return False
@@ -1230,12 +1335,17 @@ class FreeboxDownload:
                         body.get("error_code"))
         return bool(self._token)
 
-    def _call(self, method: str, path: str, *, data=None, payload=None) -> dict:
+    def _call(self, method: str, path: str, *, data=None, payload=None,
+              _deadline: float | None = None) -> dict:
+        """Issue one Freebox API call, refreshing expired session tokens once."""
         for attempt in range(2):
-            if not self._token and not self._open_session():
+            if not self._token and not self._open_session(_deadline=_deadline):
+                return {}
+            req_timeout = _bounded_timeout(self._config.timeout, _deadline)
+            if req_timeout is None:
                 return {}
             try:
-                kwargs = {"timeout": self._config.timeout,
+                kwargs = {"timeout": req_timeout,
                           "headers": {"X-Fbx-App-Auth": self._token}}
                 if data is not None:
                     kwargs["data"] = data
@@ -1273,10 +1383,12 @@ class FreeboxDownload:
             return False
         return True
 
-    def completed(self) -> list[dict]:
+    def completed(self, timeout: float | None = None) -> list[dict]:
+        """Finished Freebox downloads, bounded by `timeout`."""
         if not self.configured:
             return []
-        body = self._call("get", "downloads/")
+        deadline = None if timeout is None else time.monotonic() + max(0.0, float(timeout))
+        body = self._call("get", "downloads/", _deadline=deadline)
         out = []
         for task in body.get("result") or []:
             if not isinstance(task, dict) or task.get("status") != "done":
@@ -1369,7 +1481,13 @@ class Hadouken:
     def configured(self) -> bool:
         return bool(self._config.base_url)
 
-    def _rpc(self, method: str, params: list | None = None):
+    def _rpc(self, method: str, params: list | None = None, *,
+             _timeout: float | None = None):
+        """Send one Hadouken JSON-RPC request with optional timeout bound."""
+        if _timeout is not None and float(_timeout) <= 0:
+            return None
+        req_timeout = (self._config.timeout if _timeout is None
+                       else max(0.01, min(float(self._config.timeout), float(_timeout))))
         url = self._config.base_url.rstrip("/") + self.RPC_PATH
         auth = ((self._config.username, self._config.password)
                 if self._config.username else None)
@@ -1377,7 +1495,7 @@ class Hadouken:
             response = self._session.post(
                 url, json={"jsonrpc": "2.0", "id": 1, "method": method,
                            "params": params or []},
-                auth=auth, timeout=self._config.timeout)
+                auth=auth, timeout=req_timeout)
             response.raise_for_status()
             body = response.json() or {}
         except (requests.RequestException, ValueError) as err:
@@ -1406,10 +1524,11 @@ class Hadouken:
             return False
         return True
 
-    def completed(self) -> list[dict]:
+    def completed(self, timeout: float | None = None) -> list[dict]:
+        """Finished Hadouken downloads carrying our label, bounded by `timeout`."""
         if not self.configured:
             return []
-        body = self._rpc("webui.list") or {}
+        body = self._rpc("webui.list", _timeout=timeout) or {}
         return _utorrent_completed(body.get("torrents"), self._config.category)
 
 
@@ -1464,11 +1583,15 @@ class UTorrent:
         return ((self._config.username, self._config.password)
                 if self._config.username else None)
 
-    def _fetch_token(self) -> bool:
+    def _fetch_token(self, *, _deadline: float | None = None) -> bool:
+        """Fetch a uTorrent WebUI CSRF token and cookie pair."""
+        req_timeout = _bounded_timeout(self._config.timeout, _deadline)
+        if req_timeout is None:
+            return False
         url = self._config.base_url.rstrip("/") + self.GUI_PATH + "token.html"
         try:
             response = self._session.get(url, auth=self._auth(),
-                                         timeout=self._config.timeout)
+                                         timeout=req_timeout)
             response.raise_for_status()
         except requests.RequestException as err:
             log.warning("utorrent would not issue a token: %s",
@@ -1480,15 +1603,19 @@ class UTorrent:
             log.warning("utorrent's token page held no token")
         return bool(self._token)
 
-    def _call(self, params: dict) -> dict:
+    def _call(self, params: dict, *, _deadline: float | None = None) -> dict:
+        """Invoke a uTorrent WebUI action, refreshing stale tokens once."""
         url = self._config.base_url.rstrip("/") + self.GUI_PATH
         for attempt in range(2):
-            if not self._token and not self._fetch_token():
+            if not self._token and not self._fetch_token(_deadline=_deadline):
+                return {}
+            req_timeout = _bounded_timeout(self._config.timeout, _deadline)
+            if req_timeout is None:
                 return {}
             try:
                 response = self._session.get(
                     url, params={"token": self._token, **params},
-                    auth=self._auth(), timeout=self._config.timeout)
+                    auth=self._auth(), timeout=req_timeout)
                 if getattr(response, "status_code", 200) in (400, 401) \
                         and attempt == 0:
                     # The token went stale with the session. Take a new pair.
@@ -1521,10 +1648,12 @@ class UTorrent:
                         "s": "label", "v": self._config.category})
         return True
 
-    def completed(self) -> list[dict]:
+    def completed(self, timeout: float | None = None) -> list[dict]:
+        """Finished uTorrent downloads carrying our label, bounded by `timeout`."""
         if not self.configured:
             return []
-        body = self._call({"list": 1})
+        deadline = None if timeout is None else time.monotonic() + max(0.0, float(timeout))
+        body = self._call({"list": 1}, _deadline=deadline)
         return _utorrent_completed(body.get("torrents"), self._config.category)
 
 
@@ -1562,14 +1691,20 @@ class Porla:
     def configured(self) -> bool:
         return bool(self._config.base_url and self._config.api_token)
 
-    def _rpc(self, method: str, params: dict | None = None):
+    def _rpc(self, method: str, params: dict | None = None, *,
+             _timeout: float | None = None):
+        """Send one porla JSON-RPC request with optional timeout bound."""
+        if _timeout is not None and float(_timeout) <= 0:
+            return None
+        req_timeout = (self._config.timeout if _timeout is None
+                       else max(0.01, min(float(self._config.timeout), float(_timeout))))
         url = self._config.base_url.rstrip("/") + self.RPC_PATH
         try:
             response = self._session.post(
                 url, json={"jsonrpc": "2.0", "id": 1, "method": method,
                            "params": params or {}},
                 headers={"Authorization": f"Bearer {self._config.api_token}"},
-                timeout=self._config.timeout)
+                timeout=req_timeout)
             response.raise_for_status()
             body = response.json() or {}
         except (requests.RequestException, ValueError) as err:
@@ -1597,13 +1732,14 @@ class Porla:
             return False
         return True
 
-    def completed(self) -> list[dict]:
+    def completed(self, timeout: float | None = None) -> list[dict]:
+        """Finished porla downloads, bounded by `timeout`."""
         if not self.configured:
             return []
         params = {"page_size": 500}
         if self._config.category:
             params["filters"] = {"category": self._config.category}
-        result = self._rpc("torrents.list", params) or {}
+        result = self._rpc("torrents.list", params, _timeout=timeout) or {}
         out = []
         for torrent in result.get("torrents") or []:
             if not isinstance(torrent, dict):
@@ -1677,8 +1813,12 @@ class DebridClient:
     DONE_STATE = "downloaded"
 
     def __init__(self, config, session: requests.Session | None = None):
+        """Initialize the debrid client with its configuration and HTTP session."""
         self._config = config
         self._session = session or requests.Session()
+        self._probe_state = threading.local()
+        self._fetched_lock = threading.RLock()
+        self._fetched_local: dict[str, dict] = {}
 
     @property
     def configured(self) -> bool:
@@ -1689,10 +1829,39 @@ class DebridClient:
     def _headers(self) -> dict:
         return {"Authorization": f"Bearer {self._config.api_token}"}
 
+    def _get_probe_deadline(self) -> float | None:
+        """Return the current thread's active Queue probe deadline, or None."""
+        state = getattr(self, "_probe_state", None)
+        return getattr(state, "deadline", None) if state is not None else None
+
+    def _set_probe_deadline(self, deadline: float | None) -> None:
+        """Store the current thread's active Queue probe deadline."""
+        state = getattr(self, "_probe_state", None)
+        if state is None:
+            state = threading.local()
+            self._probe_state = state
+        state.deadline = deadline
+
+    def _probe_timed_out(self) -> bool:
+        """True when an active Queue probe deadline has elapsed."""
+        deadline = self._get_probe_deadline()
+        return deadline is not None and time.monotonic() >= deadline
+
+    def _request_timeout(self) -> float:
+        """Bounded HTTP request timeout respecting any active probe deadline."""
+        base = float(getattr(self._config, "timeout", 30) or 30)
+        deadline = self._get_probe_deadline()
+        if deadline is None:
+            return base
+        return min(base, max(0.01, deadline - time.monotonic()))
+
     def _get(self, path: str, params: dict | None = None):
+        """Perform a bounded GET request against the debrid API."""
+        if self._probe_timed_out():
+            return None
         # params is only passed when there is one: a service whose GETs never
         # take a query string should not have every call carry an empty dict.
-        kwargs = {"headers": self._headers(), "timeout": self._config.timeout}
+        kwargs = {"headers": self._headers(), "timeout": self._request_timeout()}
         if params:
             kwargs["params"] = params
         try:
@@ -1705,8 +1874,11 @@ class DebridClient:
             return None
 
     def _post(self, path: str, data: dict | None = None, files=None):
+        """Perform a bounded POST request against the debrid API."""
+        if self._probe_timed_out():
+            return None
         kwargs = {"data": data, "headers": self._headers(),
-                  "timeout": self._config.timeout}
+                  "timeout": self._request_timeout()}
         if files is not None:
             kwargs["files"] = files
         try:
@@ -1776,39 +1948,249 @@ class DebridClient:
             return link
         return _basename_of(str(link)), str(link)
 
-    def completed(self) -> list[dict]:
+    def _fetched_cache_path(self) -> Path:
+        """Path to the local cache of resolved link filenames and completed rows."""
+        stem = self.LEDGER[:-5] if self.LEDGER.endswith(".json") else self.LEDGER
+        return Path(self._config.save_path) / f"{stem}-fetched.json"
+
+    @staticmethod
+    def _link_key(link) -> str:
+        """Stable key identifying one resolved debrid link entry."""
+        if isinstance(link, tuple):
+            return "tuple:" + json.dumps(list(link))
+        return f"str:{link}"
+
+    def _read_fetched_cache(self) -> dict[str, dict]:
+        """Load per-target fetched filename and completion metadata."""
+        lock = getattr(self, "_fetched_lock", None)
+        if lock is None:
+            return {}
+        with lock:
+            data: dict[str, dict] = {}
+            if self._config.save_path:
+                try:
+                    raw = json.loads(self._fetched_cache_path().read_text(encoding="utf-8"))
+                    if isinstance(raw, dict):
+                        data = {
+                            str(k): dict(v)
+                            for k, v in raw.items()
+                            if isinstance(v, dict)
+                        }
+                except (OSError, ValueError):
+                    pass
+            for k, v in getattr(self, "_fetched_local", {}).items():
+                if k not in data and isinstance(v, dict):
+                    data[k] = dict(v)
+            return data
+
+    def _update_fetched_cache(self, target, *, resolved: dict[str, str] | None = None,
+                              completed_row: dict | None = None,
+                              files: list[str] | None = None,
+                              clear_completed: bool = False,
+                              clear_links: bool = False) -> None:
+        """Persist or invalidate resolved filenames and completed row state for `target`."""
+        lock = getattr(self, "_fetched_lock", None)
+        if lock is None:
+            return
+        key = str(target)
+        with lock:
+            cache = self._read_fetched_cache()
+            entry = dict(cache.get(key) or {})
+            if clear_links:
+                entry.pop("links", None)
+            elif resolved:
+                merged = dict(entry.get("links") or {})
+                merged.update(resolved)
+                entry["links"] = merged
+            if clear_completed:
+                entry.pop("row", None)
+                entry.pop("files", None)
+            elif completed_row is not None and files:
+                entry["row"] = dict(completed_row)
+                entry["files"] = list(files)
+            if entry:
+                cache[key] = entry
+                self._fetched_local[key] = entry
+            else:
+                cache.pop(key, None)
+                self._fetched_local.pop(key, None)
+            if self._config.save_path:
+                try:
+                    path = self._fetched_cache_path()
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    tmp = path.with_suffix(path.suffix + ".tmp")
+                    tmp.write_text(json.dumps(cache), encoding="utf-8")
+                    tmp.replace(path)
+                except OSError as err:
+                    log.warning("could not record %s fetched cache: %s", self.name, err)
+
+    def _recorded_links_for(self, target) -> dict[str, str]:
+        """Return `{link_key: filename}` previously fetched into `target`."""
+        entry = self._read_fetched_cache().get(str(target)) or {}
+        links = entry.get("links")
+        return {str(k): str(v) for k, v in links.items()} if isinstance(links, dict) else {}
+
+    def _cached_completed_rows(self) -> dict[str, dict]:
+        """Return locally cached completed rows whose fetched files still exist without collisions."""
+        verified: dict[str, dict] = {}
+        for entry in self._read_fetched_cache().values():
+            row = entry.get("row")
+            files = entry.get("files")
+            if not isinstance(row, dict) or not isinstance(files, list) or not files:
+                continue
+            names = [str(fname) for fname in files if fname]
+            if len(names) != len(files):
+                continue
+            if len({os.path.normcase(name) for name in names}) != len(names):
+                continue
+            raw_path = str(row.get("content_path") or "")
+            if not raw_path:
+                continue
+            target = Path(raw_path)
+            if not target.is_dir():
+                continue
+            if all((target / name).is_file() for name in names):
+                verified[str(target)] = dict(row)
+        return verified
+
+    def _expected_filenames(self, links: list, target, *, fetch: bool = True) -> list[str] | None:
+        """Return resolved filenames for `links` in `target`, or None if incomplete."""
+        if not links:
+            return []
+        if not fetch:
+            try:
+                if not target.is_dir():
+                    return None
+                present = {
+                    p.name
+                    for p in target.iterdir()
+                    if p.is_file() and not p.name.endswith(".partial")
+                }
+            except OSError:
+                return None
+            recorded = self._recorded_links_for(target)
+            expected: list[str] = []
+            seen_names: set[str] = set()
+            default_resolve = type(self)._resolve is DebridClient._resolve
+            for link in links:
+                known = recorded.get(self._link_key(link), "")
+                if not known:
+                    if isinstance(link, tuple):
+                        if len(link) == 2:
+                            known = os.path.basename(str(link[0] or "").replace("\\", "/"))
+                        elif len(link) == 3:
+                            known = os.path.basename(str(link[2] or "").replace("\\", "/"))
+                    elif default_resolve and isinstance(link, str):
+                        known = _basename_of(link)
+                if not known or known not in present:
+                    return None
+                norm_known = os.path.normcase(known)
+                if norm_known in seen_names:
+                    return None
+                seen_names.add(norm_known)
+                expected.append(known)
+            return expected
+        return None
+
+    def completed(self, *, fetch=True, timeout: float | None = None) -> list[dict]:
         """Fetch what the cloud has finished, then report it like a local client."""
         if not self.configured:
             return []
+        if not fetch and timeout is not None and float(timeout) <= 0:
+            return list(self._cached_completed_rows().values()) if self._config.save_path else []
+        if not fetch and self._config.save_path:
+            cached = self._cached_completed_rows()
+            save_root = Path(self._config.save_path)
+            try:
+                disk_dirs = {
+                    p.name
+                    for p in save_root.iterdir()
+                    if p.is_dir() and any(
+                        child.is_file() and not child.name.endswith(".partial")
+                        for child in p.iterdir()
+                    )
+                } if save_root.is_dir() else set()
+            except OSError:
+                disk_dirs = set()
+            cached_dirs = {Path(path).name for path in cached}
+            if not (disk_dirs - cached_dirs):
+                return list(cached.values())
         out = []
-        for entry in self._finished():
-            # A service that knows the torrent's infohash may append it as a
-            # third element; the others still return `(name, links)`.
-            name, links, *rest = entry
-            target = Path(self._config.save_path) / name
-            if self._fetch_links(links, target):
-                row = {"name": name, "content_path": str(target),
-                       "save_path": self._config.save_path,
-                       "state": self.DONE_STATE}
-                if rest and rest[0]:
-                    row["hash"] = str(rest[0])
-                out.append(row)
+        seen_paths = set()
+        prev_deadline = self._get_probe_deadline()
+        if timeout is not None:
+            self._set_probe_deadline(time.monotonic() + max(0.0, float(timeout)))
+        try:
+            for entry in self._finished():
+                # A service that knows the torrent's infohash may append it as a
+                # third element; the others still return `(name, links)`.
+                name, links, *rest = entry
+                target = Path(self._config.save_path) / name
+                if self._fetch_links(links, target, fetch=fetch):
+                    row = {"name": name, "content_path": str(target),
+                           "save_path": self._config.save_path,
+                           "state": self.DONE_STATE}
+                    if rest and rest[0]:
+                        row["hash"] = str(rest[0])
+                    if fetch and links:
+                        recorded = self._recorded_links_for(target)
+                        files = [recorded.get(self._link_key(link), "") for link in links]
+                        if (len(files) == len(links) and all(files)
+                                and len({os.path.normcase(f) for f in files}) == len(files)):
+                            self._update_fetched_cache(
+                                target, completed_row=row, files=files,
+                            )
+                    out.append(row)
+                    seen_paths.add(str(target))
+                if self._probe_timed_out():
+                    break
+            if not fetch:
+                for content_path, row in self._cached_completed_rows().items():
+                    if content_path not in seen_paths:
+                        out.append(row)
+        finally:
+            self._set_probe_deadline(prev_deadline)
         return out
 
-    def _fetch_links(self, links: list, target) -> bool:
+    def _fetch_links(self, links: list, target, *, fetch=True) -> bool:
         """Download every link into `target/`. True if all the files are
         present afterwards, counting ones a previous sweep already fetched."""
+        if not fetch:
+            if not links:
+                return False
+            return self._expected_filenames(links, target, fetch=False) is not None
         ok = True
+        collided = False
+        seen_names: set[str] = set()
+        resolved_names: dict[str, str] = {}
         for link in links:
             filename, url = self._resolve(link)
             if not url:
                 ok = False
                 continue
-            destination = target / (filename or "download.bin")
-            if destination.exists():
-                continue
-            if not self._download(url, destination):
+            safe_name = os.path.basename(str(filename or "").replace("\\", "/")).strip() or "download.bin"
+            norm_name = os.path.normcase(safe_name)
+            if norm_name in seen_names:
+                log.warning("%s filename collision in %s: %s", self.name, target, safe_name)
                 ok = False
+                collided = True
+                continue
+            seen_names.add(norm_name)
+            destination = target / safe_name
+            if not destination.exists():
+                if not self._download(url, destination):
+                    ok = False
+                    continue
+            resolved_names[self._link_key(link)] = destination.name
+        if collided:
+            self._update_fetched_cache(target, clear_completed=True, clear_links=True)
+            return False
+        if resolved_names or not ok:
+            self._update_fetched_cache(
+                target,
+                resolved=resolved_names or None,
+                clear_completed=not ok,
+            )
         return ok
 
     def _download(self, url: str, destination) -> bool:
@@ -1886,8 +2268,11 @@ class RealDebrid(DebridClient):
         return True
 
     def _finished(self) -> list[tuple[str, list]]:
+        """List completed Real-Debrid torrents from our ledger."""
         out = []
         for entry in self._ours():
+            if self._probe_timed_out():
+                break
             torrent_id = self._entry_id(entry)
             info = self._get(f"/torrents/info/{torrent_id}")
             if not info or info.get("status") != "downloaded":
@@ -1954,8 +2339,11 @@ class AllDebrid(DebridClient):
         return True
 
     def _finished(self) -> list[tuple[str, list]]:
+        """List completed AllDebrid magnets from our ledger."""
         out = []
         for entry in self._ours():
+            if self._probe_timed_out():
+                break
             ident = self._entry_id(entry)
             magnet = self._data(self._post("/magnet/status", {"id": ident})) \
                 .get("magnets") or {}
@@ -1965,7 +2353,10 @@ class AllDebrid(DebridClient):
                 continue
             links = magnet.get("links")
             if links is None:
-                files = self._data(self._post("/magnet/files", {"id[]": ident}))
+                raw_files = self._post("/magnet/files", {"id[]": ident})
+                if not isinstance(raw_files, dict) or raw_files.get("status") != "success":
+                    continue
+                files = self._data(raw_files)
                 rows = files.get("magnets") or []
                 first = rows[0] if rows and isinstance(rows[0], dict) else {}
                 links = _alldebrid_links(first.get("files"))
@@ -2034,10 +2425,13 @@ class Premiumize(DebridClient):
         return True
 
     def _finished(self) -> list[tuple[str, list]]:
+        """List completed Premiumize transfers from our ledger."""
         body = self._get("/transfer/list") or {}
         mine = {self._entry_id(e) for e in self._ours()}
         out = []
         for transfer in body.get("transfers") or []:
+            if self._probe_timed_out():
+                break
             if not isinstance(transfer, dict):
                 continue
             if str(transfer.get("id")) not in mine:
@@ -2045,19 +2439,26 @@ class Premiumize(DebridClient):
             if str(transfer.get("status", "")).lower() not in self.DONE:
                 continue
             name = transfer.get("name") or str(transfer.get("id"))
-            out.append((name, self._links_for(transfer)))
+            links = self._links_for(transfer)
+            if links is None:
+                continue
+            out.append((name, links))
         return out
 
-    def _links_for(self, transfer: dict) -> list:
+    def _links_for(self, transfer: dict) -> list | None:
+        """Resolve folder or single-file links for a Premiumize transfer, or None if unavailable."""
         if transfer.get("folder_id"):
-            listing = self._get("/folder/list",
-                                {"id": transfer["folder_id"]}) or {}
+            listing = self._get("/folder/list", {"id": transfer["folder_id"]})
+            if not isinstance(listing, dict):
+                return None
             return [(item.get("name") or _basename_of(item.get("link", "")),
                      item.get("link") or "")
                     for item in listing.get("content") or []
                     if isinstance(item, dict) and item.get("type") == "file"]
         if transfer.get("file_id"):
-            item = self._get("/item/details", {"id": transfer["file_id"]}) or {}
+            item = self._get("/item/details", {"id": transfer["file_id"]})
+            if not isinstance(item, dict):
+                return None
             if item.get("link"):
                 return [(item.get("name") or _basename_of(item["link"]),
                          item["link"])]
@@ -2247,8 +2648,11 @@ class Offcloud(DebridClient):
         return True
 
     def _finished(self) -> list[tuple[str, list]]:
+        """List completed Offcloud downloads from our ledger."""
         out = []
         for entry in self._ours():
+            if self._probe_timed_out():
+                break
             ident = self._entry_id(entry)
             body = self._post("/cloud/status",
                               {**self._key(), "requestId": ident}) or {}
@@ -2304,8 +2708,11 @@ class PutIo(DebridClient):
         return True
 
     def _finished(self) -> list[tuple[str, list]]:
+        """List completed put.io transfers from our ledger."""
         out = []
         for entry in self._ours():
+            if self._probe_timed_out():
+                break
             ident = self._entry_id(entry)
             transfer = (self._get(f"/transfers/{ident}") or {}).get("transfer") or {}
             if str(transfer.get("status", "")).upper() != "COMPLETED":
@@ -2314,8 +2721,47 @@ class PutIo(DebridClient):
             if not file_id:
                 continue
             name = transfer.get("name") or str(ident)
-            out.append((name, self._files_under(file_id)))
+            files, complete = self._collect_files(file_id)
+            if not complete:
+                if self._probe_timed_out():
+                    break
+                continue
+            out.append((name, files))
         return out
+
+    def _collect_files(self, file_id) -> tuple[list, bool]:
+        """Collect all files under `file_id` together with traversal completeness."""
+        if self._probe_timed_out():
+            return [], False
+        listing = self._get("/files/list", {"parent_id": file_id})
+        if not isinstance(listing, dict):
+            return [], False
+        rows = listing.get("files")
+        if not rows:
+            # Either a single file, or a folder that is genuinely empty. Ask
+            # for the thing itself and let its own type say which -- returning
+            # an empty folder as a file produces a download that always fails.
+            resp = self._get(f"/files/{file_id}")
+            if not isinstance(resp, dict):
+                return [], False
+            item = resp.get("file") or {}
+            if not item.get("id") or item.get("file_type") == "FOLDER":
+                return [], True
+            return [(item.get("name") or "", item["id"])], True
+        out = []
+        for item in rows:
+            if self._probe_timed_out():
+                return [], False
+            if not isinstance(item, dict) or not item.get("id"):
+                continue
+            if item.get("file_type") == "FOLDER":
+                sub_files, sub_ok = self._collect_files(item["id"])
+                if not sub_ok:
+                    return [], False
+                out.extend(sub_files)
+            else:
+                out.append((item.get("name") or "", item["id"]))
+        return out, True
 
     def _files_under(self, file_id) -> list:
         """Every file below this id, folders walked.
@@ -2324,25 +2770,8 @@ class PutIo(DebridClient):
         is the folder it was put in -- `files/list` tells the two apart by the
         `file_type` of what it lists.
         """
-        listing = self._get("/files/list", {"parent_id": file_id}) or {}
-        rows = listing.get("files")
-        if not rows:
-            # Either a single file, or a folder that is genuinely empty. Ask
-            # for the thing itself and let its own type say which -- returning
-            # an empty folder as a file produces a download that always fails.
-            item = (self._get(f"/files/{file_id}") or {}).get("file") or {}
-            if not item.get("id") or item.get("file_type") == "FOLDER":
-                return []
-            return [(item.get("name") or "", item["id"])]
-        out = []
-        for item in rows:
-            if not isinstance(item, dict) or not item.get("id"):
-                continue
-            if item.get("file_type") == "FOLDER":
-                out.extend(self._files_under(item["id"]))
-            else:
-                out.append((item.get("name") or "", item["id"]))
-        return out
+        files, complete = self._collect_files(file_id)
+        return files if complete else []
 
     def _resolve(self, link) -> tuple[str, str]:
         filename, file_id = link
@@ -2447,13 +2876,18 @@ class Linksnappy(DebridClient):
         return None
 
     def _finished(self) -> list[tuple[str, list]]:
+        """List completed Linksnappy torrents from our ledger."""
         out = []
         for entry in self._ours():
+            if self._probe_timed_out():
+                break
             ident = self._entry_id(entry)
             status = self._call("/torrents/STATUS", {"tid": ident}) or {}
             if str(status.get("status", "")).upper() != "FINISHED":
                 continue
             files = self._call("/torrents/FILES", {"id": ident})
+            if files is None:
+                continue
             out.append((status.get("name") or ident, _linksnappy_files(files)))
         return out
 
@@ -2978,7 +3412,7 @@ class SiteDownloader:
         self._write(rows)
         return True
 
-    def completed(self) -> list[dict]:
+    def completed(self, *, fetch=True) -> list[dict]:
         """Fetch what is pending, then report everything already here.
 
         Reports rather than pops: the importer sweeps repeatedly and decides
@@ -2990,6 +3424,8 @@ class SiteDownloader:
         rows = self._read()
         fetched = 0
         for row in rows:
+            if not fetch:
+                break
             if row.get("state") != "pending":
                 continue
             if fetched >= self._config.max_active:
@@ -3271,13 +3707,15 @@ class HubDownloader:
         self._write(rows)
         return True
 
-    def completed(self) -> list[dict]:
+    def completed(self, *, fetch=True) -> list[dict]:
         """Fetch what is pending, then report everything already here."""
         if not self.configured:
             return []
         rows = self._read()
         fetched = 0
         for row in rows:
+            if not fetch:
+                break
             if row.get("state") != "pending":
                 continue
             if fetched >= self._config.max_active:
@@ -3355,33 +3793,77 @@ def hand_off_with_id(client, url: str, *, name: str = "") -> tuple[bool, str]:
     return ok, (getattr(client, "last_job_id", "") or "") if ok else ""
 
 
-def match_queue_item(queue, download: dict):
+def match_queue_item(queue, download: dict, *,
+                     client_id: str = "", client_protocol: str = ""):
     """The queue row a finished download belongs to, or None.
 
     Prefer the recorded infohash, client job id, or qBittorrent tag. Legacy
     rows without a comparable identity can still match an exact release
     title, but file size never establishes identity.
     """
+    reporting_client = download.get("_romarr_client")
+    reporting_id = str(
+        client_id
+        or getattr(reporting_client, "romarr_id", "")
+        or getattr(reporting_client, "config_id", "")
+        or download.get("_romarr_client_id")
+        or ""
+    ).strip()
+    reporting_protocol = str(
+        client_protocol
+        or getattr(reporting_client, "protocol", "")
+        or ""
+    ).strip().lower()
+
+    def client_matches(item) -> bool:
+        """Return True when `item` is compatible with the reporting client and protocol."""
+        release_id = str(getattr(item, "release_id", "") or "")
+        download_id = str(getattr(item, "download_id", "") or "")
+        download_client = str(getattr(item, "download_client", "") or "").strip()
+        if download_client and reporting_id and download_client != reporting_id:
+            return False
+        if ((download_id.startswith("qbit-tag:") or release_id.startswith("btih:"))
+                and reporting_protocol and reporting_protocol != "torrent"):
+            return False
+        return True
+
     tags = {part.strip() for part in str(download.get("tags") or "").split(",")
             if part.strip()}
     tag_matches = [item for item in queue
                    if str(getattr(item, "download_id", "") or "").startswith("qbit-tag:")
-                   and item.download_id[9:] in tags]
+                   and item.download_id[9:] in tags
+                   and client_matches(item)]
     if tag_matches:
-        return tag_matches[0] if len(tag_matches) == 1 else None
+        exact_tags = [item for item in tag_matches
+                      if reporting_id and str(getattr(item, "download_client", "") or "").strip() == reporting_id]
+        chosen_tags = exact_tags or tag_matches
+        return chosen_tags[0] if len(chosen_tags) == 1 else None
 
     found = str(download.get("hash") or "").strip().lower()
     job = str(download.get("id") or "").strip()
     if found or job:
-        for item in queue:
-            if found and item.release_id == f"btih:{found}":
-                return item
-            if job and item.download_id == job:
-                return item
+        compatible = [item for item in queue if client_matches(item)]
+        exact = [item for item in compatible
+                 if reporting_id and str(getattr(item, "download_client", "") or "").strip() == reporting_id]
+        legacy = [item for item in compatible
+                  if not (reporting_id and str(getattr(item, "download_client", "") or "").strip() == reporting_id)]
+        for pool in (exact, legacy):
+            for item in pool:
+                if found and item.release_id == f"btih:{found}":
+                    return item
+                if job and item.download_id == job:
+                    return item
 
     def identity_conflicts(item):
+        """Return True when the reporting client or recorded job identity conflicts with `item`."""
         release_id = str(getattr(item, "release_id", "") or "")
         download_id = str(getattr(item, "download_id", "") or "")
+        download_client = str(getattr(item, "download_client", "") or "").strip()
+        if download_client and reporting_id and download_client != reporting_id:
+            return True
+        if ((download_id.startswith("qbit-tag:") or release_id.startswith("btih:"))
+                and reporting_protocol and reporting_protocol != "torrent"):
+            return True
         if download_id.startswith("qbit-tag:"):
             return bool(tags)  # A matching tag would already have matched.
         if found and release_id.startswith("btih:"):
@@ -3389,10 +3871,14 @@ def match_queue_item(queue, download: dict):
         return bool(job and download_id)
 
     name = download.get("name", "")
-    title_matches = [item for item in queue
-                     if item.state == "grabbed" and item.release == name
-                     and not identity_conflicts(item)]
-    return title_matches[0] if len(title_matches) == 1 else None
+    title_candidates = [item for item in queue
+                        if item.release == name and not identity_conflicts(item)]
+    grabbed_matches = [item for item in title_candidates if item.state == "grabbed"]
+    if grabbed_matches:
+        return grabbed_matches[0] if len(grabbed_matches) == 1 else None
+    review_matches = [item for item in title_candidates
+                      if item.state in ("import-review", "import-failed")]
+    return review_matches[0] if len(review_matches) == 1 else None
 
 
 def pick_client(protocol: str, clients: list) -> object | None:
