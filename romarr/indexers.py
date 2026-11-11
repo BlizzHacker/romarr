@@ -226,6 +226,7 @@ class Prowlarr:
 
     def __init__(self, config: ProwlarrConfig, session: requests.Session | None = None):
         self._config = config
+        self._owns_session = session is None
         self._session = session or requests.Session()
         # indexerId -> is-private, resolved lazily and cached. See _private_ids.
         self._privacy: dict[int, bool] | None = None
@@ -546,6 +547,7 @@ class Torznab:
 
     def __init__(self, config: TorznabConfig, session: requests.Session | None = None):
         self._config = config
+        self._owns_session = session is None
         self._session = session or requests.Session()
 
     @property
@@ -693,6 +695,7 @@ class TorrentRss:
     def __init__(self, config: TorrentRssConfig,
                  session: requests.Session | None = None):
         self._config = config
+        self._owns_session = session is None
         self._session = session or requests.Session()
 
     @property
@@ -781,6 +784,7 @@ class TorrentPotato:
     def __init__(self, config: TorrentPotatoConfig,
                  session: requests.Session | None = None):
         self._config = config
+        self._owns_session = session is None
         self._session = session or requests.Session()
 
     @property

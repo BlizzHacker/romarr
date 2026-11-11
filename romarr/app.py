@@ -32,7 +32,9 @@ Routes:
 from __future__ import annotations
 
 import json
-from copy import deepcopy
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
+from copy import copy, deepcopy
 import logging
 import os
 import pathlib
@@ -1787,8 +1789,6 @@ class ROMarr:
         wider net: score() already rejects a release naming a foreign system,
         one in the wrong category, or one too large to be a cartridge.
         """
-        seen: set[tuple[str, str]] = set()
-        merged = []
         # Prowlarr plus every directly-configured indexer. One source failing
         # must never lose another's results -- an indexer that is down, rate
         # limited or mid-login is the normal case across a dozen trackers, not
@@ -1796,28 +1796,46 @@ class ROMarr:
         sources: list[tuple[str, object]] = [("prowlarr", self.prowlarr)]
         sources += [(getattr(i, "name", "indexer"), i)
                     for i in getattr(self, "indexers", [])]
-        for term in (game, f"{game} {platform.name}"):
-            for label, source in sources:
-                try:
-                    found = source.search(term)
-                except Exception as err:
-                    log.warning("%s search failed for %r: %s", label, term, err)
-                    continue
-                for release in found:
-                    key = (release.title, release.download_url)
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    merged.append(release)
+
+        def search_term(term):
+            releases = []
+            with ExitStack() as sessions:
+                for label, source in sources:
+                    client = source
+                    try:
+                        # Worker copies keep requests.Session and Prowlarr's
+                        # lazily-filled privacy cache out of shared state.
+                        if getattr(source, "_owns_session", False):
+                            client = copy(source)
+                            client._session = sessions.enter_context(requests.Session())
+                        releases.extend(client.search(term))
+                    except Exception as err:
+                        log.warning("%s search failed for %r: %s", label, term, err)
+                    if isinstance(client, Prowlarr) and source._privacy is None:
+                        source._privacy = client._privacy
+            return releases
+
         # Enabled ROM Hub plugins are searched alongside the indexers: the
         # same titles, scored by the same rules, grabbable from the same
         # Interactive Search page. One query, not per-term: the Hub's own
         # fan-out already merges every plugin's answer for it.
-        for release in self._hub_releases(game, platform):
-            key = (release.title, release.download_url)
-            if key not in seen:
-                seen.add(key)
-                merged.append(release)
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            searches = [pool.submit(search_term, game),
+                        pool.submit(search_term, f"{game} {platform.name}"),
+                        pool.submit(self._hub_releases, game, platform)]
+        seen: set[tuple[str, str]] = set()
+        merged = []
+        for search in searches:
+            try:
+                releases = search.result()
+            except Exception as err:
+                log.warning("release search task failed: %s", err)
+                continue
+            for release in releases:
+                key = (release.title, release.download_url)
+                if key not in seen:
+                    seen.add(key)
+                    merged.append(release)
         return merged
 
     def request(self, game: str, platform_name: str, external_request_id: str = "") -> dict:
