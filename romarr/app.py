@@ -390,6 +390,8 @@ class ProxyResponse(tuple):
 class ROMarr:
     """The service. Holds config, clients, and the in-flight queue."""
 
+    QUEUE_PROBE_TIMEOUT = 5.0
+
     def __init__(self, env: dict[str, str] | None = None):
         e = env if env is not None else os.environ
         # Kept so reload_libraries can seed from the environment on first run
@@ -2193,28 +2195,49 @@ class ROMarr:
             "items": items,
         }
 
-    def _completed_queue_downloads(self, items, *, ownership=None):
+    def _completed_queue_downloads(self, items, *, ownership=None, timeout: float | None = None):
         """Yield `(client, completed_rows)` for queue preview checks without fetch or repair writes."""
         if ownership is None:
             with self._lock:
                 ownership = self._retained_owners_readonly(list(self.queue))
+        deadline = None if timeout is None else time.monotonic() + max(0.0, float(timeout))
         for client in self.clients:
             if not getattr(client, "configured", True):
                 continue
+            remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
+            if remaining is not None and remaining <= 0:
+                break
             try:
                 if isinstance(client, QBittorrent):
                     raw_timeout = getattr(getattr(client, "_config", None), "timeout", 5) or 5
-                    probe_timeout = min(float(raw_timeout), 5.0)
-                    candidates = (
-                        client.selective_completed(
-                            items,
-                            ownership=ownership,
-                            update_cache=False,
-                            timeout=probe_timeout,
-                        )
-                        + client.completed(repair=False, timeout=probe_timeout)
+                    probe_timeout = min(float(raw_timeout), self.QUEUE_PROBE_TIMEOUT)
+                    if remaining is not None:
+                        probe_timeout = min(probe_timeout, remaining)
+                    selective = client.selective_completed(
+                        items,
+                        ownership=ownership,
+                        update_cache=False,
+                        timeout=max(0.01, probe_timeout),
                     )
-                elif isinstance(client, (DebridClient, SiteDownloader, HubDownloader)):
+                    if deadline is not None:
+                        left = deadline - time.monotonic()
+                        if left <= 0:
+                            candidates = selective
+                        else:
+                            candidates = selective + client.completed(
+                                repair=False, timeout=max(0.01, min(probe_timeout, left)),
+                            )
+                    else:
+                        candidates = selective + client.completed(
+                            repair=False, timeout=max(0.01, probe_timeout),
+                        )
+                elif isinstance(client, DebridClient):
+                    raw_timeout = getattr(getattr(client, "_config", None), "timeout", 5) or 5
+                    probe_timeout = min(float(raw_timeout), self.QUEUE_PROBE_TIMEOUT)
+                    if remaining is not None:
+                        probe_timeout = min(probe_timeout, remaining)
+                    candidates = client.completed(fetch=False, timeout=max(0.01, probe_timeout))
+                elif isinstance(client, (SiteDownloader, HubDownloader)):
                     candidates = client.completed(fetch=False)
                 else:
                     candidates = client.completed()
@@ -2231,14 +2254,22 @@ class ROMarr:
             ownership = self._retained_owners_readonly(items)
         pending = [item for item in items if item.state not in ("imported", "failed")]
         completed = (
-            [download for _, downloads in self._completed_queue_downloads(pending, ownership=ownership)
+            [(client, download)
+             for client, downloads in self._completed_queue_downloads(
+                 pending, ownership=ownership, timeout=self.QUEUE_PROBE_TIMEOUT)
              for download in downloads]
             if pending else []
         )
         for item, row in zip(items, rows):
             row["can_preview_import"] = row["state"] not in ("imported", "failed") and any(
-                match_queue_item([item], download) is item and not download.get("_romarr_selection_error")
-                for download in completed
+                match_queue_item(
+                    items,
+                    download,
+                    client_id=str(getattr(client, "romarr_id", "") or getattr(client, "config_id", "") or ""),
+                    client_protocol=str(getattr(client, "protocol", "") or ""),
+                ) is item
+                and not download.get("_romarr_selection_error")
+                for client, download in completed
             )
         return rows
 
@@ -2251,21 +2282,25 @@ class ROMarr:
         import zipfile
         import subprocess
         with self._lock:
-            if not 0 <= index < len(self.queue):
+            items = list(self.queue)
+            if not 0 <= index < len(items):
                 return {"error": "no such queue item"}
-            item = self.queue[index]
+            item = items[index]
             if item.state == "imported":
                 return {"error": "this item has already imported"}
-            ownership = self._retained_owners_readonly(list(self.queue))
+            ownership = self._retained_owners_readonly(items)
         platform = resolve(item.platform)
         target = self.library_for(item.platform) if platform else None
         if target is None:
             return {"error": "configure a platform and library first"}
         torrent = None
         source_client = None
-        for client, candidates in self._completed_queue_downloads([item], ownership=ownership):
+        for client, candidates in self._completed_queue_downloads(
+                [item], ownership=ownership, timeout=self.QUEUE_PROBE_TIMEOUT):
+            client_id = str(getattr(client, "romarr_id", "") or getattr(client, "config_id", "") or "")
+            client_protocol = str(getattr(client, "protocol", "") or "")
             for candidate in candidates:
-                if match_queue_item([item], candidate) is item:
+                if match_queue_item(items, candidate, client_id=client_id, client_protocol=client_protocol) is item:
                     torrent = candidate
                     source_client = client
                     break
@@ -2850,11 +2885,13 @@ class ROMarr:
         for client in self.clients:
             if not getattr(client, "configured", True):
                 continue
+            client_id = str(getattr(client, "romarr_id", "") or getattr(client, "config_id", "") or "")
+            client_protocol = str(getattr(client, "protocol", "") or "")
             try:
                 completed = getattr(client, "completed", None)
                 if callable(completed):
                     for item in completed():
-                        if match_queue_item([row], item) is not None:
+                        if match_queue_item([row], item, client_id=client_id, client_protocol=client_protocol) is not None:
                             return True
             except Exception:
                 pass
@@ -2863,7 +2900,7 @@ class ROMarr:
                              or getattr(client, "torrents", None))
                 if callable(active_fn):
                     for item in active_fn():
-                        if match_queue_item([row], item) is None:
+                        if match_queue_item([row], item, client_id=client_id, client_protocol=client_protocol) is None:
                             continue
                         progress = float(item.get("progress", 0) or 0)
                         if progress >= 1.0:
@@ -2900,12 +2937,13 @@ class ROMarr:
                 except Exception as err:
                     log.warning("could not remove dead download %r from %s: %s",
                                 row.download_id, getattr(client, "name", client), err)
+            client_protocol = str(getattr(client, "protocol", "") or "")
             deleter = getattr(client, "delete_torrent", None)
             torrents_fn = getattr(client, "torrents", None)
             if callable(deleter) and callable(torrents_fn):
                 try:
                     for item in torrents_fn():
-                        if match_queue_item([row], item) is not None:
+                        if match_queue_item([row], item, client_id=str(client_id), client_protocol=client_protocol) is not None:
                             thash = str(item.get("hash") or "").strip()
                             if thash and deleter(thash):
                                 removed = True
@@ -6472,8 +6510,21 @@ class ROMarr:
             name = torrent.get("name", "")
             platform = None
             queue_item = None
+            source_client = torrent.get("_romarr_client")
+            client_id = str(
+                getattr(source_client, "romarr_id", "")
+                or getattr(source_client, "config_id", "")
+                or torrent.get("_romarr_client_id")
+                or ""
+            )
+            client_protocol = str(getattr(source_client, "protocol", "") or "")
             with self._lock:
-                match = match_queue_item(self.queue, torrent)
+                match = match_queue_item(
+                    self.queue,
+                    torrent,
+                    client_id=client_id,
+                    client_protocol=client_protocol,
+                )
                 if match is not None:
                     queue_item = match
                     if match.state not in ("imported", "import-failed"):

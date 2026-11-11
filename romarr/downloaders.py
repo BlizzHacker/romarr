@@ -1677,8 +1677,12 @@ class DebridClient:
     DONE_STATE = "downloaded"
 
     def __init__(self, config, session: requests.Session | None = None):
+        """Initialize the debrid client with its configuration and HTTP session."""
         self._config = config
         self._session = session or requests.Session()
+        self._probe_deadline: float | None = None
+        self._fetched_lock = threading.RLock()
+        self._fetched_local: dict[str, dict] = {}
 
     @property
     def configured(self) -> bool:
@@ -1689,10 +1693,24 @@ class DebridClient:
     def _headers(self) -> dict:
         return {"Authorization": f"Bearer {self._config.api_token}"}
 
+    def _probe_timed_out(self) -> bool:
+        """True when an active Queue probe deadline has elapsed."""
+        return self._probe_deadline is not None and time.monotonic() >= self._probe_deadline
+
+    def _request_timeout(self) -> float:
+        """Bounded HTTP request timeout respecting any active probe deadline."""
+        base = float(getattr(self._config, "timeout", 30) or 30)
+        if self._probe_deadline is None:
+            return base
+        return min(base, max(0.01, self._probe_deadline - time.monotonic()))
+
     def _get(self, path: str, params: dict | None = None):
+        """Perform a bounded GET request against the debrid API."""
+        if self._probe_timed_out():
+            return None
         # params is only passed when there is one: a service whose GETs never
         # take a query string should not have every call carry an empty dict.
-        kwargs = {"headers": self._headers(), "timeout": self._config.timeout}
+        kwargs = {"headers": self._headers(), "timeout": self._request_timeout()}
         if params:
             kwargs["params"] = params
         try:
@@ -1705,8 +1723,11 @@ class DebridClient:
             return None
 
     def _post(self, path: str, data: dict | None = None, files=None):
+        """Perform a bounded POST request against the debrid API."""
+        if self._probe_timed_out():
+            return None
         kwargs = {"data": data, "headers": self._headers(),
-                  "timeout": self._config.timeout}
+                  "timeout": self._request_timeout()}
         if files is not None:
             kwargs["files"] = files
         try:
@@ -1776,23 +1797,184 @@ class DebridClient:
             return link
         return _basename_of(str(link)), str(link)
 
-    def completed(self, *, fetch=True) -> list[dict]:
+    def _fetched_cache_path(self) -> Path:
+        """Path to the local cache of resolved link filenames and completed rows."""
+        stem = self.LEDGER[:-5] if self.LEDGER.endswith(".json") else self.LEDGER
+        return Path(self._config.save_path) / f"{stem}-fetched.json"
+
+    @staticmethod
+    def _link_key(link) -> str:
+        """Stable key identifying one resolved debrid link entry."""
+        if isinstance(link, tuple):
+            return "tuple:" + json.dumps(list(link))
+        return f"str:{link}"
+
+    def _read_fetched_cache(self) -> dict[str, dict]:
+        """Load per-target fetched filename and completion metadata."""
+        lock = getattr(self, "_fetched_lock", None)
+        if lock is None:
+            return {}
+        with lock:
+            data: dict[str, dict] = {}
+            if self._config.save_path:
+                try:
+                    raw = json.loads(self._fetched_cache_path().read_text(encoding="utf-8"))
+                    if isinstance(raw, dict):
+                        data = {
+                            str(k): dict(v)
+                            for k, v in raw.items()
+                            if isinstance(v, dict)
+                        }
+                except (OSError, ValueError):
+                    pass
+            for k, v in getattr(self, "_fetched_local", {}).items():
+                if k not in data and isinstance(v, dict):
+                    data[k] = dict(v)
+            return data
+
+    def _update_fetched_cache(self, target, *, resolved: dict[str, str] | None = None,
+                              completed_row: dict | None = None,
+                              files: list[str] | None = None) -> None:
+        """Persist resolved filenames and completed row state for `target`."""
+        lock = getattr(self, "_fetched_lock", None)
+        if lock is None:
+            return
+        key = str(target)
+        with lock:
+            cache = self._read_fetched_cache()
+            entry = dict(cache.get(key) or {})
+            if resolved:
+                merged = dict(entry.get("links") or {})
+                merged.update(resolved)
+                entry["links"] = merged
+            if completed_row is not None and files:
+                entry["row"] = dict(completed_row)
+                entry["files"] = list(files)
+            cache[key] = entry
+            self._fetched_local[key] = entry
+            if self._config.save_path:
+                try:
+                    path = self._fetched_cache_path()
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    tmp = path.with_suffix(path.suffix + ".tmp")
+                    tmp.write_text(json.dumps(cache), encoding="utf-8")
+                    tmp.replace(path)
+                except OSError as err:
+                    log.warning("could not record %s fetched cache: %s", self.name, err)
+
+    def _recorded_links_for(self, target) -> dict[str, str]:
+        """Return `{link_key: filename}` previously fetched into `target`."""
+        entry = self._read_fetched_cache().get(str(target)) or {}
+        links = entry.get("links")
+        return {str(k): str(v) for k, v in links.items()} if isinstance(links, dict) else {}
+
+    def _cached_completed_rows(self) -> dict[str, dict]:
+        """Return locally cached completed rows whose fetched files still exist on disk."""
+        verified: dict[str, dict] = {}
+        for entry in self._read_fetched_cache().values():
+            row = entry.get("row")
+            files = entry.get("files")
+            if not isinstance(row, dict) or not isinstance(files, list) or not files:
+                continue
+            raw_path = str(row.get("content_path") or "")
+            if not raw_path:
+                continue
+            target = Path(raw_path)
+            if not target.is_dir():
+                continue
+            if all((target / str(fname)).is_file() for fname in files if fname):
+                verified[str(target)] = dict(row)
+        return verified
+
+    def _expected_filenames(self, links: list, target, *, fetch: bool = True) -> list[str] | None:
+        """Return resolved filenames for `links` in `target`, or None if incomplete."""
+        if not links:
+            return []
+        if not fetch:
+            try:
+                if not target.is_dir():
+                    return None
+                present = {
+                    p.name
+                    for p in target.iterdir()
+                    if p.is_file() and not p.name.endswith(".partial")
+                }
+            except OSError:
+                return None
+            recorded = self._recorded_links_for(target)
+            expected: list[str] = []
+            default_resolve = type(self)._resolve is DebridClient._resolve
+            for link in links:
+                known = recorded.get(self._link_key(link), "")
+                if not known:
+                    if isinstance(link, tuple):
+                        if len(link) == 2:
+                            known = os.path.basename(str(link[0] or "").replace("\\", "/"))
+                        elif len(link) == 3:
+                            known = os.path.basename(str(link[2] or "").replace("\\", "/"))
+                    elif default_resolve and isinstance(link, str):
+                        known = _basename_of(link)
+                if not known or known not in present:
+                    return None
+                expected.append(known)
+            return expected
+        return None
+
+    def completed(self, *, fetch=True, timeout: float | None = None) -> list[dict]:
         """Fetch what the cloud has finished, then report it like a local client."""
         if not self.configured:
             return []
+        if not fetch and self._config.save_path:
+            cached = self._cached_completed_rows()
+            save_root = Path(self._config.save_path)
+            try:
+                disk_dirs = {
+                    p.name
+                    for p in save_root.iterdir()
+                    if p.is_dir() and any(
+                        child.is_file() and not child.name.endswith(".partial")
+                        for child in p.iterdir()
+                    )
+                } if save_root.is_dir() else set()
+            except OSError:
+                disk_dirs = set()
+            cached_dirs = {Path(path).name for path in cached}
+            if not (disk_dirs - cached_dirs):
+                return list(cached.values())
         out = []
-        for entry in self._finished():
-            # A service that knows the torrent's infohash may append it as a
-            # third element; the others still return `(name, links)`.
-            name, links, *rest = entry
-            target = Path(self._config.save_path) / name
-            if self._fetch_links(links, target, fetch=fetch):
-                row = {"name": name, "content_path": str(target),
-                       "save_path": self._config.save_path,
-                       "state": self.DONE_STATE}
-                if rest and rest[0]:
-                    row["hash"] = str(rest[0])
-                out.append(row)
+        seen_paths = set()
+        prev_deadline = getattr(self, "_probe_deadline", None)
+        if timeout is not None:
+            self._probe_deadline = time.monotonic() + max(0.0, float(timeout))
+        try:
+            for entry in self._finished():
+                # A service that knows the torrent's infohash may append it as a
+                # third element; the others still return `(name, links)`.
+                name, links, *rest = entry
+                target = Path(self._config.save_path) / name
+                if self._fetch_links(links, target, fetch=fetch):
+                    row = {"name": name, "content_path": str(target),
+                           "save_path": self._config.save_path,
+                           "state": self.DONE_STATE}
+                    if rest and rest[0]:
+                        row["hash"] = str(rest[0])
+                    if fetch and links:
+                        recorded = self._recorded_links_for(target)
+                        files = [recorded.get(self._link_key(link), "") for link in links]
+                        if all(files):
+                            self._update_fetched_cache(
+                                target, completed_row=row, files=files,
+                            )
+                    out.append(row)
+                    seen_paths.add(str(target))
+                if self._probe_timed_out():
+                    break
+            if not fetch and self._probe_timed_out():
+                for content_path, row in self._cached_completed_rows().items():
+                    if content_path not in seen_paths:
+                        out.append(row)
+        finally:
+            self._probe_deadline = prev_deadline
         return out
 
     def _fetch_links(self, links: list, target, *, fetch=True) -> bool:
@@ -1801,43 +1983,23 @@ class DebridClient:
         if not fetch:
             if not links:
                 return False
-            try:
-                if not target.is_dir():
-                    return False
-                present = {
-                    p.name
-                    for p in target.iterdir()
-                    if p.is_file() and not p.name.endswith(".partial")
-                }
-            except OSError:
-                return False
-            matched_known = set()
-            unresolved = 0
-            for link in links:
-                known = ""
-                if isinstance(link, tuple):
-                    if len(link) == 2:
-                        known = str(link[0] or "")
-                    elif len(link) == 3:
-                        known = os.path.basename(str(link[2] or "").replace("\\", "/"))
-                if known:
-                    if known not in present:
-                        return False
-                    matched_known.add(known)
-                else:
-                    unresolved += 1
-            return len(present - matched_known) >= unresolved
+            return self._expected_filenames(links, target, fetch=False) is not None
         ok = True
+        resolved_names: dict[str, str] = {}
         for link in links:
             filename, url = self._resolve(link)
             if not url:
                 ok = False
                 continue
-            destination = target / (filename or "download.bin")
-            if destination.exists():
-                continue
-            if not self._download(url, destination):
-                ok = False
+            safe_name = os.path.basename(str(filename or "").replace("\\", "/")).strip() or "download.bin"
+            destination = target / safe_name
+            if not destination.exists():
+                if not self._download(url, destination):
+                    ok = False
+                    continue
+            resolved_names[self._link_key(link)] = destination.name
+        if resolved_names:
+            self._update_fetched_cache(target, resolved=resolved_names)
         return ok
 
     def _download(self, url: str, destination) -> bool:
@@ -1915,8 +2077,11 @@ class RealDebrid(DebridClient):
         return True
 
     def _finished(self) -> list[tuple[str, list]]:
+        """List completed Real-Debrid torrents from our ledger."""
         out = []
         for entry in self._ours():
+            if self._probe_timed_out():
+                break
             torrent_id = self._entry_id(entry)
             info = self._get(f"/torrents/info/{torrent_id}")
             if not info or info.get("status") != "downloaded":
@@ -1983,8 +2148,11 @@ class AllDebrid(DebridClient):
         return True
 
     def _finished(self) -> list[tuple[str, list]]:
+        """List completed AllDebrid magnets from our ledger."""
         out = []
         for entry in self._ours():
+            if self._probe_timed_out():
+                break
             ident = self._entry_id(entry)
             magnet = self._data(self._post("/magnet/status", {"id": ident})) \
                 .get("magnets") or {}
@@ -2063,10 +2231,13 @@ class Premiumize(DebridClient):
         return True
 
     def _finished(self) -> list[tuple[str, list]]:
+        """List completed Premiumize transfers from our ledger."""
         body = self._get("/transfer/list") or {}
         mine = {self._entry_id(e) for e in self._ours()}
         out = []
         for transfer in body.get("transfers") or []:
+            if self._probe_timed_out():
+                break
             if not isinstance(transfer, dict):
                 continue
             if str(transfer.get("id")) not in mine:
@@ -2276,8 +2447,11 @@ class Offcloud(DebridClient):
         return True
 
     def _finished(self) -> list[tuple[str, list]]:
+        """List completed Offcloud downloads from our ledger."""
         out = []
         for entry in self._ours():
+            if self._probe_timed_out():
+                break
             ident = self._entry_id(entry)
             body = self._post("/cloud/status",
                               {**self._key(), "requestId": ident}) or {}
@@ -2333,8 +2507,11 @@ class PutIo(DebridClient):
         return True
 
     def _finished(self) -> list[tuple[str, list]]:
+        """List completed put.io transfers from our ledger."""
         out = []
         for entry in self._ours():
+            if self._probe_timed_out():
+                break
             ident = self._entry_id(entry)
             transfer = (self._get(f"/transfers/{ident}") or {}).get("transfer") or {}
             if str(transfer.get("status", "")).upper() != "COMPLETED":
@@ -2365,6 +2542,8 @@ class PutIo(DebridClient):
             return [(item.get("name") or "", item["id"])]
         out = []
         for item in rows:
+            if self._probe_timed_out():
+                break
             if not isinstance(item, dict) or not item.get("id"):
                 continue
             if item.get("file_type") == "FOLDER":
@@ -2476,8 +2655,11 @@ class Linksnappy(DebridClient):
         return None
 
     def _finished(self) -> list[tuple[str, list]]:
+        """List completed Linksnappy torrents from our ledger."""
         out = []
         for entry in self._ours():
+            if self._probe_timed_out():
+                break
             ident = self._entry_id(entry)
             status = self._call("/torrents/STATUS", {"tid": ident}) or {}
             if str(status.get("status", "")).upper() != "FINISHED":
@@ -3388,13 +3570,28 @@ def hand_off_with_id(client, url: str, *, name: str = "") -> tuple[bool, str]:
     return ok, (getattr(client, "last_job_id", "") or "") if ok else ""
 
 
-def match_queue_item(queue, download: dict):
+def match_queue_item(queue, download: dict, *,
+                     client_id: str = "", client_protocol: str = ""):
     """The queue row a finished download belongs to, or None.
 
     Prefer the recorded infohash, client job id, or qBittorrent tag. Legacy
     rows without a comparable identity can still match an exact release
     title, but file size never establishes identity.
     """
+    reporting_client = download.get("_romarr_client")
+    reporting_id = str(
+        client_id
+        or getattr(reporting_client, "romarr_id", "")
+        or getattr(reporting_client, "config_id", "")
+        or download.get("_romarr_client_id")
+        or ""
+    ).strip()
+    reporting_protocol = str(
+        client_protocol
+        or getattr(reporting_client, "protocol", "")
+        or ""
+    ).strip().lower()
+
     tags = {part.strip() for part in str(download.get("tags") or "").split(",")
             if part.strip()}
     tag_matches = [item for item in queue
@@ -3413,8 +3610,15 @@ def match_queue_item(queue, download: dict):
                 return item
 
     def identity_conflicts(item):
+        """Return True when the reporting client or recorded job identity conflicts with `item`."""
         release_id = str(getattr(item, "release_id", "") or "")
         download_id = str(getattr(item, "download_id", "") or "")
+        download_client = str(getattr(item, "download_client", "") or "").strip()
+        if download_client and reporting_id and download_client != reporting_id:
+            return True
+        if ((download_id.startswith("qbit-tag:") or release_id.startswith("btih:"))
+                and reporting_protocol and reporting_protocol != "torrent"):
+            return True
         if download_id.startswith("qbit-tag:"):
             return bool(tags)  # A matching tag would already have matched.
         if found and release_id.startswith("btih:"):

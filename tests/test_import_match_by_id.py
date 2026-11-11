@@ -266,3 +266,43 @@ def test_ambiguous_qbittorrent_tags_cannot_claim_a_download():
                       download_id="qbit-tag:romarr-b")]
     assert match_queue_item(rows, {
         "name": "release A", "tags": "romarr-a,romarr-b"}) is None
+
+
+@pytest.mark.parametrize("state", ["grabbed", "import-review", "import-failed"])
+def test_title_fallback_rejects_different_download_client(state):
+    """Refuse untagged fallback title matches from a different client id or protocol."""
+    from romarr.downloaders import match_queue_item
+
+    qbit_row = QueueItem("Zelda", "nes", "Zelda (USA)", 1, state,
+                         download_id="qbit-tag:romarr-q1", download_client="qbit-1")
+    # Different client_id and protocol.
+    assert match_queue_item([qbit_row], {"name": "Zelda (USA)"},
+                            client_id="nzb-1", client_protocol="usenet") is None
+    # Same protocol rejection even when download_client is blank on an older qbit row.
+    legacy_qbit_row = QueueItem("Zelda", "nes", "Zelda (USA)", 1, state,
+                                download_id="qbit-tag:romarr-q1")
+    assert match_queue_item([legacy_qbit_row], {"name": "Zelda (USA)"},
+                            client_id="nzb-1", client_protocol="usenet") is None
+    # Same client fallback still matches when no tags/hash are present.
+    assert match_queue_item([qbit_row], {"name": "Zelda (USA)"},
+                            client_id="qbit-1", client_protocol="torrent") is qbit_row
+
+
+def test_import_finished_does_not_cross_match_client_fallback(tmp_path):
+    """Verify ROMarr.import_finished() never imports an NZBGet title under a qBittorrent queue item."""
+    from types import SimpleNamespace
+
+    s = svc(tmp_path)
+    s.library_for = lambda slug: ({"path": str(tmp_path / "lib")}, SimpleNamespace(rescan=lambda slug: None))
+    qbit_row = QueueItem("Zelda", "nes", "Zelda (USA)", 1, "import-review",
+                         download_id="qbit-tag:romarr-q1", download_client="qbit-1")
+    s.queue = [qbit_row]
+
+    class FakeNzbClient(FakeClient):
+        name = "NZBGet"
+        protocol = "usenet"
+        romarr_id = "nzb-1"
+
+    s.clients = [FakeNzbClient([{"name": "Zelda (USA)", "content_path": str(tmp_path / "nowhere")}])]
+    assert s.import_finished() == []
+    assert qbit_row.state == "import-review"

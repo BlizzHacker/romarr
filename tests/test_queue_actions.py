@@ -213,3 +213,146 @@ const j = async () => ({{ items: {json.dumps(rows)} }});
 """
     res = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=15)
     assert res.returncode == 0, res.stderr
+
+
+def test_queue_bounds_slow_debrid_probe_and_preserves_cached_completion(tmp_path):
+    """Verify slow debrid probes stop at QUEUE_PROBE_TIMEOUT while still surfacing cached local completions."""
+    import time
+    from romarr.downloaders import RealDebrid, RealDebridConfig
+
+    save_dir = tmp_path / "rd"
+    save_dir.mkdir()
+    rd = RealDebrid(RealDebridConfig(api_token="tok", save_path=str(save_dir), timeout=30))
+    rd._remember("cached-id")
+    for idx in range(4):
+        rd._remember(f"slow-{idx}")
+
+    class Session:
+        def __init__(self):
+            """Initialize recorded request log and speed toggle."""
+            self.calls = []
+            self.slow = False
+
+        def get(self, url, **kwargs):
+            """Simulate fast initial state or slow Real-Debrid polling."""
+            self.calls.append((url, kwargs.get("timeout")))
+            if self.slow:
+                time.sleep(0.06)
+                return SimpleNamespace(raise_for_status=lambda: None,
+                                       json=lambda: {"status": "downloading"})
+            if url.endswith("/torrents/info/cached-id"):
+                return SimpleNamespace(raise_for_status=lambda: None,
+                                       json=lambda: {"status": "downloaded",
+                                                     "filename": "Cached Game",
+                                                     "links": ["https://rd.test/opaque-1"],
+                                                     "hash": "a" * 40})
+            return SimpleNamespace(raise_for_status=lambda: None,
+                                   json=lambda: {"status": "downloading"})
+
+        def post(self, url, **kwargs):
+            """Simulate Real-Debrid link unrestriction response."""
+            return SimpleNamespace(raise_for_status=lambda: None,
+                                   text="ok",
+                                   json=lambda: {"filename": "Cached.gb", "download": "https://cdn.test/Cached.gb"})
+
+    sess = Session()
+    rd._session = sess
+    rd._download = lambda url, dest: dest.parent.mkdir(parents=True, exist_ok=True) or dest.write_bytes(b"rom") or True
+    assert len(rd.completed(fetch=True)) == 1
+
+    # Add an uncached directory on disk so queue probe must query _finished(),
+    # then make provider calls slow so the probe must cut off cleanly.
+    uncached = save_dir / "Uncached Release"
+    uncached.mkdir()
+    (uncached / "part.bin").write_bytes(b"partial-or-other")
+    sess.calls.clear()
+    sess.slow = True
+
+    s = svc(tmp_path)
+    s.QUEUE_PROBE_TIMEOUT = 0.05
+    s.clients = [rd]
+    s.queue = [QueueItem("Cached Game", "gb", "Cached Game", 1, "grabbed", release_id="btih:" + "a" * 40)]
+
+    started = time.monotonic()
+    rows = s.queue_rows()
+    elapsed = time.monotonic() - started
+
+    assert rows[0]["can_preview_import"] is True
+    assert elapsed < 0.5
+    assert len(sess.calls) < 5
+    assert all((t or 0) <= 0.05 + 1e-6 for _, t in sess.calls)
+
+
+def test_debrid_opaque_link_ignores_unrelated_file_and_tracks_fetched_name(tmp_path):
+    """Verify RealDebrid(fetch=False) ignores unrelated files and tracks the actual fetched filename."""
+    from romarr.downloaders import RealDebrid, RealDebridConfig
+
+    save_dir = tmp_path / "rd"
+    target = save_dir / "Mystery Release"
+    target.mkdir(parents=True)
+    (target / "unrelated.txt").write_bytes(b"not the rom")
+
+    rd = RealDebrid(RealDebridConfig(api_token="tok", save_path=str(save_dir)))
+    rd._finished = lambda: [("Mystery Release", ["https://rd.test/d/opaque123"], "b" * 40)]
+    resolve_mock = Mock(return_value=("Real Game.gb", "https://cdn.test/dl"))
+    rd._resolve = resolve_mock
+    rd._download = lambda url, dest: dest.write_bytes(b"rom") or True
+
+    s = svc(tmp_path)
+    s.clients = [rd]
+    s.queue = [QueueItem("Real Game", "gb", "Mystery Release", 1, "grabbed", release_id="btih:" + "b" * 40)]
+
+    assert rd.completed(fetch=False) == []
+    assert s.queue_rows()[0]["can_preview_import"] is False
+    resolve_mock.assert_not_called()
+
+    fetched = rd.completed(fetch=True)
+    assert len(fetched) == 1
+    assert (target / "Real Game.gb").is_file()
+
+    # A fresh RealDebrid instance reads the persisted fetched filename record without calling _resolve.
+    fresh = RealDebrid(RealDebridConfig(api_token="tok", save_path=str(save_dir)))
+    fresh._finished = lambda: [("Mystery Release", ["https://rd.test/d/opaque123"], "b" * 40)]
+    fresh._resolve = Mock(side_effect=AssertionError("must not resolve during fetch=False"))
+    assert len(fresh.completed(fetch=False)) == 1
+    s.clients = [fresh]
+    assert s.queue_rows()[0]["can_preview_import"] is True
+
+    # Removing the real fetched file leaves only unrelated.txt, so fetch=False reports incomplete again.
+    (target / "Real Game.gb").unlink()
+    assert fresh.completed(fetch=False) == []
+    assert s.queue_rows()[0]["can_preview_import"] is False
+
+
+def test_queue_preview_and_plan_match_against_full_queue(tmp_path):
+    """Verify duplicate titles and tagged downloads cannot offer or apply preview on the wrong queue row."""
+    import zipfile
+    archive = tmp_path / "Shared Title.zip"
+    with zipfile.ZipFile(archive, "w") as z:
+        z.writestr("Game.gb", b"rom")
+
+    s = svc(tmp_path)
+    s.library_for = lambda slug: ({"path": str(tmp_path / "lib")}, SimpleNamespace(rescan=lambda slug: None))
+    s.clients = [SimpleNamespace(configured=True, completed=lambda: [{"name": "Shared Title", "content_path": str(archive)}])]
+    s.queue = [
+        QueueItem("Game", "gb", "Shared Title", 1, "import-review"),
+        QueueItem("Game", "gb", "Shared Title", 2, "grabbed"),
+    ]
+
+    assert [r["can_preview_import"] for r in s.queue_rows()] == [False, True]
+    wrong = s.queue_import_plan(0, {})
+    assert not wrong.get("ok") and "error" in wrong
+    right = s.queue_import_plan(1, {})
+    assert right["ok"] and len(right["preview"]["items"]) == 1
+
+    # Also verify a tagged row owns the download cleanly over an untagged duplicate title.
+    s.clients = [SimpleNamespace(configured=True, completed=lambda: [
+        {"name": "Shared Title", "tags": "romarr-owned", "content_path": str(archive)}
+    ])]
+    s.queue = [
+        QueueItem("Game", "gb", "Shared Title", 1, "grabbed"),
+        QueueItem("Game", "gb", "Shared Title", 2, "grabbed", download_id="qbit-tag:romarr-owned"),
+    ]
+    assert [r["can_preview_import"] for r in s.queue_rows()] == [False, True]
+    assert not s.queue_import_plan(0, {}).get("ok")
+    assert s.queue_import_plan(1, {})["ok"]
