@@ -1,4 +1,4 @@
-from threading import Barrier
+from threading import Barrier, Event
 from types import SimpleNamespace
 
 from romarr.app import ROMarr
@@ -20,12 +20,20 @@ def test_three_searches_overlap_and_preserve_duplicate_precedence(tmp_path):
     qualified = release("Qualified", "qualified")
     hub = release("Hub", "hub")
 
+    qualified_done = Event()
+    hub_done = Event()
+
     def search(term):
         barrier.wait()
-        return [first] if term == "Game" else [duplicate, qualified]
+        if term == "Game":
+            assert qualified_done.wait(5) and hub_done.wait(5)
+            return [first]
+        qualified_done.set()
+        return [duplicate, qualified]
 
     def hub_search(*args):
         barrier.wait()
+        hub_done.set()
         return [hub]
 
     service.prowlarr = SimpleNamespace(search=search)

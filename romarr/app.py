@@ -1829,7 +1829,7 @@ class ROMarr:
             try:
                 releases = search.result()
             except Exception as err:
-                log.warning("release search task failed: %s", err)
+                log.warning("release search task failed: %r", err)
                 continue
             for release in releases:
                 key = (release.title, release.download_url)
