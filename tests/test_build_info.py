@@ -1,6 +1,6 @@
 """Build identity must be truthful for tagged, development, and older images."""
-from pathlib import Path
 import re
+from pathlib import Path
 
 from romarr import build_info
 
