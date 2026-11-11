@@ -105,13 +105,14 @@ def _check_docker_build_steps(workflow):
     # Every list-item key can start a workflow step (including 'if' or 'uses').
     for step in re.split(r"(?m)(?=^      - [A-Za-z_][\w-]*:)", workflow):
         if not re.search(
-            r"(?m)^      (?:- uses:|  uses:) docker/build-push-action@\S+[ \t]*$",
+            r"""(?m)^      (?:- uses:|  uses:) (?P<quote>['"]?)docker/build-push-action@\S+?(?P=quote)[ \t]*$""",
             step,
         ):
             continue
         marker = re.search(r"(?m)^          build-args: \|[+-]?[ \t]*$", step)
         assert marker is not None, "Docker build step has no build-args"
         arguments = {}
+        argument_indent = None
         for line in step[marker.end():].splitlines():
             if not line.strip():
                 continue
@@ -120,7 +121,9 @@ def _check_docker_build_steps(workflow):
                 break
             if line.lstrip().startswith("#"):
                 continue
-            assert indent == 12, "Unexpected Docker build argument indentation"
+            if argument_indent is None:
+                argument_indent = indent
+            assert indent == argument_indent, "Unexpected Docker build argument indentation"
             key, sep, value = line.strip().partition("=")
             assert sep and key not in arguments, "Invalid or duplicate build argument"
             arguments[key] = value
@@ -186,20 +189,57 @@ def test_docker_build_step_validator_rejects_misconfigured_steps():
     )
     assert first_uses != extra
 
-    original_publish = (
-        "      - name: Build and push\n"
-        "        uses: docker/build-push-action@v6\n"
-        "        with:\n"
-        "          context: .\n"
-        "          platforms: linux/amd64,linux/arm64,linux/arm/v7"
+    # Valid extra build steps may quote the action or indent block arguments deeper.
+    for step in (extra, first_uses):
+        for quote in ("'", '"'):
+            quoted = step.replace(
+                "uses: docker/build-push-action@v6",
+                f"uses: {quote}docker/build-push-action@v6{quote}",
+            )
+            _check_docker_build_steps(with_extra(quoted))
+            with pytest.raises(AssertionError):
+                _check_docker_build_steps(with_extra(quoted.replace(
+                    "ROMARR_SOURCE_REVISION=${{ github.sha }}",
+                    "ROMARR_SOURCE_REVISION=${{ github.repository }}",
+                )))
+    deeper = extra.replace("\n            ROMARR_", "\n              ROMARR_")
+    _check_docker_build_steps(with_extra(deeper))
+
+    def fixture_step(dockerfile, publish):
+        """Create an independent standard or browser build step."""
+        return (
+            extra.replace("      - if: ${{ always() }}", "      - name: Fixture", 1)
+            .replace("          file: Dockerfile.browser",
+                     f"          file: {dockerfile}", 1)
+            .replace("          push: true",
+                     "          push: true" if publish else "          load: true", 1)
+        )
+
+    fixture = "".join(
+        fixture_step(dockerfile, publish)
+        for dockerfile in ("Dockerfile", "Dockerfile.browser")
+        for publish in (False, True)
     )
-    assert workflow.count(original_publish) == 1
-    bad_dockerfile = workflow.replace(
-        original_publish,
-        original_publish.replace(
-            "          context: .\n", "          context: .\n          file: Dockerfile.extra\n"
+    _check_docker_build_steps(fixture)
+    # Whitespace-neutral YAML comments must not make this test fail.
+    commented = fixture.replace(
+        "          context: .\n",
+        "          context: .\n          # Valid workflow comment\n",
+        1,
+    )
+    assert commented != fixture
+    _check_docker_build_steps(commented)
+
+    standard_publish = fixture_step("Dockerfile", True)
+    assert fixture.count(standard_publish) == 1
+    bad_dockerfile = fixture.replace(
+        standard_publish,
+        standard_publish.replace(
+            "          file: Dockerfile\n", "          file: Dockerfile.extra\n", 1
         ), 1,
     )
+    assert bad_dockerfile != fixture
+
     bad_cases = {
         "wrong revision": workflow.replace(
             "ROMARR_SOURCE_REVISION=${{ github.sha }}",
@@ -227,7 +267,8 @@ def test_docker_build_step_validator_rejects_misconfigured_steps():
         ),
     }
     for label, changed in bad_cases.items():
-        assert changed != workflow, f"Mutation not applied: {label}"
+        reference = fixture if label == "non-standard Dockerfile" else workflow
+        assert changed != reference, f"Mutation not applied: {label}"
         with pytest.raises(AssertionError):
             _check_docker_build_steps(changed)
 
