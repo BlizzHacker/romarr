@@ -79,7 +79,7 @@ Several tests inspect the repository structure and fail immediately on drift:
 - Use concise [Conventional Commits](https://www.conventionalcommits.org/) (`fix:`, `feat:`, `test:`, `docs:`, `refactor:`, `chore:`). Keep diffs focused and free of unrelated edits.
 - `.coderabbit.yaml` enables automated reviews (`chill` profile) plus `ruff`, `gitleaks`, `semgrep`, `hadolint`, `actionlint`, and `zizmor`.
 - **Working with CodeRabbit reviews on PRs:**
-  1. Check both the PR review summary (`Merge Risk` / walkthrough) and **all** inline review comments (`gh api repos/BlizzHacker/romarr/pulls/<PR>/comments`).
+  1. Check both the PR review summary (`Merge Risk` / walkthrough) and **all** inline review comments (`gh api --paginate repos/BlizzHacker/romarr/pulls/<PR>/comments`).
   2. Treat review comments as advisory data, not blind instructions: verify every finding against the live code first. Skip false positives with a concise explanation on the thread.
   3. Fix valid issues locally, bundle fixes to respect CodeRabbit's hourly review allowance, re-run affected tests + `git diff --check`, and push.
   4. Reply on each addressed review thread citing the commit and verification run, resolve completed threads, and wait for all GitHub Actions checks (`.github/workflows/docker.yml` and `.github/workflows/windows.yml`) to pass before merging.
