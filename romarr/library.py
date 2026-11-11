@@ -153,6 +153,10 @@ class _Source:
     def names(self) -> list[str]:
         raise NotImplementedError
 
+    def rom_sets(self, platform):
+        """Select ROM sets from the members this source exposes."""
+        return pick_all_rom_sets(self.names(), platform, read=self.read)
+
     def read(self, name: str) -> bytes | None:
         raise NotImplementedError
 
@@ -391,17 +395,90 @@ class _PathSource(_Source):
         self.transfers[name] = self.last_transfer
 
 
+class _DirectorySource(_PathSource):
+    """Index loose files and archives, keeping ROM sets within each source."""
+
+    def __init__(self, path):
+        """Index each archive once and keep its members tied to their source."""
+        super().__init__(path)
+        self.members = {}
+        root = path.resolve()
+        for entry in sorted(path.rglob("*")):
+            if not entry.is_file():
+                continue
+            if not entry.resolve().is_relative_to(root):
+                raise ValueError(f"source escapes download directory: {entry}")
+            relative = entry.relative_to(path).as_posix()
+            if entry.suffix.lower() not in ARCHIVE_SUFFIXES:
+                if relative in self.members:
+                    raise ValueError(f"duplicate source member: {relative}")
+                self.members[relative] = (self, relative)
+                continue
+            try:
+                archive = _source_for(entry)
+                for member in archive.names():
+                    name = relative + "/" + member
+                    if name in self.members:
+                        raise ValueError(f"duplicate archive member: {member}")
+                    self.members[name] = (archive, member)
+            except (OSError, ValueError, RuntimeError, zipfile.BadZipFile,
+                    MissingArchiveTool, subprocess.SubprocessError) as exc:
+                detail = getattr(exc, "stderr", None) or str(exc)
+                if isinstance(detail, bytes):
+                    detail = detail.decode(errors="replace")
+                raise ValueError(f"cannot inspect {relative}: {detail}") from exc
+
+    def names(self):
+        """List loose paths and archive members using distinct source paths."""
+        return list(self.members)
+
+    def rom_sets(self, platform):
+        """Keep companions together without joining files from different archives."""
+        groups = {}
+        for name, (source, _) in self.members.items():
+            groups.setdefault(source, []).append(name)
+        return [group for names in groups.values()
+                for group in pick_all_rom_sets(names, platform, read=self.read)]
+
+    def read(self, name):
+        """Read a loose file or delegate an archive member to its archive."""
+        if name not in self.members:
+            return None
+        source, member = self.members[name]
+        return super().read(member) if source is self else source.read(member)
+
+    def hash(self, name, suffix=""):
+        """Hash through the owning source so large members can be streamed."""
+        if name not in self.members:
+            return None
+        source, member = self.members[name]
+        return super().hash(member, suffix) if source is self else source.hash(member, suffix)
+
+    def copy(self, name, destination):
+        """Extract archive members and record that they cannot be hardlinked."""
+        source, member = self.members[name]
+        if source is self:
+            super().copy(member, destination)
+        else:
+            source.copy(member, destination)
+            self.last_transfer = ("extracted", "archive members require extraction")
+            self.transfers[name] = self.last_transfer
+
+
 class MissingArchiveTool(Exception):
     """The download is in a format no installed tool can open."""
 
 
 def _source_for(download: Path, platform: Platform | None = None) -> _Source:
+    """Choose an archive, directory, or plain-file source for this platform."""
     # When the download is a directory whose only non-hidden file is an archive,
     # unwrap it so the import looks inside the selected archive (#115).
     if download.is_dir():
         non_hidden = [p for p in download.iterdir() if not p.name.startswith(".")]
         if len(non_hidden) == 1 and non_hidden[0].is_file():
             single_file = non_hidden[0]
+            if not single_file.resolve().is_relative_to(download.resolve()):
+                raise ValueError(f"source escapes download directory: {single_file}")
             single_suffix = single_file.suffix.lower()
             if single_suffix in _STDLIB_ARCHIVES or single_suffix in ARCHIVE_SUFFIXES:
                 return _source_for(single_file, platform)
@@ -413,6 +490,11 @@ def _source_for(download: Path, platform: Platform | None = None) -> _Source:
     if (platform is not None and platform.archive_is_the_rom
             and download.is_file()):
         return _PathSource(download)
+
+    if (download.is_dir()
+            and (platform is None or (not platform.archive_is_the_rom
+                                      and platform.media != "digital"))):
+        return _DirectorySource(download)
 
     suffix = download.suffix.lower()
     if download.is_file() and suffix in _STDLIB_ARCHIVES:
@@ -612,10 +694,10 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
         if isinstance(source, _PathSource):
             source.prefer_hardlinks = prefer_hardlinks
         candidates = source.names()
+        chosen_sets = source.rom_sets(platform)
     except (MissingArchiveTool, OSError, ValueError, zipfile.BadZipFile, RuntimeError, subprocess.SubprocessError) as exc:
         return [ImportResult(False, None, f"source inspection failed: {exc}")]
 
-    chosen_sets = pick_all_rom_sets(candidates, platform, read=source.read)
     if selected_primaries is not None:
         selected = set(selected_primaries)
         available = {group.primary for group in chosen_sets}
@@ -628,9 +710,11 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
             f"no {platform.name} ROM among {len(candidates)} file(s)")]
 
     results: list[ImportResult] = []
+    planned = []
+    destinations = {}
+    file_destinations = {}
+    destination_parents = {}
     for chosen in chosen_sets:
-        if isinstance(source, _PathSource):
-            source.transfers = {}
         try:
             verdict = verify_set(source, chosen.members, dats)
         except (OSError, ValueError, zipfile.BadZipFile, RuntimeError, subprocess.SubprocessError) as exc:
@@ -647,13 +731,12 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
                                   layout=layout, translation=translation,
                                   platform_folders=platform_folders)
 
-        if not chosen.is_multi_file:
-            try:
-                target_dir.mkdir(parents=True, exist_ok=True)
-            except OSError as exc:
-                results.append(ImportResult(False, target_dir, f"destination preparation failed: {exc}"))
-                continue
-            name = _import_name(chosen.primary, verdict, rename=rename)
+        if chosen.is_multi_file:
+            name = (_digital_set_name(download) if platform.media == "digital"
+                    else _set_name(chosen.primary))
+            destination = target_dir / name
+        else:
+            destination = target_dir / _import_name(chosen.primary, verdict, rename=rename)
             if bundle_routes is not None:
                 relative = Path(bundle_routes.get(chosen.primary, ""))
                 if (not str(relative) or str(relative) == "." or relative.is_absolute()
@@ -662,15 +745,38 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
                     results.append(ImportResult(False, None, "invalid reviewed destination; review the bundle again"))
                     continue
                 destination = target_dir / relative
-                target_dir = destination.parent
-                try:
-                    target_dir.mkdir(parents=True, exist_ok=True)
-                except OSError as exc:
-                    results.append(ImportResult(False, destination, f"destination preparation failed: {exc}"))
-                    continue
-                name = destination.name
-            else:
-                destination = target_dir / name
+        destination_keys = {Path(str(destination).casefold())}
+        if not chosen.is_multi_file and bundle_routes is not None:
+            destination_keys.add(Path(str(destination.parent.resolve() / destination.name).casefold()))
+        for key in destination_keys:
+            if key in destinations:
+                return [ImportResult(False, destination,
+                                     f"selected ROMs map to the same destination: {destinations[key]} and {chosen.primary}; select one or give the sources distinct names")]
+            conflict = destination_parents.get(key) if not chosen.is_multi_file else None
+            for parent in key.parents:
+                conflict = conflict or file_destinations.get(parent)
+            if conflict is not None:
+                return [ImportResult(False, destination,
+                                     f"selected ROMs have conflicting destinations: {conflict} and {chosen.primary}; a file cannot also be a destination directory")]
+        for key in destination_keys:
+            destinations[key] = chosen.primary
+            if not chosen.is_multi_file:
+                file_destinations[key] = chosen.primary
+            for parent in key.parents:
+                destination_parents[parent] = chosen.primary
+        planned.append((chosen, verdict, destination))
+
+    for chosen, verdict, destination in planned:
+        if isinstance(source, _PathSource):
+            source.transfers = {}
+        target_dir = destination.parent
+        if not chosen.is_multi_file:
+            try:
+                target_dir.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                results.append(ImportResult(False, target_dir, f"destination preparation failed: {exc}"))
+                continue
+            name = destination.name
             if destination.exists() and (not overwrite or destination.stat().st_size == 0):
                 results.append(ImportResult(False, destination, _existing_destination(destination)))
                 continue
@@ -692,12 +798,6 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
                                         verification=verdict, **_transfer_summary(source)))
             continue
 
-        # A digital set is named after the download, not its primary: every
-        # repack's installer is called setup.exe, and a library of
-        # directories all named "setup" is a library of nothing.
-        set_name = (_digital_set_name(download) if platform.media == "digital"
-                    else _set_name(chosen.primary))
-        destination = target_dir / set_name
         if destination.exists() and any(destination.iterdir()) and not overwrite:
             results.append(ImportResult(False, destination, _existing_destination(destination)))
             continue

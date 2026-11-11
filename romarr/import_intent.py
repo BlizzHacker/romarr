@@ -4,7 +4,6 @@ import hashlib
 import json
 from pathlib import Path
 from .library import _source_for, platform_dir, _digital_set_name, _set_name
-from .selection import pick_all_rom_sets
 
 
 def queue_identity(item):
@@ -14,9 +13,10 @@ def queue_identity(item):
 
 
 def preview_import(download, platform, library_root, *, layout="flat", platform_folders=None, queue_identity=None):
+    """Build a reviewable preview without hashing game payloads."""
     source = _source_for(download, platform)
     names = source.names()
-    sets = pick_all_rom_sets(names, platform, read=source.read)
+    sets = source.rom_sets(platform)
     sizes = {}
     identity = []
     # Stat the archive itself or every source member. No game payload is hashed
@@ -26,7 +26,7 @@ def preview_import(download, platform, library_root, *, layout="flat", platform_
         if path.is_file():
             st = path.stat()
             identity.append((str(path.relative_to(download)) if path != download else ".", st.st_size, st.st_mtime_ns))
-            sizes[str(path.relative_to(download)) if path != download else download.name] = st.st_size
+            sizes[path.relative_to(download).as_posix() if path != download else download.name] = st.st_size
     import zipfile
     if download.is_file() and zipfile.is_zipfile(download):
         with zipfile.ZipFile(download) as archive:
@@ -45,7 +45,7 @@ def preview_import(download, platform, library_root, *, layout="flat", platform_
                       "evidence": "Package title, type and version have not been inspected; choose its role manually." if unknown else "Platform-compatible ROM set; companions are kept together. Game identity is unverified.",
                       "confidence": "unknown" if unknown else "format-only",
                       "bytes": sum(sizes[m] for m in members) if all(m in sizes for m in members) else None,
-                      "destination": str(target / ((_digital_set_name(download) if platform.media == "digital" else _set_name(group.primary)) if group.is_multi_file else Path(group.primary).name)),
+                      "destination": str(target / ((_digital_set_name(download) if platform.media == "digital" else _set_name(group.primary)) if group.is_multi_file else Path(group.primary.replace("\\", "/")).name)),
                       "selected": len(sets) == 1 and not unknown})
     return {"token": token, "items": items,
             "extras": [n for n in names if n not in used],

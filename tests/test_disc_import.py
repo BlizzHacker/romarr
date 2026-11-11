@@ -160,6 +160,27 @@ def test_list_candidates_reads_a_7z(tmp_path):
     assert sorted(list_candidates(tmp_path / "a.7z")) == ["notes.nfo", "x.chd"]
 
 
+def test_archive_removed_during_inspection_returns_failure(tmp_path, monkeypatch):
+    """Report a disappearing source as an inspection failure."""
+    archive = tmp_path / "Game.zip"
+    make_zip(archive, {"Game.chd": b"game bytes"})
+    original_names = library._ZipSource.names
+
+    def names_then_remove(source):
+        """Simulate an archive disappearing after its members are listed."""
+        names = original_names(source)
+        source.path.unlink()
+        return names
+
+    monkeypatch.setattr(library._ZipSource, "names", names_then_remove)
+
+    result = import_rom(archive, PSX, tmp_path / "library")
+
+    assert not result.ok
+    assert "source inspection failed" in result.reason
+    assert "Game.zip" in result.reason
+
+
 def test_an_archive_format_with_no_tool_fails_by_name(tmp_path, monkeypatch):
     """Never a bare "no ROM found". An operator who is missing a tool has to
     be told which tool, or the diagnosis is a guess about their download."""
