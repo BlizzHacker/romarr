@@ -2,6 +2,8 @@
 import re
 from pathlib import Path
 
+import pytest
+
 from romarr import build_info
 
 SHA = "a41b8bdeb3b52fa42dd12a16df14b84f3f037541"
@@ -91,25 +93,21 @@ def test_known_release_version_does_not_imply_release_build(monkeypatch):
     assert info["type"] == "development" and info["version_known"]
 
 
-def test_build_arguments_are_in_both_images_and_every_publish_leg():
-    """Require build arguments in both images and every workflow build leg."""
-    for dockerfile in ("Dockerfile", "Dockerfile.browser"):
-        source = (ROOT / dockerfile).read_text()
-        for name in ("ROMARR_BUILD_KIND", "ROMARR_SOURCE_REF",
-                     "ROMARR_SOURCE_REVISION", "ROMARR_SOURCE_REPOSITORY"):
-            assert "ARG " + name in source
-        assert "_build_info.py" in source
-    workflow = (ROOT / ".github/workflows/docker.yml").read_text()
+def _check_docker_build_steps(workflow):
+    """Check exact provenance in each Docker build, including future steps."""
     expected = {
         "ROMARR_BUILD_KIND": "${{ startsWith(github.ref, 'refs/tags/') && 'release' || 'development' }}",
         "ROMARR_SOURCE_REF": "${{ github.ref }}",
         "ROMARR_SOURCE_REVISION": "${{ github.sha }}",
         "ROMARR_SOURCE_REPOSITORY": "${{ github.repository }}",
     }
-    steps = re.split(r"(?m)(?=^      - (?:name|id|uses):)", workflow)
     build_roles = set()
-    for step in steps:
-        if not re.search(r"(?m)^        uses: docker/build-push-action@[^\s]+$", step):
+    # Every list-item key can start a workflow step (including 'if' or 'uses').
+    for step in re.split(r"(?m)(?=^      - [A-Za-z_][\w-]*:)", workflow):
+        if not re.search(
+            r"(?m)^      (?:- uses:|  uses:) docker/build-push-action@\S+[ \t]*$",
+            step,
+        ):
             continue
         marker = re.search(r"(?m)^          build-args: \|[+-]?[ \t]*$", step)
         assert marker is not None, "Docker build step has no build-args"
@@ -117,26 +115,121 @@ def test_build_arguments_are_in_both_images_and_every_publish_leg():
         for line in step[marker.end():].splitlines():
             if not line.strip():
                 continue
-            indentation = len(line) - len(line.lstrip(" "))
-            if indentation <= 10:
+            indent = len(line) - len(line.lstrip(" "))
+            if indent <= 10:
                 break
             if line.lstrip().startswith("#"):
                 continue
-            assert indentation == 12, "Unexpected Docker build argument indentation"
-            key, separator, value = line.strip().partition("=")
-            assert separator and key not in arguments, "Invalid or duplicate build argument"
+            assert indent == 12, "Unexpected Docker build argument indentation"
+            key, sep, value = line.strip().partition("=")
+            assert sep and key not in arguments, "Invalid or duplicate build argument"
             arguments[key] = value
         for name, value in expected.items():
             assert arguments.get(name) == value, f"Incorrect {name} in Docker build step"
-        dockerfile = ("Dockerfile.browser" if re.search(
-            r"(?m)^          file: Dockerfile\.browser[ \t]*$", step
-        ) else "Dockerfile")
-        role = "publish" if re.search(r"(?m)^          push: ", step) else "smoke"
-        build_roles.add((dockerfile, role))
+
+        file_match = re.search(r"(?m)^          file: (.+?)[ \t]*$", step)
+        selected_file = file_match.group(1) if file_match else "Dockerfile"
+        selected_file = selected_file.removeprefix("./")
+        if selected_file not in {"Dockerfile", "Dockerfile.browser"}:
+            continue  # Additional Dockerfiles cannot satisfy the required roles.
+
+        push_match = re.search(r"(?m)^          push: (.+?)[ \t]*$", step)
+        push = push_match.group(1) if push_match else ""
+        load_match = re.search(r"(?m)^          load: (.+?)[ \t]*$", step)
+        load = load_match.group(1) if load_match else ""
+        if push in {"true", "${{ github.event_name != 'pull_request' }}"}:
+            build_roles.add((selected_file, "publish"))
+        if load == "true":
+            build_roles.add((selected_file, "smoke"))
     assert build_roles >= {
         ("Dockerfile", "smoke"), ("Dockerfile", "publish"),
         ("Dockerfile.browser", "smoke"), ("Dockerfile.browser", "publish"),
     }, "Expected standard/browser smoke and publish build steps"
+
+
+def test_build_arguments_are_in_both_images_and_every_publish_leg():
+    """Require exact provenance in all workflow builds and each image."""
+    for dockerfile in ("Dockerfile", "Dockerfile.browser"):
+        source = (ROOT / dockerfile).read_text()
+        for name in ("ROMARR_BUILD_KIND", "ROMARR_SOURCE_REF",
+                     "ROMARR_SOURCE_REVISION", "ROMARR_SOURCE_REPOSITORY"):
+            assert "ARG " + name in source
+        assert "_build_info.py" in source
+    _check_docker_build_steps((ROOT / ".github/workflows/docker.yml").read_text())
+
+
+def test_docker_build_step_validator_rejects_misconfigured_steps():
+    """Catch invalid arguments, omitted roles, and differently ordered YAML steps."""
+    workflow = (ROOT / ".github/workflows/docker.yml").read_text()
+    extra = """      - if: ${{ always() }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.browser
+          push: true
+          build-args: |
+            ROMARR_BUILD_KIND=${{ startsWith(github.ref, 'refs/tags/') && 'release' || 'development' }}
+            ROMARR_SOURCE_REF=${{ github.ref }}
+            ROMARR_SOURCE_REVISION=${{ github.sha }}
+            ROMARR_SOURCE_REPOSITORY=${{ github.repository }}
+"""
+    anchor = "\n  image-browser:\n"
+    assert workflow.count(anchor) == 1
+
+    def with_extra(addition):
+        return workflow.replace(anchor, "\n" + addition + anchor, 1)
+
+    _check_docker_build_steps(with_extra(extra))  # Extra valid build step is permitted.
+    first_uses = extra.replace(
+        "      - if: ${{ always() }}\n        uses: docker/build-push-action@v6",
+        "      - uses: docker/build-push-action@v6\n        if: ${{ always() }}",
+    )
+    assert first_uses != extra
+
+    original_publish = (
+        "      - name: Build and push\n"
+        "        uses: docker/build-push-action@v6\n"
+        "        with:\n"
+        "          context: .\n"
+        "          platforms: linux/amd64,linux/arm64,linux/arm/v7"
+    )
+    assert workflow.count(original_publish) == 1
+    bad_dockerfile = workflow.replace(
+        original_publish,
+        original_publish.replace(
+            "          context: .\n", "          context: .\n          file: Dockerfile.extra\n"
+        ), 1,
+    )
+    bad_cases = {
+        "wrong revision": workflow.replace(
+            "ROMARR_SOURCE_REVISION=${{ github.sha }}",
+            "ROMARR_SOURCE_REVISION=${{ github.repository }}", 1
+        ),
+        "missing argument": workflow.replace(
+            "            ROMARR_SOURCE_REVISION=${{ github.sha }}\n", "", 1
+        ),
+        "duplicate argument": workflow.replace(
+            "            ROMARR_SOURCE_REVISION=${{ github.sha }}",
+            "            ROMARR_SOURCE_REVISION=${{ github.sha }}\n"
+            "            ROMARR_SOURCE_REVISION=${{ github.sha }}", 1,
+        ),
+        "build step beginning with if": with_extra(extra.replace(
+            "ROMARR_SOURCE_REVISION=${{ github.sha }}",
+            "ROMARR_SOURCE_REVISION=${{ github.repository }}",
+        )),
+        "build step beginning with uses": with_extra(first_uses.replace(
+            "ROMARR_SOURCE_REVISION=${{ github.sha }}",
+            "ROMARR_SOURCE_REVISION=${{ github.repository }}",
+        )),
+        "non-standard Dockerfile": bad_dockerfile,
+        "push disabled": workflow.replace(
+            "push: ${{ github.event_name != 'pull_request' }}", "push: false", 1
+        ),
+    }
+    for label, changed in bad_cases.items():
+        assert changed != workflow, f"Mutation not applied: {label}"
+        with pytest.raises(AssertionError):
+            _check_docker_build_steps(changed)
 
 
 def test_update_and_status_apis_expose_same_build_metadata():
