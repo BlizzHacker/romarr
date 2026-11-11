@@ -378,6 +378,8 @@ class _PathSource(_Source):
 
 
 class _DirectorySource(_PathSource):
+    """Index loose files and archives, keeping ROM sets within each source."""
+
     def __init__(self, path):
         super().__init__(path)
         self.members = {}
