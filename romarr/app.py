@@ -5652,6 +5652,7 @@ class ROMarr:
         return f"{base}/oidc/callback" if base else "/oidc/callback"
 
     def _record_update_check(self, state: str, reason: str, *,
+                             checked_channel: str,
                              latest: str = "", error: str = "") -> None:
         """Persist one completed check without erasing the last good comparison.
 
@@ -5666,8 +5667,7 @@ class ROMarr:
             settings["_update_last_attempt"] = stamp
             settings["_update_error"] = error
             settings["_update_checked_version"] = VERSION
-            settings["_update_checked_channel"] = str(
-                settings.get("update_channel") or "stable").lower()
+            settings["_update_checked_channel"] = checked_channel
             settings["_update_available"] = state == "available"
             if latest:
                 settings["_latest_version"] = latest
@@ -5713,8 +5713,14 @@ class ROMarr:
             return {"ok": False, "busy": True, "update_available": False,
                     "message": "an update check is already in progress"}
         try:
+            with self._lock:
+                channel = str(self.store.settings.get("update_channel")
+                              or "stable").lower()
+
             def failed(reason: str, message: str) -> dict:
-                self._record_update_check("error", reason, error=message)
+                self._record_update_check("error", reason,
+                                          checked_channel=channel,
+                                          error=message)
                 return {"ok": False, "state": "error", "reason": reason,
                         "update_available": False, "message": message}
 
@@ -5753,20 +5759,27 @@ class ROMarr:
                 return failed("invalid_release",
                               "github.com answered without a valid release tag")
 
-            channel = str(self.store.settings.get("update_channel")
-                          or "stable").lower()
+            with self._lock:
+                active_channel = str(self.store.settings.get("update_channel")
+                                     or "stable").lower()
+            if active_channel != channel:
+                self._record_update_check("unknown", "channel_changed_during_check",
+                                          latest=latest, checked_channel=channel)
+                return {"ok": True, "state": "unknown", "latest": latest,
+                        "indeterminate": True, "update_available": False,
+                        "message": "update channel changed during the check; no action taken"}
             if channel != "stable":
                 # A stable GitHub release is not a comparison against origin/main.
                 self._record_update_check("unknown",
                                           "nightly_revision_not_checked",
-                                          latest=latest)
+                                          latest=latest, checked_channel=channel)
                 return {"ok": True, "state": "unknown", "latest": latest,
                         "indeterminate": True, "update_available": False,
                         "message": ("latest stable release is " + latest +
                                     "; nightly revision checks are not yet supported")}
             if is_unknown(VERSION):
                 self._record_update_check("unknown", "running_version_unknown",
-                                          latest=latest)
+                                          latest=latest, checked_channel=channel)
                 return {"ok": True, "state": "unknown", "latest": latest,
                         "indeterminate": True, "update_available": False,
                         "message": (f"latest is {latest}; this build does not know its "
@@ -5775,7 +5788,8 @@ class ROMarr:
 
             newer = compare_key(latest) > compare_key(VERSION)
             state = "available" if newer else "current"
-            self._record_update_check(state, "stable_release_version", latest=latest)
+            self._record_update_check(state, "stable_release_version",
+                                      latest=latest, checked_channel=channel)
 
             if newer and not manual:
                 with self._lock:

@@ -187,3 +187,25 @@ def test_invalid_release_payload_does_not_overwrite_known_latest(
     assert out["reason"] == "invalid_release"
     assert svc.update_status()["latest_version"] == "1.8.2"
     assert svc.update_status()["update_available"] is False
+
+
+def test_channel_change_during_network_request_never_applies_old_result(
+        tmp_path, monkeypatch):
+    svc = _svc(tmp_path)
+    monkeypatch.setattr("romarr.app.VERSION", "1.8.1")
+    svc.store.settings["auto_update"] = True
+    notified, applied = [], []
+    monkeypatch.setattr(svc, "notify", lambda *a: notified.append(a))
+    monkeypatch.setattr(svc, "apply_update", lambda: applied.append(True))
+
+    def switch_channel(*args, **kwargs):
+        svc.store.settings["update_channel"] = "nightly"
+        return Release()
+
+    monkeypatch.setattr(requests, "get", switch_channel)
+    out = svc.check_update()
+    assert out["indeterminate"]
+    assert not notified and not applied
+    status = svc.update_status()
+    assert status["check_status"]["reason"] == "build_or_channel_changed"
+    assert status["update_available"] is False
