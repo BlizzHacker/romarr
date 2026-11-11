@@ -219,6 +219,7 @@ def test_qbittorrent_tag_takes_precedence_over_another_rows_title():
 
 @pytest.mark.parametrize("state", ["grabbed", "import-review", "import-failed"])
 def test_conflicting_download_identity_cannot_claim_an_exact_title(state):
+    """Refuse fallback title matching when recorded download identity conflicts."""
     from romarr.downloaders import match_queue_item
     rows_and_downloads = [
         (QueueItem("A", "nes", "same title", 0, state,
@@ -234,9 +235,19 @@ def test_conflicting_download_identity_cannot_claim_an_exact_title(state):
 
 @pytest.mark.parametrize("state", ["grabbed", "import-review", "import-failed"])
 def test_ambiguous_titles_cannot_claim_a_download(state):
+    """Refuse fallback title matching when multiple rows share the same release title."""
     from romarr.downloaders import match_queue_item
     rows = [QueueItem(game, "gb", "same title", 1, state) for game in ("A", "B")]
     assert match_queue_item(rows, {"name": "same title"}) is None
+
+
+@pytest.mark.parametrize("older_state", ["import-review", "import-failed"])
+def test_grabbed_row_takes_precedence_over_older_review_or_failed_title(older_state):
+    """Prefer a fresh grabbed row when an older import-failed or import-review row shares its title."""
+    from romarr.downloaders import match_queue_item
+    older = QueueItem("A", "gb", "same title", 1, older_state)
+    fresh = QueueItem("A", "gb", "same title", 1, "grabbed")
+    assert match_queue_item([older, fresh], {"name": "same title"}) is fresh
 
 
 def test_unrelated_hash_and_same_size_cannot_claim_a_grabbed_row():

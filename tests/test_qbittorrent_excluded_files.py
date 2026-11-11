@@ -152,6 +152,7 @@ def test_an_emptied_torrent_is_not_offered_to_the_importer():
 
 
 def test_read_only_completion_check_leaves_excluded_files_alone():
+    """Verify completed(repair=False) does not issue filePrio repairs."""
     server = _Qbittorrent()
     server.seed("ccc", "Vagrant Story [PSX]", [("Vagrant Story.iso", 89_000)])
     assert client(server).completed(repair=False) == []

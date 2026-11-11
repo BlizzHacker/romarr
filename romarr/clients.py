@@ -555,11 +555,14 @@ class QBittorrent:
         self._added.error = ""
         return True
 
-    def _collection_owners(self, row, owners):
+    def _collection_owners(self, row, owners, *, timeout: float | None = None):
+        """Fetch files and live torrent metadata and validate retained collection ownership."""
         from .retained_collection import validate_owners
         torrent_hash = str(row.get("hash") or "")
-        files = self.torrent_files(torrent_hash)
-        fresh = [r for r in self.torrents() if str(r.get("hash") or "") == torrent_hash]
+        files = (self.torrent_files(torrent_hash) if timeout is None
+                 else self.torrent_files(torrent_hash, timeout=timeout))
+        torrent_rows = self.torrents() if timeout is None else self.torrents(timeout=timeout)
+        fresh = [r for r in torrent_rows if str(r.get("hash") or "") == torrent_hash]
         if len(fresh) != 1:
             raise ValueError("retained torrent disappeared or became ambiguous")
         validate_owners(fresh[0], files, owners, getattr(self, "romarr_id", ""), self._config.category)
@@ -630,24 +633,33 @@ class QBittorrent:
             self._collection_owners(rows[0], owners)
             return self.resume_torrent(identity["hash"])
 
-    def selective_completed(self, owners, *, ownership=None):
+    def selective_completed(self, owners, *, ownership=None,
+                            update_cache: bool = True,
+                            timeout: float | None = None):
         """One completed selected member per independent request, not per torrent."""
         from .retained_collection import owner_records
         records = owner_records(owners)
         matching = [o for o in records if o["client"] == getattr(self, "romarr_id", "")]
         all_known = owner_records(ownership if ownership is not None else owners)
-        self._selective_hashes = {o["selected_file"].get("hash") for o in all_known
-                                  if o["client"] == getattr(self, "romarr_id", "")}
+        selective_hashes = {o["selected_file"].get("hash") for o in all_known
+                            if o["client"] == getattr(self, "romarr_id", "")}
+        if update_cache:
+            self._selective_hashes = selective_hashes
         if not matching:
             return []
-        rows = {str(r.get("hash") or ""): r for r in self.torrents()}
+        torrent_rows = self.torrents() if timeout is None else self.torrents(timeout=timeout)
+        rows = {str(r.get("hash") or ""): r for r in torrent_rows}
         out = []
-        for torrent_hash in self._selective_hashes:
+        for torrent_hash in selective_hashes:
             row = rows.get(torrent_hash)
             if not row:
                 continue
             try:
-                files = self._collection_owners(row, ownership if ownership is not None else matching)
+                files = self._collection_owners(
+                    row,
+                    ownership if ownership is not None else matching,
+                    **({"timeout": timeout} if timeout is not None else {}),
+                )
             except (ValueError, KeyError, TypeError, requests.RequestException) as exc:
                 for owner in matching:
                     if owner["selected_file"].get("hash") == torrent_hash:
@@ -664,20 +676,24 @@ class QBittorrent:
                     out.append(dict(row, tags=tag, id=owner["download_id"]))
         return out
 
-    def torrents(self) -> list[dict]:
+    def torrents(self, timeout: float | None = None) -> list[dict]:
         """Return the client's torrent list for an explicit collection plan."""
         if not self._authed and not self.login():
             raise QbitAuthenticationError("qBittorrent authentication failed")
-        response = self._get("torrents/info", timeout=self._config.timeout)
+        response = self._get(
+            "torrents/info",
+            timeout=self._config.timeout if timeout is None else timeout,
+        )
         response.raise_for_status()
         return [row for row in response.json() if isinstance(row, dict)]
 
-    def torrent_files(self, torrent_hash: str) -> list[dict]:
+    def torrent_files(self, torrent_hash: str, timeout: float | None = None) -> list[dict]:
+        """Return the file entries for one torrent hash."""
         if not self._authed and not self.login():
             raise QbitAuthenticationError("qBittorrent authentication failed")
         response = self._get("torrents/files",
                              params={"hash": torrent_hash},
-                             timeout=self._config.timeout)
+                             timeout=self._config.timeout if timeout is None else timeout)
         response.raise_for_status()
         return [row for row in response.json() if isinstance(row, dict)]
 
@@ -790,7 +806,7 @@ class QBittorrent:
             log.warning("qbittorrent unreachable: %s", err)
             return False
 
-    def completed(self, *, repair=True) -> list[dict]:
+    def completed(self, *, repair=True, timeout: float | None = None) -> list[dict]:
         """Torrents in our category that have finished.
 
         A torrent qBittorrent emptied is repaired and withheld rather than
@@ -802,7 +818,7 @@ class QBittorrent:
         response = self._get(
             "torrents/info",
             params={"category": self._config.category, "filter": "completed"},
-            timeout=self._config.timeout,
+            timeout=self._config.timeout if timeout is None else timeout,
         )
         response.raise_for_status()
         done = []

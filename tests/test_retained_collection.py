@@ -101,6 +101,7 @@ def service_with_retained(tmp_path):
 
 
 def test_queue_preview_tracks_selected_file_completion_without_writes(tmp_path):
+    """Verify queue_rows() reflects per-file completion without mutating qBittorrent or store state."""
     service, client, session = service_with_retained(tmp_path)
     service.queue.append(owner("B", 1, tag="romarr-collection-B"))
     session.row["tags"] += ",romarr-collection-B"
@@ -108,6 +109,7 @@ def test_queue_preview_tracks_selected_file_completion_without_writes(tmp_path):
     original = (tmp_path / "state.json").read_bytes()
     assert [r["can_preview_import"] for r in service.queue_rows()] == [True, False]
     assert session.posts == []
+    assert client._selective_hashes == set()
     assert (tmp_path / "state.json").read_bytes() == original
 
 

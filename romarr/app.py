@@ -1933,6 +1933,17 @@ class ROMarr:
         if changed:
             self.store.save()
 
+    def _retained_owners_readonly(self, items: list[QueueItem] | None = None) -> list[dict]:
+        """Return retained-collection ownership records without mutating or saving store state."""
+        from .retained_collection import owner_records
+        ledger = list(self.store.settings.get("retained_collection_owners", []))
+        known = {r.get("download_id") for r in ledger}
+        queue_items = self.queue if items is None else items
+        return ledger + [
+            record for record in owner_records(queue_items)
+            if record["download_id"] not in known
+        ]
+
     def _retained_owners(self):
         self._remember_collection_owners()
         return list(self.store.settings.get("retained_collection_owners", []))
@@ -2182,14 +2193,27 @@ class ROMarr:
             "items": items,
         }
 
-    def _completed_queue_downloads(self, items):
+    def _completed_queue_downloads(self, items, *, ownership=None):
+        """Yield `(client, completed_rows)` for queue preview checks without fetch or repair writes."""
+        if ownership is None:
+            with self._lock:
+                ownership = self._retained_owners_readonly(list(self.queue))
         for client in self.clients:
             if not getattr(client, "configured", True):
                 continue
             try:
                 if isinstance(client, QBittorrent):
-                    ownership = list(self.store.settings.get("retained_collection_owners", [])) + list(self.queue)
-                    candidates = client.selective_completed(items, ownership=ownership) + client.completed(repair=False)
+                    raw_timeout = getattr(getattr(client, "_config", None), "timeout", 5) or 5
+                    probe_timeout = min(float(raw_timeout), 5.0)
+                    candidates = (
+                        client.selective_completed(
+                            items,
+                            ownership=ownership,
+                            update_cache=False,
+                            timeout=probe_timeout,
+                        )
+                        + client.completed(repair=False, timeout=probe_timeout)
+                    )
                 elif isinstance(client, (DebridClient, SiteDownloader, HubDownloader)):
                     candidates = client.completed(fetch=False)
                 else:
@@ -2200,19 +2224,26 @@ class ROMarr:
             yield client, candidates
 
     def queue_rows(self) -> list[dict]:
+        """Return queue items annotated with read-only `can_preview_import` flags."""
         with self._lock:
             items = list(self.queue)
             rows = [asdict(item) for item in items]
-        pending = [item for item in items if item.state != "imported"]
-        completed = [download for _, downloads in self._completed_queue_downloads(pending)
-                     for download in downloads] if pending else []
+            ownership = self._retained_owners_readonly(items)
+        pending = [item for item in items if item.state not in ("imported", "failed")]
+        completed = (
+            [download for _, downloads in self._completed_queue_downloads(pending, ownership=ownership)
+             for download in downloads]
+            if pending else []
+        )
         for item, row in zip(items, rows):
-            row["can_preview_import"] = row["state"] != "imported" and any(
+            row["can_preview_import"] = row["state"] not in ("imported", "failed") and any(
                 match_queue_item([item], download) is item and not download.get("_romarr_selection_error")
-                for download in completed)
+                for download in completed
+            )
         return rows
 
     def queue_import_plan(self, index: int, body: dict) -> dict:
+        """Build or confirm an interactive import plan for one queued release."""
         from .import_intent import preview_import, choose_import, queue_identity
         from .romm_bundle import decorate_preview, route_selection
         from .library import MissingArchiveTool
@@ -2225,18 +2256,21 @@ class ROMarr:
             item = self.queue[index]
             if item.state == "imported":
                 return {"error": "this item has already imported"}
+            ownership = self._retained_owners_readonly(list(self.queue))
         platform = resolve(item.platform)
         target = self.library_for(item.platform) if platform else None
         if target is None:
             return {"error": "configure a platform and library first"}
         torrent = None
         source_client = None
-        for client, candidates in self._completed_queue_downloads([item]):
+        for client, candidates in self._completed_queue_downloads([item], ownership=ownership):
             for candidate in candidates:
                 if match_queue_item([item], candidate) is item:
                     torrent = candidate
                     source_client = client
                     break
+            if torrent is not None:
+                break
         if torrent is None:
             return {"error": "download is not complete or cannot be found"}
         if torrent.get("_romarr_selection_error"):
@@ -2276,7 +2310,7 @@ class ROMarr:
                     item.import_intent = intent
                     item.state = "grabbed"
                     item.detail = "Import selection saved; source download will be retained"
-                item.import_preview = preview
+                    item.import_preview = preview
                 self.store.save()
             return {"ok": True, "preview": preview}
         except (OSError, ValueError, RuntimeError, TypeError, MissingArchiveTool, RequestException, zipfile.BadZipFile, subprocess.SubprocessError) as exc:
@@ -7078,6 +7112,7 @@ def make_handler(service: ROMarr):
             return self._gate(self._delete)
 
         def _get(self):
+            """Serve UI HTML pages and JSON API GET endpoints."""
             route = urlparse(self.path)
             query = parse_qs(route.query)
             if route.path in ("/favicon.ico", "/favicon.svg"):

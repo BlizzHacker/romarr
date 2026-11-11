@@ -81,6 +81,7 @@ def service_fixture(tmp_path,monkeypatch,names=None):
 
 
 def test_hub_empty_preview_remains_accessible_after_review_pause(tmp_path, monkeypatch):
+    """Verify hub bundles paused in import-review remain previewable even when items list is empty."""
     from romarr.downloaders import HubConfig, HubDownloader
     service, row, source = service_fixture(tmp_path, monkeypatch, ("manual.pdf",))
     row.download_id = ""

@@ -127,6 +127,7 @@ def test_bad_archive_does_not_abort_next_completed_import(tmp_path, monkeypatch)
 
 
 def test_http_preview_is_read_only_and_confirm_survives_restart(tmp_path, monkeypatch):
+    """Verify HTTP queue preview is read-only and saved import intent survives restarts."""
     from romarr.app import make_handler
     from http.server import ThreadingHTTPServer
     import threading

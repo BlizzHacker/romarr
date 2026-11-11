@@ -1798,6 +1798,35 @@ class DebridClient:
     def _fetch_links(self, links: list, target, *, fetch=True) -> bool:
         """Download every link into `target/`. True if all the files are
         present afterwards, counting ones a previous sweep already fetched."""
+        if not fetch:
+            if not links:
+                return False
+            try:
+                if not target.is_dir():
+                    return False
+                present = {
+                    p.name
+                    for p in target.iterdir()
+                    if p.is_file() and not p.name.endswith(".partial")
+                }
+            except OSError:
+                return False
+            matched_known = set()
+            unresolved = 0
+            for link in links:
+                known = ""
+                if isinstance(link, tuple):
+                    if len(link) == 2:
+                        known = str(link[0] or "")
+                    elif len(link) == 3:
+                        known = os.path.basename(str(link[2] or "").replace("\\", "/"))
+                if known:
+                    if known not in present:
+                        return False
+                    matched_known.add(known)
+                else:
+                    unresolved += 1
+            return len(present - matched_known) >= unresolved
         ok = True
         for link in links:
             filename, url = self._resolve(link)
@@ -1807,7 +1836,7 @@ class DebridClient:
             destination = target / (filename or "download.bin")
             if destination.exists():
                 continue
-            if not fetch or not self._download(url, destination):
+            if not self._download(url, destination):
                 ok = False
         return ok
 
@@ -3393,10 +3422,14 @@ def match_queue_item(queue, download: dict):
         return bool(job and download_id)
 
     name = download.get("name", "")
-    title_matches = [item for item in queue
-                     if item.state in ("grabbed", "import-review", "import-failed") and item.release == name
-                     and not identity_conflicts(item)]
-    return title_matches[0] if len(title_matches) == 1 else None
+    title_candidates = [item for item in queue
+                        if item.release == name and not identity_conflicts(item)]
+    grabbed_matches = [item for item in title_candidates if item.state == "grabbed"]
+    if grabbed_matches:
+        return grabbed_matches[0] if len(grabbed_matches) == 1 else None
+    review_matches = [item for item in title_candidates
+                      if item.state in ("import-review", "import-failed")]
+    return review_matches[0] if len(review_matches) == 1 else None
 
 
 def pick_client(protocol: str, clients: list) -> object | None:
