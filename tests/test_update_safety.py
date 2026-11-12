@@ -185,6 +185,42 @@ def test_two_parallel_launches_have_one_atomic_owner(checkout, monkeypatch):
     assert calls[0][0] == "systemd-run" and "--collect" in calls[0]
 
 
+def test_detached_worker_retains_shipped_service_sandbox(checkout, monkeypatch):
+    """Independent worker must be confined to the checked-out source directory."""
+    _pub, repo, _origin, env = checkout
+    calls = []
+    real_run = safety.subprocess.run
+
+    def fake_run(args, **kwargs):
+        if args[0] == "systemd-run":
+            calls.append(args)
+            return SimpleNamespace(returncode=0, stdout="", stderr="")
+        return real_run(args, **kwargs)
+
+    monkeypatch.setattr(safety.subprocess, "run", fake_run)
+    out = safety.launch(env, "origin/main")
+    assert out["ok"] is True
+    assert len(calls) == 1
+    argv = calls[0]
+    assert "--property=Type=exec" in argv
+    assert "--property=NoNewPrivileges=yes" in argv
+    assert "--property=PrivateTmp=yes" in argv
+    assert "--property=ProtectSystem=strict" in argv
+    assert "--property=ProtectHome=yes" in argv
+    assert f"--property=ReadWritePaths={repo}" in argv
+    assert sum(x.startswith("--property=ReadWritePaths=") for x in argv) == 1
+
+
+def test_ambiguous_checkout_path_is_rejected_before_worker_claim(checkout, monkeypatch):
+    """Scoped write allowances must never contain whitespace-separated paths."""
+    _pub, repo, _origin, env = checkout
+    target = repo.parent / "checkout with spaces"
+    repo.rename(target)
+    env.repo = str(target)
+    with pytest.raises(ValueError, match="unsafe for a scoped systemd"):
+        safety.preflight(env, "origin/main")
+
+
 def test_launch_failure_preserves_ambiguous_claim(checkout, monkeypatch):
     _pub, repo, _origin, env = checkout
     original = safety.subprocess.run
