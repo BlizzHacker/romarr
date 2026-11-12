@@ -67,6 +67,14 @@ ECOSYSTEM: dict[str, list[Project]] = {
             site="https://igir.io",
             install="npm install -g igir@5.8.0",
             tab="igir"),
+        Project(
+            "eXo2romm",
+            "Repackage eXoDOS game zips for RomM by rewriting pack-root dosbox.conf "
+            "mounts so imported zips launch standalone. Created by derkommutator -- "
+            "this plugin was inspired to assist with more users having this.",
+            repo="https://github.com/derkommutator/eXo2romm",
+            site="https://github.com/BlizzHacker/rom-hub-exo2romm",
+            tab="acquisition"),
     ],
     "First-party apps — maintained by the RomM team": [
         Project(
