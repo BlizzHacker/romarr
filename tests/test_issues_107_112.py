@@ -356,13 +356,17 @@ def test_issue_107_ui_local_timezone_helpers():
 # ------------------------------------------------------------------ #93 ---
 
 def test_issue_93_rom_hub_pin_updated():
-    """#93: Dockerfile, Dockerfile.browser, and docs/PLUGINS.md pin the updated
-    rom-hub commit containing the catalog, Igir v5.8.0, and eXo2romm v0.1.0 updates."""
+    """#93 & Archive.org auth: Dockerfile, Dockerfile.browser, docs/PLUGINS.md,
+    scripts/build-windows-desktop.ps1, and .github/workflows/docker.yml pin the
+    updated BlizzHacker/rom-hub commit containing the catalog, Igir v5.8.0,
+    eXo2romm v0.1.0, and shared Archive.org host auth updates."""
     root = pathlib.Path(__file__).resolve().parents[1]
-    expected_sha = "feb34c2df743c379988b1087dd9c1f560897d657"
-    for rel in ("Dockerfile", "Dockerfile.browser", "docs/PLUGINS.md"):
+    expected_sha = "02e9a1dbc7ebca5191b4a977233a4d6d0466ed4b"
+    for rel in ("Dockerfile", "Dockerfile.browser", "docs/PLUGINS.md",
+                "scripts/build-windows-desktop.ps1", ".github/workflows/docker.yml"):
         content = (root / rel).read_text(encoding="utf-8")
         assert expected_sha in content, f"{rel} does not pin {expected_sha}"
+        assert "dgmora/rom-hub" not in content, f"{rel} still references fork URL"
 
 
 def test_portal_proxy_same_origin_shield_and_ssrf_guard(tmp_path, monkeypatch):

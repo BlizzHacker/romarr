@@ -28,8 +28,17 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt pytest
+          pip install "rom-hub @ https://github.com/BlizzHacker/rom-hub/archive/02e9a1dbc7ebca5191b4a977233a4d6d0466ed4b.tar.gz"
+
+      - uses: actions/checkout@v5
+        with:
+          repository: BlizzHacker/rom-hub-archive-org
+          ref: v0.4.1
+          path: .archive-org-proof
 
       - name: Test
+        env:
+          ROMARR_ARCHIVE_ORG_PLUGIN_SOURCE: ${{ github.workspace }}/.archive-org-proof
         run: python -m pytest tests/ -q
 
   image:
@@ -137,7 +146,7 @@ jobs:
             || { echo "bsdtar missing"; exit 1; }
           docker exec smoke sh -c 'command -v git >/dev/null' \
             || { echo "git missing; catalogue plugins cannot install"; exit 1; }
-          docker exec smoke python -c "import requests, rom_hub; from rom_hub.sandbox import install; install()" \
+          docker exec smoke python -c "import requests, rom_hub; from rom_hub.ia_session import archive_transport; from rom_hub.sandbox import install; install()" \
             || { echo "a dependency did not install"; exit 1; }
           docker exec -e EXPECTED_BUILD_TYPE="${{ startsWith(github.ref, 'refs/tags/') && 'release' || 'development' }}" \
              -e EXPECTED_SOURCE_REF="$GITHUB_REF" \
@@ -247,7 +256,7 @@ jobs:
             curl -fsS -o /dev/null http://127.0.0.1:6868/api/health && break
             sleep 2
           done
-          docker exec smoke python -c "import playwright, rom_hub; from playwright.sync_api import sync_playwright"
+          docker exec smoke python -c "import playwright, rom_hub; from rom_hub.ia_session import archive_transport; from playwright.sync_api import sync_playwright"
           docker exec -e EXPECTED_BUILD_TYPE="${{ startsWith(github.ref, 'refs/tags/') && 'release' || 'development' }}" \
              -e EXPECTED_SOURCE_REF="$GITHUB_REF" \
              -e EXPECTED_SOURCE_REVISION="$GITHUB_SHA" \
