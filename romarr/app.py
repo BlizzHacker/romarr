@@ -1836,8 +1836,9 @@ class ROMarr:
             log.warning("rom hub search failed for %r: %s", game, exc)
             return []
         if err:
-            log.warning("rom hub search unavailable: %s", err)
-            return []
+            log.warning("rom hub search warning: %s", err)
+            if not rows:
+                return []
         # Magnet-bearing rows get their plugin's `torrent` capability run
         # over them first -- host-gated, tracker-augmented. One grouped pass,
         # never one subprocess per row; see hub.resolve_torrents.
@@ -8937,9 +8938,10 @@ def make_handler(service: ROMarr):
                     "reason": got.reason,
                 })
             if route.path == "/api/v1/hub/archive-org/auth":
+                payload = body if isinstance(body, dict) else {}
                 result = hub.archive_org_auth_configure(
-                    email=body.get("email", ""), password=body.get("password", ""),
-                    clear=body.get("clear", False))
+                    email=payload.get("email", ""), password=payload.get("password", ""),
+                    clear=payload.get("clear", False))
                 return self._json(200 if result.get("ok") else 400, result)
             if route.path == "/api/v1/hub/plugin":
                 slug = (body.get("slug") or "").strip()

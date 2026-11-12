@@ -396,7 +396,11 @@ def archive_org_auth_configure(email="", password="", clear=False) -> dict:
         Registry(HOME).get("archive-org")
     except Exception:
         return {"ok": False, "error": "Install the Archive.org plugin first"}
-    from .ia_auth import configure
+    try:
+        from .ia_auth import configure
+    except ImportError:
+        return {"ok": False,
+                "error": "Install the pinned ROM Hub version for Archive.org authentication"}
     return configure(HOME, email=email, password=password, clear=clear)
 
 
@@ -442,12 +446,17 @@ def search(query: str, platform: str | None = None, limit: int = 25,
     # shorter than some sources need -- MiNERVA measured 21-25s per query
     # live, and a ReadTimeout inside the plugin surfaced as a plugin failure
     # rather than as a slow source. One timeout to reason about, not two.
-    from .ia_session import archive_transport
-    from .ia_auth import status as ia_status
+    try:
+        from .ia_session import archive_transport
+        from .ia_auth import status as ia_status
+    except ImportError:
+        ia = {"configured": False, "external": False, "error": ""}
+        archive_transport = lambda *a, **k: None
+    else:
+        ia = ia_status(HOME)
     # ROM Hub shares a fetcher across all plugins in a search fanout.
     # Split only when IA auth is configured, so another plugin cannot use
     # the Archive.org cookies through an otherwise allowed archive.org URL.
-    ia = ia_status(HOME)
     auth_error = ""
     if ia["error"]:
         # Never silently downgrade a configured but invalid account to
@@ -648,7 +657,10 @@ def fetch(row: dict, dest_dir) -> dict:
                 "error": f"plugin {slug!r} is disabled", "files": []}
     dest = Path(dest_dir)
     dest.mkdir(parents=True, exist_ok=True)
-    from .ia_session import archive_transport
+    try:
+        from .ia_session import archive_transport
+    except ImportError:
+        archive_transport = lambda *a, **k: None
     try:
         fetcher = HttpxFetcher(transport=archive_transport(slug, HOME))
     except Exception as exc:

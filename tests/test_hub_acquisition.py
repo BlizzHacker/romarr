@@ -231,3 +231,47 @@ def test_authentication_status_without_shared_rom_hub(monkeypatch):
         "configured": False, "external": False,
         "error": "Install the pinned ROM Hub version for Archive.org authentication",
     }
+
+
+def test_authentication_configure_without_shared_rom_hub(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    monkeypatch.setitem(sys.modules, "romarr.ia_auth", None)
+    monkeypatch.setattr("rom_hub.registry.Registry.get",
+                        lambda self, slug: SimpleNamespace(slug=slug))
+    res = hub.archive_org_auth_configure("a@b.com", "pw")
+    assert res == {
+        "ok": False,
+        "error": "Install the pinned ROM Hub version for Archive.org authentication",
+    }
+
+
+def test_partial_hub_search_warning_keeps_healthy_rows(tmp_path, monkeypatch):
+    from romarr.app import ROMarr
+    svc = ROMarr(env={"ROMARR_DATA": str(tmp_path / "s.json")})
+    svc.clients = [_hub_client(tmp_path)]
+    monkeypatch.setattr(hub, "searchable_plugins", lambda: ["homebrew", "archive-org"])
+    healthy_row = dict(ROW, plugin="homebrew")
+    monkeypatch.setattr(hub, "search",
+                        lambda q, platform=None: ([healthy_row], "Archive.org authentication: bad key"))
+    monkeypatch.setattr(hub, "resolve_torrents", lambda rows: rows)
+    releases = svc._hub_releases("Super Metroid", _FakePlatform())
+    assert len(releases) == 1
+    assert releases[0].indexer == "hub:homebrew"
+
+
+def test_search_falls_back_when_ia_modules_are_absent(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+    monkeypatch.setitem(sys.modules, "romarr.ia_auth", None)
+    monkeypatch.setitem(sys.modules, "romarr.ia_session", None)
+    plugin = SimpleNamespace(slug="homebrew", enabled=True,
+                             manifest=SimpleNamespace(capabilities=("search",)))
+    monkeypatch.setattr("rom_hub.registry.Registry.installed", lambda self: [plugin])
+    monkeypatch.setattr("rom_hub.dispatcher.search_all",
+                        lambda group, **kw: SimpleNamespace(
+                            statuses=[],
+                            results=[SimpleNamespace(model_dump=lambda: dict(ROW, plugin="homebrew"))]))
+    rows, err = hub.search("Super Metroid")
+    assert err == ""
+    assert len(rows) == 1 and rows[0]["plugin"] == "homebrew"
