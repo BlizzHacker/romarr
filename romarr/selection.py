@@ -1246,10 +1246,12 @@ def _digital_set(filenames: list[str]) -> RomSet | None:
     if not filenames:
         return None
     exes = [f for f in filenames if _basename(f).lower().endswith(".exe")]
-    # Exact setup.exe wins regardless of archive provenance or member order.
+    # Prefer the shallowest exact setup.exe over nested redistributable copies.
     # Fall back to a delimited installer label (setup-1.exe) or a
     # architecture-suffixed setup name (setup64/setupx64), not AssetUpdater.exe.
-    primary = next((f for f in exes if _basename(f).casefold() == "setup.exe"), None)
+    exact = [f for f in exes if _basename(f).casefold() == "setup.exe"]
+    primary = min(exact, key=lambda f: (
+        f.replace("\\", "/").count("/"), f.casefold(), f)) if exact else None
     if primary is None:
         primary = next(
             (f for f in exes if re.search(

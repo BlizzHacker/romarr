@@ -31,7 +31,7 @@ from pathlib import Path
 
 from .dat import BAD_DUMP, UNKNOWN, VERIFIED, Match, hash_bytes, hash_stream
 from .platforms import Platform, resolve, romm_fs_slug
-from .nested_zip import NestedZipIndex, StagingBudget, check_zip_central_directory
+from .nested_zip import NestedZipIndex, StagingBudget
 from .selection import pick_all_rom_sets, pick_rom_set
 
 log = logging.getLogger(__name__)
@@ -645,9 +645,9 @@ def _source_for(download: Path, platform: Platform | None = None, *,
 
     suffix = download.suffix.lower()
     if download.is_file() and suffix in _STDLIB_ARCHIVES:
-        # ZipFile allocates all ZipInfo entries during construction. Bound the
-        # central directory before opening either flat or nested ZIP sources.
-        check_zip_central_directory(download)
+        # Preserve the existing flat-ZIP reader behavior. When nested layers
+        # are indexed, NestedZipIndex._scan applies its stricter limits before
+        # opening each ZIP. Do not impose nested limits on flat installers.
         with zipfile.ZipFile(download) as archive:
             # Flat ZIPs retain their existing reader, including streaming
             # verification. Only ZIPs containing another ZIP need an index.
@@ -999,6 +999,7 @@ def _import_rom_from_source(source, candidates, chosen_sets, download, platform,
                 # Other multi-file ROMs retain their established flat layout.
                 written: dict[str, str] = {}
                 folded: dict[str, str] = {}
+                folded_dirs: set[str] = set()
                 for member in chosen.members:
                     relative = (member.replace("\\", "/") if platform.media == "digital"
                                 else Path(member.replace("\\", "/")).name)
@@ -1012,12 +1013,14 @@ def _import_rom_from_source(source, candidates, chosen_sets, download, platform,
                     # Keep the original member for source.copy() lookup.
                     normalized = path.as_posix()
                     key = normalized.casefold()
-                    if key in folded or any(
-                            key.startswith(other + "/") or other.startswith(key + "/")
-                            for other in folded):
+                    parents = {parent.as_posix().casefold() for parent in path.parents
+                               if parent.as_posix() != "."}
+                    if (key in folded or key in folded_dirs
+                            or any(parent in folded for parent in parents)):
                         raise ValueError(
                             f"colliding set member paths: {folded.get(key, normalized)!r} and {member!r}")
                     folded[key] = member
+                    folded_dirs.update(parents)
                     written[normalized] = member
                 for name, member in written.items():
                     staged_member = staged_dir / name

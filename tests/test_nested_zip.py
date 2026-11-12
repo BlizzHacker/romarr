@@ -563,6 +563,20 @@ def test_digital_installer_selection_ignores_parent_archive_name():
     assert selected.primary == "setup.exe"
 
 
+@pytest.mark.parametrize("filenames", [
+    ["_CommonRedist/DirectX/setup.exe", "setup.exe", "data.bin"],
+    ["setup.exe", "_CommonRedist/DirectX/setup.exe", "data.bin"],
+    ["install/setup.exe", "install/redist/setup.exe", "data.bin"],
+])
+def test_digital_installer_prefers_shallowest_exact_setup(filenames):
+    """A redistributable's setup.exe never outranks the main installer."""
+    selected = _digital_set(filenames)
+    assert selected is not None
+    assert selected.primary == next(
+        path for path in filenames
+        if path.lower() in ("setup.exe", "install/setup.exe"))
+
+
 def test_digital_exact_setup_outranks_asset_updater():
     """'AssetUpdater' embeds the substring 'setup' but is not the installer."""
     selected = _digital_set(["AssetUpdater.exe", "setup.exe"])
@@ -643,6 +657,27 @@ def test_digital_equivalent_relative_paths_fail_before_copy(tmp_path):
     assert not (library / "win" / "Installer" / "setup.exe").exists()
 
 
+@pytest.mark.parametrize("first, second", [
+    ("assets/config.dat", "assets"),
+    ("ASSETS/CONFIG.dat", "assets"),
+])
+def test_digital_descendant_before_file_collision_fails_closed(tmp_path, first, second):
+    """The path collision guard rejects files that alias earlier directories."""
+    outer = zip_bytes({
+        "setup.exe": b"installer",
+        first: b"file beneath assets",
+        second: b"cannot also be a directory",
+    })
+    download = tmp_path / "Installer.zip"
+    download.write_bytes(outer)
+    library = tmp_path / "library"
+    result, = import_rom(download, resolve("win"), library)
+    assert not result.ok
+    assert "colliding set member paths" in result.reason
+    assert download.read_bytes() == outer
+    assert not (library / "win" / "Installer" / "setup.exe").exists()
+
+
 def test_digital_relative_path_normalizes_without_collision(tmp_path):
     """A single dot-segment member keeps its directory, with no alias."""
     outer = zip_bytes({
@@ -655,6 +690,36 @@ def test_digital_relative_path_normalizes_without_collision(tmp_path):
     result, = import_rom(download, resolve("win"), library)
     assert result.ok, result.reason
     assert (result.destination / "assets/config.dat").read_bytes() == b"config"
+    assert download.read_bytes() == outer
+
+
+def test_flat_zip_not_rejected_by_nested_entry_limit(tmp_path, monkeypatch):
+    """Two flat ZIP members do not inherit a one-entry nested ZIP ceiling."""
+    original = zip_bytes({"Game.gb": b"game", "readme.txt": b"notes"})
+    download = tmp_path / "Flat.zip"
+    download.write_bytes(original)
+    library = tmp_path / "library"
+    monkeypatch.setattr(nested_zip, "MAX_ZIP_MEMBERS", 1)
+
+    result, = import_rom(download, resolve("gb"), library)
+    assert result.ok, result.reason
+    assert result.destination.read_bytes() == b"game"
+    assert download.read_bytes() == original
+
+
+def test_nested_zip_still_rejects_strict_member_limit(tmp_path, monkeypatch):
+    """The nested index retains entry limits despite flat-ZIP compatibility."""
+    inner = zip_bytes({"Game.gb": b"game", "Another.gb": b"more"})
+    outer = zip_bytes({"inner.zip": inner})
+    download = tmp_path / "Nested.zip"
+    download.write_bytes(outer)
+    library = tmp_path / "library"
+    monkeypatch.setattr(nested_zip, "MAX_ZIP_MEMBERS", 1)
+
+    result, = import_rom(download, resolve("gb"), library)
+    assert not result.ok
+    assert "nested ZIP member-count limit" in result.reason
+    assert not library.exists()
     assert download.read_bytes() == outer
 
 
