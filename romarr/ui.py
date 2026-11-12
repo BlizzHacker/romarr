@@ -3870,9 +3870,16 @@ RENDER.profiles=async()=>{
       };
     }
 
+    let maxSizeDirty=false;
+    const maxSizeEl=$('#prof-max-size');
+    if(maxSizeEl){
+      maxSizeEl.oninput=()=>{maxSizeDirty=true;};
+    }
+
     $('#prof-save-btn').onclick=async()=>{
       const minSz=Number($('#prof-min-size').value)||0;
-      const maxSz=Number($('#prof-max-size').value)||0;
+      const inputMaxSz=Number($('#prof-max-size').value)||0;
+      const maxSz=(!isGlobal&&!maxSizeDirty&&!rawPlatMax)?0:inputMaxSz;
       const seeders=Number($('#prof-min-seeders').value)||1;
       const sPref=$('#prof-size-pref').value;
       const sWeight=Number($('#prof-size-weight').value)||0;

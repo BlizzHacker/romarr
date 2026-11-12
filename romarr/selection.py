@@ -392,11 +392,16 @@ _EXT_TOKEN_RE = re.compile(
     r"(?<=\S)\.([a-z0-9]{2,8})\s*$",
     re.IGNORECASE,
 )
-_BRACKET_GROUP_RE = re.compile(r"\([^()]*\)|\[[^\[\]]*\]|\{[^{}]*\}")
+_BRACKET_GROUP_RE = re.compile(
+    r"\((?!(?:19|20)\d{2}\))[^()]*\)|\[(?!(?:19|20)\d{2}\])[^\[\]]*\]|\{[^{}]*\}"
+)
 _INVERTED_ARTICLE_RE = re.compile(r",\s*(?:the|an?)(?=\s*$|\s*[:\-–—])", re.IGNORECASE)
 _LEADING_ARTICLE_RE = re.compile(r"^\s*(?:the|an?)\s+", re.IGNORECASE)
-_PLUS_SEP_RE = re.compile(r"\s+\+\s+")
+_PLUS_SEP_RE = re.compile(r"\s*\+\s*")
 _PLATFORM_SEP_RE = re.compile(r"\s+[-–—]\s+|:\s+")
+_TRAILING_SUBTITLE_SEP_RE = re.compile(r"^\s*(?::|[-–—]+(?=\s))")
+_TRAILING_CHUNK_SPLIT_RE = re.compile(r"\s*(?::|[-–—]+)\s*")
+_ALPHA_NUM_TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 # Single-word console acronyms safe to strip as unbracketed prefixes before a
 # game title even without a dash separator. Ambiguous English words or shared
@@ -439,6 +444,21 @@ _ROMAN_TO_ARABIC = {
 
 _SEQUEL_NEXT_TOKENS = frozenset({"0", "64", "x", *(str(n) for n in range(2, 20))})
 _NON_EXT_PREFIXES = frozenset({"mr", "mrs", "ms", "dr", "st", "vs", "jr", "sr"})
+_TRAILING_METADATA_TOKENS = frozenset({
+    *_LANGUAGE_CODES,
+    *(tok for key in _TOKEN_TO_REGIONS for tok in _normalise_marker(key).split()),
+    "ntsc", "pal", "u", "j", "e", "w", "ue", "ju", "uj", "jue", "uej", "jeu",
+    "rev", "v", "ver", "version", "disc", "disk", "cd", "dvd", "side", "part",
+    "redump", "nointro", "no", "intro", "tosec", "unl", "unlicensed",
+    "repack", "rip", "iso", "rom", "nsp", "xci", "nsz", "xcz", "pbp", "chd", "cso",
+    "wad", "cia", "3ds", "eshop", "virtual", "console", "wiiware", "psn", "xbla",
+    "pc", "windows", "win", "steam", "gog", "nintendo", "sony", "sega", "microsoft",
+    "reloaded", "fitgirl", "dodi", "elamigos", "kaos", "kaoskrew", "masquerade",
+    "codex", "plaza", "skidrow", "razor1911", "tenoke", "prophet", "hoodlum",
+    "empress", "rune", "goldberg", "flt", "hi2u", "darksiders", "doge",
+    "multi", "eng", "rus", "ger", "deu", "fra", "fre", "esp", "spa", "ita",
+    "por", "kor", "chs", "cht", "pol", "dut", "ned", "swe", "tur", "ukr",
+})
 
 
 def _build_strippable_extensions() -> frozenset[str]:
@@ -561,7 +581,7 @@ def _prefix_is_platform(core: str, r_tokens: list[str], start: int) -> bool:
 
 def _within_single_crossover_part(core: str, start: int, end: int) -> bool:
     """Whether `[start, end)` sits wholly inside one `+`-delimited compilation part."""
-    parts = _PLUS_SEP_RE.split(core)
+    parts = [part for part in _PLUS_SEP_RE.split(core) if _normalise(part)]
     if len(parts) <= 1:
         return False
     pos = 0
@@ -574,14 +594,41 @@ def _within_single_crossover_part(core: str, start: int, end: int) -> bool:
     return False
 
 
+def _trailing_subtitle_is_allowed(folded_core: str, spans: list[re.Match[str]], end: int) -> bool:
+    """Reject unmatched `: <subtitle>` or ` - <subtitle>` extensions unless platform/metadata."""
+    if not spans or end <= 0 or end > len(spans):
+        return True
+    tail = folded_core[spans[end - 1].end():]
+    sep = _TRAILING_SUBTITLE_SEP_RE.match(tail)
+    if not sep:
+        return True
+    after_sep = tail[sep.end():].strip()
+    if not after_sep:
+        return True
+    chunks = [c.strip() for c in _TRAILING_CHUNK_SPLIT_RE.split(after_sep) if _normalise(c)]
+    for chunk in chunks:
+        norm = _normalise(chunk)
+        if norm not in ("nintendo", "arcade") and resolve(chunk) is not None:
+            continue
+        tokens = norm.split()
+        if all(
+            tok in _TRAILING_METADATA_TOKENS or tok.isdigit() or re.fullmatch(r"v\d+", tok)
+            for tok in tokens
+        ):
+            continue
+        return False
+    return True
+
+
 def title_matches(release_title: str, wanted: str) -> bool:
     """Whether a release plausibly IS the requested game.
 
     Compares contiguous token sequences after stripping known file extensions,
-    bracketed release tags, and leading/comma-inverted articles, while
-    canonicalising unambiguous Roman numerals. Rejects differing sequel
-    numbers, non-platform title prefixes (``New ...``, ``Dr. ...``,
-    ``Paper ...``), and single halves of ``A + B`` compilations/crossovers.
+    bracketed release metadata (preserving year qualifiers like ``(2016)``),
+    and leading/comma-inverted articles, while canonicalising unambiguous
+    Roman numerals. Rejects differing sequel numbers, non-platform title
+    prefixes (``New ...``, ``Dr. ...``, ``Paper ...``), unmatched colon/dash
+    subtitles, and single halves of ``A + B`` compilations/crossovers.
     """
     w_core = _prepare_core(wanted)
     w_tokens = _canonical_tokens(_normalise(w_core).split())
@@ -589,7 +636,9 @@ def title_matches(release_title: str, wanted: str) -> bool:
         return False
 
     r_core = _prepare_core(release_title)
-    r_tokens = _canonical_tokens(_normalise(r_core).split())
+    r_folded = unicodedata.normalize("NFKD", r_core).encode("ascii", "ignore").decode("ascii")
+    r_spans = list(_ALPHA_NUM_TOKEN_RE.finditer(r_folded.lower()))
+    r_tokens = _canonical_tokens([m.group(0) for m in r_spans])
     w_len = len(w_tokens)
     if len(r_tokens) < w_len:
         return False
@@ -604,6 +653,8 @@ def title_matches(release_title: str, wanted: str) -> bool:
         if end < len(r_tokens) and r_tokens[end] in _SEQUEL_NEXT_TOKENS:
             continue
         if not want_has_plus and _within_single_crossover_part(r_core, start, end):
+            continue
+        if not _trailing_subtitle_is_allowed(r_folded, r_spans, end):
             continue
         return True
     return False

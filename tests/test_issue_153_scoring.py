@@ -158,6 +158,7 @@ def test_frozen_smb3_nes_exact_ranking_order():
     japan_usenet = _usenet("Super Mario Bros. 3 (Japan)", 384 * KB)
     wrong_nsmb2 = _usenet("New Super Mario Bros 2 . The Next Levels (Ntsc) Scrubbed", 423 * MB)
     wrong_crossover = _usenet("Puzzle & Dragons Z + Puzzle & Dragons: Super Mario Bros. Edition", int(1.12 * GB))
+    wrong_compact_combo = _usenet("Super Mario Bros.+Duck Hunt (USA)", 1 * MB)
     wrong_smb1 = _usenet("Super Mario Bros (USA).nes", 40 * KB)
 
     pool = [
@@ -167,6 +168,7 @@ def test_frozen_smb3_nes_exact_ranking_order():
         hub_bare,
         europe_usenet,
         world_usenet,
+        wrong_compact_combo,
         usa_usenet,
         wrong_crossover,
         verified_usa,
@@ -193,6 +195,11 @@ def test_frozen_smb3_nes_exact_ranking_order():
     assert score(hub_bare, "Super Mario Bros. 3", NES) > score(bare_usenet, "Super Mario Bros. 3", NES)
     assert score(hub_japan, "Super Mario Bros. 3", NES) < score(europe_usenet, "Super Mario Bros. 3", NES)
 
+    # Compact "+" compilation, subtitle spin-off, and mismatched release years are refused by judge too.
+    assert not judge(wrong_compact_combo, "Super Mario Bros", NES, profile=profile).accepted
+    assert not judge(_usenet("The Legend of Zelda: A Link to the Past (USA)", 1 * MB), "The Legend of Zelda", NES, profile=profile).accepted
+    assert not judge(_usenet("Doom (1993) (USA)", 10 * MB), "Doom (2016)", WIN).accepted
+
 
 # ---------------------------------------------------------------------------
 # Title matching edge cases
@@ -218,6 +225,11 @@ def test_frozen_smb3_nes_exact_ranking_order():
         ("Super Metroid.smc (USA)", "Super Metroid"),
         ("Mario + Rabbids: Kingdom Battle (Switch)", "Mario + Rabbids Kingdom Battle"),
         ("Mario + Rabbids: Kingdom Battle (Switch)", "Mario Rabbids Kingdom Battle"),
+        ("Doom (2016) (Repack)", "Doom (2016)"),
+        ("Doom.2016.FitGirl.Repack", "Doom (2016)"),
+        ("Legend of Zelda, The - A Link to the Past (USA).sfc", "The Legend of Zelda: A Link to the Past"),
+        ("Super Mario Bros. 3 - NES (USA).nes", "Super Mario Bros. 3"),
+        ("Disgaea 5 Complete+ (Switch)", "Disgaea 5 Complete"),
     ],
 )
 def test_title_matches_accepts_valid_variants(release_title: str, wanted: str):
@@ -238,7 +250,14 @@ def test_title_matches_accepts_valid_variants(release_title: str, wanted: str):
         ("New Super Mario Bros Remake (NTSC)", "Super Mario Bros"),
         ("Puzzle & Dragons Z + Puzzle & Dragons: Super Mario Bros. Edition", "Super Mario Bros"),
         ("Super Mario Bros. + Duck Hunt (USA)", "Super Mario Bros"),
+        ("Super Mario Bros.+Duck Hunt (USA)", "Super Mario Bros"),
         ("Super Mario Bros. 3 (USA)", "Super Mario Bros"),
+        ("Super Mario Bros. 3: Mix (USA)", "Super Mario Bros. 3"),
+        ("The Legend of Zelda: A Link to the Past (USA)", "The Legend of Zelda"),
+        ("Legend of Zelda, The - Link's Awakening (USA)", "The Legend of Zelda"),
+        ("Doom (1993) (USA)", "Doom (2016)"),
+        ("Doom (2016) (Repack)", "Doom (1993)"),
+        ("Doom (USA)", "Doom (2016)"),
         ("Mega Man 8 PSX2PSP", "Mega Man 2"),
         ("Mega Man Battle and Chase PSX2PSP", "Mega Man 2"),
         ("Final Fantasy X-2 (USA)", "Final Fantasy X"),
@@ -313,10 +332,12 @@ def test_oversized_release_never_survives_via_bonuses():
 
 
 def test_profiles_ui_does_not_seed_legacy_8192():
-    """Release Profiles UI treats legacy 8192 as unset and falls back to platform max_size_mb."""
+    """Release Profiles UI keeps inherited max visible while saving 0 unless edited."""
     html = page()
     assert "!==8192" in html
     assert "Math.min(platInfo.max_size_mb,rawGlobalMax):platInfo.max_size_mb" in html
+    assert "maxSizeDirty" in html
+    assert "(!isGlobal&&!maxSizeDirty&&!rawPlatMax)?0:inputMaxSz" in html
 
 
 # ---------------------------------------------------------------------------
