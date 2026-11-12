@@ -209,8 +209,10 @@ class NestedZipIndex:
                     continue
                 name = info.filename
                 parts = PurePosixPath(name)
+                # Drop traversal entries, but retain safe siblings.
+                if parts.is_absolute() or ".." in parts.parts:
+                    continue
                 if (not name or "\\" in name or ":" in name or "\x00" in name
-                        or parts.is_absolute() or ".." in parts.parts
                         or not self._safe_name(name, path.parent)):
                     raise ValueError(f"unsafe nested ZIP member: {name!r}")
                 mode = info.external_attr >> 16
