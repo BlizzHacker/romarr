@@ -12,6 +12,8 @@ import pytest
 
 from romarr import update_safety as safety
 
+pytestmark = pytest.mark.skipif(os.name == "nt", reason="POSIX/systemd-only worker")
+
 
 def git(*args, cwd=None):
     """Run Git within disposable pytest repositories."""
