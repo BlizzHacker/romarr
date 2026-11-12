@@ -31,7 +31,8 @@ from pathlib import Path
 
 from .dat import BAD_DUMP, UNKNOWN, VERIFIED, Match, hash_bytes, hash_stream
 from .platforms import Platform, resolve, romm_fs_slug
-from .nested_zip import NestedZipIndex, StagingBudget
+from .nested_zip import (MAX_OUTER_ZIP_MEMBERS, NestedZipIndex, StagingBudget,
+                         check_zip_central_directory)
 from .selection import pick_all_rom_sets, pick_rom_set
 
 log = logging.getLogger(__name__)
@@ -645,9 +646,10 @@ def _source_for(download: Path, platform: Platform | None = None, *,
 
     suffix = download.suffix.lower()
     if download.is_file() and suffix in _STDLIB_ARCHIVES:
-        # Preserve the existing flat-ZIP reader behavior. When nested layers
-        # are indexed, NestedZipIndex._scan applies its stricter limits before
-        # opening each ZIP. Do not impose nested limits on flat installers.
+        # ZipFile allocates ZipInfo entries during construction. Apply the
+        # bounded outer-ZIP metadata preflight before classifying its contents;
+        # nested indexes reapply the stricter per-tree cap when opened.
+        check_zip_central_directory(download, max_members=MAX_OUTER_ZIP_MEMBERS)
         with zipfile.ZipFile(download) as archive:
             # Flat ZIPs retain their existing reader, including streaming
             # verification. Only ZIPs containing another ZIP need an index.

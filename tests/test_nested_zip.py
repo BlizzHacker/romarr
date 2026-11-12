@@ -9,7 +9,7 @@ import zlib
 
 import pytest
 
-from romarr import nested_zip
+from romarr import library, nested_zip
 from romarr.import_intent import preview_import
 from romarr.library import _DirectorySource, _PathSource, _source_for, import_rom
 from romarr.platforms import resolve
@@ -577,6 +577,19 @@ def test_digital_installer_prefers_shallowest_exact_setup(filenames):
         if path.lower() in ("setup.exe", "install/setup.exe"))
 
 
+@pytest.mark.parametrize("filenames", [
+    ["_CommonRedist/DirectX/setup.exe", "install/game/setup.exe"],
+    ["install/game/setup.exe", "_CommonRedist/DirectX/setup.exe"],
+    ["redist/DirectX/setup.exe", "install/game/setup.exe"],
+    [r"_CommonRedist\DirectX\setup.exe", "install/game/setup.exe"],
+])
+def test_digital_equal_depth_prefers_game_setup_over_redist(filenames):
+    """Equal-depth redistributables are not the game's actual installer."""
+    selected = _digital_set(filenames)
+    assert selected is not None
+    assert selected.primary == "install/game/setup.exe"
+
+
 def test_digital_exact_setup_outranks_asset_updater():
     """'AssetUpdater' embeds the substring 'setup' but is not the installer."""
     selected = _digital_set(["AssetUpdater.exe", "setup.exe"])
@@ -704,6 +717,36 @@ def test_flat_zip_not_rejected_by_nested_entry_limit(tmp_path, monkeypatch):
     result, = import_rom(download, resolve("gb"), library)
     assert result.ok, result.reason
     assert result.destination.read_bytes() == b"game"
+    assert download.read_bytes() == original
+
+
+def test_flat_outer_zip_has_separate_finite_metadata_cap(tmp_path, monkeypatch):
+    """Flat ZIPs have a higher cap, but reject excessive metadata before import."""
+    original = zip_bytes({"Game.gb": b"game", "readme.txt": b"notes"})
+    download = tmp_path / "Flat.zip"
+    download.write_bytes(original)
+    library_root = tmp_path / "library"
+    monkeypatch.setattr(library, "MAX_OUTER_ZIP_MEMBERS", 1)
+
+    result, = import_rom(download, resolve("gb"), library_root)
+    assert not result.ok
+    assert "ZIP member-count limit exceeded" in result.reason
+    assert not library_root.exists()
+    assert download.read_bytes() == original
+
+
+def test_flat_outer_zip_central_byte_bound_before_import(tmp_path, monkeypatch):
+    """Outer flat ZIP metadata still has a pre-open byte-size safeguard."""
+    original = zip_bytes({"Game.gb": b"game", "readme.txt": b"notes"})
+    download = tmp_path / "Flat.zip"
+    download.write_bytes(original)
+    library_root = tmp_path / "library"
+    monkeypatch.setattr(nested_zip, "MAX_CENTRAL_DIRECTORY_BYTES", 48)
+
+    result, = import_rom(download, resolve("gb"), library_root)
+    assert not result.ok
+    assert "ZIP central-directory byte limit exceeded" in result.reason
+    assert not library_root.exists()
     assert download.read_bytes() == original
 
 

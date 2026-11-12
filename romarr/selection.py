@@ -1250,8 +1250,17 @@ def _digital_set(filenames: list[str]) -> RomSet | None:
     # Fall back to a delimited installer label (setup-1.exe) or a
     # architecture-suffixed setup name (setup64/setupx64), not AssetUpdater.exe.
     exact = [f for f in exes if _basename(f).casefold() == "setup.exe"]
-    primary = min(exact, key=lambda f: (
-        f.replace("\\", "/").count("/"), f.casefold(), f)) if exact else None
+
+    def setup_rank(candidate: str) -> tuple[int, bool, str, str]:
+        """Prefer shallow game installers over equal-depth redistributables."""
+        path = candidate.replace("\\", "/")
+        parents = path.split("/")[:-1]
+        redistributable = any(part.casefold() in {
+            "_commonredist", "redist", "redistributables", "vcredist", "directx",
+        } for part in parents)
+        return len(parents), redistributable, path.casefold(), path
+
+    primary = min(exact, key=setup_rank) if exact else None
     if primary is None:
         primary = next(
             (f for f in exes if re.search(

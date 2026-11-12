@@ -17,6 +17,7 @@ from typing import Callable
 MAX_ZIP_LAYERS = 3
 MAX_INNER_ARCHIVES = 16
 MAX_ZIP_MEMBERS = 10_000
+MAX_OUTER_ZIP_MEMBERS = 100_000  # Flat ZIPs need a larger but still finite metadata limit.
 MAX_INNER_BYTES = 256 * 1024 * 1024
 MAX_STAGED_BYTES = 512 * 1024 * 1024
 MAX_FINAL_MEMBER_BYTES = 64 * 1024 * 1024 * 1024
@@ -27,12 +28,17 @@ MAX_CENTRAL_DIRECTORY_BYTES = 16 * 1024 * 1024
 COPY_CHUNK = 1024 * 1024
 
 
-def check_zip_central_directory(path: Path) -> None:
-    """Bound ZIP directory size and entries before ZipFile allocates ZipInfo.
+def check_zip_central_directory(path: Path, *, max_members: int | None = None) -> None:
+    """Bound ZIP metadata before opening it, with a caller-specific entry cap.
 
-    Verify the end record (including ZIP64 when needed), cap directory bytes,
-    and count central headers independently of the untrusted declared count.
+    A flat outer ZIP can hold more entries than a nested indexed ZIP, but both
+    must pass the same central-directory byte and structure checks first.
     """
+    if max_members is None:
+        max_members = MAX_ZIP_MEMBERS
+    if max_members < 1:
+        raise ValueError("ZIP entry limit must be positive")
+    member_label = "nested ZIP" if max_members == MAX_ZIP_MEMBERS else "ZIP"
     with path.open("rb") as stream:
         stream.seek(0, 2)
         size = stream.tell()
@@ -99,8 +105,8 @@ def check_zip_central_directory(path: Path) -> None:
             directory_end = end
         if disk_entries != entries:
             raise ValueError("inconsistent ZIP directory entry count")
-        if entries > MAX_ZIP_MEMBERS:
-            raise ValueError("nested ZIP member-count limit exceeded")
+        if entries > max_members:
+            raise ValueError(f"{member_label} member-count limit exceeded")
         if central_bytes > MAX_CENTRAL_DIRECTORY_BYTES:
             raise ValueError("ZIP central-directory byte limit exceeded")
         if central_bytes > directory_end or directory_end > size:
@@ -124,7 +130,7 @@ def check_zip_central_directory(path: Path) -> None:
             if position > len(directory):
                 raise ValueError("truncated ZIP central-directory entry")
             observed += 1
-            if observed > MAX_ZIP_MEMBERS:
+            if observed > max_members:
                 raise ValueError("ZIP central-directory entry limit exceeded")
         if observed != entries:
             raise ValueError("inconsistent ZIP central-directory entry count")
