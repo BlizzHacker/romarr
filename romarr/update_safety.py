@@ -80,6 +80,8 @@ def preflight(env, target: str) -> dict:
     repo = Path(env.repo).resolve(strict=True)
     if not repo.is_dir() or repo.is_symlink():
         raise ValueError("invalid Git checkout directory")
+    if repo == Path("/") or any(char.isspace() for char in str(repo)):
+        raise ValueError("checkout path is unsafe for a scoped systemd write allowance")
     if not all(shutil.which(x) for x in ("git", "systemctl", "systemd-run")):
         raise ValueError("Git and systemd manager tools are required")
     git = shutil.which("git")
@@ -266,7 +268,13 @@ def launch(env, target: str) -> dict:
         attempted = True
         proc = subprocess.run(
             ["systemd-run", "--collect", f"--unit={unit}",
-             "--property=Type=exec", "/bin/sh", str(script)],
+             "--property=Type=exec",
+             "--property=NoNewPrivileges=yes",
+             "--property=PrivateTmp=yes",
+             "--property=ProtectSystem=strict",
+             "--property=ProtectHome=yes",
+             f"--property=ReadWritePaths={state['repo']}",
+             "/bin/sh", str(script)],
             capture_output=True, text=True, timeout=30, check=False)
         if proc.returncode:
             raise RuntimeError("systemd-run rejected the independent worker")
