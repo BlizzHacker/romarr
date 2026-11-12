@@ -13,6 +13,7 @@ details it does handle are the ones that silently corrupt a library:
 
 from __future__ import annotations
 
+import json
 import logging
 import errno
 import stat
@@ -94,6 +95,159 @@ def _is_libarchive(path: str) -> bool:
 def bsdtar_path() -> str | None:
     """`_bsdtar()`, resolved once. `None` when no usable tool is installed."""
     return _bsdtar()
+
+
+@dataclass(frozen=True)
+class RarTool:
+    """An installed program that reads RAR archives, split sets included.
+
+    `kind` is `"7z"` (7-Zip; `path` is the program) or `"unar"` (`path` is
+    `unar`, `lister` is its companion `lsar`).
+    """
+
+    kind: str
+    path: str
+    lister: str = ""
+
+
+def _reads_rar(path: str) -> bool:
+    """Whether this 7-Zip build carries the RAR decoders.
+
+    Some distributions build 7-Zip without its RAR code because the RAR
+    licence is not free: Alpine's `7zip` is built with `DISABLE_RAR`, and
+    Debian's lists the RAR format but ships the decoders separately in
+    `7zip-rar` (non-free). Such a build answers to the same name, and the
+    format line alone says nothing, so the `Rar2`/`Rar3`/`Rar5` codecs in
+    `7z i` are what is checked.
+    """
+    try:
+        out = subprocess.run([path, "i"], capture_output=True, text=True,
+                             timeout=10, stdin=subprocess.DEVNULL, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    codecs = set(re.findall(r"\bRar\d\b", out.stdout))
+    return {"Rar2", "Rar3", "Rar5"} <= codecs
+
+
+def rar_tools() -> list[RarTool]:
+    """Every installed RAR reader, best first: 7-Zip with RAR support, then unar."""
+    tools = []
+    candidates = [shutil.which(name) for name in ("7zz", "7z")]
+    if os.name == "nt":
+        for env_var in ("ProgramFiles", "ProgramFiles(x86)"):
+            base = os.environ.get(env_var)
+            if base:
+                candidates.append(os.path.join(base, "7-Zip", "7z.exe"))
+    seen: set[str] = set()
+    for path in candidates:
+        if not path or not os.path.isfile(path):
+            continue
+        key = os.path.normcase(os.path.abspath(path))
+        if key in seen:
+            continue
+        seen.add(key)
+        if _reads_rar(path):
+            tools.append(RarTool("7z", path))
+            break
+    unar, lsar = shutil.which("unar"), shutil.which("lsar")
+    if unar and lsar:
+        tools.append(RarTool("unar", unar, lsar))
+    return tools
+
+
+def _rar_tool() -> RarTool | None:
+    """The best installed RAR reader, or None."""
+    tools = rar_tools()
+    return tools[0] if tools else None
+
+
+@lru_cache(maxsize=1)
+def rar_tool() -> RarTool | None:
+    """`_rar_tool()`, resolved once. `None` when only bsdtar (or nothing) can read RAR.
+
+    libarchive reads one RAR volume at a time, so it cannot join a release
+    split into `.part1.rar`/`.r00`/`.001` volumes, and it refuses some RAR
+    data (some solid archives, filters inside PPMd blocks, some older data).
+    7-Zip and unar read split sets, so a `.rar` goes to one of them whenever
+    one is installed; 7-Zip is preferred.
+    """
+    return _rar_tool()
+
+
+_RAR4_SIGNATURE = b"Rar!\x1a\x07\x00"
+_RAR5_SIGNATURE = b"Rar!\x1a\x07\x01\x00"
+
+
+def _rar_signature(path: Path) -> bytes:
+    """The RAR signature `path` starts with, or `b""` if it is not a RAR."""
+    try:
+        with open(path, "rb") as handle:
+            head = handle.read(8)
+    except OSError:
+        return b""
+    for signature in (_RAR5_SIGNATURE, _RAR4_SIGNATURE):
+        if head.startswith(signature):
+            return signature
+    return b""
+
+
+def _rar_volume_key(path: Path) -> tuple[tuple[str, str], int] | None:
+    """`((scheme, stem), number)` when `path` is named like a RAR volume.
+
+    Volume numbers count from 1 in archive order. The three schemes scene
+    releases use are `name.part01.rar`, the older `name.rar` + `name.r00` ..
+    `name.r99` + `name.s00` .., and `name.001` (a RAR renamed to the generic
+    split-file naming). A `.001` is only a RAR volume if it starts with a RAR
+    signature, which `rar_sets` checks; the name alone says nothing.
+    """
+    name = path.name.lower()
+    match = re.fullmatch(r"(.+)\.part(\d+)\.rar", name)
+    if match:
+        return ("part", match[1]), int(match[2])
+    if name.endswith(".rar"):
+        return ("old", name[:-4]), 1
+    match = re.fullmatch(r"(.+)\.([r-z])(\d\d)", name)
+    if match:
+        return ("old", match[1]), 2 + (ord(match[2]) - ord("r")) * 100 + int(match[3])
+    match = re.fullmatch(r"(.+)\.(\d{3})", name)
+    if match and int(match[2]) > 0:
+        return ("num", match[1]), int(match[2])
+    return None
+
+
+def rar_sets(files) -> tuple[dict[Path, list[Path]], set[Path]]:
+    """Group RAR volumes among `files` (paths in one directory tree).
+
+    Returns `(sets, later)`: `sets` maps each set's first volume to every
+    volume in order (a lone `.rar` maps to itself), and `later` holds the
+    volumes after the first, which must be read through the first, never on
+    their own: bsdtar lists a later RAR 4 volume as holding the same file
+    again, and a later RAR 5 volume as empty. A numbered set counts only when
+    its `.001` starts with a RAR signature and its numbers run from 1 without
+    a gap; a set with a gap is left alone, so the import fails on the missing
+    part as before.
+    """
+    groups: dict[tuple[Path, tuple[str, str]], dict[int, Path]] = {}
+    for path in files:
+        key = _rar_volume_key(path)
+        if key is None:
+            continue
+        (scheme, stem), number = key
+        groups.setdefault((path.parent, (scheme, stem)), {})[number] = path
+    sets: dict[Path, list[Path]] = {}
+    later: set[Path] = set()
+    for (_folder, (scheme, _stem)), volumes in groups.items():
+        numbers = sorted(volumes)
+        if numbers != list(range(1, len(numbers) + 1)):
+            continue
+        ordered = [volumes[n] for n in numbers]
+        if scheme == "num" and not _rar_signature(ordered[0]):
+            continue
+        if scheme == "old" and ordered[0].suffix.lower() != ".rar":
+            continue
+        sets[ordered[0]] = ordered
+        later.update(ordered[1:])
+    return sets, later
 
 
 @dataclass(frozen=True)
@@ -238,22 +392,46 @@ class _BsdtarSource(_Source):
         self.tool = tool
 
     def _run(self, args: list[str], **kw):
-        return subprocess.run([self.tool, *args], capture_output=True,
-                              check=True, timeout=600, **kw)
+        return subprocess.run(args, capture_output=True, check=True,
+                              timeout=600, stdin=subprocess.DEVNULL, **kw)
+
+    def _list_command(self) -> list[str]:
+        """The command that lists the members, one per line."""
+        return [self.tool, "-tf", str(self.path)]
+
+    def _list(self, stdout: str) -> list[str]:
+        """Member names from the list command's output."""
+        return [line.strip() for line in stdout.splitlines()]
+
+    def _extract_command(self, name: str) -> list[str]:
+        """The command that writes member `name`, and nothing else, to stdout."""
+        return [self.tool, "-xOf", str(self.path), bsdtar_pattern(name)]
+
+    def _check_size(self, name: str, written: int) -> None:
+        """Raise if `written` bytes cannot be the whole of member `name`.
+
+        bsdtar exits non-zero when it cannot finish a member, so there is
+        nothing to check here; tools that exit 0 on a short read override it.
+        """
+
+    #: Text encoding of the list command's output; None is the locale's.
+    _list_encoding: str | None = None
 
     def names(self):
-        out = self._run(["-tf", str(self.path)], text=True)
-        return [n for n in (line.strip() for line in out.stdout.splitlines())
+        out = self._run(self._list_command(), text=True, encoding=self._list_encoding)
+        return [n for n in self._list(out.stdout)
                 if n and not n.endswith("/") and is_safe_name(n, self.path.parent)]
 
     def read(self, name):
-        return self._run(["-xOf", str(self.path), bsdtar_pattern(name)]).stdout
+        data = self._run(self._extract_command(name)).stdout
+        self._check_size(name, len(data))
+        return data
 
     def copy(self, name, destination):
         with open(destination, "wb") as dst:
-            subprocess.run([self.tool, "-xOf", str(self.path),
-                            bsdtar_pattern(name)],
-                           stdout=dst, check=True, timeout=600)
+            subprocess.run(self._extract_command(name), stdout=dst, check=True,
+                           timeout=600, stdin=subprocess.DEVNULL)
+        self._check_size(name, Path(destination).stat().st_size)
 
     #: Seconds `bsdtar` may go without producing a byte before `hash` gives
     #: up on the member. Not a deadline on the whole read: a 40 GB disc off a
@@ -271,10 +449,11 @@ class _BsdtarSource(_Source):
         stalled = threading.Event()
         finished = threading.Event()
         last_byte = [time.monotonic()]
-        with subprocess.Popen([self.tool, "-xOf", str(self.path),
-                               bsdtar_pattern(name)],
+        written = [0]
+        with subprocess.Popen(self._extract_command(name),
                               stdout=subprocess.PIPE,
-                              stderr=subprocess.DEVNULL) as proc:
+                              stderr=subprocess.DEVNULL,
+                              stdin=subprocess.DEVNULL) as proc:
 
             class _Progress:
                 """`proc.stdout` that records when data last arrived."""
@@ -282,6 +461,7 @@ class _BsdtarSource(_Source):
                 def read(self, size):
                     block = proc.stdout.read1(size)
                     last_byte[0] = time.monotonic()
+                    written[0] += len(block)
                     return block
 
             def watchdog():
@@ -319,14 +499,160 @@ class _BsdtarSource(_Source):
                 finished.set()
                 guard.join()
         if exited_after_eof:
-            raise TimeoutError(f"bsdtar did not exit within {self.STALL_TIMEOUT}s "
+            raise TimeoutError(f"{Path(self.tool).name} did not exit within {self.STALL_TIMEOUT}s "
                                f"after finishing {name!r}")
         if stalled.is_set():
-            raise TimeoutError(f"bsdtar produced nothing for {self.STALL_TIMEOUT}s "
+            raise TimeoutError(f"{Path(self.tool).name} produced nothing for {self.STALL_TIMEOUT}s "
                                f"while extracting {name!r}")
         if proc.returncode:
             raise subprocess.CalledProcessError(proc.returncode, proc.args)
+        self._check_size(name, written[0])
         return hashes
+
+
+class _RarToolSource(_BsdtarSource):
+    """A RAR archive, split or not, read with 7-Zip or unar.
+
+    `volumes` is every volume in order, the first being `path`; both tools
+    find the later volumes themselves from the first one's name. unar does
+    not recognise a RAR named `name.001`, so for that naming it is handed
+    symlinks under the names RAR itself would have used, in a temporary
+    directory this source removes on `close`.
+
+    Both tools exit 0 for some short reads (unar when a later volume is
+    missing, 7-Zip when no member matched), so every extraction is checked
+    against the size the listing reported.
+    """
+
+    #: 7-Zip is told to list in UTF-8 (-sccUTF-8) and lsar writes JSON in UTF-8.
+    _list_encoding = "utf-8"
+
+    def __init__(self, path: Path, tool: RarTool, volumes: list[Path] | None = None):
+        super().__init__(path, tool.path)
+        self.rar = tool
+        self.volumes = volumes or [path]
+        self._sizes: dict[str, int] = {}
+        self._indexes: dict[str, int] = {}
+        self._staged: str | None = None
+        self.archive = path
+        key = _rar_volume_key(path)
+        # unar opens a lone `.001` by its contents; only a set needs RAR's names.
+        if tool.kind == "unar" and len(self.volumes) > 1 and key and key[0][0] == "num":
+            try:
+                self.archive = self._stage_rar_names()
+            except OSError as exc:
+                self.close()
+                raise RuntimeError(
+                    f"{path.name}: unar needs the volumes under RAR's own names, and "
+                    f"they could not be linked in a temporary folder ({exc})") from exc
+
+    def _stage_rar_names(self) -> Path:
+        """Symlink each `.NNN` volume under its RAR name; return the first.
+
+        Raises OSError when symlinks cannot be made (Windows without the
+        privilege); the caller removes the folder.
+        """
+        self._staged = tempfile.mkdtemp(prefix="romarr-rar-")
+        first = self.volumes[0]
+        signature = _rar_signature(first)
+        try:
+            with open(first, "rb") as handle:
+                head = handle.read(13)
+        except OSError:
+            head = b""
+        # RAR 4 main header flag 0x0010 says the volumes are named name.partN.rar;
+        # without it RAR expects name.rar, name.r00, ... RAR 5 always uses partN.
+        part_names = (signature == _RAR5_SIGNATURE
+                      or (len(head) >= 12 and head[7 + 2] == 0x73
+                          and int.from_bytes(head[10:12], "little") & 0x0010))
+        width = max(2, len(str(len(self.volumes))))
+        for number, volume in enumerate(self.volumes, start=1):
+            if part_names:
+                staged = f"set.part{number:0{width}d}.rar"
+            elif number == 1:
+                staged = "set.rar"
+            else:
+                letter = chr(ord("r") + (number - 2) // 100)
+                staged = f"set.{letter}{(number - 2) % 100:02d}"
+            os.symlink(volume.resolve(), os.path.join(self._staged, staged))
+        return Path(self._staged) / (f"set.part{1:0{width}d}.rar" if part_names else "set.rar")
+
+    def close(self) -> None:
+        """Remove the staged symlinks, if any."""
+        if self._staged:
+            shutil.rmtree(self._staged, ignore_errors=True)
+            self._staged = None
+
+    def _type_switch(self) -> list[str]:
+        """7-Zip reads a `.001` as a generic split file unless told which RAR it is.
+
+        `-trar` selects only the RAR 4 reader, so a RAR 5 set needs `-trar5`.
+        """
+        if self.path.suffix.lower() == ".rar":
+            return []
+        return ["-trar5"] if _rar_signature(self.path) == _RAR5_SIGNATURE else ["-trar"]
+
+    def _list_command(self) -> list[str]:
+        """7-Zip's technical listing, or lsar's JSON listing, of the whole set."""
+        if self.rar.kind == "7z":
+            return [self.rar.path, "l", "-slt", "-ba", "-sccUTF-8", *self._type_switch(),
+                    "--", str(self.archive)]
+        return [self.rar.lister, "-j", str(self.archive)]
+
+    def _list(self, stdout: str) -> list[str]:
+        """Parse 7-Zip's technical listing or lsar's JSON, keeping sizes and indexes."""
+        names = []
+        if self.rar.kind == "7z":
+            entry: dict[str, str] = {}
+            for line in [*stdout.splitlines(), ""]:
+                if line.strip():
+                    key, _, value = line.partition(" = ")
+                    entry[key.strip()] = value
+                    continue
+                if entry.get("Path") and entry.get("Folder") != "+":
+                    names.append(entry["Path"])
+                    if entry.get("Size", "").isdigit():
+                        self._sizes[entry["Path"]] = int(entry["Size"])
+                entry = {}
+            return names
+        listing = json.loads(stdout or "{}")
+        for item in listing.get("lsarContents", []):
+            name = item.get("XADFileName")
+            if not name or item.get("XADIsDirectory"):
+                continue
+            if not isinstance(item.get("XADIndex"), int):
+                continue  # unar extracts by index; an entry without one cannot be read
+            names.append(name)
+            self._indexes[name] = item["XADIndex"]
+            if isinstance(item.get("XADFileSize"), int):
+                self._sizes[name] = item["XADFileSize"]
+        return names
+
+    def _extract_command(self, name: str) -> list[str]:
+        """The command that writes member `name` to stdout.
+
+        7-Zip gets the name with `-spd`, so brackets and `*` are literal; unar
+        gets the member's index from the listing, so no name is parsed at all.
+        """
+        if not self._sizes and not self._indexes:
+            self.names()
+        if self.rar.kind == "7z":
+            # -spd: match the name literally, never as a wildcard.
+            return [self.rar.path, "e", "-so", "-spd", "-bd", "-y", *self._type_switch(),
+                    "--", str(self.archive), name]
+        if name not in self._indexes:
+            raise ValueError(f"{name!r} is not in {self.path.name}")
+        return [self.rar.path, "-q", "-o", "-", "-i", str(self.archive),
+                str(self._indexes[name])]
+
+    def _check_size(self, name: str, written: int) -> None:
+        """Raise when the bytes written differ from the size the listing gave."""
+        expected = self._sizes.get(name)
+        if expected is not None and written != expected:
+            raise RuntimeError(
+                f"{self.path.name}: {name} came out as {written} bytes, but the "
+                f"archive lists {expected}; a volume of the set may be missing "
+                "or damaged")
 
 
 class _PathSource(_Source):
@@ -555,19 +881,26 @@ class _DirectorySource(_PathSource):
     def _index_sources(self, path):
         """Index a directory while sharing one temporary-staging budget."""
         root = path.resolve()
-        for entry in sorted(path.rglob("*")):
-            if not entry.is_file():
-                continue
+        files = [entry for entry in sorted(path.rglob("*")) if entry.is_file()]
+        # Every file passes the escape check before any is opened: grouping
+        # reads the first bytes of a .001, and a set's tool reads all its volumes.
+        for entry in files:
             if not entry.resolve().is_relative_to(root):
                 raise ValueError(f"source escapes download directory: {entry}")
+        volume_sets, later_volumes = rar_sets(files)
+        for entry in files:
+            if entry in later_volumes:
+                # Read through the set's first volume, never on its own.
+                continue
             relative = entry.relative_to(path).as_posix()
-            if entry.suffix.lower() not in ARCHIVE_SUFFIXES:
+            if entry not in volume_sets and entry.suffix.lower() not in ARCHIVE_SUFFIXES:
                 if relative in self.members:
                     raise ValueError(f"duplicate source member: {relative}")
                 self.members[relative] = (self, relative)
                 continue
             try:
-                archive = _source_for(entry, staging_budget=self._staging_budget)
+                archive = (_rar_source(entry, volume_sets[entry]) if entry in volume_sets
+                           else _source_for(entry, staging_budget=self._staging_budget))
                 self._cleanup.callback(archive.close)
                 for member in archive.names():
                     name = relative + "/" + member
@@ -641,6 +974,34 @@ class MissingArchiveTool(Exception):
     """The download is in a format no installed tool can open."""
 
 
+def _rar_source(first: Path, volumes: list[Path]) -> _Source:
+    """A source for a RAR archive or split set, given its volumes in order.
+
+    7-Zip or unar when installed (`rar_tool`); otherwise bsdtar for a single
+    archive, as before. A split set with neither raises MissingArchiveTool
+    naming the fix, because bsdtar would open the first volume alone and fail
+    partway through the data.
+    """
+    tool = rar_tool()
+    if tool is not None:
+        return _RarToolSource(first, tool, volumes)
+    if len(volumes) > 1:
+        raise MissingArchiveTool(
+            f"{first.name} is the first of {len(volumes)} parts of a split RAR "
+            "archive. bsdtar reads one part at a time, so it cannot join them. "
+            "Install 7-Zip with RAR support (the official 7zz build from "
+            "https://github.com/ip7z/7zip/releases; Alpine's and Debian's 7zip "
+            "packages leave RAR out) or unar (apt install unar), or use "
+            "the ROMarr browser image, which ships unar.")
+    tool_path = bsdtar_path()
+    if tool_path is None:
+        raise MissingArchiveTool(
+            f"{first.name} is a .rar archive and no tool that reads RAR is "
+            "installed. Install libarchive-tools (bsdtar), 7-Zip with RAR "
+            "support, or unar, or use the official ROMarr image.")
+    return _BsdtarSource(first, tool_path)
+
+
 def _source_for(download: Path, platform: Platform | None = None, *,
                 staging_budget: StagingBudget | None = None) -> _Source:
     """Choose an archive, directory, or plain-file source for this platform."""
@@ -686,6 +1047,11 @@ def _source_for(download: Path, platform: Platform | None = None, *,
         return (_NestedZipSource(download, staging_budget=staging_budget)
                 if nested and (platform is None or platform.media != "digital")
                 else _ZipSource(download))
+    key = _rar_volume_key(download) if download.is_file() else None
+    if key and key[0][0] == "num" and key[1] == 1 and _rar_signature(download):
+        return _rar_source(download, [download])
+    if download.is_file() and suffix == ".rar" and rar_tool() is not None:
+        return _RarToolSource(download, rar_tool())
     if download.is_file() and suffix in ARCHIVE_SUFFIXES:
         tool = bsdtar_path()
         if tool is None:

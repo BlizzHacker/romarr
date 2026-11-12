@@ -316,7 +316,7 @@ python -m romarr
 
 Open <http://localhost:6868>. This runs in the foreground; Ctrl+C stops it. Keep the same environment variables when starting it again. To run unattended, configure your operating system's service manager with those paths and the virtual-environment interpreter.
 
-ZIP handling is built in. Install `bsdtar` for supported `.7z` and `.rar` archives (`libarchive-tools` on Debian/Ubuntu, `libarchive` on Alpine/Arch, or `brew install libarchive` on macOS). GNU/BusyBox tar is not a substitute. ROM Hub is optional and has [separate installation instructions](PLUGINS.md#add-rom-hub-to-a-source-or-lxc-installation).
+ZIP handling is built in. Install `bsdtar` for supported `.7z` and `.rar` archives (`libarchive-tools` on Debian/Ubuntu, `libarchive` on Alpine/Arch, or `brew install libarchive` on macOS). GNU/BusyBox tar is not a substitute. For RAR releases split into volumes (`.part01.rar`, `.rar` + `.r00`, or `.001`), also install `unar` (`apt install unar`) or 7-Zip with RAR support (the official `7zz` from [its releases](https://github.com/ip7z/7zip/releases); Alpine's and Debian's `7zip` packages leave RAR out), on `PATH`. bsdtar reads one volume at a time, so it cannot join them. ROMarr uses 7-Zip or unar for every `.rar` when one is installed; the browser image ships `unar`. ROM Hub is optional and has [separate installation instructions](PLUGINS.md#add-rom-hub-to-a-source-or-lxc-installation).
 
 `.env.example` documents additional environment options. Python does not automatically load a `.env` file; source it or supply an environment file through your service manager. Configure connections in the UI after first startup.
 
@@ -369,7 +369,7 @@ The first launch creates `.venv-windows` in the checkout and installs the requir
 
 Use the same data directory for later launches. After setup, change the saved library destination under **Settings → Media Management/Libraries**; passing a different startup path does not silently replace a saved setting. The launcher prints where the state file lives.
 
-ZIP imports need no extra archive program. `.7z`/`.rar` imports require a working `bsdtar` executable on `PATH`; test one small archive before importing a collection. Optional ROM Hub installation and Windows confinement limits are documented in the [plugin guide](PLUGINS.md).
+ZIP imports need no extra archive program. `.7z`/`.rar` imports require a working `bsdtar` executable on `PATH`, and split RAR sets also need 7-Zip (checked on `PATH` and in `C:\Program Files\7-Zip` / `C:\Program Files (x86)\7-Zip`); test one small archive before importing a collection. Optional ROM Hub installation and Windows confinement limits are documented in the [plugin guide](PLUGINS.md).
 
 The Windows CI smoke job is provided to check startup, authentication and state persistence on Windows; consult its result for the revision you use. It does not prove every external client, archive tool or filesystem share works on your PC. Use **Manual Import** for an existing library, and check one imported file before adding a whole collection.
 
@@ -826,6 +826,7 @@ somebody running it.
 | `Download path does not exist` while the file is plainly there | The client reports a path ROMarr cannot see. | Make the container-side download path match what the client reports, or add a remote path mapping. |
 | Results found, then refused | No download client speaks that release's protocol. | Add a torrent and/or usenet client — the Download Clients page names the gap. |
 | Imported ROM never appears in the library | The rescan was refused. | RomM: grant the account task permission. Or the ROM landed outside the tree your library scans. |
+| A RAR release split into volumes fails with "split RAR archive" | Neither 7-Zip with RAR support nor `unar` is installed; bsdtar reads one volume at a time. | Use the browser image, or install `unar` or the official `7zz` (see above). Alpine has no package that joins split RAR sets. |
 | Every PlayStation / PS2 / Wii import fails on the archive | `bsdtar` is missing. Those sets ship as `.7z`, and busybox/GNU `tar` is not a substitute — ROMarr will not pretend otherwise. | Docker and the Proxmox installer include it. From source: install `libarchive-tools`. |
 | Hub tab says plugins are unavailable | `rom-hub` is not installed. Expected on armv7, where its `pydantic` dependency has no musl wheel. | Elsewhere: `pip install "rom-hub @ git+https://github.com/BlizzHacker/rom-hub@master"` |
 | ROM imports but will not play in the browser | The platform has no emulator core in your library's web player. | Expected. The ROM is catalogued, not playable in-browser. |
