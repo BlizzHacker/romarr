@@ -27,18 +27,22 @@ MAX_COMPRESSION_RATIO = 10_000
 MAX_DESCRIPTOR_BYTES = 2 * 1024 * 1024
 MAX_CENTRAL_DIRECTORY_BYTES = 16 * 1024 * 1024
 COPY_CHUNK = 1024 * 1024
+# Python 3.14+ reads both Zstandard method IDs (20 legacy, 93 current).
+ZIP_ZSTANDARD = getattr(zipfile, "ZIP_ZSTANDARD", 93)
 
 # CPython fixed CVE-2026-15310 in these security/maintenance releases.
-# Earlier zipfile bzip2/LZMA reads can allocate more than the requested chunk.
+# Earlier zipfile bzip2/LZMA/Zstandard reads can exceed the requested chunk.
 _FIXED_ALT_ZIP_PATCH = {10: 22, 11: 17, 12: 15, 13: 16, 14: 8}
 
 
 def _bounded_alt_zipfile_reads(version=None) -> bool:
-    """Whether CPython bounds bzip2/LZMA ZIP member decompression per read."""
+    """Whether CPython bounds alternate ZIP decompression per read."""
     if sys.implementation.name != "cpython":
         return False
-    major, minor, patch = sys.version_info[:3] if version is None else version
-    if major != 3:
+    info = sys.version_info if version is None else version
+    major, minor, patch = info[:3]
+    release_level = info[3] if len(info) > 3 else "final"
+    if major != 3 or release_level != "final":
         return False
     if minor in _FIXED_ALT_ZIP_PATCH:
         return patch >= _FIXED_ALT_ZIP_PATCH[minor]
@@ -240,10 +244,11 @@ class NestedZipIndex:
                 if info.flag_bits & 0x1:
                     raise ValueError(f"encrypted nested ZIP member: {name!r}")
                 qualified = prefix + name
-                if (info.compress_type in (zipfile.ZIP_BZIP2, zipfile.ZIP_LZMA)
+                if (info.compress_type in (zipfile.ZIP_BZIP2, zipfile.ZIP_LZMA,
+                                           ZIP_ZSTANDARD, 20)
                         and not _bounded_alt_zipfile_reads()):
                     raise ValueError(
-                        f"nested ZIP bzip2/LZMA requires a patched Python runtime: {qualified!r}")
+                        f"nested ZIP bzip2/LZMA/Zstandard requires a patched Python runtime: {qualified!r}")
                 if info.file_size < 0 or info.file_size > MAX_FINAL_MEMBER_BYTES:
                     raise ValueError(f"nested ZIP member exceeds size limit: {qualified!r}")
                 if (name.lower().endswith((".cue", ".gdi", ".m3u"))
