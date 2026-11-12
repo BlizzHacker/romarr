@@ -1508,36 +1508,44 @@ RENDER.hub=async()=>{
       inst = inst===c.dataset.inst ? '' : c.dataset.inst; render(await load());});
 
     const iaForm=$('#ia-auth-form');
+    const iaClear=$('#ia-auth-clear');
+    const iaBtn=iaForm?iaForm.querySelector('button[type="submit"]'):null;
+    const setIaBusy=busy=>{if(iaBtn)iaBtn.disabled=busy;if(iaClear)iaClear.disabled=busy;};
+    const isCurrentHub=ver=>(typeof activePage==='undefined'||activePage==='hub')&&(typeof pageVersion!=='number'||pageVersion===ver);
+    const submitIaAuth=async(payload,fallbackError,okToast)=>{
+      const opVer=typeof pageVersion==='number'?pageVersion:0;
+      setIaBusy(true);
+      try{
+        try{
+          const response=await fetch('/api/v1/hub/archive-org/auth',{
+            method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify(payload)});
+          const result=await response.json();
+          if(!isCurrentHub(opVer)) return;
+          actionError=result.ok?'':(result.error||fallbackError);
+          if(result.ok)toast(okToast);
+        }catch(e){
+          if(!isCurrentHub(opVer)) return;
+          actionError=fallbackError;
+        }
+        const nextHs=await j('/api/v1/hub/status').catch(()=>hs);
+        if(!isCurrentHub(opVer)) return;
+        hs=nextHs;
+        const nextData=await load();
+        if(!isCurrentHub(opVer)) return;
+        render(nextData);
+      }finally{
+        if(isCurrentHub(opVer)) setIaBusy(false);
+      }
+    };
     if(iaForm) iaForm.onsubmit=async e=>{
       e.preventDefault();
       const email=$('#ia-email').value.trim(), password=$('#ia-password').value;
       if(!email||!password)return;
-      const btn=iaForm.querySelector('button[type="submit"]');
-      btn.disabled=true;
-      try{
-        const response=await fetch('/api/v1/hub/archive-org/auth',{
-          method:'POST',headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({email,password})});
-        const result=await response.json();
-        actionError=result.ok?'':(result.error||'Could not save Archive.org login');
-        if(result.ok)toast('Archive.org credentials saved');
-      }catch(e){actionError='Could not save Archive.org login';}
-      hs=await j('/api/v1/hub/status').catch(()=>hs);
-      render(await load());
+      await submitIaAuth({email,password},'Could not save Archive.org login','Archive.org credentials saved');
     };
-    const iaClear=$('#ia-auth-clear');
     if(iaClear) iaClear.onclick=async()=>{
-      iaClear.disabled=true;
-      try{
-        const response=await fetch('/api/v1/hub/archive-org/auth',{
-          method:'POST',headers:{'Content-Type':'application/json'},
-          body:JSON.stringify({clear:true})});
-        const result=await response.json();
-        actionError=result.ok?'':(result.error||'Could not clear Archive.org login');
-        if(result.ok)toast('Archive.org credentials cleared');
-      }catch(e){actionError='Could not clear Archive.org login';}
-      hs=await j('/api/v1/hub/status').catch(()=>hs);
-      render(await load());
+      await submitIaAuth({clear:true},'Could not clear Archive.org login','Archive.org credentials cleared');
     };
 
     p.querySelectorAll('button[data-act]').forEach(b=>b.onclick=async()=>{

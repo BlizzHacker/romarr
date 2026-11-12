@@ -275,3 +275,17 @@ def test_search_falls_back_when_ia_modules_are_absent(monkeypatch):
     rows, err = hub.search("Super Metroid")
     assert err == ""
     assert len(rows) == 1 and rows[0]["plugin"] == "homebrew"
+
+
+def test_clear_authentication_works_after_plugin_uninstall(monkeypatch):
+    def missing(_self, slug):
+        raise KeyError(slug)
+
+    monkeypatch.setattr("rom_hub.registry.Registry.get", missing)
+    monkeypatch.setattr("romarr.ia_auth.configure",
+                        lambda home, email="", password="", clear=False: {"ok": True, "cleared": clear})
+    assert hub.archive_org_auth_configure("a@b.com", "pw") == {
+        "ok": False,
+        "error": "Install the Archive.org plugin first",
+    }
+    assert hub.archive_org_auth_configure(clear=True) == {"ok": True, "cleared": True}

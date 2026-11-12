@@ -391,11 +391,12 @@ def archive_org_auth_status() -> dict:
 
 def archive_org_auth_configure(email="", password="", clear=False) -> dict:
     """UI operation: store in ROM Hub's secret store, NOT in plugin config."""
-    try:
-        from rom_hub.registry import Registry
-        Registry(HOME).get("archive-org")
-    except Exception:
-        return {"ok": False, "error": "Install the Archive.org plugin first"}
+    if not clear:
+        try:
+            from rom_hub.registry import Registry
+            Registry(HOME).get("archive-org")
+        except (ImportError, LookupError, OSError, ValueError):
+            return {"ok": False, "error": "Install the Archive.org plugin first"}
     try:
         from .ia_auth import configure
     except ImportError:
