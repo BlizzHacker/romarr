@@ -33,11 +33,11 @@ COPY_CHUNK = 1024 * 1024
 _FIXED_ALT_ZIP_PATCH = {10: 22, 11: 17, 12: 15, 13: 16, 14: 8}
 
 
-def _bounded_alt_zipfile_reads() -> bool:
+def _bounded_alt_zipfile_reads(version=None) -> bool:
     """Whether CPython bounds bzip2/LZMA ZIP member decompression per read."""
     if sys.implementation.name != "cpython":
         return False
-    major, minor, patch = sys.version_info[:3]
+    major, minor, patch = sys.version_info[:3] if version is None else version
     if major != 3:
         return False
     if minor in _FIXED_ALT_ZIP_PATCH:
