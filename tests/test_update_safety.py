@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
@@ -56,7 +57,11 @@ def checkout(tmp_path, monkeypatch):
     venv = consumer / ".venv"
     (venv / "bin").mkdir(parents=True)
     (venv / "pyvenv.cfg").write_text("home = " + sys.base_prefix + "\n")
-    (venv / "bin" / "python").symlink_to(sys.executable)
+    # Copy the host executable into the disposable checkout so pyenv under
+    # a protected home directory cannot make the path-only tests fail.
+    fixture_python = venv / "bin" / "python-fixture"
+    shutil.copy2(sys.executable, fixture_python)
+    (venv / "bin" / "python").symlink_to("python-fixture")
     env = SimpleNamespace(kind="git", repo=str(consumer), python=str(venv / "bin" / "python"),
                           branch="main", commit=git("rev-parse", "HEAD", cwd=consumer),
                           service="romarr")
