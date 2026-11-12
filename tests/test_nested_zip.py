@@ -1053,10 +1053,13 @@ def test_nested_zstandard_method_requires_patched_python(
     """Reject both ZIP Zstandard identifiers before unsafe decompression."""
     payload = bytearray(zip_bytes({"inner.zip": zip_bytes({"Game.gb": b"game"})}))
     local_header = payload.find(b"PK\x03\x04")
-    central_header = payload.find(b"PK\x01\x02")
+    central_header = payload.rfind(b"PK\x01\x02")
     assert local_header >= 0 and central_header > local_header
     struct.pack_into("<H", payload, local_header + 8, method)
     struct.pack_into("<H", payload, central_header + 10, method)
+    with zipfile.ZipFile(io.BytesIO(payload)) as mutated:
+        assert [(member.filename, member.compress_type)
+                for member in mutated.infolist()] == [("inner.zip", method)]
     download = tmp_path / "outer.zip"
     download.write_bytes(payload)
     library_root = tmp_path / "library"
