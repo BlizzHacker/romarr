@@ -849,3 +849,30 @@ def test_game_installer_outranks_redist_across_depths(filenames, expected):
     selected = _digital_set(filenames)
     assert selected is not None
     assert selected.primary == expected
+
+
+def test_nested_disc_lookup_reuses_member_index(monkeypatch):
+    """Checking many tracks must not rescan all members for each reference."""
+    from romarr.selection import RomSet
+
+    count = 160
+    sheet = "inner.zip/Game.cue"
+    tracks = tuple(f"inner.zip/Track{index:03}.bin" for index in range(count))
+    game = RomSet(sheet, (sheet, *tracks))
+    cue = "".join(
+        f'FILE "Track{index:03}.bin" BINARY\\n'
+        for index in range(count)
+    ).replace("\\n", "\n").encode()
+
+    original_parent = library._parent
+    parent_calls = 0
+
+    def counted_parent(name):
+        """Count directory lookup work for a representative disc set."""
+        nonlocal parent_calls
+        parent_calls += 1
+        return original_parent(name)
+
+    monkeypatch.setattr(library, "_parent", counted_parent)
+    assert library._complete_nested_zip_sets([game], lambda _name: cue) == [game]
+    assert parent_calls <= len(game.members) + 2
