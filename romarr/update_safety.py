@@ -124,7 +124,8 @@ def build_script(state: dict, run_id: str, log_path: Path, lock: Path) -> str:
     # Keep the output for inspection and preserve the lock for any failure.
     health_probe = (
         'import json,sys,urllib.request; '
-        'r=urllib.request.urlopen(urllib.request.Request(sys.argv[1],'
+        'opener=urllib.request.build_opener(urllib.request.ProxyHandler({})); '
+        'r=opener.open(urllib.request.Request(sys.argv[1],'
         'headers={"Cache-Control":"no-cache"}),timeout=4); '
         'assert r.status==200 and json.load(r).get("ok") is True'
     )
