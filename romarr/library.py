@@ -1060,6 +1060,7 @@ def _import_rom_from_source(source, candidates, chosen_sets, download, platform,
                     raise ValueError(f"too small to be a {platform.name} disc image ({total_set_size // (1024*1024)}MB < 8MB)")
                 destination.mkdir(parents=True, exist_ok=True)
                 resolved_targets: dict[Path, str] = {}
+                resolved_ancestors: dict[Path, str] = {}
                 for name in written:
                     final = destination / name
                     if not is_safe_name(name, destination):
@@ -1076,13 +1077,20 @@ def _import_rom_from_source(source, candidates, chosen_sets, download, platform,
                         raise ValueError(f"destination requires a file but is a directory: {final}")
                     if final.exists() and final.stat().st_size == 0:
                         raise ValueError(f"existing zero-byte destination needs inspection: {final}")
-                    # Existing symlinked directories can alias two unique names
-                    # to the same file. Detect that before publishing either.
+                    # Symlinked directories may make separate member names
+                    # resolve to the same file, or to a file and its child.
+                    # Validate the full set before publishing any member.
                     target = final.resolve(strict=False)
-                    if target in resolved_targets:
+                    conflict = resolved_targets.get(target) or resolved_ancestors.get(target)
+                    if conflict is None:
+                        conflict = next((resolved_targets[parent] for parent in target.parents
+                                         if parent in resolved_targets), None)
+                    if conflict is not None:
                         raise ValueError(
-                            f"colliding destination paths: {resolved_targets[target]!r} and {name!r}")
+                            f"colliding destination paths: {conflict!r} and {name!r}")
                     resolved_targets[target] = name
+                    for parent in target.parents:
+                        resolved_ancestors.setdefault(parent, name)
                 for name in written:
                     final = destination / name
                     final.parent.mkdir(parents=True, exist_ok=True)
