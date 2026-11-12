@@ -227,15 +227,13 @@ def test_two_inner_zip_sets_remain_separate_under_review(tmp_path):
     assert (result.destination / "track.bin").read_bytes() == b"b"
 
 
-@pytest.mark.parametrize("violation", ["depth", "traversal", "corruption", "count", "size", "symlink"])
+@pytest.mark.parametrize("violation", ["depth", "corruption", "count", "size", "symlink"])
 def test_nested_zip_fails_before_library_publication(tmp_path, monkeypatch, violation):
     """Reject unsafe or excessive archive trees without publishing any ROM."""
     inner = zip_bytes({"Game.gb": b"good"})
     if violation == "depth":
         for number in range(nested_zip.MAX_ZIP_LAYERS):
             inner = zip_bytes({f"layer{number}.zip": inner})
-    elif violation == "traversal":
-        inner = zip_bytes({"../Game.gb": b"bad"})
     elif violation == "corruption":
         inner = b"invalid zip content"
     elif violation == "count":
@@ -773,3 +771,81 @@ def test_mame_archive_remains_the_playable_rom(tmp_path):
     download = tmp_path / "arcade.zip"
     download.write_bytes(zip_bytes({"nested.zip": zip_bytes({"chip.bin": b"chip"})}))
     assert isinstance(_source_for(download, platform), _PathSource)
+
+
+@pytest.mark.parametrize("sheet, contents", [
+    ("Game.cue", b'FILE "track01.bin" BINARY\n'),
+    ("Game.gdi", b'1\n1 0 4 2352 track01.bin 0\n'),
+])
+def test_nested_missing_disc_track_is_not_previewed(tmp_path, sheet, contents):
+    """A track in another ZIP cannot make an incomplete disc playable."""
+    original = zip_bytes({
+        "disc.zip": zip_bytes({sheet: contents}),
+        "other.zip": zip_bytes({"track01.bin": b"other disc"}),
+    })
+    download = tmp_path / "outer.zip"
+    download.write_bytes(original)
+    library_root = tmp_path / "library"
+    preview = preview_import(download, resolve("dc"), library_root)
+    assert all(item["primary"] != f"disc.zip/{sheet}" for item in preview["items"])
+    assert not library_root.exists()
+    assert download.read_bytes() == original
+
+
+def test_nested_playlist_rejects_cue_missing_track(tmp_path):
+    """A valid M3U reference does not excuse a missing CUE track."""
+    download = tmp_path / "outer.zip"
+    download.write_bytes(zip_bytes({"disc.zip": zip_bytes({
+        "Game.m3u": b"Game.cue\n",
+        "Game.cue": b'FILE "missing.bin" BINARY\n',
+    })}))
+    preview = preview_import(download, resolve("dc"), tmp_path / "library")
+    assert all(not i["primary"].endswith("Game.m3u") for i in preview["items"])
+
+
+def test_nested_skips_traversal_but_keeps_safe_sibling(tmp_path):
+    """Skip the traversal entry without rejecting the valid ROM."""
+    original = zip_bytes({"inner.zip": zip_bytes({
+        "../skip.gb": b"unsafe", "Game.gb": b"valid game",
+    })})
+    download = tmp_path / "outer.zip"
+    download.write_bytes(original)
+    library_root = tmp_path / "library"
+    preview = preview_import(download, resolve("gb"), library_root)
+    assert [i["primary"] for i in preview["items"]] == ["inner.zip/Game.gb"]
+    result, = import_rom(download, resolve("gb"), library_root)
+    assert result.ok, result.reason
+    assert result.destination.read_bytes() == b"valid game"
+    assert download.read_bytes() == original
+
+
+def test_existing_destination_parent_file_does_not_partially_publish(tmp_path):
+    """Reject a path conflict before writing setup.exe on overwrite."""
+    original = zip_bytes({"setup.exe": b"installer",
+                          "assets/config.dat": b"config"})
+    download = tmp_path / "Installer.zip"
+    download.write_bytes(original)
+    library_root = tmp_path / "library"
+    target = library_root / "win" / "Installer"
+    target.mkdir(parents=True)
+    (target / "assets").write_bytes(b"existing file")
+
+    result, = import_rom(download, resolve("win"), library_root, overwrite=True)
+    assert not result.ok
+    assert "destination ancestor is not a directory" in result.reason
+    assert not (target / "setup.exe").exists()
+    assert (target / "assets").read_bytes() == b"existing file"
+    assert download.read_bytes() == original
+
+
+@pytest.mark.parametrize("filenames, expected", [
+    (["Game/install/setup.exe", "redist/setup.exe"], "Game/install/setup.exe"),
+    (["redist/setup.exe", "Game/install/setup.exe"], "Game/install/setup.exe"),
+    (["setup64.exe", "redist/setup.exe"], "setup64.exe"),
+    (["redist/setup.exe", "setup64.exe"], "setup64.exe"),
+])
+def test_game_installer_outranks_redist_across_depths(filenames, expected):
+    """Game install setup variants take precedence over redistributables."""
+    selected = _digital_set(filenames)
+    assert selected is not None
+    assert selected.primary == expected
