@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from . import nup
 from .library import _source_for, platform_dir, _digital_set_name, _set_name
 
 
@@ -60,10 +61,18 @@ def _preview_import_from_source(source, download, platform, library_root, *,
         members = list(group.members)
         used.update(members)
         unknown = Path(group.primary).suffix.lower() in ambiguous_packages
+        role, evidence, confidence = (
+            ("unknown", "Package title, type and version have not been inspected; choose its role manually.", "unknown")
+            if unknown else
+            ("base", "Platform-compatible ROM set; companions are kept together. Game identity is unverified.", "format-only"))
+        header_role = _nup_role(download, group.primary)
+        if header_role is not None:
+            role, evidence, confidence = header_role
+            unknown = role == "unknown"
         items.append({"primary": group.primary, "members": members,
-                      "role": "unknown" if unknown else "base",
-                      "evidence": "Package title, type and version have not been inspected; choose its role manually." if unknown else "Platform-compatible ROM set; companions are kept together. Game identity is unverified.",
-                      "confidence": "unknown" if unknown else "format-only",
+                      "role": role,
+                      "evidence": evidence,
+                      "confidence": confidence,
                       "bytes": sum(sizes[m] for m in members) if all(m in sizes for m in members) else None,
                       "destination": str(target / ((_digital_set_name(download) if platform.media == "digital" else _set_name(group.primary)) if group.is_multi_file else Path(group.primary.replace("\\", "/")).name)),
                       "selected": len(sets) == 1 and not unknown})
@@ -71,6 +80,38 @@ def _preview_import_from_source(source, download, platform, library_root, *,
             "extras": [n for n in names if n not in used],
             "requires_review": len(sets) > 1 or any(i["role"] == "unknown" for i in items),
             "note": "This imports package files; it does not install or apply updates/DLC. Excluded files and the source download stay intact."}
+
+
+_NUP_UNREADABLE = "Could not read this NUP header; choose its role manually."
+_NUP_NO_GAME = "This NUP holds no game, update or DLC package; choose its role manually."
+
+
+def _nup_role(download, primary):
+    """(role, evidence, confidence) for a loose `.nup` set, or None if not one.
+
+    A NUP's package records are validated plain data, unlike an encrypted NSP's,
+    so the role comes from them rather than the name. A container whose header
+    cannot be read, or that holds only system packages, stays "unknown" and so
+    goes to review. Files inside an archive are not opened.
+    """
+    if Path(primary).suffix.lower() != ".nup":
+        return None
+    if download.is_dir():
+        path = download / primary
+    elif download.is_file() and download.suffix.lower() == ".nup":
+        path = download
+    else:
+        return None
+    try:
+        header = nup.read_header(path)
+    except (nup.NupError, OSError):
+        return "unknown", _NUP_UNREADABLE, "unknown"
+    if header.role == "unknown":
+        return "unknown", _NUP_NO_GAME, "unknown"
+    kinds = "+".join(p.kind for p in header.packages)
+    return (header.role,
+            f"NUP header: {kinds}, title ID {header.primary.title_id}.",
+            "header")
 
 
 def choose_import(preview, choices, mode="single", existing_game=""):

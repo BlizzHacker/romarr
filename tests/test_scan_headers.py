@@ -110,3 +110,25 @@ def test_reading_a_header_does_not_slow_a_scan_to_a_crawl(scan, tmp_path):
     for n in range(12):
         scan(f"Big {n}.nes", big)
     assert time.monotonic() - started < 20
+
+
+# --- NUP containers ---------------------------------------------------------
+
+def test_a_switch_2_nup_is_corrected_from_the_first_claimant(scan):
+    """.nup is claimed by switch first, then switch-2; a 0x04 title ID
+    settles it the same way an iNES header settles .nes."""
+    from tests.nup_builder import Pkg, build_nup
+
+    row = scan("Donkey Kong Bananza.nup", build_nup([Pkg(0x040074A01BF12000)]))
+    assert row["platform"] == "switch-2"
+    assert row["header_chose"] == "switch-2"
+
+
+def test_a_switch_1_id_nup_keeps_the_guess_and_asks(scan):
+    """A 0x01 ID is shared with Switch 2 Editions, so the header stays silent."""
+    from tests.nup_builder import Pkg, build_nup
+
+    row = scan("Zelda TOTK.nup", build_nup([Pkg(0x0100F2C0115B6000)]))
+    assert row["platform"] == "switch"
+    assert "header_says" not in row
+    assert "header_chose" not in row

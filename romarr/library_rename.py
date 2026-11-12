@@ -26,7 +26,7 @@ def _journal_lock(library: Path, manifest_id: str):
 
 DISC_SUFFIXES = {".cue", ".gdi", ".m3u", ".ccd", ".sub", ".mds",
                  ".mdf", ".iso", ".chd", ".cso", ".pbp", ".pkg",
-                 ".nsp", ".xci", ".nca", ".nsz", ".xcz"}
+                 ".nsp", ".xci", ".nca", ".nsz", ".xcz", ".nup"}
 ROM_SUFFIXES = {
     ".rom", ".bin", ".nes", ".fds", ".sfc", ".smc", ".gb", ".gbc",
     ".gba", ".nds", ".3ds", ".cia", ".n64", ".z64", ".v64", ".md",
