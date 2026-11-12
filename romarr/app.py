@@ -2704,29 +2704,14 @@ class ROMarr:
         failures = {(job["client_id"], job["id"]): job
                     for job in self._failed_jobs() if job.get("id")}
         now = datetime.now(timezone.utc)
-        # Snapshot candidates under the queue lock, but never hold it while
-        # querying download clients. A slow client must not block queue writes.
-        candidates = []
-        if stall_minutes > 0:
-            with self._lock:
-                for row in self.queue:
-                    if row.blocklisted or not row.release_id or row.state != "grabbed":
-                        continue
-                    age = self._row_age_minutes(row, now)
-                    if age is not None and age >= stall_minutes:
-                        candidates.append((
-                            row, row.release_id, row.download_client,
-                            row.download_id, row.at))
-
-        stalled: dict[int, tuple] = {}
-        for row, release_id, client_id, download_id, grab_at in candidates:
-            if not self._is_download_active_or_complete(row):
-                stalled[id(row)] = (release_id, client_id, download_id, grab_at)
-
         dead: list[QueueItem] = []
         with self._lock:
-            for row in self.queue:
-                if row.blocklisted or not row.release_id:
+            rows = list(self.queue)
+        for row in rows:
+            probe_identity = None
+            with self._lock:
+                if (not any(current is row for current in self.queue)
+                        or row.blocklisted or not row.release_id):
                     continue
                 failure = (failures.get((row.download_client, row.download_id))
                            if row.download_client and row.download_id else None)
@@ -2741,15 +2726,30 @@ class ROMarr:
                     continue
                 if row.state == "grabbed" and stall_minutes > 0:
                     age = self._row_age_minutes(row, now)
-                    identity = (row.release_id, row.download_client,
-                                row.download_id, row.at)
-                    if (age is not None and age >= stall_minutes
-                            and stalled.get(id(row)) == identity):
-                        row.state = "failed"
-                        row.release_fault = True
-                        row.detail = (f"stalled: no import after "
-                                      f"{int(age)} minutes")
-                        dead.append(row)
+                    if age is not None and age >= stall_minutes:
+                        probe_identity = (row.release_id, row.download_client,
+                                          row.download_id, row.at)
+
+            if probe_identity is None:
+                continue
+            # Do not hold the queue lock during network calls. Retire each
+            # inactive row before polling the next client or queue row.
+            if self._is_download_active_or_complete(row):
+                continue
+            with self._lock:
+                if (not any(current is row for current in self.queue)
+                        or row.blocklisted or row.state != "grabbed"):
+                    continue
+                if (row.release_id, row.download_client,
+                        row.download_id, row.at) != probe_identity:
+                    continue
+                age = self._row_age_minutes(row, now)
+                if age is None or age < stall_minutes:
+                    continue
+                row.state = "failed"
+                row.release_fault = True
+                row.detail = f"stalled: no import after {int(age)} minutes"
+                dead.append(row)
 
         blocklisted = 0
         regrabbed = 0
