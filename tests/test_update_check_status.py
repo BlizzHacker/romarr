@@ -487,3 +487,30 @@ def test_explicit_scheduled_apply_checks_enabled_flag_under_launch_lock(
     assert result["ok"] is False
     assert "scheduled update preference" in result["error"]
     assert launched == []
+
+def test_changing_channel_after_record_does_not_reserve_notice(
+        tmp_path, monkeypatch):
+    """Never mark a stable notification sent after switching to nightly."""
+    svc = _svc(tmp_path)
+    monkeypatch.setattr("romarr.app.VERSION", "1.8.1")
+    svc.store.settings.update({"update_channel": "stable",
+                               "update_check": True, "auto_update": False})
+    monkeypatch.setattr(requests, "get", lambda *a, **kw: Release())
+    notified = []
+    monkeypatch.setattr(svc, "notify", lambda *a: notified.append(a))
+
+    original_record = svc._record_update_check
+
+    def change_after_record(*args, **kwargs):
+        """Change the channel after the status is recorded, before notice."""
+        original_record(*args, **kwargs)
+        if args[0] == "available":
+            with svc._lock:
+                svc.store.settings["update_channel"] = "nightly"
+
+    monkeypatch.setattr(svc, "_record_update_check", change_after_record)
+    result = svc.check_update()
+    assert result["ok"]
+    assert not notified
+    assert svc.store.settings.get("_update_notified") != "1.8.2"
+    assert svc.update_status()["check_status"]["state"] == "unknown"
