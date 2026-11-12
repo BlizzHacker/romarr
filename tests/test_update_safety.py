@@ -41,6 +41,11 @@ def checkout(tmp_path, monkeypatch):
     git("config", "user.email", "tests@example.invalid", cwd=consumer)
     git("config", "user.name", "Fixture", cwd=consumer)
     monkeypatch.setenv("ROMARR_UPDATE_REMOTE_URL", str(origin))
+    # Keep real Git lookup; simulated systemd probes do not require a systemd host.
+    real_which = safety.shutil.which
+    monkeypatch.setattr(safety.shutil, "which", lambda name:
+                        f"/usr/bin/{name}" if name in ("systemctl", "systemd-run")
+                        else real_which(name))
     # No actual systemd service will be queried by tests.
     old = safety._cmd
     monkeypatch.setattr(safety, "_cmd", lambda *a, **kw:
@@ -126,6 +131,26 @@ def test_shell_injection_service_refused(checkout):
     env.service = "romarr;touch /tmp/oops"
     with pytest.raises(ValueError, match="service"):
         safety.preflight(env, "origin/main")
+
+
+def test_health_probe_ignores_environment_proxy(checkout):
+    """Readiness requests use an explicit opener without ambient HTTP proxies."""
+    _pub, _repo, _origin, env = checkout
+    state = safety.preflight(env, "origin/main")
+    script = safety.build_script(state, "pcheck", state["gitdir"] / "a.log",
+                                 state["gitdir"] / "lock")
+    assert "urllib.request.ProxyHandler({})" in script
+    assert "opener.open(" in script
+    assert '"Cache-Control":"no-cache"' in script
+
+
+def test_fixture_mocks_systemd_binary_discovery_without_hiding_git(checkout):
+    """Systemd discovery is synthetic while Git remains a real executable."""
+    _pub, _repo, _origin, env = checkout
+    assert safety.shutil.which("systemctl") == "/usr/bin/systemctl"
+    assert safety.shutil.which("systemd-run") == "/usr/bin/systemd-run"
+    assert safety.shutil.which("git")
+    assert safety.preflight(env, "origin/main")["branch"] == "main"
 
 
 def test_script_has_no_branch_fallback_or_destructive_reset(checkout):
