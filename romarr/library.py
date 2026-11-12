@@ -24,13 +24,17 @@ import threading
 import tempfile
 import time
 import zipfile
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
 from .dat import BAD_DUMP, UNKNOWN, VERIFIED, Match, hash_bytes, hash_stream
 from .platforms import Platform, resolve, romm_fs_slug
-from .selection import pick_all_rom_sets, pick_rom_set
+from .nested_zip import (MAX_OUTER_ZIP_MEMBERS, NestedZipIndex, StagingBudget,
+                         check_zip_central_directory)
+from .selection import (_basename, _cue_and_gdi_names, _names_in_sheet,
+                        _parent, pick_all_rom_sets, pick_rom_set)
 
 log = logging.getLogger(__name__)
 
@@ -149,6 +153,10 @@ class _Source:
     three questions. `pick_rom_set` needs `read` to parse a `.cue`, and only
     something that knows the shape can provide it.
     """
+
+    def close(self) -> None:
+        """Release temporary archive state when this source owns any."""
+        return None
 
     def names(self) -> list[str]:
         raise NotImplementedError
@@ -395,6 +403,140 @@ class _PathSource(_Source):
         self.transfers[name] = self.last_transfer
 
 
+def _complete_nested_zip_sets(sets, read):
+    """Reject incomplete nested playlists and readable CUE/GDI disc sheets.
+
+    An unreadable disc sheet retains the existing companion-file fallback.
+    """
+    accepted = []
+    for game in sets:
+        if game.primary.lower().endswith(".m3u"):
+            try:
+                raw = read(game.primary)
+            except (OSError, ValueError, RuntimeError, zipfile.BadZipFile):
+                raw = None
+            if raw is None:
+                log.warning("skipping unreadable nested ZIP playlist %r", game.primary)
+                continue
+            contents = raw.decode("utf-8-sig", errors="replace") if isinstance(raw, bytes) else str(raw)
+            requested = [line.strip() for line in contents.splitlines()
+                         if line.strip() and not line.lstrip().startswith("#")]
+            present = {Path(name.replace("\\", "/")).name.casefold()
+                       for name in game.members if name != game.primary}
+            normalized = [name[2:] if name.startswith("./") else name
+                          for name in requested]
+            valid = bool(normalized) and all(
+                name not in ("", ".", "..") and "/" not in name
+                and "\\" not in name and ":" not in name
+                and name.casefold() in present for name in normalized)
+            if not valid:
+                log.warning("skipping incomplete nested ZIP playlist %r", game.primary)
+                continue
+
+        # Playlists may reference CUE/GDI files; verify their track lists too.
+        members = list(game.members)
+        sheets = [member for member in members
+                  if member.lower().endswith((".cue", ".gdi"))]
+        # Index once for this set, preserving _resolve_beside's first-match,
+        # case-insensitive, same-directory companion resolution.
+        by_directory = {}
+        if sheets:
+            for member in members:
+                by_directory.setdefault(_parent(member), {}).setdefault(
+                    _basename(member).lower(), member)
+        incomplete_sheet = None
+        for sheet in sheets:
+            named = _names_in_sheet(sheet, read, _cue_and_gdi_names)
+            if named is None:
+                continue
+            by_key = by_directory[_parent(sheet)]
+            # Multi-file disc imports flatten companions on publication. A
+            # reference to another directory cannot safely resolve after that.
+            if not named or any(
+                not (reference := name.replace("\\", "/").removeprefix("./"))
+                or "/" in reference or ":" in reference
+                or reference in (".", "..")
+                or (match := by_key.get(reference.lower())) is None
+                or match == sheet for name in named
+            ):
+                incomplete_sheet = sheet
+                break
+        if incomplete_sheet is not None:
+            log.warning("skipping incomplete nested ZIP disc sheet %r", incomplete_sheet)
+            continue
+        accepted.append(game)
+    return accepted
+
+class _NestedZipSource(_Source):
+    """Present nested ZIP members through the existing streaming ZIP readers.
+
+    Each inner archive owns its own ROM sets, so matching CUE/BIN names in
+    different inner archives cannot be combined into an invalid disc.
+    """
+
+    def __init__(self, path: Path, staging_budget=None):
+        self.path = path
+        self._index = NestedZipIndex(path, is_safe_name, staging_budget=staging_budget)
+        self._sources = {}
+
+    def close(self):
+        """Close the staged inner ZIP containers used by this source."""
+        self._index.close()
+
+    def names(self):
+        """Expose members with their full nested archive provenance."""
+        return self._index.names()
+
+    def _member_source(self, name):
+        """Resolve a qualified name to its owning ZIP reader and member."""
+        leaf = self._index.member(name)
+        if leaf is None:
+            return None, None
+        if leaf.archive_path not in self._sources:
+            self._sources[leaf.archive_path] = _ZipSource(leaf.archive_path)
+        return self._sources[leaf.archive_path], leaf
+
+    def group_key(self, name):
+        """Keep CUE/BIN sidecars inside the ZIP that actually owns them."""
+        leaf = self._index.member(name)
+        return leaf.archive_path if leaf else None
+
+    def member_size(self, name):
+        """Return a ZIP member's declared size for a review-only preview."""
+        leaf = self._index.member(name)
+        return leaf.size if leaf else None
+
+    def rom_sets(self, platform):
+        """Keep complete digital installers, but isolate each disc archive."""
+        if platform.media == "digital":
+            # A PC installer can span outer and inner ZIPs: setup.exe may
+            # depend on .bin files in either container. Preserve one set.
+            return pick_all_rom_sets(self.names(), platform, read=self.read)
+        groups = {}
+        for name in self.names():
+            groups.setdefault(self.group_key(name), []).append(name)
+        selected = [game for names in groups.values()
+                    for game in pick_all_rom_sets(names, platform, read=self.read)]
+        return _complete_nested_zip_sets(selected, self.read)
+
+    def read(self, name):
+        """Read a small descriptor using the member's original ZIP source."""
+        source, leaf = self._member_source(name)
+        return source.read(leaf.member) if source else None
+
+    def hash(self, name, suffix=""):
+        """Reuse streamed ZIP hashing; never materialize a disc image."""
+        source, leaf = self._member_source(name)
+        return source.hash(leaf.member, suffix) if source else None
+
+    def copy(self, name, destination):
+        """Copy one selected leaf without changing its original download."""
+        source, leaf = self._member_source(name)
+        if source is None:
+            raise ValueError(f"nested ZIP member no longer exists: {name!r}")
+        source.copy(leaf.member, destination)
+
+
 class _DirectorySource(_PathSource):
     """Index loose files and archives, keeping ROM sets within each source."""
 
@@ -402,6 +544,16 @@ class _DirectorySource(_PathSource):
         """Index each archive once and keep its members tied to their source."""
         super().__init__(path)
         self.members = {}
+        self._cleanup = ExitStack()
+        self._staging_budget = StagingBudget()
+        try:
+            self._index_sources(path)
+        except BaseException:
+            self.close()
+            raise
+
+    def _index_sources(self, path):
+        """Index a directory while sharing one temporary-staging budget."""
         root = path.resolve()
         for entry in sorted(path.rglob("*")):
             if not entry.is_file():
@@ -415,7 +567,8 @@ class _DirectorySource(_PathSource):
                 self.members[relative] = (self, relative)
                 continue
             try:
-                archive = _source_for(entry)
+                archive = _source_for(entry, staging_budget=self._staging_budget)
+                self._cleanup.callback(archive.close)
                 for member in archive.names():
                     name = relative + "/" + member
                     if name in self.members:
@@ -428,6 +581,10 @@ class _DirectorySource(_PathSource):
                     detail = detail.decode(errors="replace")
                 raise ValueError(f"cannot inspect {relative}: {detail}") from exc
 
+    def close(self):
+        """Release every owned source, even if one cleanup callback fails."""
+        self._cleanup.close()
+
     def names(self):
         """List loose paths and archive members using distinct source paths."""
         return list(self.members)
@@ -435,10 +592,25 @@ class _DirectorySource(_PathSource):
     def rom_sets(self, platform):
         """Keep companions together without joining files from different archives."""
         groups = {}
-        for name, (source, _) in self.members.items():
-            groups.setdefault(source, []).append(name)
-        return [group for names in groups.values()
-                for group in pick_all_rom_sets(names, platform, read=self.read)]
+        for name, (source, member) in self.members.items():
+            key = ((source, source.group_key(member))
+                   if isinstance(source, _NestedZipSource) else source)
+            groups.setdefault(key, []).append(name)
+        selected = []
+        for key, names in groups.items():
+            games = pick_all_rom_sets(names, platform, read=self.read)
+            if isinstance(key, tuple) and isinstance(key[0], _NestedZipSource):
+                games = _complete_nested_zip_sets(games, self.read)
+            selected.extend(games)
+        return selected
+
+    def member_size(self, name):
+        """Expose nested ZIP member sizes without reading their payloads."""
+        entry = self.members.get(name)
+        if entry is None:
+            return None
+        source, member = entry
+        return source.member_size(member) if isinstance(source, _NestedZipSource) else None
 
     def read(self, name):
         """Read a loose file or delegate an archive member to its archive."""
@@ -469,7 +641,8 @@ class MissingArchiveTool(Exception):
     """The download is in a format no installed tool can open."""
 
 
-def _source_for(download: Path, platform: Platform | None = None) -> _Source:
+def _source_for(download: Path, platform: Platform | None = None, *,
+                staging_budget: StagingBudget | None = None) -> _Source:
     """Choose an archive, directory, or plain-file source for this platform."""
     # When the download is a directory whose only non-hidden file is an archive,
     # unwrap it so the import looks inside the selected archive (#115).
@@ -481,7 +654,7 @@ def _source_for(download: Path, platform: Platform | None = None) -> _Source:
                 raise ValueError(f"source escapes download directory: {single_file}")
             single_suffix = single_file.suffix.lower()
             if single_suffix in _STDLIB_ARCHIVES or single_suffix in ARCHIVE_SUFFIXES:
-                return _source_for(single_file, platform)
+                return _source_for(single_file, platform, staging_budget=staging_budget)
 
     # For MAME, FBNeo and DOSBox the archive IS the ROM: the core opens it and
     # expects its internal layout. Looking inside would pick one chip dump out
@@ -498,7 +671,21 @@ def _source_for(download: Path, platform: Platform | None = None) -> _Source:
 
     suffix = download.suffix.lower()
     if download.is_file() and suffix in _STDLIB_ARCHIVES:
-        return _ZipSource(download)
+        # ZipFile allocates ZipInfo entries during construction. Apply the
+        # bounded outer-ZIP metadata preflight before classifying its contents;
+        # nested indexes reapply the stricter per-tree cap when opened.
+        check_zip_central_directory(download, max_members=MAX_OUTER_ZIP_MEMBERS)
+        with zipfile.ZipFile(download) as archive:
+            # Flat ZIPs retain their existing reader, including streaming
+            # verification. Only ZIPs containing another ZIP need an index.
+            nested = any(info.filename.lower().endswith(".zip")
+                         for info in archive.infolist() if not info.is_dir())
+        # A nested ZIP may be a required Windows installer payload. Keep it
+        # intact, rather than silently converting its contents into unrelated
+        # files. Cartridge and disc platforms still inspect nested ZIP layers.
+        return (_NestedZipSource(download, staging_budget=staging_budget)
+                if nested and (platform is None or platform.media != "digital")
+                else _ZipSource(download))
     if download.is_file() and suffix in ARCHIVE_SUFFIXES:
         tool = bsdtar_path()
         if tool is None:
@@ -513,7 +700,11 @@ def _source_for(download: Path, platform: Platform | None = None) -> _Source:
 
 def list_candidates(download: Path) -> list[str]:
     """Every file a completed download offers, looking inside an archive if needed."""
-    return _source_for(download).names()
+    source = _source_for(download)
+    try:
+        return source.names()
+    finally:
+        source.close()
 
 
 def verify_set(source, members, dats) -> Match:
@@ -696,8 +887,33 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
         candidates = source.names()
         chosen_sets = source.rom_sets(platform)
     except (MissingArchiveTool, OSError, ValueError, zipfile.BadZipFile, RuntimeError, subprocess.SubprocessError) as exc:
+        if "source" in locals():
+            source.close()
         return [ImportResult(False, None, f"source inspection failed: {exc}")]
+    except BaseException:
+        # Preserve unexpected errors and cancellation, without leaking staged ZIPs.
+        if "source" in locals():
+            source.close()
+        raise
 
+    try:
+        return _import_rom_from_source(
+            source, candidates, chosen_sets, download, platform, library_root,
+            overwrite=overwrite, dats=dats, require_verified=require_verified,
+            layout=layout, translation=translation, rename=rename,
+            platform_folders=platform_folders, prefer_hardlinks=prefer_hardlinks,
+            selected_primaries=selected_primaries, bundle_routes=bundle_routes)
+    finally:
+        source.close()
+
+
+def _import_rom_from_source(source, candidates, chosen_sets, download, platform,
+                            library_root, *, overwrite=False, dats=None,
+                            require_verified=False, layout="flat",
+                            translation=False, rename=False,
+                            platform_folders=None, prefer_hardlinks=False,
+                            selected_primaries=None, bundle_routes=None):
+    """Finish import while the validated source and its scratch ZIPs remain open."""
     if selected_primaries is not None:
         selected = set(selected_primaries)
         available = {group.primary for group in chosen_sets}
@@ -805,27 +1021,80 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
         try:
             with tempfile.TemporaryDirectory(prefix=".romarr-import-", dir=target_dir) as staging:
                 staged_dir = Path(staging)
+                # Digital installers must retain their internal path layout,
+                # including subdirectories with data/configuration files.
+                # Other multi-file ROMs retain their established flat layout.
                 written: dict[str, str] = {}
+                folded: dict[str, str] = {}
+                folded_dirs: set[str] = set()
                 for member in chosen.members:
-                    name = Path(member.replace("\\", "/")).name
-                    if not is_safe_name(name, staged_dir):
+                    relative = (member.replace("\\", "/") if platform.media == "digital"
+                                else Path(member.replace("\\", "/")).name)
+                    path = Path(relative)
+                    if (not is_safe_name(relative, staged_dir)
+                            or path.is_absolute() or ".." in path.parts
+                            or path.as_posix() == "."):
                         raise ValueError(f"unsafe set member: {member!r}")
-                    if name in written:
-                        raise ValueError(f"two files in this download are both called {name!r} ({written[name]} and {member}); refusing to guess which one the game needs")
-                    source.copy(member, staged_dir / name)
-                    if (staged_dir / name).stat().st_size == 0:
+                    # Normalize ./ and repeated separators BEFORE checking
+                    # aliases, so different ZIP names cannot target one file.
+                    # Keep the original member for source.copy() lookup.
+                    normalized = path.as_posix()
+                    key = normalized.casefold()
+                    parents = {parent.as_posix().casefold() for parent in path.parents
+                               if parent.as_posix() != "."}
+                    if (key in folded or key in folded_dirs
+                            or any(parent in folded for parent in parents)):
+                        raise ValueError(
+                            f"colliding set member paths: {folded.get(key, normalized)!r} and {member!r}")
+                    folded[key] = member
+                    folded_dirs.update(parents)
+                    written[normalized] = member
+                for name, member in written.items():
+                    staged_member = staged_dir / name
+                    staged_member.parent.mkdir(parents=True, exist_ok=True)
+                    source.copy(member, staged_member)
+                    if staged_member.stat().st_size == 0:
                         raise ValueError(f"empty set member: {member!r}")
-                    written[name] = member
-                total_set_size = sum(p.stat().st_size for p in staged_dir.iterdir())
+                total_set_size = sum((staged_dir / name).stat().st_size for name in written)
                 if platform.slug in ("ps2", "ngc", "xbox") and total_set_size < 8 * 1024 * 1024:
                     raise ValueError(f"too small to be a {platform.name} disc image ({total_set_size // (1024*1024)}MB < 8MB)")
                 destination.mkdir(parents=True, exist_ok=True)
+                resolved_targets: dict[Path, str] = {}
+                resolved_ancestors: dict[Path, str] = {}
                 for name in written:
                     final = destination / name
+                    if not is_safe_name(name, destination):
+                        raise ValueError(f"unsafe destination path: {name!r}")
+                    # Detect existing file ancestors before publishing any member.
+                    for parent in Path(name).parents:
+                        if parent == Path("."):
+                            continue
+                        ancestor = destination / parent
+                        if ancestor.exists() and not ancestor.is_dir():
+                            raise ValueError(
+                                f"destination ancestor is not a directory: {ancestor}")
+                    if final.exists() and final.is_dir():
+                        raise ValueError(f"destination requires a file but is a directory: {final}")
                     if final.exists() and final.stat().st_size == 0:
                         raise ValueError(f"existing zero-byte destination needs inspection: {final}")
+                    # Symlinked directories may make separate member names
+                    # resolve to the same file, or to a file and its child.
+                    # Validate the full set before publishing any member.
+                    target = final.resolve(strict=False)
+                    conflict = resolved_targets.get(target) or resolved_ancestors.get(target)
+                    if conflict is None:
+                        conflict = next((resolved_targets[parent] for parent in target.parents
+                                         if parent in resolved_targets), None)
+                    if conflict is not None:
+                        raise ValueError(
+                            f"colliding destination paths: {conflict!r} and {name!r}")
+                    resolved_targets[target] = name
+                    for parent in target.parents:
+                        resolved_ancestors.setdefault(parent, name)
                 for name in written:
-                    _publish_staged(staged_dir / name, destination / name, overwrite)
+                    final = destination / name
+                    final.parent.mkdir(parents=True, exist_ok=True)
+                    _publish_staged(staged_dir / name, final, overwrite)
         except (OSError, ValueError, zipfile.BadZipFile, RuntimeError, subprocess.SubprocessError) as exc:
             results.append(ImportResult(False, destination, f"set copy/extraction or publication failed: {exc}; reconcile any completed members before retrying"))
             continue
