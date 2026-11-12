@@ -64,6 +64,18 @@ def publish(publisher, content="new\n", *, requirements=None):
     return git("rev-parse", "HEAD", cwd=publisher)
 
 
+def test_venv_python_symlink_is_not_resolved_to_system_interpreter(checkout, tmp_path):
+    """The updater must use the running venv interpreter, even when symlinked."""
+    _pub, _repo, _origin, env = checkout
+    venv_bin = tmp_path / "venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    venv_python = venv_bin / "python"
+    venv_python.symlink_to(sys.executable)
+    env.python = str(venv_python)
+    state = safety.preflight(env, "origin/main")
+    assert state["python"] == str(venv_python)
+
+
 def test_preflight_requires_exact_clean_git_identity(checkout):
     _pub, repo, origin, env = checkout
     state = safety.preflight(env, "origin/main")
