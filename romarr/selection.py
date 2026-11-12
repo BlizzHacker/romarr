@@ -14,7 +14,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 
-from .platforms import DISC, Platform, by_slug, resolve, same_machine
+from .platforms import DISC, PLATFORMS, Platform, all_extensions, by_slug, resolve, same_machine
 
 log = logging.getLogger(__name__)
 
@@ -31,20 +31,33 @@ PC_GAME_CATEGORIES = range(4050, 4070)
 FOREIGN_PLATFORM_MARKERS = {
     "nintendo switch 2", "switch 2", "switch2", "nintendo switch", "switch", "nsp", "xci",
     "playstation", "ps1", "ps2", "ps3", "ps4", "ps5", "psp", "psx", "vita",
+    "psx2psp", "ps12psp",
     # Spelled out, because a listing usually writes the machine in full and
     # the short forms never appear. Without these a PlayStation request took
     # "Dynasty Warriors 2 - PlayStation 2" as its own platform: "playstation"
     # is psx's alias, and it is a substring of every later Sony console.
     "playstation 2", "playstation 3", "playstation 4", "playstation 5",
     "playstation portable", "playstation vita", "ps vita",
-    "nintendo 64", "super nintendo", "game boy advance", "game boy color",
+    "nintendo 64", "n64", "super nintendo", "super nes", "snes",
+    "nintendo entertainment system", "nes",
+    "game boy advance", "gameboy advance", "gba",
+    "game boy color", "gameboy color", "gbc",
+    "game boy", "gameboy",
+    "sega genesis", "mega drive", "megadrive", "sega cd", "mega cd", "sega 32x",
     "sega saturn", "sega dreamcast", "master system", "game gear",
     # "xbox" is a substring of both later machines, so the spelled-out forms
     # are needed for the same reason "playstation 2" is above: markers are
     # tried longest-first, and without these an Xbox request treats an "Xbox
     # 360" title as naming itself and imports a disc no Xbox can read.
-    "xbox", "xbox 360", "xbox one", "x360", "xbla",
-    "gamecube", "wii", "wiiu", "wii u", "3ds", "nds", "ds",
+    "xbox", "xbox 360", "xbox one", "xbox live arcade", "xbox series",
+    "xbox series x", "xbox series s", "x360", "xbla",
+    "nintendo gamecube", "gamecube", "gcn",
+    "nintendo wii u", "nintendo wii", "wii", "wiiu", "wii u",
+    "new nintendo 3ds", "new 3ds", "nintendo 3ds", "n3ds", "3ds",
+    "nintendo dsi", "nintendo ds", "nds", "dsi", "ds",
+    "pc engine supergrafx", "pc engine cd", "pc engine",
+    "turbografx 16", "turbografx cd", "turbografx",
+    "nec pc fx", "pc fx",
     "android", "apk", "ios",
     "pc", "windows", "steam", "gog", "repack",
     "dreamcast", "saturn", "psvr",
@@ -58,6 +71,10 @@ FOREIGN_PLATFORM_MARKERS = {
     # never says Wii.
     "virtual console", "wiiware", "wad", "eshop",
 }
+
+# Generic brand alias ("nintendo") only exists for resolve("nintendo") -> nes;
+# never treat it as positive platform evidence or infer NES from it.
+_NON_SCORING_ALIASES = frozenset({"nintendo"})
 
 
 # Scene markers that only ever appear on a PC release. Kept apart from
@@ -361,21 +378,235 @@ def is_game_release(release: Release) -> bool:
 
 
 def _normalise(text: str) -> str:
-    return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+    """Fold Unicode accents and punctuation into lowercase ASCII words."""
+    folded = unicodedata.normalize("NFKD", text or "").encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"[^a-z0-9]+", " ", folded.lower()).strip()
+
+
+def _normalise_marker(text: str) -> str:
+    """Normalise a platform label or marker into space-separated lowercase tokens."""
+    return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", (text or "").lower())).strip()
+
+
+_EXT_TOKEN_RE = re.compile(
+    r"(?<=\S)\.([a-z0-9]{2,8})\s*$",
+    re.IGNORECASE,
+)
+_BRACKET_GROUP_RE = re.compile(r"\([^()]*\)|\[[^\[\]]*\]|\{[^{}]*\}")
+_INVERTED_ARTICLE_RE = re.compile(r",\s*(?:the|an?)(?=\s*$|\s*[:\-–—])", re.IGNORECASE)
+_LEADING_ARTICLE_RE = re.compile(r"^\s*(?:the|an?)\s+", re.IGNORECASE)
+_PLUS_SEP_RE = re.compile(r"\s+\+\s+")
+_PLATFORM_SEP_RE = re.compile(r"\s+[-–—]\s+|:\s+")
+
+# Single-word console acronyms safe to strip as unbracketed prefixes before a
+# game title even without a dash separator. Ambiguous English words or shared
+# brand names ("nintendo", "switch", "genesis", "saturn", "dreamcast", "pc",
+# "arcade", etc.) are excluded so they cannot strip real title prefixes.
+_UNAMBIGUOUS_SINGLE_PLATFORMS = frozenset({
+    "nes", "snes", "n64", "gba", "gbc", "gb", "nds", "3ds", "n3ds",
+    "ps1", "ps2", "ps3", "ps4", "ps5", "psp", "psx", "psvita",
+    "wii", "wiiu", "xbox", "xbox360", "x360",
+    "sfc", "fds", "sfam", "megadrive", "segacd",
+    "atari2600", "atari5200", "atari7800", "c64", "c128",
+    "msx", "msx2", "pcfx", "pcecd", "cd32", "sg1000", "famicom",
+})
+
+# Multi-word platform aliases that are storefront/descriptive terms rather than
+# system names and must never excuse an unbracketed title prefix.
+_AMBIGUOUS_MULTI_PLATFORM_PREFIXES = frozenset({
+    ("games", "on", "demand"),
+    ("disk", "system"),
+})
+
+_ROMAN_TO_ARABIC = {
+    "ii": "2",
+    "iii": "3",
+    "iv": "4",
+    "vi": "6",
+    "vii": "7",
+    "viii": "8",
+    "ix": "9",
+    "xi": "11",
+    "xii": "12",
+    "xiii": "13",
+    "xiv": "14",
+    "xv": "15",
+    "xvi": "16",
+    "xvii": "17",
+    "xviii": "18",
+    "xix": "19",
+}
+
+_SEQUEL_NEXT_TOKENS = frozenset({"0", "64", "x", *(str(n) for n in range(2, 20))})
+_NON_EXT_PREFIXES = frozenset({"mr", "mrs", "ms", "dr", "st", "vs", "jr", "sr"})
+
+
+def _build_strippable_extensions() -> frozenset[str]:
+    """Build the set of parsed ROM, archive, and NZB extensions for title cleaning."""
+    extra = {".nzb", ".torrent", ".par2", ".rar", ".zip", ".7z", ".gz", ".tar"}
+    exts = {ext.lower() for ext in (*all_extensions(), *extra)}
+    return frozenset(ext for ext in exts if len(ext) >= 3 and not ext[1:].isdigit())
+
+
+_STRIPPABLE_EXTENSIONS = _build_strippable_extensions()
+
+
+def _build_platform_prefix_tuples() -> frozenset[tuple[str, ...]]:
+    """Build normalised token tuples allowed as unbracketed platform prefixes."""
+    prefixes: set[tuple[str, ...]] = {(tok,) for tok in _UNAMBIGUOUS_SINGLE_PLATFORMS}
+    for plat in PLATFORMS:
+        for label in (plat.name, plat.slug, *plat.aliases):
+            norm = tuple(_normalise(label).split())
+            if len(norm) >= 2 and norm not in _AMBIGUOUS_MULTI_PLATFORM_PREFIXES:
+                prefixes.add(norm)
+    return frozenset(prefixes)
+
+
+_PLATFORM_PREFIX_TUPLES = _build_platform_prefix_tuples()
+
+
+def _strip_extensions(text: str, *, min_len: int = 3) -> tuple[str, bool]:
+    """Iteratively remove trailing known extensions of length >= `min_len` (dot included)."""
+    current = (text or "").rstrip()
+    removed = False
+    while True:
+        match = _EXT_TOKEN_RE.search(current)
+        if not match:
+            return current, removed
+        ext = f".{match.group(1).lower()}"
+        if len(ext) < min_len or ext not in _STRIPPABLE_EXTENSIONS:
+            return current, removed
+        if len(ext) <= 3:
+            before = re.search(r"([a-z0-9]+)$", current[:match.start()], re.IGNORECASE)
+            if before and before.group(1).lower() in _NON_EXT_PREFIXES:
+                return current, removed
+        current = current[:match.start()].rstrip()
+        removed = True
+
+
+def _strip_brackets(text: str) -> str:
+    """Strip parenthetical and bracketed metadata unless doing so empties the text."""
+    stripped = text
+    while True:
+        updated = _BRACKET_GROUP_RE.sub(" ", stripped)
+        if updated == stripped:
+            break
+        stripped = updated
+    return stripped if _normalise(stripped) else text
+
+
+def _strip_articles(text: str) -> str:
+    """Normalise catalog comma-inverted and leading English articles."""
+    cleaned = _INVERTED_ARTICLE_RE.sub("", text)
+    if _normalise(cleaned):
+        candidate = _LEADING_ARTICLE_RE.sub("", cleaned)
+        if _normalise(candidate):
+            return candidate
+        return cleaned
+    return text
+
+
+def _canonical_tokens(raw_tokens: list[str]) -> list[str]:
+    """Canonicalise unambiguous Roman numerals in a token sequence.
+
+    Leaves ``"v"`` untouched at index 0 (so ``V-Rally`` never becomes
+    ``5-Rally``) or when immediately followed by ``"0"`` / ``"1"`` (version
+    tags like ``v 1.0``), and never folds ``"i"`` or ``"x"``.
+    """
+    out: list[str] = []
+    total = len(raw_tokens)
+    for idx, tok in enumerate(raw_tokens):
+        mapped = _ROMAN_TO_ARABIC.get(tok)
+        if mapped is not None:
+            out.append(mapped)
+        elif tok == "v" and idx > 0 and (idx + 1 >= total or raw_tokens[idx + 1] not in ("0", "1")):
+            out.append("5")
+        else:
+            out.append(tok)
+    return out
+
+
+def _prepare_core(text: str) -> str:
+    """Return title core after extension, bracket, and article normalisation."""
+    without_ext, removed = _strip_extensions(text or "")
+    stripped = _strip_brackets(without_ext)
+    if not removed:
+        stripped, _ = _strip_extensions(stripped, min_len=4)
+    return _strip_articles(stripped)
+
+
+def _prefix_is_platform(core: str, r_tokens: list[str], start: int) -> bool:
+    """Whether tokens before `start` represent a platform prefix rather than game text."""
+    if start == 0:
+        return True
+    prefix = tuple(r_tokens[:start])
+    if prefix in _PLATFORM_PREFIX_TUPLES:
+        return True
+    # Also accept an explicit separator (`Platform - Game` or `Platform: Game`)
+    # when the left side resolves to a non-generic platform name.
+    for match in _PLATFORM_SEP_RE.finditer(core):
+        left = core[:match.start()].strip()
+        if not left:
+            continue
+        left_norm = _normalise(left)
+        if left_norm in ("nintendo", "arcade"):
+            continue
+        if resolve(left) is None:
+            continue
+        left_tokens = tuple(_canonical_tokens(left_norm.split()))
+        if left_tokens == prefix:
+            return True
+    return False
+
+
+def _within_single_crossover_part(core: str, start: int, end: int) -> bool:
+    """Whether `[start, end)` sits wholly inside one `+`-delimited compilation part."""
+    parts = _PLUS_SEP_RE.split(core)
+    if len(parts) <= 1:
+        return False
+    pos = 0
+    for part in parts:
+        count = len(_normalise(part).split())
+        seg_end = pos + count
+        if pos <= start and end <= seg_end:
+            return True
+        pos = seg_end
+    return False
 
 
 def title_matches(release_title: str, wanted: str) -> bool:
     """Whether a release plausibly IS the requested game.
 
-    Every significant word of the request must appear. Short words are ignored
-    because "of", "the" and roman numerals produce false negatives more often
-    than they prevent false positives.
+    Compares contiguous token sequences after stripping known file extensions,
+    bracketed release tags, and leading/comma-inverted articles, while
+    canonicalising unambiguous Roman numerals. Rejects differing sequel
+    numbers, non-platform title prefixes (``New ...``, ``Dr. ...``,
+    ``Paper ...``), and single halves of ``A + B`` compilations/crossovers.
     """
-    haystack = _normalise(release_title)
-    words = [w for w in _normalise(wanted).split() if len(w) > 2]
-    if not words:
+    w_core = _prepare_core(wanted)
+    w_tokens = _canonical_tokens(_normalise(w_core).split())
+    if not w_tokens:
         return False
-    return all(w in haystack for w in words)
+
+    r_core = _prepare_core(release_title)
+    r_tokens = _canonical_tokens(_normalise(r_core).split())
+    w_len = len(w_tokens)
+    if len(r_tokens) < w_len:
+        return False
+
+    want_has_plus = "+" in w_core
+    for start in range(len(r_tokens) - w_len + 1):
+        end = start + w_len
+        if r_tokens[start:end] != w_tokens:
+            continue
+        if not _prefix_is_platform(r_core, r_tokens, start):
+            continue
+        if end < len(r_tokens) and r_tokens[end] in _SEQUEL_NEXT_TOKENS:
+            continue
+        if not want_has_plus and _within_single_crossover_part(r_core, start, end):
+            continue
+        return True
+    return False
 
 
 @dataclass(frozen=True)
@@ -406,8 +637,9 @@ class Judgement:
         """Readable lines, worst first, for a UI or a log."""
         if self.verdict:
             return [self.verdict]
-        return [f"{d:+d} {text}" for d, text in
-                sorted(self.reasons, key=lambda pair: pair[0])]
+        lines = [f"{d:+d} {text}" for d, text in
+                 sorted(self.reasons, key=lambda pair: pair[0])]
+        return lines or [f"{self.points:+d} matched release"]
 
 
 def judge(release: Release, wanted: str,
@@ -449,6 +681,10 @@ def judge(release: Release, wanted: str,
         points += delta
         if delta:
             reasons.append((delta, text))
+
+    add(10, "title matches")
+    if release.protocol == "hub":
+        add(5, "ROM Hub source")
 
     # Availability. Usenet has no seeders, so it is not penalised for having none.
     #
@@ -557,27 +793,40 @@ def judge(release: Release, wanted: str,
         # how every release is signed.
         add(-_CREDIT_PENALTY, "credited to a group, which usually means a hack")
 
-    # Reject a release that names a system other than the one requested. Its own
-    # platform's aliases are removed from the check first, so asking for a Wii
-    # game does not disqualify a title that says "Wii".
+    # Reject a release that names a system other than the one requested.
+    # Evaluate own-platform phrases alongside foreign markers longest-first so
+    # compound own names (e.g. "nec pc-fx", "pc engine", "xbox 360") strip only
+    # their own tokens while longer foreign names (e.g. "nintendo switch 2"
+    # during a Switch search, or "nintendo 64" during an NES search) still trip
+    # before shorter own aliases.
     if platform is not None:
-        own = {platform.slug.lower(), platform.name.lower(), *platform.aliases,
-               *platform.native_markers}
-        own_words = {w for entry in own for w in entry.split()}
-        # Longest first, so the most specific name in the title decides. Every
-        # Sony console contains "playstation", so checking the short alias
-        # first exempted "PlayStation 2" from a PlayStation request and let a
-        # PS2 disc win a PSX search.
-        for marker in sorted(FOREIGN_PLATFORM_MARKERS, key=len, reverse=True):
-            if not _mentions(lowered, marker):
+        own_raw = {platform.slug, platform.name, *platform.aliases,
+                   *platform.native_markers}
+        own_norms = {
+            norm for entry in own_raw
+            if (norm := _normalise_marker(entry))
+            and (platform.slug, norm) != ("switch-2", "switch")
+        }
+        foreign_by_norm: dict[str, str] = {}
+        for marker in FOREIGN_PLATFORM_MARKERS:
+            norm = _normalise_marker(marker)
+            if norm and norm not in foreign_by_norm:
+                foreign_by_norm[norm] = marker
+
+        remaining = f" {_normalise_marker(lowered)} "
+        combined = sorted(
+            own_norms | set(foreign_by_norm),
+            key=lambda norm: (len(norm), norm in own_norms),
+            reverse=True,
+        )
+        for norm in combined:
+            if f" {norm} " not in remaining:
                 continue
-            if marker in own or (marker in own_words
-                                 and (platform.slug, marker) != ("switch-2", "switch")):
-                # This platform's own name. Nothing more specific matched, so
-                # the title is talking about us.
-                break
+            if norm in own_norms:
+                remaining = re.sub(rf" {re.escape(norm)}(?= )", "", remaining)
+                continue
             return Judgement(-300,
-                             verdict=f"names another platform ({marker})")
+                             verdict=f"names another platform ({foreign_by_norm[norm]})")
 
     # A cracked PC release, whatever it is named. Rejected rather than
     # penalised for the same reason a compilation is: there is no ROM inside
@@ -651,14 +900,17 @@ def judge(release: Release, wanted: str,
                 return Judgement(-300, verdict="collection path has no platform evidence")
 
     if platform is not None:
-        if _has_extension(lowered, platform.extensions):
+        scoring_aliases = [a for a in platform.aliases
+                           if a.lower() not in _NON_SCORING_ALIASES]
+        has_ext = _has_extension(lowered, platform.extensions)
+        names_plat = _mentions(lowered, platform.slug.lower()) or any(
+            _mentions(lowered, alias) for alias in scoring_aliases
+        )
+        if has_ext:
             add(60, f"carries a {platform.name} ROM extension")
-        elif _mentions(lowered, platform.slug.lower()) or any(
-                _mentions(lowered, alias) for alias in platform.aliases):
+        elif names_plat:
             add(30, f"names {platform.name}")
-        if platform.is_disc:
-            has_ext = _has_extension(lowered, platform.extensions)
-            names_plat = _mentions(lowered, platform.slug.lower()) or any(_mentions(lowered, alias) for alias in platform.aliases)
+        if platform.is_disc and release.protocol != "hub":
             if not (has_ext or names_plat or path_confirms_platform):
                 add(-40, f"no extension, platform name or path for {platform.name}")
 
@@ -671,16 +923,24 @@ def judge(release: Release, wanted: str,
     # limit this replaces was larger than every cartridge ever made, so a 452MB
     # PC build of Final Fantasy III passed it and, being the best-seeded result,
     # was picked for a SNES request.
+    ceiling = 8192 * 1024 * 1024
     if platform is not None:
         medium = "disc image" if platform.is_disc else "cartridge"
-        ceiling = (profile.max_size_bytes if (profile and getattr(profile, "max_size_bytes", 0) > 0)
-                   else platform.max_size)
+        prof_max = getattr(profile, "max_size_bytes", 0) if profile else 0
+        if prof_max > 0:
+            if getattr(profile, "_max_size_is_global", False):
+                ceiling = min(platform.max_size, prof_max)
+            else:
+                ceiling = prof_max
+        else:
+            ceiling = platform.max_size
         if release.size > ceiling:
-            add(-200,
-                f"too big for a {platform.name} {medium} "
-                f"({release.size // 1048576}MB, ceiling "
-                f"{ceiling // 1048576}MB)")
-        elif 0 < release.size < _size_floor(platform):
+            return Judgement(
+                -400,
+                verdict=f"too big for a {platform.name} {medium} "
+                        f"({release.size // 1048576}MB, ceiling "
+                        f"{ceiling // 1048576}MB)")
+        if 0 < release.size < _size_floor(platform):
             # The floor is per medium for the same reason the ceiling is. Four
             # kilobytes is a real floor for an Atari cartridge and no floor at
             # all for a disc: a few hundred KB offered for a PlayStation
@@ -692,11 +952,16 @@ def judge(release: Release, wanted: str,
             # every one of their releases was rejected as "too small", however
             # good the title match was. Absent evidence is not evidence of
             # absence; the title and extension checks still decide those.
-            add(-200, f"too small to be a {platform.name} {medium}")
+            return Judgement(
+                -400,
+                verdict=f"too small to be a {platform.name} {medium}")
 
     if profile and getattr(profile, "size_weight", 0) > 0 and getattr(release, "size", 0) > 0:
-        calc_ceiling = (profile.max_size_bytes if getattr(profile, "max_size_bytes", 0) > 0
-                        else (platform.max_size if platform else 8192 * 1024 * 1024))
+        if platform is not None:
+            calc_ceiling = ceiling
+        else:
+            prof_max = getattr(profile, "max_size_bytes", 0)
+            calc_ceiling = prof_max if prof_max > 0 else ceiling
         size_adj = profile.size_score_for(release.size, calc_ceiling)
         if size_adj:
             add(*size_adj)
@@ -755,7 +1020,7 @@ def infer_platform(release: Release) -> Platform | None:
     lowered = (release.title or "").lower()
     candidates: list[tuple[int, str, Platform]] = []
     for p in PLATFORMS:
-        tokens = set([p.slug.lower(), p.name.lower(), *(a.lower() for a in p.aliases)])
+        tokens = {p.slug.lower(), p.name.lower(), *(a.lower() for a in p.aliases)} - _NON_SCORING_ALIASES
         for tok in tokens:
             # Skip generic 2-letter tokens like "pc" or "dc" only if we handle them carefully;
             # _mentions enforces word boundaries.
@@ -1216,5 +1481,7 @@ def _mentions(haystack: str, marker: str) -> bool:
     Substring matching is wrong here: "ds" is inside "worlds", and "pc" is
     inside "pcb", so a naive check disqualifies half of every result set.
     """
-    padded = f" {re.sub(r'[^a-z0-9 ]+', ' ', haystack)} "
-    return f" {marker} " in re.sub(r"\s+", " ", padded)
+    norm_marker = _normalise_marker(marker)
+    if not norm_marker:
+        return False
+    return f" {norm_marker} " in f" {_normalise_marker(haystack)} "

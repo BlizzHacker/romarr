@@ -3688,7 +3688,11 @@ RENDER.profiles=async()=>{
     };
 
     const minSize=getVal('min_size_mb',0);
-    const maxSize=getVal('max_size_mb',platInfo?platInfo.max_size_mb:8192);
+    const rawGlobalMax=(SETTINGS.max_size_mb&&Number(SETTINGS.max_size_mb)!==8192)?Number(SETTINGS.max_size_mb):0;
+    const rawPlatMax=(!isGlobal&&overrides&&overrides.max_size_mb&&Number(overrides.max_size_mb)!==8192)?Number(overrides.max_size_mb):0;
+    const maxSize=isGlobal
+      ?rawGlobalMax
+      :(rawPlatMax||(platInfo?(rawGlobalMax>0?Math.min(platInfo.max_size_mb,rawGlobalMax):platInfo.max_size_mb):rawGlobalMax));
     const minSeeders=getVal('min_seeders',1);
     const sizePref=getVal('size_preference','auto');
     const sizeWeight=getVal('size_weight',0);
