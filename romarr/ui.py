@@ -1203,6 +1203,7 @@ function sidebarBindNav(){
 
 /* ---------------- routing ---------------- */
 let activePage=null, pageVersion=0, metadataLookup=null;
+let exoJobSeq=0;
 // Keep the last successful Identify result only for the current browser page.
 let metadataFilename='Chrono.Trigger.USA.v1.1.smc';
 let metadataCachedFilename='', metadataCachedResult=null;
@@ -1426,7 +1427,6 @@ RENDER.hub=async()=>{
     };
     if($('#igir-dry')) $('#igir-dry').onclick=()=>runIgirJob(true);
     if($('#igir-run')) $('#igir-run').onclick=()=>runIgirJob(false);
-    let exoJobSeq=0;
     const runExoJob=async(dry)=>{
       const box=$('#exo-msg');
       if(!box) return;
