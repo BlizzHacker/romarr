@@ -986,6 +986,11 @@ def test_classic_zip_with_exactly_65535_members_has_no_zip64_locator(tmp_path):
     ((3, 13, 15), False), ((3, 13, 16), True),
     ((3, 14, 7), False), ((3, 14, 8), True),
     ((3, 15, 0), True), ((3, 9, 25), False),
+    ((3, 13, 16, "candidate", 1), False),
+    ((3, 14, 8, "candidate", 1), False),
+    ((3, 15, 0, "alpha", 1), False),
+    ((3, 15, 0, "candidate", 2), False),
+    ((3, 15, 0, "final", 0), True),
 ])
 def test_zipfile_security_release_floor(version, expected):
     """Allow alternate ZIP compression only on patched CPython versions."""
@@ -1017,3 +1022,48 @@ def test_nested_alt_compression_requires_patched_python(
     assert result.ok, result.reason
     assert result.destination.read_bytes() == b"game"
     assert download.read_bytes() == original
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX directory symlinks")
+@pytest.mark.parametrize("members", [
+    ("setup.exe", "assets/setup.exe/config.ini"),
+    ("assets/setup.exe/config.ini", "setup.exe"),
+])
+def test_digital_aliased_file_directory_conflict_is_preflighted(tmp_path, members):
+    """A file cannot also be an ancestor of a resolved installer member."""
+    download = tmp_path / "Installer.zip"
+    original = zip_bytes({name: b"data" for name in members})
+    download.write_bytes(original)
+    library_root = tmp_path / "library"
+    target = library_root / "win" / "Installer"
+    target.mkdir(parents=True)
+    (target / "assets").symlink_to(".", target_is_directory=True)
+
+    result, = import_rom(download, resolve("win"), library_root, overwrite=True)
+    assert not result.ok
+    assert "colliding destination paths" in result.reason
+    assert not (target / "setup.exe").exists()
+    assert (target / "assets").is_symlink()
+    assert download.read_bytes() == original
+
+
+@pytest.mark.parametrize("method", [20, 93])
+def test_nested_zstandard_method_requires_patched_python(
+        tmp_path, monkeypatch, method):
+    """Reject both ZIP Zstandard identifiers before unsafe decompression."""
+    payload = bytearray(zip_bytes({"inner.zip": zip_bytes({"Game.gb": b"game"})}))
+    local_header = payload.find(b"PK\x03\x04")
+    central_header = payload.find(b"PK\x01\x02")
+    assert local_header >= 0 and central_header > local_header
+    struct.pack_into("<H", payload, local_header + 8, method)
+    struct.pack_into("<H", payload, central_header + 10, method)
+    download = tmp_path / "outer.zip"
+    download.write_bytes(payload)
+    library_root = tmp_path / "library"
+
+    monkeypatch.setattr(nested_zip, "_bounded_alt_zipfile_reads", lambda: False)
+    result, = import_rom(download, resolve("gb"), library_root)
+    assert not result.ok
+    assert "requires a patched Python runtime" in result.reason
+    assert not library_root.exists()
+    assert download.read_bytes() == payload
