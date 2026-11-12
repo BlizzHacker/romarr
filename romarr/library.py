@@ -33,8 +33,8 @@ from .dat import BAD_DUMP, UNKNOWN, VERIFIED, Match, hash_bytes, hash_stream
 from .platforms import Platform, resolve, romm_fs_slug
 from .nested_zip import (MAX_OUTER_ZIP_MEMBERS, NestedZipIndex, StagingBudget,
                          check_zip_central_directory)
-from .selection import (_cue_and_gdi_names, _names_in_sheet, _resolve_beside,
-                        pick_all_rom_sets, pick_rom_set)
+from .selection import (_basename, _cue_and_gdi_names, _names_in_sheet,
+                        _parent, pick_all_rom_sets, pick_rom_set)
 
 log = logging.getLogger(__name__)
 
@@ -435,13 +435,24 @@ def _complete_nested_zip_sets(sets, read):
 
         # Playlists may reference CUE/GDI files; verify their track lists too.
         members = list(game.members)
+        sheets = [member for member in members
+                  if member.lower().endswith((".cue", ".gdi"))]
+        # Index once for this set, preserving _resolve_beside's first-match,
+        # case-insensitive, same-directory companion resolution.
+        by_directory = {}
+        for member in members if sheets else ():
+            by_directory.setdefault(_parent(member), {}).setdefault(
+                _basename(member).lower(), member)
         incomplete_sheet = None
-        for sheet in members:
-            if not sheet.lower().endswith((".cue", ".gdi")):
-                continue
+        for sheet in sheets:
             named = _names_in_sheet(sheet, read, _cue_and_gdi_names)
-            if named is not None and any(
-                    not _resolve_beside(sheet, (name,), members) for name in named):
+            if named is None:
+                continue
+            by_key = by_directory[_parent(sheet)]
+            if any(
+                (match := by_key.get(_basename(name.replace("\\", "/")).lower()))
+                is None or match == sheet for name in named
+            ):
                 incomplete_sheet = sheet
                 break
         if incomplete_sheet is not None:
