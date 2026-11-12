@@ -440,9 +440,10 @@ def _complete_nested_zip_sets(sets, read):
         # Index once for this set, preserving _resolve_beside's first-match,
         # case-insensitive, same-directory companion resolution.
         by_directory = {}
-        for member in members if sheets else ():
-            by_directory.setdefault(_parent(member), {}).setdefault(
-                _basename(member).lower(), member)
+        if sheets:
+            for member in members:
+                by_directory.setdefault(_parent(member), {}).setdefault(
+                    _basename(member).lower(), member)
         incomplete_sheet = None
         for sheet in sheets:
             named = _names_in_sheet(sheet, read, _cue_and_gdi_names)
