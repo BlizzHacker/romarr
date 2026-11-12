@@ -22,6 +22,8 @@ from __future__ import annotations
 import pathlib
 from dataclasses import dataclass
 
+from . import nup
+
 #: The Nintendo logo both Game Boy and GBA carry, and the boot ROM checks. Its
 #: first bytes are enough to separate them from everything else here.
 _GB_LOGO = bytes.fromhex("CEED6666CC0D000B03730083")
@@ -181,13 +183,32 @@ def identify_file(path) -> Sniffed | None:
     a zipped ROM is the normal shipping form and its own header says nothing
     about which machine the game is for.
     """
-    if pathlib.Path(str(path)).suffix.lower() in _ARCHIVE_SUFFIXES:
+    suffix = pathlib.Path(str(path)).suffix.lower()
+    if suffix in _ARCHIVE_SUFFIXES:
         return identify_archive(path)
+    if suffix == ".nup":
+        return _identify_nup(path)
     try:
         with open(path, "rb") as handle:
             return identify(handle.read(HEAD_BYTES))
     except OSError:
         return None
+
+
+def _identify_nup(path) -> Sniffed | None:
+    """A NUP container's console, from its validated package records.
+
+    Only a Switch 2 (0x04) title ID is an opinion. A 0x01 ID is shared by
+    Switch games and Switch 2 Editions, and an invalid file is no evidence of
+    anything, so both are silence.
+    """
+    try:
+        header = nup.read_header(path)
+    except (nup.NupError, OSError):
+        return None
+    if header.is_switch2:
+        return Sniffed("switch-2", f"NUP title ID {header.primary.title_id} (Switch 2)")
+    return None
 
 
 def disagrees_with(path, platform_slug: str) -> Sniffed | None:

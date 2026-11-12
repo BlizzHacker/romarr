@@ -152,3 +152,46 @@ def test_no_platform_claimed_means_nothing_to_contradict(tmp_path):
     path = tmp_path / "game.nes"
     path.write_bytes(rom(**{"0": b"NES\x1a"}))
     assert disagrees_with(path, "") is None
+
+
+# --- NUP containers ---------------------------------------------------------
+# A .nup's header is a validated table of contents, not a guess. Only a 0x04
+# title ID is conclusive: Switch 2 Editions keep their Switch 1 (0x01) ID.
+
+def test_a_switch_2_nup_says_switch_2(tmp_path):
+    from tests.nup_builder import Pkg, build_nup
+
+    path = tmp_path / "Bananza.nup"
+    path.write_bytes(build_nup([Pkg(0x040074A01BF12000)]))
+    got = identify_file(path)
+    assert got.platform == "switch-2"
+    assert "040074A01BF12000" in got.detail
+
+
+def test_a_switch_1_id_nup_has_no_opinion(tmp_path):
+    """It may be a Switch game or a Switch 2 Edition; silence beats a guess."""
+    from tests.nup_builder import Pkg, build_nup
+
+    path = tmp_path / "Zelda.nup"
+    path.write_bytes(build_nup([Pkg(0x0100F2C0115B6000)]))
+    assert identify_file(path) is None
+    assert disagrees_with(path, "switch-2") is None
+    assert disagrees_with(path, "switch") is None
+
+
+@pytest.mark.parametrize("blob", [b"", b"NUP\x01" + b"\x00" * 200, b"NES\x1a" + b"\x00" * 2048],
+                         ids=["empty", "truncated", "renamed-nes"])
+def test_an_invalid_nup_has_no_opinion(tmp_path, blob):
+    """Not even the iNES magic counts: a .nup is read as a NUP or not at all."""
+    path = tmp_path / "broken.nup"
+    path.write_bytes(blob)
+    assert identify_file(path) is None
+
+
+def test_a_switch_2_nup_claimed_as_switch_is_reported(tmp_path):
+    from tests.nup_builder import Pkg, build_nup
+
+    path = tmp_path / "Bananza.nup"
+    path.write_bytes(build_nup([Pkg(0x040074A01BF12000)]))
+    assert disagrees_with(path, "switch").platform == "switch-2"
+    assert disagrees_with(path, "switch-2") is None
