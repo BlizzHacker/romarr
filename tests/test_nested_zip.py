@@ -1,6 +1,7 @@
 """Regression coverage for bounded ZIP-inside-ZIP import and review."""
 
 import io
+import os
 import struct
 from pathlib import Path
 import stat
@@ -876,3 +877,141 @@ def test_nested_disc_lookup_reuses_member_index(monkeypatch):
     monkeypatch.setattr(library, "_parent", counted_parent)
     assert library._complete_nested_zip_sets([game], lambda _name: cue) == [game]
     assert parent_calls <= len(game.members) + 2
+
+
+@pytest.mark.parametrize("sheet, contents", [
+    ("Game.cue", b"REM no track names\\n"),
+    ("Game.gdi", b"0\\n"),
+])
+def test_nested_disc_sheet_with_no_track_references_is_rejected(
+        tmp_path, sheet, contents):
+    """A readable but empty disc sheet must not import orphan tracks."""
+    inner = zip_bytes({sheet: contents, "track.bin": b"orphan"})
+    download = tmp_path / "outer.zip"
+    original = zip_bytes({"disc.zip": inner})
+    download.write_bytes(original)
+    library_root = tmp_path / "library"
+
+    preview = preview_import(download, resolve("dc"), library_root)
+    assert all(not item["primary"].endswith(sheet) for item in preview["items"])
+    result, = import_rom(download, resolve("dc"), library_root)
+    assert not result.ok
+    assert not library_root.exists()
+    assert download.read_bytes() == original
+
+
+@pytest.mark.parametrize("sheet, contents", [
+    ("Game.cue", b'FILE "tracks/track.bin" BINARY\\n'),
+    ("Game.gdi", b'1\\n1 0 4 2352 tracks/track.bin 0\\n'),
+])
+def test_nested_disc_reference_cannot_match_wrong_directory(
+        tmp_path, sheet, contents):
+    """A root-level basename does not satisfy a subdirectory reference."""
+    original = zip_bytes({"disc.zip": zip_bytes({
+        sheet: contents, "track.bin": b"wrong location",
+    })})
+    download = tmp_path / "outer.zip"
+    download.write_bytes(original)
+    library_root = tmp_path / "library"
+    preview = preview_import(download, resolve("dc"), library_root)
+    assert all(not item["primary"].endswith(sheet) for item in preview["items"])
+    result, = import_rom(download, resolve("dc"), library_root)
+    assert not result.ok
+    assert not library_root.exists()
+    assert download.read_bytes() == original
+
+
+@pytest.mark.parametrize("reference", ["./track.bin", ".\\\\track.bin"])
+def test_nested_disc_accepts_same_directory_reference_prefix(tmp_path, reference):
+    """An explicit current-directory prefix still resolves a real sidecar."""
+    cue = f'FILE "{reference}" BINARY\\n'.encode()
+    original = zip_bytes({"disc.zip": zip_bytes({
+        "Game.cue": cue, "track.bin": b"correct track",
+    })})
+    download = tmp_path / "outer.zip"
+    download.write_bytes(original)
+    library_root = tmp_path / "library"
+    preview = preview_import(download, resolve("dc"), library_root)
+    assert [i["primary"] for i in preview["items"]] == ["disc.zip/Game.cue"]
+    result, = import_rom(download, resolve("dc"), library_root)
+    assert result.ok, result.reason
+    assert (result.destination / "track.bin").read_bytes() == b"correct track"
+    assert download.read_bytes() == original
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX directory symlinks")
+def test_digital_symlink_alias_rejected_before_first_publication(tmp_path):
+    """Existing directory aliases cannot publish two files to one target."""
+    original = zip_bytes({
+        "setup.exe": b"game setup",
+        "assets/setup.exe": b"second installer",
+    })
+    download = tmp_path / "Installer.zip"
+    download.write_bytes(original)
+    library_root = tmp_path / "library"
+    target = library_root / "win" / "Installer"
+    target.mkdir(parents=True)
+    (target / "assets").symlink_to(".", target_is_directory=True)
+
+    result, = import_rom(download, resolve("win"), library_root, overwrite=True)
+    assert not result.ok
+    assert "colliding destination paths" in result.reason
+    assert not (target / "setup.exe").exists()
+    assert (target / "assets").is_symlink()
+    assert download.read_bytes() == original
+
+
+def test_classic_zip_with_exactly_65535_members_has_no_zip64_locator(tmp_path):
+    """A classic maximum-count archive is legal without a ZIP64 locator."""
+    archive = tmp_path / "classic.zip"
+    with zipfile.ZipFile(archive, "w", allowZip64=False) as out:
+        for index in range(65_535):
+            out.writestr(f"{index:05}.txt", b"")
+    data = archive.read_bytes()
+    end = data.rfind(b"PK\\x05\\x06")
+    assert end >= 20
+    assert data[end - 20:end - 16] != b"PK\\x06\\x07"
+    nested_zip.check_zip_central_directory(
+        archive, max_members=nested_zip.MAX_OUTER_ZIP_MEMBERS)
+    with pytest.raises(ValueError, match="member-count limit exceeded"):
+        nested_zip.check_zip_central_directory(archive, max_members=65_534)
+
+
+@pytest.mark.parametrize("version, expected", [
+    ((3, 10, 21), False), ((3, 10, 22), True),
+    ((3, 11, 16), False), ((3, 11, 17), True),
+    ((3, 12, 14), False), ((3, 12, 15), True),
+    ((3, 13, 15), False), ((3, 13, 16), True),
+    ((3, 14, 7), False), ((3, 14, 8), True),
+    ((3, 15, 0), True), ((3, 9, 25), False),
+])
+def test_zipfile_security_release_floor(version, expected):
+    """Allow alternate ZIP compression only on patched CPython versions."""
+    assert nested_zip._bounded_alt_zipfile_reads(version) is expected
+
+
+@pytest.mark.parametrize("method", [zipfile.ZIP_BZIP2, zipfile.ZIP_LZMA])
+def test_nested_alt_compression_requires_patched_python(
+        tmp_path, monkeypatch, method):
+    """Do not expand bzip2/LZMA ZIP containers on a vulnerable runtime."""
+    inner = zip_bytes({"Game.gb": b"game"})
+    data = io.BytesIO()
+    with zipfile.ZipFile(data, "w", compression=method) as archive:
+        archive.writestr("inner.zip", inner)
+    download = tmp_path / "outer.zip"
+    original = data.getvalue()
+    download.write_bytes(original)
+    library_root = tmp_path / "library"
+
+    monkeypatch.setattr(nested_zip, "_bounded_alt_zipfile_reads", lambda: False)
+    result, = import_rom(download, resolve("gb"), library_root)
+    assert not result.ok
+    assert "requires a patched Python runtime" in result.reason
+    assert not library_root.exists()
+    assert download.read_bytes() == original
+
+    monkeypatch.setattr(nested_zip, "_bounded_alt_zipfile_reads", lambda: True)
+    result, = import_rom(download, resolve("gb"), library_root)
+    assert result.ok, result.reason
+    assert result.destination.read_bytes() == b"game"
+    assert download.read_bytes() == original
