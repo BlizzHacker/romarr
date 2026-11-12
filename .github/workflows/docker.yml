@@ -254,6 +254,8 @@ jobs:
              -e EXPECTED_SOURCE_REPOSITORY="$GITHUB_REPOSITORY" \
              smoke python -c 'import os; from romarr.build_info import get_build_info; from romarr.version import VERSION; b=get_build_info(VERSION); assert b["type"] == os.environ["EXPECTED_BUILD_TYPE"] and b["source_ref"] == os.environ["EXPECTED_SOURCE_REF"] and b["source_revision"] == os.environ["EXPECTED_SOURCE_REVISION"] and b["source_repository"] == os.environ["EXPECTED_SOURCE_REPOSITORY"]; print(b)'
           docker exec smoke sh -c 'command -v bsdtar >/dev/null && command -v git >/dev/null'
+          # unar is what joins split RAR releases in this image (romarr/library.py::rar_tool).
+          docker exec smoke python -c "from romarr.library import rar_tool; t = rar_tool(); assert t and t.kind == 'unar', t"
           docker rm -f smoke
 
       - name: Build and push

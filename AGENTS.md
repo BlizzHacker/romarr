@@ -7,7 +7,7 @@ Guidance for coding agents and contributors working in `BlizzHacker/romarr`. Rea
 ROMarr ("The \*arr for games") searches indexers, scores and grabs releases, verifies dumps against No-Intro/Redump DAT checksums, and imports verified files into game libraries (RomM, Gaseous, Retrom, or plain frontend folders).
 
 - **Runtime footprint:** Core server is Python standard library + `requests` (`requirements.txt`). Do not add runtime dependencies or frontend build steps without a clear, tested requirement.
-- **Optional components:** `pyseccomp` on Linux (sandboxed plugins via external `rom-hub`), `playwright` (Headless Browser downloader, browser image/opt-in), and `bsdtar` (`libarchive-tools` on Alpine, `tar.exe` on Windows; GNU `tar` is explicitly rejected in `romarr/library.py::_bsdtar`).
+- **Optional components:** `pyseccomp` on Linux (sandboxed plugins via external `rom-hub`), `playwright` (Headless Browser downloader, browser image/opt-in), `bsdtar` (`libarchive-tools` on Alpine, `tar.exe` on Windows; GNU `tar` is explicitly rejected in `romarr/library.py::_bsdtar`), and 7-Zip with RAR support or `unar` for `.rar`, which split RAR sets need (`romarr/library.py::rar_tool`; the browser image ships `unar`).
 - **Brand rule (`tests/test_brand.py`):** Spell the product name **ROMarr** in UI text, prose, comments, and shipped docs (never mixed-case variations). Keep technical identifiers lowercase (`romarr`, `ROMARR_DATA`, `ROMARR_PORT`, `/opt/romarr`, `romarr.json`, `ghcr.io/blizzhacker/romarr`).
 
 ## Architecture & Module Map

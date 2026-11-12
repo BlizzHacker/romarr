@@ -21,9 +21,13 @@ ARG PLAYWRIGHT_VERSION=1.62.0
 
 # gosu is su-exec's Debian twin and takes the same "uid:gid cmd" arguments, so
 # the shared entrypoint runs unchanged under the su-exec name.
+# unar (LGPL, Debian main) joins RAR releases split into volumes, which bsdtar
+# cannot; romarr/library.py::rar_tool prefers it over bsdtar for .rar. Alpine
+# has no package that joins split RAR sets (its 7zip is built without RAR),
+# so the standard image explains how to add one instead.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-        gosu tzdata libarchive-tools libseccomp2 git ca-certificates \
+        gosu tzdata libarchive-tools libseccomp2 git ca-certificates unar \
  && ln -s "$(command -v gosu)" /usr/local/bin/su-exec \
  && rm -rf /var/lib/apt/lists/*
 
