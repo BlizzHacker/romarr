@@ -70,6 +70,11 @@ FOREIGN_PLATFORM_MARKERS = {
     # "wii" alone does not catch it, because the title says Virtual Console and
     # never says Wii.
     "virtual console", "wiiware", "wad", "eshop",
+    # Scene groups tag Switch releases "NSW-<group>" and Vita releases
+    # "PSV-<group>", and often never spell the console out. Without these a
+    # GameCube request for Paper Mario accepted the Switch remake's update patch,
+    # and a PSP request for Lumines accepted a Vita release.
+    "nsw", "psv",
 }
 
 # Generic brand alias ("nintendo") only exists for resolve("nintendo") -> nes;
