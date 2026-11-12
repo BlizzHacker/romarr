@@ -1246,26 +1246,26 @@ def _digital_set(filenames: list[str]) -> RomSet | None:
     if not filenames:
         return None
     exes = [f for f in filenames if _basename(f).lower().endswith(".exe")]
-    # Prefer the shallowest exact setup.exe over nested redistributable copies.
-    # Fall back to a delimited installer label (setup-1.exe) or a
-    # architecture-suffixed setup name (setup64/setupx64), not AssetUpdater.exe.
+    # Game installers outrank redistributables regardless of path depth.
+    # Recognized numbered/architecture-suffixed setup names are candidates too.
     exact = [f for f in exes if _basename(f).casefold() == "setup.exe"]
+    variants = [f for f in exes if f not in exact and re.search(
+        r"(?<![a-z0-9])setup(?:[0-9]+|x(?:86|64))?(?![a-z0-9])",
+        _stem(f).casefold())]
+    candidates = exact + variants
 
-    def setup_rank(candidate: str) -> tuple[int, bool, str, str]:
-        """Prefer shallow game installers over equal-depth redistributables."""
+    def setup_rank(candidate: str) -> tuple[bool, bool, int, str, str]:
+        """Prefer game installers, exact setup names, then shallower paths."""
         path = candidate.replace("\\", "/")
         parents = path.split("/")[:-1]
         redistributable = any(part.casefold() in {
             "_commonredist", "redist", "redistributables", "vcredist", "directx",
         } for part in parents)
-        return len(parents), redistributable, path.casefold(), path
+        variant = _basename(candidate).casefold() != "setup.exe"
+        return redistributable, variant, len(parents), path.casefold(), path
 
-    primary = min(exact, key=setup_rank) if exact else None
-    if primary is None:
-        primary = next(
-            (f for f in exes if re.search(
-                r"(?<![a-z0-9])setup(?:[0-9]+|x(?:86|64))?(?![a-z0-9])", _stem(f).casefold())),
-            exes[0] if exes else filenames[0])
+    primary = (min(candidates, key=setup_rank) if candidates
+               else exes[0] if exes else filenames[0])
     return RomSet(primary, tuple(filenames))
 
 
