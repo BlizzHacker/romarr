@@ -31,6 +31,7 @@ def checkout(tmp_path, monkeypatch):
     git("config", "user.email", "tests@example.invalid", cwd=publisher)
     git("config", "user.name", "Fixture", cwd=publisher)
     (publisher / "example.txt").write_text("original\n")
+    (publisher / ".gitignore").write_text(".venv/\n")
     git("add", ".", cwd=publisher)
     git("commit", "-qm", "first", cwd=publisher)
     git("remote", "add", "origin", str(origin), cwd=publisher)
@@ -52,7 +53,11 @@ def checkout(tmp_path, monkeypatch):
         "loaded" if a[0] == "systemctl" and "show" in a else
         "active" if a[0] == "systemctl" and "is-active" in a else old(*a, **kw))
     monkeypatch.setenv("ROMARR_UPDATE_HEALTH_URL", "http://127.0.0.1:6868/api/health")
-    env = SimpleNamespace(kind="git", repo=str(consumer), python=sys.executable,
+    venv = consumer / ".venv"
+    (venv / "bin").mkdir(parents=True)
+    (venv / "pyvenv.cfg").write_text("home = " + sys.base_prefix + "\n")
+    (venv / "bin" / "python").symlink_to(sys.executable)
+    env = SimpleNamespace(kind="git", repo=str(consumer), python=str(venv / "bin" / "python"),
                           branch="main", commit=git("rev-parse", "HEAD", cwd=consumer),
                           service="romarr")
     return publisher, consumer, origin, env
@@ -69,16 +74,62 @@ def publish(publisher, content="new\n", *, requirements=None):
     return git("rev-parse", "HEAD", cwd=publisher)
 
 
-def test_venv_python_symlink_is_not_resolved_to_system_interpreter(checkout, tmp_path):
-    """The updater must use the running venv interpreter, even when symlinked."""
-    _pub, _repo, _origin, env = checkout
-    venv_bin = tmp_path / "venv" / "bin"
-    venv_bin.mkdir(parents=True)
-    venv_python = venv_bin / "python"
-    venv_python.symlink_to(sys.executable)
-    env.python = str(venv_python)
+def test_venv_python_symlink_is_not_resolved_to_system_interpreter(checkout):
+    """The updater must use the checkout-local venv, even when symlinked."""
+    _pub, repo, _origin, env = checkout
+    assert (repo / ".venv" / "bin" / "python").is_symlink()
     state = safety.preflight(env, "origin/main")
-    assert state["python"] == str(venv_python)
+    assert state["python"] == env.python
+
+
+def test_home_checkout_is_blocked_before_reservation():
+    """ProtectHome hides source checkouts under home and root."""
+    with pytest.raises(ValueError, match="ProtectHome"):
+        safety._confined_layout(Path("/home/operator/romarr"),
+                                Path("/home/operator/romarr/.git"),
+                                "/home/operator/romarr/.venv/bin/python")
+    with pytest.raises(ValueError, match="ProtectHome"):
+        safety._confined_layout(Path("/root/romarr"),
+                                Path("/root/romarr/.git"),
+                                "/root/romarr/.venv/bin/python")
+
+
+def test_external_git_metadata_is_blocked_before_reservation(checkout):
+    """A linked or separate Git directory cannot receive the worker's log."""
+    _pub, repo, _origin, env = checkout
+    external = repo.parent / "separate-metadata.git"
+    (repo / ".git").rename(external)
+    (repo / ".git").write_text("gitdir: " + str(external) + "\n")
+    with pytest.raises(ValueError, match="external Git metadata"):
+        safety.preflight(env, "origin/main")
+    assert not (external / safety.LOCK_NAME).exists()
+
+
+def test_external_python_environment_is_blocked_before_reservation(checkout):
+    """An interpreter outside ReadWritePaths must not reach the worker."""
+    _pub, repo, _origin, env = checkout
+    env.python = sys.executable
+    with pytest.raises(ValueError, match="external Python environment"):
+        safety.preflight(env, "origin/main")
+    assert not (repo / ".git" / safety.LOCK_NAME).exists()
+
+
+def test_missing_checkout_local_virtual_environment_is_rejected(checkout):
+    """A system Python symlink without venv metadata is not an install target."""
+    _pub, repo, _origin, env = checkout
+    (repo / ".venv" / "pyvenv.cfg").unlink()
+    with pytest.raises(ValueError, match="checkout-local Python virtual environment"):
+        safety.preflight(env, "origin/main")
+
+
+def test_symlinked_external_virtual_environment_is_rejected(checkout):
+    """A linked venv cannot bypass checkout-only filesystem allowances."""
+    _pub, repo, _origin, env = checkout
+    external = repo.parent / "external-venv"
+    (repo / ".venv").rename(external)
+    (repo / ".venv").symlink_to(external, target_is_directory=True)
+    with pytest.raises(ValueError, match="resolves outside the checkout"):
+        safety._confined_layout(repo, repo / ".git", env.python)
 
 
 def test_preflight_requires_exact_clean_git_identity(checkout):
@@ -217,6 +268,7 @@ def test_ambiguous_checkout_path_is_rejected_before_worker_claim(checkout, monke
     target = repo.parent / "checkout with spaces"
     repo.rename(target)
     env.repo = str(target)
+    env.python = str(target / ".venv" / "bin" / "python")
     with pytest.raises(ValueError, match="unsafe for a scoped systemd"):
         safety.preflight(env, "origin/main")
 
