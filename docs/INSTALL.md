@@ -369,7 +369,7 @@ The first launch creates `.venv-windows` in the checkout and installs the requir
 
 Use the same data directory for later launches. After setup, change the saved library destination under **Settings → Media Management/Libraries**; passing a different startup path does not silently replace a saved setting. The launcher prints where the state file lives.
 
-ZIP imports need no extra archive program. `.7z`/`.rar` imports require a working `bsdtar` executable on `PATH`, and split RAR sets also need 7-Zip, with its folder (usually `C:\Program Files\7-Zip`) on `PATH`; test one small archive before importing a collection. Optional ROM Hub installation and Windows confinement limits are documented in the [plugin guide](PLUGINS.md).
+ZIP imports need no extra archive program. `.7z`/`.rar` imports require a working `bsdtar` executable on `PATH`, and split RAR sets also need 7-Zip (checked on `PATH` and in `C:\Program Files\7-Zip` / `C:\Program Files (x86)\7-Zip`); test one small archive before importing a collection. Optional ROM Hub installation and Windows confinement limits are documented in the [plugin guide](PLUGINS.md).
 
 The Windows CI smoke job is provided to check startup, authentication and state persistence on Windows; consult its result for the revision you use. It does not prove every external client, archive tool or filesystem share works on your PC. Use **Manual Import** for an existing library, and check one imported file before adding a whole collection.
 

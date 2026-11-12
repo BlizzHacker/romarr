@@ -132,9 +132,21 @@ def _reads_rar(path: str) -> bool:
 def rar_tools() -> list[RarTool]:
     """Every installed RAR reader, best first: 7-Zip with RAR support, then unar."""
     tools = []
-    for name in ("7zz", "7z"):
-        path = shutil.which(name)
-        if path and _reads_rar(path):
+    candidates = [shutil.which(name) for name in ("7zz", "7z")]
+    if os.name == "nt":
+        for env_var in ("ProgramFiles", "ProgramFiles(x86)"):
+            base = os.environ.get(env_var)
+            if base:
+                candidates.append(os.path.join(base, "7-Zip", "7z.exe"))
+    seen: set[str] = set()
+    for path in candidates:
+        if not path or not os.path.isfile(path):
+            continue
+        key = os.path.normcase(os.path.abspath(path))
+        if key in seen:
+            continue
+        seen.add(key)
+        if _reads_rar(path):
             tools.append(RarTool("7z", path))
             break
     unar, lsar = shutil.which("unar"), shutil.which("lsar")
@@ -1035,6 +1047,9 @@ def _source_for(download: Path, platform: Platform | None = None, *,
         return (_NestedZipSource(download, staging_budget=staging_budget)
                 if nested and (platform is None or platform.media != "digital")
                 else _ZipSource(download))
+    key = _rar_volume_key(download) if download.is_file() else None
+    if key and key[0][0] == "num" and key[1] == 1 and _rar_signature(download):
+        return _rar_source(download, [download])
     if download.is_file() and suffix == ".rar" and rar_tool() is not None:
         return _RarToolSource(download, rar_tool())
     if download.is_file() and suffix in ARCHIVE_SUFFIXES:

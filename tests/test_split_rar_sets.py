@@ -291,3 +291,12 @@ def test_a_one_part_numbered_set_opens_with_either_tool(tmp_path, tool):
     result, = import_rom(folder, resolve("ps2"), tmp_path / "library")
     assert result.ok, result.reason
     assert result.destination.read_bytes() == DATA
+
+
+def test_a_one_part_numbered_file_opens_directly_with_either_tool(tmp_path, tool):
+    """Passing a single `.001` RAR file directly opens it as an archive, not a raw file."""
+    lone = tmp_path / "game-grp.001"
+    lone.write_bytes(stored_rar_volumes("Game (USA).iso", DATA, len(DATA))[0])
+    result, = import_rom(lone, resolve("ps2"), tmp_path / "library")
+    assert result.ok, result.reason
+    assert result.destination.read_bytes() == DATA
