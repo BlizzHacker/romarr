@@ -65,6 +65,31 @@ def _health_url() -> str:
     return configured
 
 
+def _confined_layout(repo: Path, gitdir: Path, python: str) -> Path:
+    """Reject layouts not writable and reachable in the detached worker sandbox.
+
+    ProtectHome hides home-directory checkouts. ProtectSystem=strict permits
+    writes only under the checkout, including Git metadata and the venv.
+    """
+    if any(repo.is_relative_to(path) for path in
+           (Path("/home"), Path("/root"), Path("/run/user"))):
+        raise ValueError("checkout is hidden by systemd ProtectHome")
+    if not gitdir.is_relative_to(repo):
+        raise ValueError("external Git metadata is outside the updater's write scope")
+    if not Path(python).is_absolute():
+        raise ValueError("Python interpreter path must be absolute")
+    # abspath normalizes '..' without dereferencing the venv's Python symlink.
+    interpreter = Path(os.path.abspath(python))
+    if not interpreter.is_relative_to(repo):
+        raise ValueError("external Python environment is outside the updater's write scope")
+    if (interpreter.parent.name != "bin"
+            or not (interpreter.parent.parent / "pyvenv.cfg").is_file()):
+        raise ValueError("Git self-update requires a checkout-local Python virtual environment")
+    if not interpreter.parent.parent.resolve(strict=True).is_relative_to(repo):
+        raise ValueError("virtual environment directory resolves outside the checkout")
+    return interpreter
+
+
 def preflight(env, target: str) -> dict:
     """Verify exact Git root, branch, origin, clean worktree and service before launch."""
     if env.kind != "git" or not env.repo:
@@ -106,6 +131,7 @@ def preflight(env, target: str) -> dict:
     gitdir = Path(_cmd(git, "rev-parse", "--absolute-git-dir", cwd=repo)).resolve(strict=True)
     if not gitdir.is_dir():
         raise ValueError("Git metadata directory missing")
+    interpreter = _confined_layout(repo, gitdir, env.python)
     service = env.service if env.service.endswith(".service") else env.service + ".service"
     if _cmd("systemctl", "show", service, "--property=LoadState", "--value") != "loaded":
         raise ValueError("expected systemd service is not loaded")
@@ -114,7 +140,7 @@ def preflight(env, target: str) -> dict:
     health = _health_url()
     return {"repo": repo, "gitdir": gitdir, "branch": env.branch,
             "commit": full, "remote": remote, "service": service,
-            "python": str(Path(env.python).absolute()),
+            "python": str(interpreter),
             "target": target, "health_url": health}
 
 
