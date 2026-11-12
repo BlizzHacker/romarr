@@ -5537,6 +5537,14 @@ RENDER.manualimport=async()=>{
       ? '<span class="pill" style="background:var(--bad);color:#2a0b0b">bad dump</span>'
       : '<span class="pill" title="Not in your DAT. Often perfectly fine.">unknown</span>';
 
+  // The bytes' opinion when it contradicts the platform. A warning, never a
+  // refusal: shown on the scan row and again on the import result, because
+  // the operator may have picked the other platform after the scan.
+  const headerPill=x=>x.header_says
+    ? '<br><span class="pill" style="background:var(--warn);color:#2a1c05" title="'
+      +esc(x.header_detail||'')+'">header says '+esc(x.header_says)+'</span>'
+    : '';
+
   async function adopt(row, force){
     const btn=row.querySelector('.mi-go');
     const st=row.querySelector('.mi-st');
@@ -5549,9 +5557,9 @@ RENDER.manualimport=async()=>{
 
     if(d.ok){
       const one=d.imported[0]||{};
-      st.innerHTML=one.forced
+      st.innerHTML=(one.forced
         ? '<span style="color:var(--warn)">imported (forced)</span>'
-        : '<span style="color:var(--ok)">imported</span>';
+        : '<span style="color:var(--ok)">imported</span>')+headerPill(d);
       btn.remove();
       row.querySelector('.mi-pf').disabled=true;
       return;
@@ -5590,7 +5598,7 @@ RENDER.manualimport=async()=>{
            +'<td>'+esc(x.filename)+'</td>'
            +'<td><select class="mi-pf">'+opts(x.platform)+'</select></td>'
            +'<td class="help" style="margin:0">'+esc(x.reason)+'</td>'
-           +'<td>'+(x.hollow?'<span class="pill" style="background:var(--bad);color:#2a0b0b" title="'+esc(x.hollow)+'">EMPTY FILE</span><br>':'')+verdict(x.verdict)+(x.header_says?'<br><span class="pill" style="background:var(--warn);color:#2a1c05" title="'+esc(x.header_detail||'')+'">header says '+esc(x.header_says)+'</span>':'')+'</td>'
+           +'<td>'+(x.hollow?'<span class="pill" style="background:var(--bad);color:#2a0b0b" title="'+esc(x.hollow)+'">EMPTY FILE</span><br>':'')+verdict(x.verdict)+headerPill(x)+'</td>'
            +'<td><button class="btn mi-go">Import</button></td>'
            +'<td class="mi-st help" style="margin:0"></td></tr>').join('')
          +'</tbody></table>'
