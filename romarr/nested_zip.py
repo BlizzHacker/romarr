@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import stat
 import struct
+import sys
 import tempfile
 import zipfile
 from dataclasses import dataclass
@@ -26,6 +27,22 @@ MAX_COMPRESSION_RATIO = 10_000
 MAX_DESCRIPTOR_BYTES = 2 * 1024 * 1024
 MAX_CENTRAL_DIRECTORY_BYTES = 16 * 1024 * 1024
 COPY_CHUNK = 1024 * 1024
+
+# CPython fixed CVE-2026-15310 in these security/maintenance releases.
+# Earlier zipfile bzip2/LZMA reads can allocate more than the requested chunk.
+_FIXED_ALT_ZIP_PATCH = {3: 22, 11: 17, 12: 15, 13: 16, 14: 8}
+
+
+def _bounded_alt_zipfile_reads() -> bool:
+    """Whether CPython bounds bzip2/LZMA ZIP member decompression per read."""
+    if sys.implementation.name != "cpython":
+        return False
+    major, minor, patch = sys.version_info[:3]
+    if major != 3:
+        return False
+    if minor in _FIXED_ALT_ZIP_PATCH:
+        return patch >= _FIXED_ALT_ZIP_PATCH[minor]
+    return minor >= 15
 
 
 def check_zip_central_directory(path: Path, *, max_members: int | None = None) -> None:
@@ -66,8 +83,10 @@ def check_zip_central_directory(path: Path, *, max_members: int | None = None) -
         if end >= 20:
             stream.seek(end - 20)
             locator = stream.read(20)
-        zip64_required = (disk_entries == 0xFFFF or entries == 0xFFFF
-                          or central_bytes == 0xFFFFFFFF
+        # 0xffff is also a legal literal count for a classic 65,535-entry ZIP.
+        # A ZIP64 locator, when present, still overrides the classic counts;
+        # the observed central-directory count is verified below in either case.
+        zip64_required = (central_bytes == 0xFFFFFFFF
                           or central_offset == 0xFFFFFFFF)
         if locator[:4] == b"PK\x06\x07" or zip64_required:
             if len(locator) != 20 or locator[:4] != b"PK\x06\x07":
@@ -221,6 +240,10 @@ class NestedZipIndex:
                 if info.flag_bits & 0x1:
                     raise ValueError(f"encrypted nested ZIP member: {name!r}")
                 qualified = prefix + name
+                if (info.compress_type in (zipfile.ZIP_BZIP2, zipfile.ZIP_LZMA)
+                        and not _bounded_alt_zipfile_reads()):
+                    raise ValueError(
+                        f"nested ZIP bzip2/LZMA requires a patched Python runtime: {qualified!r}")
                 if info.file_size < 0 or info.file_size > MAX_FINAL_MEMBER_BYTES:
                     raise ValueError(f"nested ZIP member exceeds size limit: {qualified!r}")
                 if (name.lower().endswith((".cue", ".gdi", ".m3u"))
