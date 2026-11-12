@@ -404,3 +404,32 @@ def test_changed_queue_row_is_not_retired_after_stall_probe(
     assert finished[0]["blocklisted"] == 0
     assert row.state == "import-review"
     assert not row.blocklisted
+
+def test_first_stalled_row_decided_before_polling_second(
+        tmp_path, monkeypatch):
+    """An unrelated slow client must not postpone the first row's verdict."""
+    service = svc(tmp_path)
+    service.prowlarr = FakeProwlarr([])
+    service.store.update_settings({"stalled_timeout_minutes": 1})
+    first = QueueItem("Contra", "nes", "Contra (USA)", 5, "grabbed",
+                      at=ago(60), release_id="btih:" + "c" * 40)
+    second = QueueItem("Zelda", "nes", "Zelda (USA)", 5, "grabbed",
+                       at=ago(60), release_id="btih:" + "d" * 40)
+    service.store.enqueue(first)
+    service.store.enqueue(second)
+
+    def observe_order(row):
+        """The first failed decision must be visible during the next poll."""
+        if row is first:
+            return False
+        assert row is second
+        assert first.state == "failed"
+        return True
+
+    monkeypatch.setattr(service, "_is_download_active_or_complete",
+                        observe_order)
+    result = service.retire_dead_downloads()
+    assert result["blocklisted"] == 1
+    assert first.blocklisted
+    assert not second.blocklisted
+    assert second.state == "grabbed"
