@@ -450,9 +450,14 @@ def _complete_nested_zip_sets(sets, read):
             if named is None:
                 continue
             by_key = by_directory[_parent(sheet)]
-            if any(
-                (match := by_key.get(_basename(name.replace("\\", "/")).lower()))
-                is None or match == sheet for name in named
+            # Multi-file disc imports flatten companions on publication. A
+            # reference to another directory cannot safely resolve after that.
+            if not named or any(
+                not (reference := name.replace("\\", "/").removeprefix("./"))
+                or "/" in reference or ":" in reference
+                or reference in (".", "..")
+                or (match := by_key.get(reference.lower())) is None
+                or match == sheet for name in named
             ):
                 incomplete_sheet = sheet
                 break
@@ -1054,6 +1059,7 @@ def _import_rom_from_source(source, candidates, chosen_sets, download, platform,
                 if platform.slug in ("ps2", "ngc", "xbox") and total_set_size < 8 * 1024 * 1024:
                     raise ValueError(f"too small to be a {platform.name} disc image ({total_set_size // (1024*1024)}MB < 8MB)")
                 destination.mkdir(parents=True, exist_ok=True)
+                resolved_targets: dict[Path, str] = {}
                 for name in written:
                     final = destination / name
                     if not is_safe_name(name, destination):
@@ -1070,6 +1076,13 @@ def _import_rom_from_source(source, candidates, chosen_sets, download, platform,
                         raise ValueError(f"destination requires a file but is a directory: {final}")
                     if final.exists() and final.stat().st_size == 0:
                         raise ValueError(f"existing zero-byte destination needs inspection: {final}")
+                    # Existing symlinked directories can alias two unique names
+                    # to the same file. Detect that before publishing either.
+                    target = final.resolve(strict=False)
+                    if target in resolved_targets:
+                        raise ValueError(
+                            f"colliding destination paths: {resolved_targets[target]!r} and {name!r}")
+                    resolved_targets[target] = name
                 for name in written:
                     final = destination / name
                     final.parent.mkdir(parents=True, exist_ok=True)
