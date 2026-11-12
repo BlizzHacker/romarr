@@ -424,6 +424,31 @@ def test_restore_round_trips_a_backup(server):
     assert "password" in json.loads(body)["warning"].lower()
 
 
+def test_restore_settings_are_serialized_with_update_launch(server):
+    """A restore must hold the same settings lock as update launching."""
+    base, service = server
+    service.store.settings["min_seeders"] = 7
+    status, backup, _ = get(base + "/api/v1/backup", key="testkey")
+    assert status == 200
+    service.store.settings["min_seeders"] = 1
+
+    class GuardedSettings(dict):
+        """Reject restore-time writes made without the updater lock."""
+
+        def update(self, values=(), **kwargs):
+            """Detect writes of the restored preference in the HTTP thread."""
+            if isinstance(values, dict) and values.get("min_seeders") == 7:
+                assert service._lock.locked(), (
+                    "restore changed settings outside the update launch lock")
+            return super().update(values, **kwargs)
+
+    service.store.settings = GuardedSettings(service.store.settings)
+    code, _, _ = get(base + "/api/v1/restore", key="testkey",
+                     method="POST", body=json.loads(backup))
+    assert code == 200
+    assert service.store.settings["min_seeders"] == 7
+
+
 def test_export_offers_csv(server):
     base, _ = server
     code, body, headers = get(base + "/api/v1/export?what=wanted&format=csv",

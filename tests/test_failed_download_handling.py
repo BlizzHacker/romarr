@@ -14,6 +14,7 @@ tested here, because either one alone fixes nothing.
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import threading
 
 from romarr.app import QueueItem, ROMarr
 from romarr.selection import Release
@@ -323,3 +324,112 @@ def test_the_tasks_page_can_run_it(tmp_path):
     service = svc(tmp_path)
     out = service.run_command("FailedDownloads")
     assert "blocklisted" in out
+
+def test_stalled_client_poll_releases_queue_lock(tmp_path, monkeypatch):
+    """A delayed client probe must not block unrelated queue mutations."""
+    service = svc(tmp_path)
+    service.store.update_settings({"stalled_timeout_minutes": 1})
+    service.store.enqueue(QueueItem(
+        "Contra", "nes", "Contra (USA)", 5, "grabbed",
+        at=ago(60), release_id="btih:" + "c" * 40))
+    started, resume = threading.Event(), threading.Event()
+    finished, errors = [], []
+
+    def slow_probe(_row):
+        """Hold the client request without taking the queue lock."""
+        started.set()
+        assert resume.wait(5)
+        return True
+
+    def worker():
+        """Record the sweep outcome and any thread exception."""
+        try:
+            finished.append(service.retire_dead_downloads())
+        except BaseException as exc:
+            errors.append(exc)
+
+    monkeypatch.setattr(service, "_is_download_active_or_complete", slow_probe)
+    thread = threading.Thread(target=worker)
+    thread.start()
+    try:
+        assert started.wait(5)
+        acquired = service._lock.acquire(blocking=False)
+        if acquired:
+            service._lock.release()
+        assert acquired, "queue lock held while the client request is pending"
+    finally:
+        resume.set()
+        thread.join(5)
+    assert not thread.is_alive()
+    assert not errors
+    assert finished[0]["blocklisted"] == 0
+
+
+def test_changed_queue_row_is_not_retired_after_stall_probe(
+        tmp_path, monkeypatch):
+    """Do not retire a download that changed state during a slow poll."""
+    service = svc(tmp_path)
+    service.store.update_settings({"stalled_timeout_minutes": 1})
+    row = QueueItem("Contra", "nes", "Contra (USA)", 5, "grabbed",
+                    at=ago(60), release_id="btih:" + "c" * 40)
+    service.store.enqueue(row)
+    started, resume = threading.Event(), threading.Event()
+    finished, errors = [], []
+
+    def slow_probe(_row):
+        """Simulate a client response after another thread updates the row."""
+        started.set()
+        assert resume.wait(5)
+        return False
+
+    def worker():
+        """Capture failures from the background retirement pass."""
+        try:
+            finished.append(service.retire_dead_downloads())
+        except BaseException as exc:
+            errors.append(exc)
+
+    monkeypatch.setattr(service, "_is_download_active_or_complete", slow_probe)
+    thread = threading.Thread(target=worker)
+    thread.start()
+    try:
+        assert started.wait(5)
+        with service._lock:
+            row.state = "import-review"
+    finally:
+        resume.set()
+        thread.join(5)
+    assert not thread.is_alive()
+    assert not errors
+    assert finished[0]["blocklisted"] == 0
+    assert row.state == "import-review"
+    assert not row.blocklisted
+
+def test_first_stalled_row_decided_before_polling_second(
+        tmp_path, monkeypatch):
+    """An unrelated slow client must not postpone the first row's verdict."""
+    service = svc(tmp_path)
+    service.prowlarr = FakeProwlarr([])
+    service.store.update_settings({"stalled_timeout_minutes": 1})
+    first = QueueItem("Contra", "nes", "Contra (USA)", 5, "grabbed",
+                      at=ago(60), release_id="btih:" + "c" * 40)
+    second = QueueItem("Zelda", "nes", "Zelda (USA)", 5, "grabbed",
+                       at=ago(60), release_id="btih:" + "d" * 40)
+    service.store.enqueue(first)
+    service.store.enqueue(second)
+
+    def observe_order(row):
+        """The first failed decision must be visible during the next poll."""
+        if row is first:
+            return False
+        assert row is second
+        assert first.state == "failed"
+        return True
+
+    monkeypatch.setattr(service, "_is_download_active_or_complete",
+                        observe_order)
+    result = service.retire_dead_downloads()
+    assert result["blocklisted"] == 1
+    assert first.blocklisted
+    assert not second.blocklisted
+    assert second.state == "grabbed"

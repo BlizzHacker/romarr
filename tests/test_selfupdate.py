@@ -340,7 +340,7 @@ def test_check_update_applies_when_auto_update_is_on(tmp_path, monkeypatch):
     monkeypatch.setattr(svc, "notify", lambda m: [])
     applied = []
     monkeypatch.setattr(svc, "apply_update",
-                        lambda: applied.append(1) or
+                        lambda **kwargs: applied.append(1) or
                         {"ok": True, "message": "updating to v99.0.0"})
 
     class FakeResponse:
