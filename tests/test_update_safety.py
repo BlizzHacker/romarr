@@ -132,6 +132,27 @@ def test_symlinked_external_virtual_environment_is_rejected(checkout):
         safety._confined_layout(repo, repo / ".git", env.python)
 
 
+@pytest.mark.parametrize("protected", [
+    "/home/operator/.pyenv/bin/python", "/root/.pyenv/bin/python",
+    "/run/user/1000/python",
+])
+def test_protecthome_rejects_hidden_interpreter_target_paths(protected):
+    """The worker cannot execute targets in paths hidden by ProtectHome."""
+    assert safety._hidden_by_protect_home(Path(protected)) is True
+
+
+def test_resolved_python_target_is_checked_before_claim(checkout, monkeypatch):
+    """A protected symlink target blocks the launch despite a local venv path."""
+    _pub, repo, _origin, env = checkout
+    actual_target = Path(env.python).resolve(strict=True)
+    original = safety._hidden_by_protect_home
+    monkeypatch.setattr(safety, "_hidden_by_protect_home",
+                        lambda p: original(p) or p == actual_target)
+    with pytest.raises(ValueError, match="interpreter target is hidden"):
+        safety.preflight(env, "origin/main")
+    assert not (repo / ".git" / safety.LOCK_NAME).exists()
+
+
 def test_preflight_requires_exact_clean_git_identity(checkout):
     _pub, repo, origin, env = checkout
     state = safety.preflight(env, "origin/main")
