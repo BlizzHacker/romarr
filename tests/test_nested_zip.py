@@ -859,10 +859,10 @@ def test_nested_disc_lookup_reuses_member_index(monkeypatch):
     sheet = "inner.zip/Game.cue"
     tracks = tuple(f"inner.zip/Track{index:03}.bin" for index in range(count))
     game = RomSet(sheet, (sheet, *tracks))
-    cue = "\\n".join(
+    cue = "\n".join(
         f'FILE "Track{index:03}.bin" BINARY'
         for index in range(count)
-    ).replace("\\n", chr(10)).encode()
+    ).encode()
 
     original_parent = library._parent
     parent_calls = 0
