@@ -30,7 +30,7 @@ COPY_CHUNK = 1024 * 1024
 
 # CPython fixed CVE-2026-15310 in these security/maintenance releases.
 # Earlier zipfile bzip2/LZMA reads can allocate more than the requested chunk.
-_FIXED_ALT_ZIP_PATCH = {3: 22, 11: 17, 12: 15, 13: 16, 14: 8}
+_FIXED_ALT_ZIP_PATCH = {10: 22, 11: 17, 12: 15, 13: 16, 14: 8}
 
 
 def _bounded_alt_zipfile_reads() -> bool:
