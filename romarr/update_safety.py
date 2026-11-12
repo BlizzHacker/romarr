@@ -65,14 +65,19 @@ def _health_url() -> str:
     return configured
 
 
+def _hidden_by_protect_home(path: Path) -> bool:
+    """Identify paths hidden by the worker's systemd ProtectHome=yes option."""
+    return any(path.is_relative_to(parent) for parent in
+               (Path("/home"), Path("/root"), Path("/run/user")))
+
+
 def _confined_layout(repo: Path, gitdir: Path, python: str) -> Path:
     """Reject layouts not writable and reachable in the detached worker sandbox.
 
     ProtectHome hides home-directory checkouts. ProtectSystem=strict permits
     writes only under the checkout, including Git metadata and the venv.
     """
-    if any(repo.is_relative_to(path) for path in
-           (Path("/home"), Path("/root"), Path("/run/user"))):
+    if _hidden_by_protect_home(repo):
         raise ValueError("checkout is hidden by systemd ProtectHome")
     if not gitdir.is_relative_to(repo):
         raise ValueError("external Git metadata is outside the updater's write scope")
@@ -87,6 +92,8 @@ def _confined_layout(repo: Path, gitdir: Path, python: str) -> Path:
         raise ValueError("Git self-update requires a checkout-local Python virtual environment")
     if not interpreter.parent.parent.resolve(strict=True).is_relative_to(repo):
         raise ValueError("virtual environment directory resolves outside the checkout")
+    if _hidden_by_protect_home(interpreter.resolve(strict=True)):
+        raise ValueError("Python interpreter target is hidden by systemd ProtectHome")
     return interpreter
 
 
