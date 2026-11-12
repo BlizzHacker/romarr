@@ -3631,6 +3631,7 @@ RENDER.media=()=>settingsPage('Media Management',
   +chk('retain_downloads_after_import','Keep completed downloads for seeding after import',SETTINGS.retain_downloads_after_import)
   +chk('overwrite_existing','Overwrite an existing file',SETTINGS.overwrite_existing)
   +chk('rescan_after_import','Tell your library server to rescan after an import',SETTINGS.rescan_after_import)
+  +chk('reconcile_after_import','Reconcile Wanted aliases against verified library files after an import',SETTINGS.reconcile_after_import!==false)
   +chk('clamav_enabled','Scan downloads with ClamAV before importing them',SETTINGS.clamav_enabled)
   +fld('clamav_address','ClamAV address',SETTINGS.clamav_address||'','text',
      'placeholder="tcp://clamav:3310 or /run/clamav/clamd.sock"')
