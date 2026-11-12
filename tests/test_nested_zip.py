@@ -880,8 +880,8 @@ def test_nested_disc_lookup_reuses_member_index(monkeypatch):
 
 
 @pytest.mark.parametrize("sheet, contents", [
-    ("Game.cue", b"REM no track names\\n"),
-    ("Game.gdi", b"0\\n"),
+    ("Game.cue", b"REM no track names\n"),
+    ("Game.gdi", b"0\n"),
 ])
 def test_nested_disc_sheet_with_no_track_references_is_rejected(
         tmp_path, sheet, contents):
@@ -901,8 +901,8 @@ def test_nested_disc_sheet_with_no_track_references_is_rejected(
 
 
 @pytest.mark.parametrize("sheet, contents", [
-    ("Game.cue", b'FILE "tracks/track.bin" BINARY\\n'),
-    ("Game.gdi", b'1\\n1 0 4 2352 tracks/track.bin 0\\n'),
+    ("Game.cue", b'FILE "tracks/track.bin" BINARY\n'),
+    ("Game.gdi", b'1\n1 0 4 2352 tracks/track.bin 0\n'),
 ])
 def test_nested_disc_reference_cannot_match_wrong_directory(
         tmp_path, sheet, contents):
@@ -921,10 +921,10 @@ def test_nested_disc_reference_cannot_match_wrong_directory(
     assert download.read_bytes() == original
 
 
-@pytest.mark.parametrize("reference", ["./track.bin", ".\\\\track.bin"])
+@pytest.mark.parametrize("reference", ["./track.bin", ".\\track.bin"])
 def test_nested_disc_accepts_same_directory_reference_prefix(tmp_path, reference):
     """An explicit current-directory prefix still resolves a real sidecar."""
-    cue = f'FILE "{reference}" BINARY\\n'.encode()
+    cue = f'FILE "{reference}" BINARY\n'.encode()
     original = zip_bytes({"disc.zip": zip_bytes({
         "Game.cue": cue, "track.bin": b"correct track",
     })})
@@ -968,9 +968,9 @@ def test_classic_zip_with_exactly_65535_members_has_no_zip64_locator(tmp_path):
         for index in range(65_535):
             out.writestr(f"{index:05}.txt", b"")
     data = archive.read_bytes()
-    end = data.rfind(b"PK\\x05\\x06")
+    end = data.rfind(b"PK\x05\x06")
     assert end >= 20
-    assert data[end - 20:end - 16] != b"PK\\x06\\x07"
+    assert data[end - 20:end - 16] != b"PK\x06\x07"
     nested_zip.check_zip_central_directory(
         archive, max_members=nested_zip.MAX_OUTER_ZIP_MEMBERS)
     with pytest.raises(ValueError, match="member-count limit exceeded"):
