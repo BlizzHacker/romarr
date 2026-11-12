@@ -14,6 +14,7 @@ import concurrent.futures
 import glob
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
 import os
@@ -22,6 +23,7 @@ import re
 import secrets
 import shutil
 import stat
+import signal
 import subprocess
 import sys
 import tarfile
@@ -29,13 +31,14 @@ import tempfile
 import threading
 import time
 import zipfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from urllib.parse import quote, urljoin, urlsplit
+from urllib.parse import parse_qs, quote, urljoin, urlsplit
 
 import requests
 
-from .retained_collection import magnet_hash, owner_records
+from .retained_collection import magnet_hash
 
 log = logging.getLogger(__name__)
 
@@ -46,6 +49,7 @@ MDM_CLI_NAMES = ("misterdownloadmanager-cli", "misterdownloadmanager-cli.exe")
 MDM_APP_NAMES = ("misterdownloadmanager", "misterdownloadmanager.exe")
 MDM_CATEGORIES = frozenset({"programs", "compressed", "documents", "music", "videos", "other"})
 TAG_PREFIX = "mdm-tag:"
+MAX_TORRENT_BYTES = 32 * 1024 * 1024
 
 _SHA256_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 _SAFE_SEGMENT_RE = re.compile(r"[^\w.\- ()\[\]]+", re.ASCII)
@@ -175,8 +179,11 @@ def default_install_dir(data_dir: str | Path | None = None) -> Path:
     env_dir = os.environ.get("MDM_INSTALL_DIR", "").strip()
     if env_dir:
         return Path(env_dir)
-    base = data_dir if data_dir else (os.environ.get("ROMARR_DATA", "").strip() or ".")
-    return Path(base) / "tools" / "mdm"
+    if data_dir:
+        return Path(data_dir) / "tools" / "mdm"
+    state = os.environ.get("ROMARR_DATA", "").strip()
+    base = Path(state).parent if state else Path(".")
+    return base / "tools" / "mdm"
 
 
 def _is_executable_file(path: Path) -> bool:
@@ -447,12 +454,86 @@ def install_mdm(
 # ------------------------------------------------------------------ ledgers --
 
 
+_LEDGER_LOCKS: dict[str, threading.RLock] = {}
+_LEDGER_LOCKS_GUARD = threading.Lock()
+_JOB_CONTROLS: dict[tuple[str, str], "_JobControl"] = {}
+_JOB_CONTROLS_GUARD = threading.Lock()
+
+
+@dataclass
+class _JobControl:
+    """Coordination handle shared across reloads for cancelling and stopping a job."""
+
+    cancel: threading.Event
+    done: threading.Event
+    future: concurrent.futures.Future | None = None
+    abort: Callable[[], None] | None = None
+
+
+def _ledger_key(path: str | Path) -> str:
+    return str(Path(path).resolve())
+
+
+def register_job_control(
+    ledger_path: str | Path,
+    job_id: str,
+    *,
+    abort: Callable[[], None] | None = None,
+) -> _JobControl:
+    """Register cancel and completion events for a background job keyed by ledger path."""
+    ctrl = _JobControl(cancel=threading.Event(), done=threading.Event(), abort=abort)
+    with _JOB_CONTROLS_GUARD:
+        _JOB_CONTROLS[(_ledger_key(ledger_path), job_id)] = ctrl
+    return ctrl
+
+
+def set_job_future(ctrl: _JobControl, future: concurrent.futures.Future) -> None:
+    """Attach the executor future to a registered job control handle."""
+    ctrl.future = future
+
+
+def clear_job_control(ledger_path: str | Path, job_id: str, ctrl: _JobControl | None = None) -> None:
+    """Mark a background job finished and remove its registry entry if still active."""
+    key = (_ledger_key(ledger_path), job_id)
+    with _JOB_CONTROLS_GUARD:
+        current = _JOB_CONTROLS.get(key)
+        if current is None or (ctrl is not None and current is not ctrl):
+            return
+        current.done.set()
+        _JOB_CONTROLS.pop(key, None)
+
+
+def stop_job(ledger_path: str | Path, job_id: str, *, timeout: float = 10.0) -> bool:
+    """Signal a job to cancel and wait until its worker has stopped or queued work cancels.
+
+    Returns True when no worker remains active, or False if the wait timed out.
+    """
+    key = (_ledger_key(ledger_path), job_id)
+    with _JOB_CONTROLS_GUARD:
+        ctrl = _JOB_CONTROLS.get(key)
+    if ctrl is None:
+        return True
+    ctrl.cancel.set()
+    if ctrl.abort is not None:
+        try:
+            ctrl.abort()
+        except Exception:  # noqa: BLE001
+            pass
+    if ctrl.future is not None and ctrl.future.cancel():
+        ctrl.done.set()
+        clear_job_control(ledger_path, job_id, ctrl)
+        return True
+    return ctrl.done.wait(timeout=timeout)
+
+
 class _MdmLedger:
     """Thread-safe JSON ledger tracking ROMarr-owned MDM jobs on disk."""
 
     def __init__(self, path: Path):
         self.path = path
-        self._lock = threading.RLock()
+        key = _ledger_key(path)
+        with _LEDGER_LOCKS_GUARD:
+            self._lock = _LEDGER_LOCKS.setdefault(key, threading.RLock())
 
     def _read_unlocked(self) -> dict[str, dict]:
         try:
@@ -477,6 +558,7 @@ class _MdmLedger:
                     pass
 
     def upsert(self, job_id: str, fields: dict) -> dict:
+        """Insert or update a job row in the persistent ledger."""
         with self._lock:
             data = self._read_unlocked()
             row = dict(data.get(job_id) or {})
@@ -485,6 +567,17 @@ class _MdmLedger:
             data[job_id] = row
             self._write_unlocked(data)
             return dict(row)
+
+    def update(self, job_id: str, fields: dict) -> dict | None:
+        """Update an existing job row; return None without recreating it if removed."""
+        with self._lock:
+            data = self._read_unlocked()
+            if job_id not in data:
+                return None
+            data[job_id].update(fields)
+            data[job_id]["id"] = job_id
+            self._write_unlocked(data)
+            return dict(data[job_id])
 
     def get(self, job_id: str) -> dict | None:
         with self._lock:
@@ -507,6 +600,124 @@ class _MdmLedger:
 # ----------------------------------------------------------- remote HTTPS --
 
 
+def _is_loopback_host(host: str | None) -> bool:
+    clean = str(host or "").strip().lower().strip("[]")
+    if clean in ("127.0.0.1", "localhost", "::1"):
+        return True
+    try:
+        return ipaddress.ip_address(clean).is_loopback
+    except ValueError:
+        return False
+
+
+def _close_response(resp) -> None:
+    close = getattr(resp, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def _read_bounded_response(resp, limit: int, label: str) -> bytes:
+    """Read an HTTP response payload up to `limit` bytes cleanly."""
+    headers = getattr(resp, "headers", None) or {}
+    content_length = headers.get("Content-Length")
+    if content_length is not None:
+        try:
+            declared = int(content_length)
+        except (TypeError, ValueError) as err:
+            raise MdmError(f"{label} returned an invalid Content-Length") from err
+        if declared < 0:
+            raise MdmError(f"{label} returned an invalid Content-Length")
+        if declared > limit:
+            raise MdmError(f"{label} exceeds the {limit // (1024 * 1024)} MiB safety limit")
+
+    iter_fn = getattr(resp, "iter_content", None)
+    if callable(iter_fn):
+        chunks: list[bytes] = []
+        total = 0
+        for chunk in iter_fn(chunk_size=64 * 1024):
+            if not chunk:
+                continue
+            total += len(chunk)
+            if total > limit:
+                raise MdmError(f"{label} exceeds the {limit // (1024 * 1024)} MiB safety limit")
+            chunks.append(chunk)
+        if chunks:
+            return b"".join(chunks)
+
+    raw = bytes(getattr(resp, "content", b"") or b"")
+    if len(raw) > limit:
+        raise MdmError(f"{label} exceeds the {limit // (1024 * 1024)} MiB safety limit")
+    return raw
+
+
+def _bdecode_next(buf: bytes, idx: int, depth: int = 0) -> tuple[object, int, tuple[int, int] | None]:
+    """Decode one bencoded value and return `(value, next_idx, info_span)` safely."""
+    if depth > 32 or idx >= len(buf):
+        raise ValueError("invalid bencode")
+    ch = buf[idx:idx + 1]
+    if ch == b"i":
+        end = buf.index(b"e", idx + 1)
+        return int(buf[idx + 1:end]), end + 1, None
+    if ch == b"l":
+        items = []
+        pos = idx + 1
+        info_span = None
+        while buf[pos:pos + 1] != b"e":
+            val, pos, span = _bdecode_next(buf, pos, depth + 1)
+            items.append(val)
+            if info_span is None and span is not None:
+                info_span = span
+        return items, pos + 1, info_span
+    if ch == b"d":
+        mapping: dict[bytes, object] = {}
+        pos = idx + 1
+        info_span = None
+        while buf[pos:pos + 1] != b"e":
+            key, pos, _ = _bdecode_next(buf, pos, depth + 1)
+            if not isinstance(key, bytes):
+                raise ValueError("invalid bencode dict key")
+            val_start = pos
+            val, pos, child_span = _bdecode_next(buf, pos, depth + 1)
+            mapping[key] = val
+            if depth == 0 and key == b"info" and isinstance(val, dict):
+                info_span = (val_start, pos)
+            elif info_span is None and child_span is not None:
+                info_span = child_span
+        return mapping, pos + 1, info_span
+    if b"0" <= ch <= b"9":
+        colon = buf.index(b":", idx)
+        size = int(buf[idx:colon])
+        if size < 0 or colon + 1 + size > len(buf):
+            raise ValueError("invalid bencode string")
+        start = colon + 1
+        return buf[start:start + size], start + size, None
+    raise ValueError("unexpected bencode token")
+
+
+def _extract_torrent_metadata(torrent_bytes: bytes) -> tuple[str, str]:
+    """Return `(info_hash_hex, name)` extracted from a `.torrent` payload, if valid."""
+    raw = bytes(torrent_bytes or b"")
+    try:
+        top, _, info_span = _bdecode_next(raw, 0, 0)
+    except (ValueError, IndexError):
+        return "", ""
+    if not isinstance(top, dict):
+        return "", ""
+    info_hash = ""
+    if info_span is not None:
+        info_hash = hashlib.sha1(raw[info_span[0]:info_span[1]], usedforsecurity=False).hexdigest().lower()
+    info = top.get(b"info")
+    name = ""
+    if isinstance(info, dict):
+        raw_name = info.get(b"name.utf-8") or info.get(b"name")
+        if isinstance(raw_name, bytes):
+            name = raw_name.decode("utf-8", errors="replace").strip()
+    return info_hash, name
+
+
 class MdmRemoteTransport:
     """Authenticated HTTPS transport for `misterdownloadmanager --headless` or Desktop."""
 
@@ -519,7 +730,22 @@ class MdmRemoteTransport:
         timeout: int = 30,
         session: requests.Session | None = None,
     ):
-        self.base_url = str(base_url or "").strip().rstrip("/")
+        raw_url = str(base_url or "").strip().rstrip("/")
+        self.rejected_reason = ""
+        if raw_url:
+            parts = urlsplit(raw_url)
+            scheme = parts.scheme.lower()
+            host = parts.hostname or ""
+            if not host or (scheme != "https" and not (scheme == "http" and _is_loopback_host(host))):
+                # Refuse plain http:// off-host so the Bearer token never crosses a network in cleartext.
+                self.base_url = ""
+                self.rejected_reason = (
+                    "Remote MDM URL must use https:// (plain http:// is allowed only for localhost/127.0.0.1)"
+                )
+            else:
+                self.base_url = raw_url
+        else:
+            self.base_url = ""
         self.api_token = str(api_token or "").strip()
         self.verify_tls = bool(verify_tls)
         self.timeout = max(1, int(timeout or 30))
@@ -535,7 +761,7 @@ class MdmRemoteTransport:
 
     def list_downloads(self, *, timeout: float | None = None) -> tuple[bool, list[dict], str]:
         if not self.base_url:
-            return False, [], "Remote MDM URL is required"
+            return False, [], self.rejected_reason or "Remote MDM URL is required"
         req_timeout = self.timeout if timeout is None else max(0.05, min(float(self.timeout), float(timeout)))
         try:
             resp = self.session.get(
@@ -556,6 +782,8 @@ class MdmRemoteTransport:
         return True, [r for r in rows if isinstance(r, dict)], ""
 
     def add_url(self, url: str, *, category: str = "", start: bool = True) -> tuple[bool, str, str]:
+        if not self.base_url:
+            return False, "", self.rejected_reason or "Remote MDM URL is required"
         body: dict = {"url": url, "start": bool(start)}
         cat = self._valid_category(category)
         if cat:
@@ -578,6 +806,8 @@ class MdmRemoteTransport:
         return True, job_id, ""
 
     def add_torrent(self, data: bytes, *, category: str = "", start: bool = True) -> tuple[bool, str, str]:
+        if not self.base_url:
+            return False, "", self.rejected_reason or "Remote MDM URL is required"
         params: dict[str, str] = {"start": "true" if start else "false"}
         cat = self._valid_category(category)
         if cat:
@@ -632,9 +862,11 @@ def _fetch_torrent_or_magnet(
         return current, None, ""
     if not current.lower().startswith(("http://", "https://")):
         return None, None, f"unsupported torrent link scheme: {urlsplit(current).scheme or 'none'}"
+    initial_host = urlsplit(current).hostname
     for _ in range(6):
+        resp = None
         try:
-            resp = session.get(current, timeout=timeout, allow_redirects=False)
+            resp = session.get(current, timeout=timeout, stream=True, allow_redirects=False)
         except requests.exceptions.InvalidSchema as err:
             match = re.search(r"(magnet:\?[^\s'\"]+)", str(err), re.I)
             if match:
@@ -643,20 +875,28 @@ def _fetch_torrent_or_magnet(
         except requests.RequestException as err:
             return None, None, f"could not fetch .torrent: {err.__class__.__name__}"
 
-        if resp.status_code in (301, 302, 303, 307, 308):
-            location = str(resp.headers.get("Location") or "").strip()
-            if location.lower().startswith("magnet:"):
-                return location, None, ""
-            if location:
-                next_url = urljoin(current, location)
-                if urlsplit(next_url).scheme.lower() not in ("http", "https"):
-                    return None, None, "unsafe redirect scheme while fetching .torrent"
-                current = next_url
-                continue
-            return None, None, f".torrent redirect {resp.status_code} missing Location"
-        if not getattr(resp, "ok", False) and getattr(resp, "status_code", 200) >= 400:
-            return None, None, f".torrent server returned HTTP {resp.status_code}"
-        raw = bytes(getattr(resp, "content", b"") or b"")
+        try:
+            if resp.status_code in (301, 302, 303, 307, 308):
+                location = str(resp.headers.get("Location") or "").strip()
+                if location.lower().startswith("magnet:"):
+                    return location, None, ""
+                if location:
+                    next_url = urljoin(current, location)
+                    next_parts = urlsplit(next_url)
+                    if next_parts.scheme.lower() not in ("http", "https"):
+                        return None, None, "unsafe redirect scheme while fetching .torrent"
+                    if _is_loopback_host(next_parts.hostname) and not _is_loopback_host(initial_host):
+                        return None, None, "unsafe loopback redirect while fetching .torrent"
+                    current = next_url
+                    continue
+                return None, None, f".torrent redirect {resp.status_code} missing Location"
+            if not getattr(resp, "ok", False) and getattr(resp, "status_code", 200) >= 400:
+                return None, None, f".torrent server returned HTTP {resp.status_code}"
+            raw = _read_bounded_response(resp, MAX_TORRENT_BYTES, "Torrent download")
+        except MdmError as err:
+            return None, None, str(err)
+        finally:
+            _close_response(resp)
         text = raw.lstrip()
         if text.startswith(b"magnet:"):
             return text.decode("utf-8", "ignore").strip(), None, ""
@@ -698,16 +938,41 @@ class _MdmBaseClient:
             remote_url, api_token, verify_tls=verify_tls,
             timeout=self._timeout, session=self._session,
         )
-        self._ledger = _MdmLedger(Path(self._save_path or ".") / ledger_name)
+        if self._mode == "remote":
+            env_state = os.environ.get("ROMARR_DATA", "").strip()
+            if self._data_dir:
+                ledger_dir = Path(self._data_dir)
+            elif env_state:
+                ledger_dir = Path(env_state).parent
+            elif self._save_path and Path(self._save_path).is_dir():
+                ledger_dir = Path(self._save_path)
+            else:
+                ledger_dir = Path(tempfile.gettempdir()) / "romarr-mdm"
+        else:
+            ledger_dir = Path(self._save_path or self._data_dir or ".")
+        self._ledger = _MdmLedger(ledger_dir / ledger_name)
         self._pool = concurrent.futures.ThreadPoolExecutor(
             max_workers=max(1, min(8, int(max_workers or 2))),
             thread_name_prefix="romarr-mdm",
         )
-        self._cancel_lock = threading.Lock()
-        self._cancels: dict[str, threading.Event] = {}
+        self._added = threading.local()
         self.detail = ""
-        self.last_job_id = ""
-        self.last_error = ""
+
+    @property
+    def last_job_id(self) -> str:
+        return str(getattr(self._added, "job_id", "") or "")
+
+    @last_job_id.setter
+    def last_job_id(self, value: str) -> None:
+        self._added.job_id = str(value or "")
+
+    @property
+    def last_error(self) -> str:
+        return str(getattr(self._added, "error", "") or "")
+
+    @last_error.setter
+    def last_error(self, value: str) -> None:
+        self._added.error = str(value or "")
 
     def _resolve_cli(self) -> str:
         return find_binary(self._cli_path, data_dir=self._data_dir or None)
@@ -724,49 +989,95 @@ class _MdmBaseClient:
         if not cli:
             raise MdmError("misterdownloadmanager-cli is not installed")
         cmd = [cli, "--json", *args]
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            creationflags=_SUBPROCESS_FLAGS,
-        )
-        final_event: dict = {}
-        try:
-            assert proc.stdout is not None
-            for raw_line in proc.stdout:
-                if cancel_event.is_set():
-                    proc.terminate()
-                    raise MdmError("cancelled by user")
-                line = raw_line.strip()
-                if not line:
-                    continue
+        watch_stop = threading.Event()
+        with tempfile.TemporaryFile(mode="w+", encoding="utf-8", errors="replace") as err_file:
+            popen_kwargs: dict = {
+                "stdout": subprocess.PIPE,
+                "stderr": err_file,
+                "text": True,
+                "encoding": "utf-8",
+                "errors": "replace",
+                "creationflags": _SUBPROCESS_FLAGS,
+            }
+            if sys.platform != "win32":
+                popen_kwargs["start_new_session"] = True
+            proc = subprocess.Popen(cmd, **popen_kwargs)
+
+            def _kill_proc_tree(*, force: bool = False) -> None:
+                if sys.platform == "win32":
+                    subprocess.run(
+                        ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        creationflags=_SUBPROCESS_FLAGS,
+                        check=False,
+                    )
+                    if proc.poll() is None:
+                        proc.kill()
+                    return
+                sig = signal.SIGKILL if force else signal.SIGTERM
                 try:
-                    evt = json.loads(line)
-                except ValueError:
-                    continue
-                if not isinstance(evt, dict):
-                    continue
-                ev_type = str(evt.get("event") or "").lower()
-                if evt.get("error") or ev_type == "error":
-                    raise MdmError(str(evt.get("error") or evt.get("message") or "MDM CLI error"))
-                if ev_type == "progress":
-                    self._ledger.upsert(job_id, {
-                        "downloaded": int(evt.get("downloaded") or 0),
-                        "size": int(evt.get("size") or 0),
-                        "speed": int(evt.get("speed") or 0),
-                        "phase": str(evt.get("phase") or ""),
-                    })
-                elif ev_type in ("done", "paused", "stopped"):
-                    final_event = evt
-            stderr_text = proc.stderr.read().strip() if proc.stderr is not None else ""
-            rc = proc.wait(timeout=10)
-        except Exception:
-            if proc.poll() is None:
-                proc.kill()
-            raise
+                    os.killpg(proc.pid, sig)
+                except (ProcessLookupError, OSError):
+                    if proc.poll() is None:
+                        if force:
+                            proc.kill()
+                        else:
+                            proc.terminate()
+
+            def _watch_cancel() -> None:
+                while not watch_stop.is_set() and proc.poll() is None:
+                    if cancel_event.wait(0.2):
+                        if proc.poll() is None:
+                            _kill_proc_tree(force=False)
+                            try:
+                                proc.wait(timeout=1.5)
+                            except subprocess.TimeoutExpired:
+                                if proc.poll() is None:
+                                    _kill_proc_tree(force=True)
+                        return
+
+            watcher = threading.Thread(target=_watch_cancel, daemon=True)
+            watcher.start()
+            final_event: dict = {}
+            try:
+                assert proc.stdout is not None
+                for raw_line in proc.stdout:
+                    if cancel_event.is_set():
+                        if proc.poll() is None:
+                            _kill_proc_tree(force=True)
+                        raise MdmError("cancelled by user")
+                    line = raw_line.strip()
+                    if not line:
+                        continue
+                    try:
+                        evt = json.loads(line)
+                    except ValueError:
+                        continue
+                    if not isinstance(evt, dict):
+                        continue
+                    ev_type = str(evt.get("event") or "").lower()
+                    if evt.get("error") or ev_type == "error":
+                        raise MdmError(str(evt.get("error") or evt.get("message") or "MDM CLI error"))
+                    if ev_type == "progress":
+                        self._ledger.update(job_id, {
+                            "downloaded": int(evt.get("downloaded") or 0),
+                            "size": int(evt.get("size") or 0),
+                            "speed": int(evt.get("speed") or 0),
+                            "phase": str(evt.get("phase") or ""),
+                        })
+                    elif ev_type in ("done", "paused", "stopped"):
+                        final_event = evt
+                rc = proc.wait(timeout=10)
+                err_file.seek(0)
+                stderr_text = err_file.read().strip()
+            except Exception:
+                if proc.poll() is None:
+                    _kill_proc_tree(force=True)
+                raise
+            finally:
+                watch_stop.set()
+                watcher.join(timeout=1.0)
         if cancel_event.is_set():
             raise MdmError("cancelled by user")
         if rc != 0:
@@ -809,15 +1120,11 @@ class _MdmBaseClient:
         err_msg = (proc.stderr or proc.stdout or "").strip()
         raise MdmError(err_msg or f"MDM CLI exited with code {proc.returncode}")
 
-    def _register_cancel(self, job_id: str) -> threading.Event:
-        ev = threading.Event()
-        with self._cancel_lock:
-            self._cancels[job_id] = ev
-        return ev
+    def _register_job(self, job_id: str) -> _JobControl:
+        return register_job_control(self._ledger.path, job_id)
 
-    def _clear_cancel(self, job_id: str) -> None:
-        with self._cancel_lock:
-            self._cancels.pop(job_id, None)
+    def _clear_job(self, job_id: str, ctrl: _JobControl) -> None:
+        clear_job_control(self._ledger.path, job_id, ctrl)
 
     def reachable(self) -> bool:
         if self._mode == "remote":
@@ -878,26 +1185,49 @@ class _MdmBaseClient:
             if r.get("status") == "error"
         ]
 
+    def _remote_id_for_row(self, row: dict | None, raw_id: str) -> str:
+        """Resolve MDM's numeric download id for a remote-mode `download_id`, if present."""
+        if raw_id.startswith("mdm-remote:"):
+            candidate = raw_id.removeprefix("mdm-remote:")
+            if candidate.isdigit():
+                return candidate
+        if row:
+            rid = str(row.get("remote_id") or "")
+            if rid.isdigit():
+                return rid
+            row_hash = str(row.get("hash") or "").lower()
+            tname = str(row.get("torrent_name") or row.get("name") or "")
+            ok, rows, _ = self._remote.list_downloads()
+            if ok:
+                for item in rows:
+                    item_hash = magnet_hash(str(item.get("url") or ""))
+                    if row_hash and item_hash == row_hash:
+                        return str(item.get("id") or "")
+                    if tname and str(item.get("file") or "").strip() == tname:
+                        return str(item.get("id") or "")
+        return ""
+
     def remove_download(self, download_id: str, *, delete_files: bool = False) -> bool:
         raw_id = str(download_id or "").strip()
         if not raw_id:
             return False
         if self._mode == "remote":
-            target = raw_id.removeprefix("mdm-remote:")
+            stored = self._ledger.get(raw_id)
+            target = self._remote_id_for_row(stored, raw_id)
             if not target.isdigit():
+                if stored is not None:
+                    self._ledger.remove(raw_id)
+                    return True
                 return False
             ok = self._remote.act("delete" if delete_files else "remove", [int(target)])
             if ok:
                 self._ledger.remove(raw_id)
             return ok
-        with self._cancel_lock:
-            ev = self._cancels.get(raw_id)
-            if ev is not None:
-                ev.set()
+        stopped = stop_job(self._ledger.path, raw_id, timeout=10.0)
         row = self._ledger.remove(raw_id)
         if row is None:
             return False
-        if delete_files:
+        if delete_files and stopped:
             job_dir = str(row.get("job_dir") or "")
             base = Path(self._save_path).resolve()
             if job_dir:
@@ -905,7 +1235,7 @@ class _MdmBaseClient:
                 if p.is_relative_to(base) and p != base:
                     shutil.rmtree(p, ignore_errors=True)
         torrent_stage = row.get("torrent_file")
-        if torrent_stage:
+        if torrent_stage and stopped:
             Path(torrent_stage).unlink(missing_ok=True)
         return True
 
@@ -962,10 +1292,25 @@ class MdmTorrentClient(_MdmBaseClient):
             cli_runner=cli_runner,
         )
         self._config = config
-        self.last_selected_file: dict = {}
-        self.last_retained_hash: str = ""
         self._files_lock = threading.Lock()
         self._files_cache: dict[str, list[dict]] = {}
+
+    @property
+    def last_selected_file(self) -> dict:
+        val = getattr(self._added, "selected_file", None)
+        return dict(val) if isinstance(val, dict) else {}
+
+    @last_selected_file.setter
+    def last_selected_file(self, value: dict) -> None:
+        self._added.selected_file = dict(value) if isinstance(value, dict) else {}
+
+    @property
+    def last_retained_hash(self) -> str:
+        return str(getattr(self._added, "retained_hash", "") or "")
+
+    @last_retained_hash.setter
+    def last_retained_hash(self, value: str) -> None:
+        self._added.retained_hash = str(value or "")
 
     @property
     def configured(self) -> bool:
@@ -1017,19 +1362,24 @@ class MdmTorrentClient(_MdmBaseClient):
         })
         self.last_job_id = job_id
         self.last_error = ""
-        cancel_ev = self._register_cancel(job_id)
+        ctrl = self._register_job(job_id)
+        cancel_ev = ctrl.cancel
 
         def _worker() -> None:
             src = source
             staged = torrent_file_path
             try:
-                self._ledger.upsert(job_id, {"status": "downloading"})
+                if cancel_ev.is_set() or self._ledger.get(job_id) is None:
+                    return
+                self._ledger.update(job_id, {"status": "downloading"})
                 if not src and release_url:
                     mag, tbytes, ferr = _fetch_torrent_or_magnet(
                         release_url, self._session, self._timeout,
                     )
+                    if cancel_ev.is_set():
+                        return
                     if ferr:
-                        self._ledger.upsert(job_id, {
+                        self._ledger.update(job_id, {
                             "status": "error", "error": ferr, "release_fault": False,
                         })
                         return
@@ -1038,7 +1388,9 @@ class MdmTorrentClient(_MdmBaseClient):
                     elif tbytes is not None:
                         staged = str(self._stage_torrent_bytes(tag, tbytes))
                         src = staged
-                        self._ledger.upsert(job_id, {"torrent_file": staged})
+                        self._ledger.update(job_id, {"torrent_file": staged})
+                if cancel_ev.is_set():
+                    return
                 cmd = ["torrent-get", src, "-o", job_dir]
                 if file_indices:
                     cmd.extend(["--files", ",".join(str(i) for i in file_indices)])
@@ -1046,30 +1398,56 @@ class MdmTorrentClient(_MdmBaseClient):
                 out_path = str(done.get("path") or "").strip()
                 if not out_path:
                     raise MdmError("MDM finished torrent without returning output path")
-                self._ledger.upsert(job_id, {
+                self._ledger.update(job_id, {
                     "status": "complete",
                     "content_path": out_path,
                     "save_path": out_path,
                     "size": int(done.get("size") or 0),
                 })
             except Exception as err:  # noqa: BLE001
-                self._ledger.upsert(job_id, {
-                    "status": "error",
-                    "error": str(err),
-                    "release_fault": False,
-                })
+                if not cancel_ev.is_set():
+                    self._ledger.update(job_id, {
+                        "status": "error",
+                        "error": str(err),
+                        "release_fault": False,
+                    })
             finally:
-                self._clear_cancel(job_id)
                 if staged:
                     Path(staged).unlink(missing_ok=True)
+                self._clear_job(job_id, ctrl)
 
-        self._pool.submit(_worker)
+        fut = self._pool.submit(_worker)
+        set_job_future(ctrl, fut)
         return True
+
+    def _record_remote_job(
+        self,
+        *,
+        remote_id: str,
+        name: str = "",
+        torrent_hash: str = "",
+        torrent_name: str = "",
+    ) -> str:
+        """Create a persistent tracking id for a remote-mode torrent (even when pending)."""
+        clean_rid = str(remote_id or "").strip()
+        tag = secrets.token_hex(8)
+        job_id = f"mdm-remote:{clean_rid}" if clean_rid else f"{TAG_PREFIX}{tag}"
+        self._ledger.upsert(job_id, {
+            "mode": "remote",
+            "tag": "" if clean_rid else tag,
+            "remote_id": clean_rid,
+            "name": name or torrent_name or torrent_hash or clean_rid or tag,
+            "torrent_name": torrent_name,
+            "hash": torrent_hash.lower(),
+            "status": "pending",
+            "created_at": time.time(),
+        })
+        return job_id
 
     def add(self, url: str, *, save_path: str | None = None, name: str = "") -> bool:
         del save_path
         if not self.configured:
-            self.last_error = "Standalone MDM Torrent client is not configured"
+            self.last_error = self._remote.rejected_reason or "Standalone MDM Torrent client is not configured"
             return False
         raw = str(url or "").strip()
         if not raw:
@@ -1077,7 +1455,22 @@ class MdmTorrentClient(_MdmBaseClient):
             return False
         if self._mode == "remote":
             ok, job_id, err = self._remote.add_url(raw, category=self._category, start=True)
-            self.last_job_id = f"mdm-remote:{job_id}" if job_id else ""
+            if ok:
+                thash = magnet_hash(raw) if raw.lower().startswith("magnet:") else ""
+                dn_list = parse_qs(urlsplit(raw).query).get("dn", []) if thash else []
+                tname = str(dn_list[0]).strip() if dn_list else ""
+                if job_id:
+                    self.last_job_id = self._record_remote_job(
+                        remote_id=job_id, name=name, torrent_hash=thash, torrent_name=tname,
+                    )
+                elif raw.lower().startswith("magnet:"):
+                    self.last_job_id = self._record_remote_job(
+                        remote_id="", name=name, torrent_hash=thash, torrent_name=tname,
+                    )
+                else:
+                    self.last_job_id = ""
+            else:
+                self.last_job_id = ""
             self.last_error = err
             return ok
         if raw.lower().startswith("magnet:"):
@@ -1091,15 +1484,24 @@ class MdmTorrentClient(_MdmBaseClient):
 
     def add_torrent_file(self, torrent_bytes: bytes, *, name: str = "") -> bool:
         if not self.configured:
-            self.last_error = "Standalone MDM Torrent client is not configured"
+            self.last_error = self._remote.rejected_reason or "Standalone MDM Torrent client is not configured"
             return False
         raw = bytes(torrent_bytes or b"")
         if not raw.lstrip().startswith(b"d"):
             self.last_error = "uploaded payload is not a valid .torrent file"
             return False
         if self._mode == "remote":
+            info_hash, torrent_name = _extract_torrent_metadata(raw)
             ok, job_id, err = self._remote.add_torrent(raw, category=self._category, start=True)
-            self.last_job_id = f"mdm-remote:{job_id}" if job_id else ""
+            if ok:
+                self.last_job_id = self._record_remote_job(
+                    remote_id=job_id,
+                    name=name or torrent_name,
+                    torrent_hash=info_hash,
+                    torrent_name=torrent_name,
+                )
+            else:
+                self.last_job_id = ""
             self.last_error = err
             return ok
         tag = secrets.token_hex(8)
@@ -1116,6 +1518,7 @@ class MdmTorrentClient(_MdmBaseClient):
         owned_selections=(),
     ) -> bool:
         """Fetch metadata via MDM CLI and download ONLY `selected_file`."""
+        del owned_selections
         self.last_selected_file = {}
         self.last_retained_hash = ""
         self.last_job_id = ""
@@ -1132,10 +1535,8 @@ class MdmTorrentClient(_MdmBaseClient):
             self.last_error = "selective download requires a magnet link"
             return False
 
-        # Refuse if an active job already holds conflicting non-ROMarr ownership.
+        # Every selective MDM job downloads into its own isolated job_dir, so no other job's files are touched.
         info_hash = magnet_hash(raw_magnet)
-        owned_records = owner_records(owned_selections)
-        del owned_records  # Checked cleanly per isolated MDM job directory.
 
         try:
             meta = self._run_json_once(["torrent-info", raw_magnet], timeout=120.0)
@@ -1249,6 +1650,59 @@ class MdmTorrentClient(_MdmBaseClient):
             if row.get("status") == "complete" and row.get("selected_file") and row.get("content_path")
         ]
 
+    def _correlate_remote_row(self, row: dict, tracked: list[dict]) -> dict | None:
+        """Match a remote `/api/list` item to a tracked pending/submitted job entry."""
+        rid = str(row.get("id") or "").strip()
+        row_hash = magnet_hash(str(row.get("url") or ""))
+        fname = str(row.get("file") or "").strip()
+        for entry in tracked:
+            if entry.get("mode") != "remote":
+                continue
+            if rid and str(entry.get("remote_id") or "") == rid:
+                return entry
+        for entry in tracked:
+            if entry.get("mode") != "remote":
+                continue
+            ehash = str(entry.get("hash") or "").lower()
+            if row_hash and ehash and ehash == row_hash:
+                if rid and not entry.get("remote_id"):
+                    self._ledger.update(entry["id"], {"remote_id": rid})
+                return entry
+        for entry in tracked:
+            if entry.get("mode") != "remote" or entry.get("remote_id"):
+                continue
+            tname = str(entry.get("torrent_name") or "").strip()
+            rname = str(entry.get("name") or "").strip()
+            if fname and ((tname and tname == fname) or (rname and rname == fname)):
+                if rid:
+                    self._ledger.update(entry["id"], {"remote_id": rid})
+                return entry
+        return None
+
+    def active_downloads(self) -> list[dict]:
+        if self._mode == "remote":
+            ok, rows, _ = self._remote.list_downloads()
+            if not ok:
+                return []
+            tracked = self._ledger.rows()
+            out = []
+            for r in rows:
+                if str(r.get("status") or "") not in ("Queued", "Downloading", "Stopped"):
+                    continue
+                entry = self._correlate_remote_row(r, tracked)
+                rhash = magnet_hash(str(r.get("url") or "")) or (entry.get("hash", "") if entry else "")
+                out.append({
+                    "id": entry["id"] if entry else f"mdm-remote:{r.get('id')}",
+                    "name": r.get("file", ""),
+                    "hash": rhash,
+                    "tags": entry.get("tag", "") if entry else "",
+                    "state": str(r.get("status") or "").lower(),
+                    "size": int(r.get("size") or 0),
+                    "downloaded": int(r.get("downloaded") or 0),
+                })
+            return out
+        return super().active_downloads()
+
     def completed(self, timeout: float | None = None) -> list[dict]:
         if not self.configured:
             return []
@@ -1256,16 +1710,21 @@ class MdmTorrentClient(_MdmBaseClient):
             ok, rows, _ = self._remote.list_downloads(timeout=timeout)
             if not ok:
                 return []
+            tracked = self._ledger.rows()
             out = []
             for row in rows:
                 if str(row.get("status") or "") != "Complete":
                     continue
+                entry = self._correlate_remote_row(row, tracked)
                 fname = str(row.get("file") or "").strip()
                 raw_path = str(row.get("path") or "").strip()
                 resolved_path = raw_path or (str(Path(self._save_path) / fname) if (self._save_path and fname) else "")
+                row_hash = magnet_hash(str(row.get("url") or "")) or (entry.get("hash", "") if entry else "")
                 out.append({
-                    "id": f"mdm-remote:{row.get('id')}",
+                    "id": entry["id"] if entry else f"mdm-remote:{row.get('id')}",
                     "name": fname,
+                    "hash": row_hash,
+                    "tags": entry.get("tag", "") if entry else "",
                     "content_path": resolved_path,
                     "save_path": self._save_path or resolved_path,
                     "state": "complete",
@@ -1343,7 +1802,7 @@ class MdmDirectClient(_MdmBaseClient):
     def add(self, url: str, *, save_path: str | None = None, name: str = "", headers: dict[str, str] | None = None) -> bool:
         del save_path
         if not self.configured:
-            self.last_error = "Standalone MDM Direct client is not configured"
+            self.last_error = self._remote.rejected_reason or "Standalone MDM Direct client is not configured"
             return False
         raw = str(url or "").strip()
         scheme = urlsplit(raw).scheme.lower()
@@ -1375,11 +1834,14 @@ class MdmDirectClient(_MdmBaseClient):
         })
         self.last_job_id = job_id
         self.last_error = ""
-        cancel_ev = self._register_cancel(job_id)
+        ctrl = self._register_job(job_id)
+        cancel_ev = ctrl.cancel
 
         def _worker() -> None:
             try:
-                self._ledger.upsert(job_id, {"status": "downloading"})
+                if cancel_ev.is_set() or self._ledger.get(job_id) is None:
+                    return
+                self._ledger.update(job_id, {"status": "downloading"})
                 args = ["get", raw, "-o", job_dir, "-c", str(self._connections)]
                 for hk, hv in (headers or {}).items():
                     clean_k = re.sub(r"[\r\n:]+", "", str(hk or "")).strip()
@@ -1390,22 +1852,24 @@ class MdmDirectClient(_MdmBaseClient):
                 out_path = str(done.get("path") or "").strip()
                 if not out_path:
                     raise MdmError("MDM HTTP download finished without an output file path")
-                self._ledger.upsert(job_id, {
+                self._ledger.update(job_id, {
                     "status": "complete",
                     "content_path": out_path,
                     "save_path": str(Path(out_path).parent),
                     "size": int(done.get("size") or 0),
                 })
             except Exception as err:  # noqa: BLE001
-                self._ledger.upsert(job_id, {
-                    "status": "error",
-                    "error": str(err),
-                    "release_fault": False,
-                })
+                if not cancel_ev.is_set():
+                    self._ledger.update(job_id, {
+                        "status": "error",
+                        "error": str(err),
+                        "release_fault": False,
+                    })
             finally:
-                self._clear_cancel(job_id)
+                self._clear_job(job_id, ctrl)
 
-        self._pool.submit(_worker)
+        fut = self._pool.submit(_worker)
+        set_job_future(ctrl, fut)
         return True
 
     def completed(self, timeout: float | None = None) -> list[dict]:

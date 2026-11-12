@@ -30,6 +30,8 @@ def _wait_until(predicate, timeout: float = 3.0) -> None:
 
 
 class _FakeResp:
+    """Minimal HTTP response stub for mocked requests.Session calls."""
+
     def __init__(self, *, status_code=200, content=b"", text=None, headers=None, json_data=None):
         self.status_code = status_code
         self.ok = 200 <= status_code < 400
@@ -37,42 +39,56 @@ class _FakeResp:
         self.text = text if text is not None else self.content.decode("utf-8", errors="replace")
         self.headers = headers or {}
         self._json = json_data
+        self.closed = False
 
     def json(self):
+        """Decode the response body as JSON."""
         if self._json is not None:
             return self._json
         return json.loads(self.text)
 
     def raise_for_status(self):
+        """Raise requests.HTTPError when status_code indicates an HTTP error."""
         if self.status_code >= 400:
             raise requests.HTTPError(f"HTTP {self.status_code}", response=self)
 
     def iter_content(self, chunk_size=65536):
+        """Yield response body slices up to chunk_size bytes."""
         for i in range(0, len(self.content), chunk_size):
             yield self.content[i:i + chunk_size]
+
+    def close(self):
+        """Record that callers explicitly closed streaming responses."""
+        self.closed = True
 
     def __enter__(self):
         return self
 
     def __exit__(self, *args):
+        self.close()
         return False
 
 
 class _FakeSession:
+    """Minimal requests.Session test double that records GET/POST calls."""
+
     def __init__(self, handler):
         self.handler = handler
         self.calls = []
 
     def get(self, url, **kw):
+        """Record a GET request and delegate to handler."""
         self.calls.append(("GET", url, kw))
         return self.handler("GET", url, kw)
 
     def post(self, url, **kw):
+        """Record a POST request and delegate to handler."""
         self.calls.append(("POST", url, kw))
         return self.handler("POST", url, kw)
 
 
 def _make_archive_bytes(kind: str, binary_name: str, payload: bytes = b"#!/bin/sh\necho mdm 0.5.2\n") -> bytes:
+    """Build an in-memory tar.gz or zip archive containing a binary and a path-traversal probe."""
     buf = io.BytesIO()
     if kind == "tar.gz":
         with tarfile.open(fileobj=buf, mode="w:gz") as tf:
@@ -462,3 +478,215 @@ def test_build_client_helper_preserves_legacy_single_arg_factory(tmp_path, monke
     assert len(svc.clients) == 1
     assert tested["ok"] is True
 
+
+
+def test_default_install_dir_uses_parent_of_romarr_data_file(tmp_path, monkeypatch):
+    """Fall back to parent directory when ROMARR_DATA points to romarr.json."""
+    state_file = tmp_path / "state" / "romarr.json"
+    monkeypatch.setenv("ROMARR_DATA", str(state_file))
+    assert mdm.default_install_dir() == tmp_path / "state" / "tools" / "mdm"
+
+
+def test_mdm_ledger_shares_lock_across_instances_and_update_skips_removed(tmp_path):
+    """Verify ledger instances share locks by canonical path and update() never resurrects deleted rows."""
+    import threading
+
+    ledger_path = tmp_path / "ledger.json"
+    l1 = mdm._MdmLedger(ledger_path)
+    l2 = mdm._MdmLedger(ledger_path)
+    assert l1._lock is l2._lock
+
+    errors = []
+
+    def _writer(ledger, prefix: str):
+        try:
+            for i in range(15):
+                ledger.upsert(f"{prefix}-{i}", {"status": "queued", "n": i})
+        except Exception as exc:  # pragma: no cover - surfaced in assertion below
+            errors.append(exc)
+
+    t1 = threading.Thread(target=_writer, args=(l1, "a"))
+    t2 = threading.Thread(target=_writer, args=(l2, "b"))
+    t1.start()
+    t2.start()
+    t1.join(timeout=5.0)
+    t2.join(timeout=5.0)
+    assert errors == []
+    assert len(l1.rows()) == 30
+
+    l1.upsert("dead-1", {"status": "queued"})
+    assert l1.remove("dead-1") is not None
+    assert l2.update("dead-1", {"status": "error", "error": "late write"}) is None
+    assert l1.get("dead-1") is None
+
+
+def test_remote_transport_blocks_insecure_remote_http_and_surfaces_reason(tmp_path):
+    """Reject plain http:// for non-loopback hosts while permitting https:// and loopback http://."""
+    bad = mdm.MdmRemoteTransport("http://mdm.example.com:8443", "tok")
+    assert bad.rejected_reason
+    ok_list, rows, detail = bad.list_downloads()
+    assert ok_list is False and rows == [] and detail == bad.rejected_reason
+    ok_add, _, detail_add = bad.add_url("magnet:?xt=urn:btih:" + "a" * 40)
+    assert ok_add is False and detail_add == bad.rejected_reason
+
+    c_bad = mdm.MdmTorrentClient(mdm.MdmTorrentConfig(
+        mode="remote", remote_url="http://mdm.example.com:8443", api_token="tok",
+        data_dir=str(tmp_path / "d1"),
+    ))
+    assert c_bad.reachable() is False
+    assert "https" in c_bad.detail.lower()
+
+    loop = mdm.MdmRemoteTransport("http://127.0.0.1:8443", "tok")
+    tls = mdm.MdmRemoteTransport("https://mdm.example.com:8443", "tok")
+    assert loop.rejected_reason == ""
+    assert tls.rejected_reason == ""
+
+
+def test_run_ndjson_drains_large_stderr_and_cancels_silent_subprocess(tmp_path):
+    """Drain >128 KiB of stderr without deadlock and cancel silent subprocesses promptly."""
+    import concurrent.futures
+    import sys
+    import threading
+    import time
+
+    script_py = tmp_path / "fake_mdm.py"
+    script_py.write_text(
+        "import sys, time\n"
+        "mode = sys.argv[-1]\n"
+        "if mode == 'spam':\n"
+        "    sys.stderr.write('E' * 160000)\n"
+        "    sys.stderr.flush()\n"
+        "    print('{\"event\":\"done\"}', flush=True)\n"
+        "elif mode == 'hang':\n"
+        "    time.sleep(30)\n",
+        encoding="utf-8",
+    )
+    if sys.platform == "win32":
+        shim = tmp_path / "fake-mdm.cmd"
+        shim.write_text(f'@echo off\r\n"{sys.executable}" "{script_py}" %*\r\n', encoding="utf-8")
+    else:
+        shim = tmp_path / "fake-mdm"
+        shim.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{script_py}" "$@"\n', encoding="utf-8")
+        shim.chmod(0o755)
+
+    client = mdm.MdmTorrentClient(mdm.MdmTorrentConfig(
+        mode="cli",
+        save_path=str(tmp_path / "dl"),
+        cli_path=str(shim),
+        timeout=15,
+        data_dir=str(tmp_path / "data"),
+    ))
+    # Drain >128 KiB of stderr (beyond OS 64 KiB pipe buffers) without deadlock.
+    t0 = time.monotonic()
+    res = client._run_ndjson(["spam"], "job-stderr", threading.Event())
+    assert time.monotonic() - t0 < 5.0
+    assert res.get("event") == "done"
+
+    # Cancel an otherwise silent 30s subprocess via remove_download + _JobControl.
+    job_id = "mdm-hang-1"
+    job_dir = tmp_path / "dl" / "hang-job"
+    job_dir.mkdir(parents=True)
+    client._ledger.upsert(job_id, {
+        "name": "Hang Job",
+        "status": "downloading",
+        "job_dir": str(job_dir),
+        "save_path": str(job_dir),
+    })
+    ctrl = mdm.register_job_control(client._ledger.path, job_id)
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+
+    def _run_and_clear():
+        try:
+            return client._run_ndjson(["hang"], job_id, ctrl.cancel)
+        finally:
+            mdm.clear_job_control(client._ledger.path, job_id, ctrl)
+
+    try:
+        fut = pool.submit(_run_and_clear)
+        mdm.set_job_future(ctrl, fut)
+        time.sleep(0.25)
+        start_cancel = time.monotonic()
+        assert client.remove_download(job_id, delete_files=True) is True
+        assert time.monotonic() - start_cancel < 5.0
+        assert client._ledger.get(job_id) is None
+        assert not job_dir.exists()
+    finally:
+        mdm.clear_job_control(client._ledger.path, job_id, ctrl)
+        pool.shutdown(wait=False)
+
+
+def test_remote_torrent_upload_correlates_pending_row_and_removes_by_tag(tmp_path):
+    """Correlate pending remote .torrent uploads via sha1 infohash/name and remove via tag."""
+    info_dict = b"d6:lengthi123e4:name12:Sonic.md.zip12:piece lengthi16384e6:pieces20:01234567890123456789e"
+    torrent_bytes = b"d4:info" + info_dict + b"e"
+    expected_hash = hashlib.sha1(info_dict).hexdigest().lower()
+
+    meta_hash, meta_name = mdm._extract_torrent_metadata(torrent_bytes)
+    assert meta_hash == expected_hash
+    assert meta_name == "Sonic.md.zip"
+
+    remote_state = {"status": "Downloading"}
+    act_calls = []
+
+    def _handler(method, url, kw):
+        if method == "POST" and url.endswith("/api/torrent"):
+            return _FakeResp(json_data={"ok": True, "id": None, "pending": True})
+        if method == "GET" and url.endswith("/api/list"):
+            if remote_state["status"] == "Downloading":
+                return _FakeResp(json_data={"downloads": [{
+                    "id": 42,
+                    "file": "Sonic.md.zip",
+                    "status": "Downloading",
+                    "size": 123,
+                    "downloaded": 60,
+                }]})
+            if remote_state["status"] == "Complete":
+                return _FakeResp(json_data={"downloads": [{
+                    "id": 42,
+                    "file": "Sonic.md.zip",
+                    "status": "Complete",
+                    "size": 123,
+                    "path": "/remote/dl/Sonic.md.zip",
+                }]})
+            return _FakeResp(json_data={"downloads": []})
+        if method == "POST" and url.endswith("/api/act"):
+            act_calls.append(kw.get("json") or kw.get("data"))
+            remote_state["status"] = "Removed"
+            return _FakeResp(json_data={"ok": True})
+        raise AssertionError(f"unexpected call: {method} {url}")
+
+    session = _FakeSession(_handler)
+    client = mdm.MdmTorrentClient(
+        mdm.MdmTorrentConfig(
+            mode="remote",
+            remote_url="https://mdm.example.com:8443",
+            api_token="tok",
+            save_path="/remote/dl",
+            data_dir=str(tmp_path / "mdm-data"),
+        ),
+        session=session,
+    )
+
+    assert client.add_torrent_file(torrent_bytes, name="Sonic (USA)") is True
+    job_id = client.last_job_id
+    assert job_id.startswith("mdm-tag:")
+
+    active = client.active_downloads()
+    assert len(active) == 1
+    assert active[0]["id"] == job_id
+    assert active[0]["hash"] == expected_hash
+    assert active[0]["tags"] == job_id.split(":", 1)[1]
+
+    remote_state["status"] = "Complete"
+    done = client.completed()
+    assert len(done) == 1
+    assert done[0]["id"] == job_id
+    assert done[0]["hash"] == expected_hash
+    assert done[0]["tags"] == job_id.split(":", 1)[1]
+    assert done[0]["content_path"] == "/remote/dl/Sonic.md.zip"
+
+    assert client.remove_download(job_id, delete_files=True) is True
+    assert act_calls == [{"action": "delete", "ids": [42]}]
+    assert client.completed() == []
+    assert not (tmp_path / "mdm-data" / ".romarr-mdm-torrents.json").parent.joinpath("nonexistent").exists()
+    assert (tmp_path / "mdm-data" / ".romarr-mdm-torrents.json").exists()

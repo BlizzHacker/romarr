@@ -21,18 +21,33 @@ import threading
 import time
 import xml.etree.ElementTree as ET
 import zlib
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 import requests
 
-from .mdm import _MdmLedger, _safe_name
+from .mdm import (
+    _MdmLedger,
+    _close_response,
+    _safe_name,
+    clear_job_control,
+    register_job_control,
+    set_job_future,
+    stop_job,
+)
 
 log = logging.getLogger(__name__)
 
+MAX_NZB_BYTES = 32 * 1024 * 1024
+
 _QUOTED_SUBJECT_RE = re.compile(r'"([^"]+)"')
-_FILE_EXT_RE = re.compile(r"([^\s/\\]+\.(?:zip|7z|rar|iso|chd|rvz|sfc|smc|nes|gb|gbc|gba|nds|n64|z64|bin|cue|rom|par2|nfo|nzb))\b", re.I)
+_FILE_EXT_RE = re.compile(
+    r"([^\s/\\]+\.(?:zip|7z|rar|iso|chd|rvz|sfc|smc|nes|gb|gbc|gba|nds|n64|z64|bin|cue|rom|par2|nfo|nzb)"
+    r"(?:\.(?:[0-9]{2,4}|r[0-9]{2,3}|rev))?)(?=\s|$)",
+    re.I,
+)
 _YENC_KV_RE = re.compile(r"\b([a-z0-9_]+)=([^\s]+)", re.I)
 _ENTITY_OR_DOCTYPE_RE = re.compile(r"<!(?:DOCTYPE|ENTITY)\b", re.I)
 
@@ -51,6 +66,8 @@ class ArticleMissingError(NntpError):
 
 @dataclass(frozen=True)
 class NzbSegment:
+    """Single article segment referenced inside an NZB file entry."""
+
     number: int
     size: int
     message_id: str
@@ -58,6 +75,8 @@ class NzbSegment:
 
 @dataclass(frozen=True)
 class NzbFile:
+    """Parsed NZB `<file>` entry grouping Usenet groups and sorted segments."""
+
     subject: str
     filename: str
     groups: tuple[str, ...]
@@ -66,6 +85,8 @@ class NzbFile:
 
 @dataclass(frozen=True)
 class YencPart:
+    """Decoded yEnc single-part or multi-part payload and byte-range metadata."""
+
     name: str
     data: bytes
     begin: int
@@ -73,13 +94,16 @@ class YencPart:
     part: int
     total: int
     expected_crc32: int | None
+    file_size: int = 0
 
 
 def _strip_ns(tag: str) -> str:
+    """Return lowercase XML element local name with any namespace URI stripped."""
     return tag.rsplit("}", 1)[-1].lower() if "}" in tag else tag.lower()
 
 
 def _subject_filename(subject: str, index: int) -> str:
+    """Extract a sanitized filename (including split archive suffixes) from an NZB subject."""
     text = str(subject or "").strip()
     quoted = _QUOTED_SUBJECT_RE.findall(text)
     if quoted:
@@ -171,6 +195,7 @@ def parse_nzb(xml_payload: bytes | str) -> list[NzbFile]:
 
 
 def _parse_yenc_params(line: str) -> dict[str, str]:
+    """Parse `key=value` tokens from a `=ybegin`, `=ypart`, or `=yend` line."""
     out: dict[str, str] = {}
     name_idx = line.find(" name=")
     head = line[:name_idx] if name_idx >= 0 else line
@@ -231,6 +256,16 @@ def decode_yenc(lines: list[bytes]) -> YencPart:
         except ValueError as err:
             raise ArticleMissingError("invalid yEnc size trailer") from err
 
+    file_size = 0
+    header_size_str = ybegin.get("size")
+    if header_size_str:
+        try:
+            file_size = int(header_size_str)
+        except ValueError as err:
+            raise ArticleMissingError("invalid yEnc header size") from err
+        if file_size < 0:
+            raise ArticleMissingError("invalid yEnc header size")
+
     part_num = int(ybegin.get("part") or 0)
     total_parts = int(ybegin.get("total") or (1 if not part_num else 0))
     begin = int(ypart.get("begin") or 1)
@@ -259,6 +294,7 @@ def decode_yenc(lines: list[bytes]) -> YencPart:
         part=part_num,
         total=total_parts,
         expected_crc32=expected_crc,
+        file_size=file_size or len(payload),
     )
 
 
@@ -287,6 +323,7 @@ class NntpConnection:
         self._reader = None
 
     def connect(self) -> str:
+        """Open TCP/TLS socket to the NNTP server and authenticate if credentials are set."""
         raw = socket.create_connection((self.host, self.port), timeout=self.timeout)
         if self.use_ssl:
             ctx = ssl.create_default_context()
@@ -313,6 +350,7 @@ class NntpConnection:
         return banner
 
     def close(self) -> None:
+        """Send QUIT and close the NNTP socket and buffered reader safely."""
         if self._sock is not None:
             try:
                 self._sock.sendall(b"QUIT\r\n")
@@ -392,8 +430,25 @@ class NntpConnection:
         raise NntpError(f"NNTP fetch failed ({msg}): {status}")
 
 
+def _origin_key(url: str) -> tuple[str, str, int] | None:
+    """Return normalized `(scheme, hostname, port)` for an HTTP(S) URL without userinfo."""
+    try:
+        parts = urlsplit(str(url or "").strip())
+        scheme = parts.scheme.lower()
+        if scheme not in ("http", "https") or not parts.hostname:
+            return None
+        if parts.username is not None or parts.password is not None:
+            return None
+        port = parts.port or (443 if scheme == "https" else 80)
+        return scheme, parts.hostname.lower(), port
+    except ValueError:
+        return None
+
+
 @dataclass(frozen=True)
 class BuiltinNzbConfig:
+    """Connection and storage settings for `BuiltinNzbClient`."""
+
     host: str = ""
     port: int = 563
     use_ssl: bool = True
@@ -404,9 +459,11 @@ class BuiltinNzbConfig:
     save_path: str = "/downloads/usenet"
     category: str = "romarr"
     timeout: int = 30
+    allowed_origins: tuple[str, ...] = ()
 
     @property
     def base_url(self) -> str:
+        """Return the formatted `nntp(s)://host:port` identifier string."""
         clean = str(self.host or "").strip()
         if not clean:
             return ""
@@ -426,24 +483,47 @@ class BuiltinNzbClient:
         config: BuiltinNzbConfig,
         *,
         session: requests.Session | None = None,
+        allowed_origins: Iterable[str] = (),
     ):
         self._config = config
         self._session = session or requests.Session()
         self._save_path = str(config.save_path or "").strip()
         self._connections = max(1, min(32, int(config.connections or 8)))
+        self._static_origins = tuple(
+            str(u).strip() for u in (*config.allowed_origins, *allowed_origins) if str(u).strip()
+        )
+        self.allowed_origins_provider: Callable[[], Iterable[str]] | None = None
         self._ledger = _MdmLedger(Path(self._save_path or ".") / ".romarr-builtin-nzb.json")
         self._pool = concurrent.futures.ThreadPoolExecutor(
             max_workers=2,
             thread_name_prefix="romarr-nzb-job",
         )
-        self._cancel_lock = threading.Lock()
-        self._cancels: dict[str, threading.Event] = {}
+        self._conn_cond = threading.Condition()
+        self._idle_conns: list[NntpConnection] = []
+        self._leased_conns = 0
+        self._active_jobs = 0
+        self._added = threading.local()
         self.detail = ""
-        self.last_job_id = ""
-        self.last_error = ""
+
+    @property
+    def last_job_id(self) -> str:
+        return str(getattr(self._added, "job_id", "") or "")
+
+    @last_job_id.setter
+    def last_job_id(self, value: str) -> None:
+        self._added.job_id = str(value or "")
+
+    @property
+    def last_error(self) -> str:
+        return str(getattr(self._added, "error", "") or "")
+
+    @last_error.setter
+    def last_error(self, value: str) -> None:
+        self._added.error = str(value or "")
 
     @property
     def configured(self) -> bool:
+        """Whether both NNTP host and destination save directory are configured."""
         return bool(str(self._config.host or "").strip() and self._save_path)
 
     def _new_conn(self) -> NntpConnection:
@@ -457,7 +537,115 @@ class BuiltinNzbClient:
             timeout=self._config.timeout,
         )
 
+    def _borrow_conn(self, cancel_ev: threading.Event) -> NntpConnection:
+        """Acquire an NNTP socket within the shared cross-job connection budget."""
+        need_connect = False
+        conn: NntpConnection | None = None
+        with self._conn_cond:
+            while True:
+                if cancel_ev.is_set():
+                    raise NntpError("cancelled by user")
+                if self._idle_conns:
+                    conn = self._idle_conns.pop()
+                    self._leased_conns += 1
+                    break
+                if (self._leased_conns + len(self._idle_conns)) < self._connections:
+                    self._leased_conns += 1
+                    need_connect = True
+                    break
+                self._conn_cond.wait(timeout=0.2)
+        if not need_connect:
+            assert conn is not None
+            return conn
+        conn = self._new_conn()
+        try:
+            conn.connect()
+        except Exception:
+            conn.close()
+            with self._conn_cond:
+                self._leased_conns = max(0, self._leased_conns - 1)
+                self._conn_cond.notify_all()
+            raise
+        return conn
+
+    def _release_conn(self, conn: NntpConnection | None, *, reusable: bool) -> None:
+        """Return a healthy NNTP socket to the pool or close and free its slot."""
+        if conn is None:
+            return
+        with self._conn_cond:
+            self._leased_conns = max(0, self._leased_conns - 1)
+            if reusable and (self._leased_conns + len(self._idle_conns)) < self._connections:
+                self._idle_conns.append(conn)
+                conn_to_close = None
+            else:
+                conn_to_close = conn
+            self._conn_cond.notify_all()
+        if conn_to_close is not None:
+            conn_to_close.close()
+
+    def _drain_idle_conns(self) -> None:
+        """Close idle pooled NNTP connections once no jobs remain active."""
+        to_close: list[NntpConnection] = []
+        with self._conn_cond:
+            if self._active_jobs == 0 and self._leased_conns == 0 and self._idle_conns:
+                to_close = list(self._idle_conns)
+                self._idle_conns.clear()
+        for conn in to_close:
+            conn.close()
+
+    def _allowed_origin_keys(self) -> set[tuple[str, str, int]]:
+        origins: list[str] = list(self._static_origins)
+        if callable(self.allowed_origins_provider):
+            try:
+                origins.extend(str(u).strip() for u in self.allowed_origins_provider() if str(u).strip())
+            except Exception:  # noqa: BLE001
+                pass
+        keys: set[tuple[str, str, int]] = set()
+        for origin in origins:
+            k = _origin_key(origin)
+            if k is not None:
+                keys.add(k)
+        return keys
+
+    def _is_allowed_nzb_url(self, url: str) -> bool:
+        target = _origin_key(url)
+        if target is None:
+            return False
+        return target in self._allowed_origin_keys()
+
+    @staticmethod
+    def _read_bounded_nzb(resp) -> bytes:
+        headers = getattr(resp, "headers", None) or {}
+        content_length = headers.get("Content-Length")
+        if content_length is not None:
+            try:
+                declared = int(content_length)
+            except (TypeError, ValueError) as err:
+                raise NntpError("NZB server returned invalid Content-Length") from err
+            if declared < 0:
+                raise NntpError("NZB server returned invalid Content-Length")
+            if declared > MAX_NZB_BYTES:
+                raise NntpError("NZB download exceeds the 32 MiB safety limit")
+        iter_fn = getattr(resp, "iter_content", None)
+        if callable(iter_fn):
+            chunks: list[bytes] = []
+            total = 0
+            for chunk in iter_fn(chunk_size=64 * 1024):
+                if not chunk:
+                    continue
+                total += len(chunk)
+                if total > MAX_NZB_BYTES:
+                    raise NntpError("NZB download exceeds the 32 MiB safety limit")
+                chunks.append(chunk)
+            if chunks:
+                return b"".join(chunks)
+        raw = bytes(getattr(resp, "content", b"") or b"")
+        if len(raw) > MAX_NZB_BYTES:
+            raise NntpError("NZB download exceeds the 32 MiB safety limit")
+        return raw
+
     def reachable(self) -> bool:
+        """Verify TCP/TLS reachability and authentication against the configured NNTP server."""
         if not self.configured:
             self.detail = "NNTP Host and Save Path are required"
             return False
@@ -479,14 +667,40 @@ class BuiltinNzbClient:
         scheme = urlsplit(text).scheme.lower()
         if scheme not in ("http", "https"):
             raise NntpError(f"unsupported NZB source scheme: {scheme or 'none'}")
-        try:
-            resp = self._session.get(text, timeout=self._config.timeout)
-            resp.raise_for_status()
-        except requests.RequestException as err:
-            raise NntpError(f"could not fetch NZB: {err.__class__.__name__}") from err
-        return bytes(getattr(resp, "content", b"") or b"")
+        current = text
+        for _ in range(6):
+            if not self._is_allowed_nzb_url(current):
+                raise NntpError("NZB download URL is outside configured indexer origins")
+            resp = None
+            try:
+                resp = self._session.get(
+                    current,
+                    timeout=self._config.timeout,
+                    stream=True,
+                    allow_redirects=False,
+                )
+            except requests.RequestException as err:
+                raise NntpError(f"could not fetch NZB: {err.__class__.__name__}") from err
+
+            try:
+                status = int(getattr(resp, "status_code", 200) or 200)
+                if status in (301, 302, 303, 307, 308):
+                    location = str((getattr(resp, "headers", None) or {}).get("Location") or "").strip()
+                    if not location:
+                        raise NntpError("NZB redirect missing Location")
+                    current = urljoin(current, location)
+                    continue
+                if hasattr(resp, "raise_for_status"):
+                    resp.raise_for_status()
+                return self._read_bounded_nzb(resp)
+            except requests.RequestException as err:
+                raise NntpError(f"could not fetch NZB: {err.__class__.__name__}") from err
+            finally:
+                _close_response(resp)
+        raise NntpError("too many redirects while fetching NZB")
 
     def add(self, url: str, *, save_path: str | None = None, name: str = "") -> bool:
+        """Fetch and validate an NZB (inline XML or allowed indexer URL) and enqueue download."""
         del save_path
         if not self.configured:
             self.last_error = "Standalone Usenet client is not configured"
@@ -519,59 +733,87 @@ class BuiltinNzbClient:
         })
         self.last_job_id = job_id
         self.last_error = ""
-        cancel_ev = threading.Event()
-        with self._cancel_lock:
-            self._cancels[job_id] = cancel_ev
-
-        self._pool.submit(self._run_job, job_id, job_dir, nzb_files, cancel_ev)
+        ctrl = register_job_control(self._ledger.path, job_id)
+        fut = self._pool.submit(self._run_job, job_id, job_dir, nzb_files, ctrl)
+        set_job_future(ctrl, fut)
         return True
+
+    @staticmethod
+    def _verify_assembled_ranges(
+        ranges: list[tuple[int, int]],
+        expected_file_size: int | None,
+        expected_parts: int | None,
+        seen_parts: set[int],
+    ) -> None:
+        if not ranges:
+            raise ArticleMissingError("NZB file produced no decoded segments")
+        cursor = 1
+        for begin, end in sorted(ranges):
+            if begin > cursor:
+                raise ArticleMissingError(
+                    f"yEnc segment gap before byte {begin} (expected {cursor})"
+                )
+            if begin < cursor:
+                raise ArticleMissingError(
+                    f"yEnc segment overlap at byte {begin} (cursor {cursor})"
+                )
+            cursor = end + 1
+        assembled = cursor - 1
+        if expected_file_size and assembled != expected_file_size:
+            raise ArticleMissingError(
+                f"yEnc assembled size {assembled} does not match declared file size {expected_file_size}"
+            )
+        if expected_parts and seen_parts and len(seen_parts) != expected_parts:
+            raise ArticleMissingError(
+                f"yEnc part count mismatch: got {len(seen_parts)}, expected {expected_parts}"
+            )
 
     def _run_job(
         self,
         job_id: str,
         job_dir: Path,
         nzb_files: list[NzbFile],
-        cancel_ev: threading.Event,
+        ctrl,
     ) -> None:
-        self._ledger.upsert(job_id, {"status": "downloading"})
-        thread_local = threading.local()
-        opened_lock = threading.Lock()
-        opened: list[NntpConnection] = []
+        cancel_ev = ctrl.cancel
+        with self._conn_cond:
+            self._active_jobs += 1
+        if cancel_ev.is_set() or self._ledger.get(job_id) is None:
+            with self._conn_cond:
+                self._active_jobs = max(0, self._active_jobs - 1)
+            self._drain_idle_conns()
+            clear_job_control(self._ledger.path, job_id, ctrl)
+            return
+
+        self._ledger.update(job_id, {"status": "downloading"})
         bytes_lock = threading.Lock()
         downloaded = 0
-
-        def _get_conn() -> NntpConnection:
-            conn = getattr(thread_local, "conn", None)
-            if conn is None:
-                conn = self._new_conn()
-                conn.connect()
-                thread_local.conn = conn
-                with opened_lock:
-                    opened.append(conn)
-            return conn
-
-        def _reset_conn() -> None:
-            conn = getattr(thread_local, "conn", None)
-            if conn is not None:
-                conn.close()
-                thread_local.conn = None
 
         def _fetch_segment(seg: NzbSegment) -> YencPart:
             if cancel_ev.is_set():
                 raise NntpError("cancelled by user")
             last_exc: Exception | None = None
             for attempt in range(2):
+                conn: NntpConnection | None = None
+                reusable = False
                 try:
-                    lines = _get_conn().fetch_body(seg.message_id)
-                    return decode_yenc(lines)
-                except (ArticleMissingError, NntpAuthError):
+                    conn = self._borrow_conn(cancel_ev)
+                    lines = conn.fetch_body(seg.message_id)
+                    part = decode_yenc(lines)
+                    reusable = True
+                    return part
+                except (ArticleMissingError, NntpAuthError) as err:
+                    # Connection stayed protocol-clean on 430; drop auth-failed connections.
+                    reusable = isinstance(err, ArticleMissingError)
                     raise
                 except (OSError, NntpError) as err:
                     last_exc = err
-                    _reset_conn()
+                    reusable = False
                     if attempt == 0 and not cancel_ev.is_set():
                         continue
                     raise
+                finally:
+                    self._release_conn(conn, reusable=reusable)
             raise NntpError(str(last_exc or "NNTP segment failed"))
 
         part_files: list[Path] = []
@@ -580,6 +822,7 @@ class BuiltinNzbClient:
                 self._connections,
                 max(1, max(len(nf.segments) for nf in nzb_files)),
             )
+            window = max(2, max_socks * 2)
             with concurrent.futures.ThreadPoolExecutor(
                 max_workers=max_socks, thread_name_prefix="romarr-nntp",
             ) as seg_pool:
@@ -590,18 +833,55 @@ class BuiltinNzbClient:
                     part_path = job_dir / f".{nf.filename}.partial"
                     part_files.append(part_path)
                     is_par2 = nf.filename.lower().endswith(".par2")
+                    ranges: list[tuple[int, int]] = []
+                    seen_parts: set[int] = set()
+                    expected_file_size: int | None = None
+                    expected_parts: int | None = None
                     try:
                         with open(part_path, "wb") as out:
-                            futures = {
-                                seg_pool.submit(_fetch_segment, seg): seg
-                                for seg in nf.segments
-                            }
-                            for fut in concurrent.futures.as_completed(futures):
-                                part = fut.result()
-                                out.seek(max(0, part.begin - 1))
-                                out.write(part.data)
-                                with bytes_lock:
-                                    downloaded += len(part.data)
+                            seg_iter = iter(nf.segments)
+                            pending: set[concurrent.futures.Future] = set()
+                            for _ in range(window):
+                                seg = next(seg_iter, None)
+                                if seg is None:
+                                    break
+                                pending.add(seg_pool.submit(_fetch_segment, seg))
+                            while pending:
+                                if cancel_ev.is_set():
+                                    for rem in pending:
+                                        rem.cancel()
+                                    raise NntpError("cancelled by user")
+                                done, pending = concurrent.futures.wait(
+                                    pending, timeout=0.2,
+                                    return_when=concurrent.futures.FIRST_COMPLETED,
+                                )
+                                for fut in done:
+                                    part = fut.result()
+                                    out.seek(max(0, part.begin - 1))
+                                    out.write(part.data)
+                                    ranges.append((part.begin, part.end))
+                                    if part.part > 0:
+                                        seen_parts.add(part.part)
+                                    if part.total > 0 and expected_parts is None:
+                                        expected_parts = part.total
+                                    if part.file_size > 0:
+                                        if expected_file_size is None:
+                                            expected_file_size = part.file_size
+                                        elif part.file_size != expected_file_size:
+                                            raise ArticleMissingError(
+                                                "inconsistent yEnc file sizes across parts"
+                                            )
+                                    with bytes_lock:
+                                        downloaded += len(part.data)
+                                    del part, fut
+                                while len(pending) < window and not cancel_ev.is_set():
+                                    seg = next(seg_iter, None)
+                                    if seg is None:
+                                        break
+                                    pending.add(seg_pool.submit(_fetch_segment, seg))
+                        self._verify_assembled_ranges(
+                            ranges, expected_file_size, expected_parts, seen_parts,
+                        )
                         os.replace(part_path, final_path)
                         part_files.remove(part_path)
                     except ArticleMissingError:
@@ -609,35 +889,40 @@ class BuiltinNzbClient:
                         if is_par2:
                             continue
                         raise
-                    self._ledger.upsert(job_id, {"downloaded": downloaded})
+                    self._ledger.update(job_id, {"downloaded": downloaded})
 
-            self._ledger.upsert(job_id, {
+            if cancel_ev.is_set():
+                raise NntpError("cancelled by user")
+            self._ledger.update(job_id, {
                 "status": "complete",
                 "content_path": str(job_dir),
                 "save_path": str(job_dir),
                 "downloaded": downloaded,
             })
         except ArticleMissingError as err:
-            self._ledger.upsert(job_id, {
-                "status": "error",
-                "error": str(err),
-                "release_fault": True,
-            })
+            if not cancel_ev.is_set():
+                self._ledger.update(job_id, {
+                    "status": "error",
+                    "error": str(err),
+                    "release_fault": True,
+                })
         except Exception as err:  # noqa: BLE001
-            self._ledger.upsert(job_id, {
-                "status": "error",
-                "error": str(err),
-                "release_fault": False,
-            })
+            if not cancel_ev.is_set():
+                self._ledger.update(job_id, {
+                    "status": "error",
+                    "error": str(err),
+                    "release_fault": False,
+                })
         finally:
             for pf in part_files:
                 pf.unlink(missing_ok=True)
-            for conn in opened:
-                conn.close()
-            with self._cancel_lock:
-                self._cancels.pop(job_id, None)
+            with self._conn_cond:
+                self._active_jobs = max(0, self._active_jobs - 1)
+            self._drain_idle_conns()
+            clear_job_control(self._ledger.path, job_id, ctrl)
 
     def completed(self, timeout: float | None = None) -> list[dict]:
+        """Return completed NZB job directories ready for ROMarr import."""
         del timeout
         if not self.configured:
             return []
@@ -655,6 +940,7 @@ class BuiltinNzbClient:
         ]
 
     def active_downloads(self) -> list[dict]:
+        """Return queued or downloading NZB jobs from the persistent ledger."""
         return [
             {
                 "id": row["id"],
@@ -668,6 +954,7 @@ class BuiltinNzbClient:
         ]
 
     def failed_jobs(self) -> list[dict]:
+        """Return failed NZB jobs, preserving `release_fault` for 430/CRC failures."""
         return [
             {
                 "id": row["id"],
@@ -680,17 +967,15 @@ class BuiltinNzbClient:
         ]
 
     def remove_download(self, download_id: str, *, delete_files: bool = False) -> bool:
+        """Cancel any active worker, wait for stop, remove ledger row, and optionally delete files."""
         raw_id = str(download_id or "").strip()
         if not raw_id:
             return False
-        with self._cancel_lock:
-            ev = self._cancels.get(raw_id)
-            if ev is not None:
-                ev.set()
+        stopped = stop_job(self._ledger.path, raw_id, timeout=10.0)
         row = self._ledger.remove(raw_id)
         if row is None:
             return False
-        if delete_files:
+        if delete_files and stopped:
             job_dir = str(row.get("job_dir") or "")
             base = Path(self._save_path).resolve()
             if job_dir:

@@ -1342,12 +1342,35 @@ class ROMarr:
             })
         return out
 
+    def _nzb_allowed_origins(self) -> tuple[str, ...]:
+        """Return configured Prowlarr and direct indexer origins allowed for NZB fetches."""
+        urls: list[str] = []
+        prowlarr_cfg = getattr(self.prowlarr, "_config", None)
+        if prowlarr_cfg is not None:
+            url = str(getattr(prowlarr_cfg, "base_url", "") or "").strip()
+            if url:
+                urls.append(url)
+        stored_prowlarr = str(self.store.settings.get("_prowlarr_url") or "").strip()
+        if stored_prowlarr:
+            urls.append(stored_prowlarr)
+        for cfg in self.store.list_items("indexers"):
+            if not cfg.get("enable", True):
+                continue
+            url = str(cfg.get("url") or "").strip()
+            if url:
+                urls.append(url)
+        return tuple(dict.fromkeys(urls))
+
     def _build_client(self, cfg: dict):
         """Instantiate a configured client, preserving legacy 1-arg build_client mocks."""
         params = inspect.signature(build_client).parameters.values()
         if any(p.name == "data_dir" or p.kind == inspect.Parameter.VAR_KEYWORD for p in params):
-            return build_client(cfg, data_dir=str(self.store.path.parent))
-        return build_client(cfg)
+            client = build_client(cfg, data_dir=str(self.store.path.parent))
+        else:
+            client = build_client(cfg)
+        if client is not None and hasattr(client, "allowed_origins_provider"):
+            client.allowed_origins_provider = self._nzb_allowed_origins
+        return client
 
     def reload_clients(self) -> None:
         """Rebuild the live clients from stored configuration.
