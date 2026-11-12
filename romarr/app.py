@@ -2704,6 +2704,25 @@ class ROMarr:
         failures = {(job["client_id"], job["id"]): job
                     for job in self._failed_jobs() if job.get("id")}
         now = datetime.now(timezone.utc)
+        # Snapshot candidates under the queue lock, but never hold it while
+        # querying download clients. A slow client must not block queue writes.
+        candidates = []
+        if stall_minutes > 0:
+            with self._lock:
+                for row in self.queue:
+                    if row.blocklisted or not row.release_id or row.state != "grabbed":
+                        continue
+                    age = self._row_age_minutes(row, now)
+                    if age is not None and age >= stall_minutes:
+                        candidates.append((
+                            row, row.release_id, row.download_client,
+                            row.download_id, row.at))
+
+        stalled: dict[int, tuple] = {}
+        for row, release_id, client_id, download_id, grab_at in candidates:
+            if not self._is_download_active_or_complete(row):
+                stalled[id(row)] = (release_id, client_id, download_id, grab_at)
+
         dead: list[QueueItem] = []
         with self._lock:
             for row in self.queue:
@@ -2722,8 +2741,10 @@ class ROMarr:
                     continue
                 if row.state == "grabbed" and stall_minutes > 0:
                     age = self._row_age_minutes(row, now)
+                    identity = (row.release_id, row.download_client,
+                                row.download_id, row.at)
                     if (age is not None and age >= stall_minutes
-                            and not self._is_download_active_or_complete(row)):
+                            and stalled.get(id(row)) == identity):
                         row.state = "failed"
                         row.release_fault = True
                         row.detail = (f"stalled: no import after "
@@ -5828,7 +5849,9 @@ class ROMarr:
                     # Disabled scheduled checks must not send notifications
                     # or consume the one-per-version notification marker.
                     should_notify = (
-                        self.store.settings.get("update_check", True)
+                        str(self.store.settings.get("update_channel")
+                            or "stable").lower() == channel
+                        and self.store.settings.get("update_check", True)
                         and self.store.settings.get("_update_notified") != latest)
                     if should_notify:
                         self.store.settings["_update_notified"] = latest
@@ -7921,8 +7944,10 @@ def make_handler(service: ROMarr):
                 except ValueError as exc:
                     return self._json(400, {"error": str(exc)})
                 with service._metadata_lock:
-                    service.store.settings.update(settings)
-                    service.store.save()
+                    # Keep restore preferences serialized with update launch.
+                    with service._lock:
+                        service.store.settings.update(settings)
+                        service.store.save()
                     service.reload_metadata()
                     service.reload_clients()
                     service.reload_libraries()
