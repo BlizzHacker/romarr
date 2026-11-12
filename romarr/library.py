@@ -33,7 +33,8 @@ from .dat import BAD_DUMP, UNKNOWN, VERIFIED, Match, hash_bytes, hash_stream
 from .platforms import Platform, resolve, romm_fs_slug
 from .nested_zip import (MAX_OUTER_ZIP_MEMBERS, NestedZipIndex, StagingBudget,
                          check_zip_central_directory)
-from .selection import pick_all_rom_sets, pick_rom_set
+from .selection import (_cue_and_gdi_names, _names_in_sheet, _resolve_beside,
+                        pick_all_rom_sets, pick_rom_set)
 
 log = logging.getLogger(__name__)
 
@@ -403,44 +404,51 @@ class _PathSource(_Source):
 
 
 def _complete_nested_zip_sets(sets, read):
-    """Discard playlists lacking any required disc in their own ZIP container.
+    """Reject incomplete nested playlists and readable CUE/GDI disc sheets.
 
-    A playlist may be listed in one ZIP while discs live in another. The
-    archive separation needed for safe track grouping means that cannot be
-    imported as a complete game; do not publish an unplayable playlist.
+    An unreadable disc sheet retains the existing companion-file fallback.
     """
     accepted = []
     for game in sets:
-        if not game.primary.lower().endswith(".m3u"):
-            accepted.append(game)
-            continue
-        try:
-            raw = read(game.primary)
-        except (OSError, ValueError, RuntimeError, zipfile.BadZipFile):
-            raw = None
-        if raw is None:
-            log.warning("skipping unreadable nested ZIP playlist %r", game.primary)
-            continue
-        contents = raw.decode("utf-8-sig", errors="replace") if isinstance(raw, bytes) else str(raw)
-        requested = [line.strip() for line in contents.splitlines()
-                     if line.strip() and not line.lstrip().startswith("#")]
-        present = {Path(name.replace("\\", "/")).name.casefold()
-                   for name in game.members if name != game.primary}
-        # "./Disc.chd" is a safe same-directory playlist reference, and
-        # _playlist_members already resolves it. Do not allow subfolders,
-        # traversal, absolute paths or cross-archive companion borrowing.
-        normalized = [name[2:] if name.startswith("./") else name
-                      for name in requested]
-        valid = bool(normalized) and all(
-            name not in ("", ".", "..") and "/" not in name
-            and "\\" not in name and ":" not in name
-            and name.casefold() in present for name in normalized)
-        if valid:
-            accepted.append(game)
-        else:
-            log.warning("skipping incomplete nested ZIP playlist %r", game.primary)
-    return accepted
+        if game.primary.lower().endswith(".m3u"):
+            try:
+                raw = read(game.primary)
+            except (OSError, ValueError, RuntimeError, zipfile.BadZipFile):
+                raw = None
+            if raw is None:
+                log.warning("skipping unreadable nested ZIP playlist %r", game.primary)
+                continue
+            contents = raw.decode("utf-8-sig", errors="replace") if isinstance(raw, bytes) else str(raw)
+            requested = [line.strip() for line in contents.splitlines()
+                         if line.strip() and not line.lstrip().startswith("#")]
+            present = {Path(name.replace("\\", "/")).name.casefold()
+                       for name in game.members if name != game.primary}
+            normalized = [name[2:] if name.startswith("./") else name
+                          for name in requested]
+            valid = bool(normalized) and all(
+                name not in ("", ".", "..") and "/" not in name
+                and "\\" not in name and ":" not in name
+                and name.casefold() in present for name in normalized)
+            if not valid:
+                log.warning("skipping incomplete nested ZIP playlist %r", game.primary)
+                continue
 
+        # Playlists may reference CUE/GDI files; verify their track lists too.
+        members = list(game.members)
+        incomplete_sheet = None
+        for sheet in members:
+            if not sheet.lower().endswith((".cue", ".gdi")):
+                continue
+            named = _names_in_sheet(sheet, read, _cue_and_gdi_names)
+            if named is not None and any(
+                    not _resolve_beside(sheet, (name,), members) for name in named):
+                incomplete_sheet = sheet
+                break
+        if incomplete_sheet is not None:
+            log.warning("skipping incomplete nested ZIP disc sheet %r", incomplete_sheet)
+            continue
+        accepted.append(game)
+    return accepted
 
 class _NestedZipSource(_Source):
     """Present nested ZIP members through the existing streaming ZIP readers.
@@ -1038,6 +1046,14 @@ def _import_rom_from_source(source, candidates, chosen_sets, download, platform,
                     final = destination / name
                     if not is_safe_name(name, destination):
                         raise ValueError(f"unsafe destination path: {name!r}")
+                    # Detect existing file ancestors before publishing any member.
+                    for parent in Path(name).parents:
+                        if parent == Path("."):
+                            continue
+                        ancestor = destination / parent
+                        if ancestor.exists() and not ancestor.is_dir():
+                            raise ValueError(
+                                f"destination ancestor is not a directory: {ancestor}")
                     if final.exists() and final.is_dir():
                         raise ValueError(f"destination requires a file but is a directory: {final}")
                     if final.exists() and final.stat().st_size == 0:
