@@ -162,6 +162,7 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "/api/v1/hub/catalogue": ("GET", "Search the plugin catalogue."),
     "/api/v1/hub/plugins": ("GET", "The plugin catalogue, unfiltered."),
     "/api/v1/hub/igir": ("GET", "Igir v5.8.0 1G1R front-end status, default profile, and CLI execution (POST runs or previews an Igir 1G1R job with {romm} output tokens)."),
+    "/api/v1/hub/exo2romm": ("GET", "eXo2romm eXoDOS-to-RomM ZIP repackager status, attribution to derkommutator, and defaults (POST previews or repackages eXoDOS game zips)."),
     "/api/v1/hub/fleet": ("GET", "Multi-device and network library sync profiles for ES-DE, RetroPie/ArcadePunks, Batocera, Argosy, Grout, Steam Deck, and RetroArch WebDAV (POST builds a 1G1R + gamelist.xml sync plan)."),
     "/api/v1/mcp": ("GET", "Model Context Protocol (MCP) tool manifest and Open-Eyes desktop bridge configuration for ROMarr."),
     "/api/v1/hub/plugin": ("POST", "Install, enable, disable or uninstall a plugin."),
@@ -462,6 +463,9 @@ def spec(version: str = "0.0.0", *, base_url: str = "") -> dict:
     paths["/api/v1/queue/import-plan"]["get"]["parameters"] = [
         {"name": "index", "in": "query", "required": True,
          "schema": {"type": "integer", "minimum": 0}}]
+    paths["/api/v1/hub/exo2romm"].update(_operation(
+        "/api/v1/hub/exo2romm", "POST",
+        "Preview or run eXo2romm eXoDOS-to-RomM ZIP repackaging (crediting derkommutator/eXo2romm)."))
     _guide_contracts(paths)
 
     return {

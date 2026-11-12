@@ -948,6 +948,8 @@ def mcp_manifest(base_url: str = "http://localhost:6868") -> dict:
              "description": "List connected library servers (RomM, Retrom, Gaseous, Gameyfin) and their health."},
             {"name": "romarr_igir_1g1r", "method": "POST", "path": "/api/v1/hub/igir",
              "description": "Preview or run Igir v5.8.0 1G1R verification and {romm} sorting."},
+            {"name": "romarr_exo2romm_repackage", "method": "POST", "path": "/api/v1/hub/exo2romm",
+             "description": "Preview or repackage eXoDOS game zips for standalone RomM playback (crediting derkommutator/eXo2romm)."},
             {"name": "romarr_fleet_sync_plan", "method": "POST", "path": "/api/v1/hub/fleet",
              "description": "Build a 1G1R + gamelist.xml sync plan for ES-DE, RetroPie/ArcadePunks, Batocera, Argosy, Grout, or Steam Deck."},
             {"name": "romarr_search_releases", "method": "GET", "path": "/api/v1/release",
@@ -971,4 +973,442 @@ def mcp_manifest(base_url: str = "http://localhost:6868") -> dict:
                 }
             }
         }
+    }
+
+
+# ---------------------------------------------- eXo2romm (eXoDOS -> RomM) --
+
+EXO2ROMM_VERSION = "0.1.0"
+EXO2ROMM_AUTHOR = "derkommutator"
+EXO2ROMM_UPSTREAM_URL = "https://github.com/derkommutator/eXo2romm"
+EXO2ROMM_PLUGIN_REPO = "https://github.com/BlizzHacker/rom-hub-exo2romm"
+EXO2ROMM_CREDIT = (
+    "Original creator: derkommutator (https://github.com/derkommutator/eXo2romm, "
+    "The Unlicense). This plugin was inspired to assist with more users having this."
+)
+EXO2ROMM_INSPIRED_NOTE = (
+    "This plugin was inspired to assist with more users having standalone eXoDOS "
+    "game zips in RomM and ROMarr, building on derkommutator's eXo2romm."
+)
+
+DEFAULT_EXO2ROMM_PROFILE: dict[str, object] = {
+    "dos_dir": "/data/eXoDOS/Content/eXo/eXoDOS/!dos",
+    "output_dir": "/var/lib/romm/library/roms/dos",
+    "error_log": "",
+    "input_paths": [],
+    "dry_run": True,
+    "overwrite": False,
+}
+
+_EXO_NEEDLE = ".\\exodos\\"
+_EXO_MOUNT_KEYWORDS = frozenset({"mount", "imgmount", "boot"})
+_EXO_BOUNDARY_CHARS = ("", " ", "\t", '"', "\r")
+
+
+def exo2romm_status() -> dict:
+    """Return status, defaults, and upstream attribution for the eXo2romm plugin."""
+    installed = False
+    enabled = False
+    try:
+        _, registry = _import()
+        info = _installed_slugs(registry).get("exo2romm")
+        if info is not None:
+            installed = True
+            enabled = bool(info.get("enabled", False))
+    except Exception:
+        pass
+    return {
+        "available": True,
+        "engine": "pure-python",
+        "version": EXO2ROMM_VERSION,
+        "plugin_slug": "exo2romm",
+        "plugin_installed": installed,
+        "plugin_enabled": enabled,
+        "plugin_repo": EXO2ROMM_PLUGIN_REPO,
+        "upstream_author": EXO2ROMM_AUTHOR,
+        "upstream_url": EXO2ROMM_UPSTREAM_URL,
+        "credit": EXO2ROMM_CREDIT,
+        "inspired_note": EXO2ROMM_INSPIRED_NOTE,
+        "default_profile": dict(DEFAULT_EXO2ROMM_PROFILE),
+    }
+
+
+def rewrite_exo_dosbox_conf_bytes(raw: bytes, top: str) -> tuple[bytes, int]:
+    """Rewrite pack-root `.\\eXoDOS\\` mounts in `dosbox.conf` bytes while preserving EOLs.
+
+    Mirrors `derkommutator/eXo2romm`: only lines starting cleanly (after optional
+    leading whitespace and optional `@`) with `mount`, `imgmount`, or `boot` are
+    edited via literal case-insensitive matching; comments and foreign paths stay untouched.
+    """
+    ltop = top.lower()
+    nlen = len(_EXO_NEEDLE)
+    out_chunks: list[bytes] = []
+    rewritten = 0
+
+    for raw_line in raw.splitlines(keepends=True):
+        if raw_line.endswith(b"\r\n"):
+            body, eol = raw_line[:-2], b"\r\n"
+        elif raw_line.endswith(b"\n"):
+            body, eol = raw_line[:-1], b"\n"
+        elif raw_line.endswith(b"\r"):
+            body, eol = raw_line[:-1], b"\r"
+        else:
+            body, eol = raw_line, b""
+
+        line_str = body.decode("utf-8", errors="surrogateescape")
+        probe = line_str.lstrip(" \t")
+        if probe.startswith("@"):
+            probe = probe[1:].lstrip(" \t")
+        first_word = re.split(r"[ \t]+", probe, maxsplit=1)[0].lower() if probe else ""
+        if first_word not in _EXO_MOUNT_KEYWORDS:
+            out_chunks.append(raw_line)
+            continue
+
+        built: list[str] = []
+        rest = line_str
+        lc = rest.lower()
+        while (pos := lc.find(_EXO_NEEDLE)) != -1:
+            built.append(rest[:pos])
+            after = rest[pos + nlen:]
+            cafter = lc[pos + nlen:]
+
+            cut = -1
+            if cafter.startswith(ltop):
+                nxt = cafter[len(ltop):len(ltop) + 1]
+                if nxt == "\\":
+                    cut = len(ltop) + 1
+                elif nxt in _EXO_BOUNDARY_CHARS:
+                    cut = len(ltop)
+
+            if cut >= 0:
+                built.append(".\\")
+                rest = after[cut:]
+                lc = rest.lower()
+            else:
+                nxt2 = cafter[:1]
+                if nxt2 in _EXO_BOUNDARY_CHARS:
+                    built.append(".\\")
+                    rest = after
+                    lc = rest.lower()
+                else:
+                    built.append(rest[pos:pos + nlen])
+                    rest = after
+                    lc = cafter
+
+        built.append(rest)
+        new_str = "".join(built)
+        if new_str != line_str:
+            rewritten += 1
+        out_chunks.append(new_str.encode("utf-8", errors="surrogateescape") + eol)
+
+    return b"".join(out_chunks), rewritten
+
+
+def inspect_exo_zip(zip_path: Path) -> str:
+    """Validate an eXoDOS `.zip` archive and return its single safe top-level directory."""
+    import zipfile
+
+    if not zip_path.is_file():
+        raise ValueError(f"file not found: {zip_path}")
+    try:
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            infos = zf.infolist()
+    except (zipfile.BadZipFile, OSError) as exc:
+        raise ValueError("unreadable zip") from exc
+
+    if not infos:
+        raise ValueError("empty zip")
+
+    has_slash = False
+    tops: set[str] = set()
+    root_non_dirs: set[str] = set()
+    for info in infos:
+        name = info.filename
+        raw_name = getattr(info, "orig_filename", name) or name
+        if not name and not raw_name:
+            continue
+        if "\\" in raw_name or "\\" in name:
+            raise ValueError(f"unsafe backslash in zip member path: {raw_name!r}")
+        if name.startswith("/") or (len(name) >= 2 and name[1] == ":"):
+            raise ValueError(f"unsafe absolute zip member path: {name!r}")
+        parts = [seg for seg in name.split("/") if seg]
+        if any(seg == ".." for seg in parts):
+            raise ValueError(f"unsafe traversal zip member path: {name!r}")
+        if "/" in name:
+            has_slash = True
+        elif not info.is_dir():
+            root_non_dirs.add(name)
+        head = name.split("/", 1)[0]
+        if head:
+            tops.add(head)
+
+    if len(tops) != 1:
+        raise ValueError("zip does not unzip into a single top-level directory")
+    if not has_slash:
+        raise ValueError("files sit at the zip root (no subdirectory)")
+
+    top = next(iter(tops))
+    if top in root_non_dirs:
+        raise ValueError(f"root file conflicts with top-level directory: {top!r}")
+    if top in ("", ".", "..") or "\\" in top or "/" in top or ":" in top:
+        raise ValueError(f"unsafe top-level directory name: {top!r}")
+    return top
+
+
+def _exo_append_error_log(error_log: Path, message: str) -> None:
+    import datetime as _dt
+
+    try:
+        error_log.parent.mkdir(parents=True, exist_ok=True)
+        stamp = _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with error_log.open("a", encoding="utf-8") as fh:
+            fh.write(f"{stamp}  {message}\n")
+    except OSError:
+        pass
+
+
+def repackage_exo_zip(
+    zip_path: Path,
+    dos_dir: Path,
+    output_dir: Path,
+    *,
+    dry_run: bool = False,
+    overwrite: bool = False,
+    error_log: Path | None = None,
+) -> dict:
+    """Clone one eXoDOS zip into `output_dir` with rewritten `<top>/dosbox.conf`."""
+    import datetime as _dt
+    import shutil
+    import tempfile
+    import zipfile
+    from pathlib import PurePosixPath
+
+    zip_path = Path(zip_path)
+    dos_dir = Path(dos_dir)
+    output_dir = Path(output_dir)
+    tag = zip_path.name
+
+    try:
+        top = inspect_exo_zip(zip_path)
+        dos_base = dos_dir.resolve()
+        src_conf = (dos_base / PurePosixPath(top).name / "dosbox.conf").resolve()
+        if not src_conf.is_relative_to(dos_base):
+            raise ValueError(f"template path escapes DOS_DIR: {top!r}")
+        if not src_conf.is_file():
+            raise ValueError(f'no dosbox.conf found in "{dos_dir / top}"')
+    except ValueError as exc:
+        msg = f"SKIP [{tag}]: {exc}"
+        if error_log and not dry_run:
+            _exo_append_error_log(error_log, msg)
+        return {"zip_path": str(zip_path), "status": "skipped_error", "top_dir": "",
+                "output_zip": "", "rewritten_lines": 0, "detail": msg, "preview_conf": ""}
+
+    out_base = output_dir.resolve()
+    if not tag or tag in (".", "..") or "/" in tag or "\\" in tag:
+        msg = f"SKIP [{tag}]: unsafe output archive name"
+        if error_log and not dry_run:
+            _exo_append_error_log(error_log, msg)
+        return {"zip_path": str(zip_path), "status": "skipped_error", "top_dir": top,
+                "output_zip": "", "rewritten_lines": 0, "detail": msg, "preview_conf": ""}
+
+    out_zip = out_base / tag
+    if out_zip.parent != out_base or out_zip.is_symlink():
+        msg = f"SKIP [{tag}]: unsafe output archive target"
+        if error_log and not dry_run:
+            _exo_append_error_log(error_log, msg)
+        return {"zip_path": str(zip_path), "status": "skipped_error", "top_dir": top,
+                "output_zip": "", "rewritten_lines": 0, "detail": msg, "preview_conf": ""}
+
+    if out_zip.exists() and not overwrite:
+        return {
+            "zip_path": str(zip_path),
+            "status": "skipped_exists",
+            "top_dir": top,
+            "output_zip": str(out_zip),
+            "rewritten_lines": 0,
+            "detail": f"SKIP [{tag}]: output already exists: {out_zip} (left untouched)",
+            "preview_conf": "",
+        }
+
+    try:
+        raw_conf = src_conf.read_bytes()
+        edited_conf, rewritten_lines = rewrite_exo_dosbox_conf_bytes(raw_conf, top)
+    except OSError as exc:
+        msg = f"SKIP [{tag}]: could not prepare edited dosbox.conf: {exc}"
+        if error_log and not dry_run:
+            _exo_append_error_log(error_log, msg)
+        return {"zip_path": str(zip_path), "status": "skipped_error", "top_dir": top,
+                "output_zip": "", "rewritten_lines": 0, "detail": msg, "preview_conf": ""}
+
+    if dry_run:
+        return {
+            "zip_path": str(zip_path),
+            "status": "dry_run",
+            "top_dir": top,
+            "output_zip": str(out_zip),
+            "rewritten_lines": rewritten_lines,
+            "detail": f"DRY-RUN [{tag}] -> {out_zip} ({rewritten_lines} mount line(s) rewritten from {top}/dosbox.conf)",
+            "preview_conf": edited_conf.decode("utf-8", errors="replace")[:2000],
+        }
+
+    target_entry = f"{top}/dosbox.conf".casefold()
+    tmp_path: Path | None = None
+    try:
+        out_base.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            dir=out_base,
+            prefix=f".{zip_path.stem}.",
+            suffix=".tmp",
+            delete=False,
+        ) as tf:
+            tmp_path = Path(tf.name)
+
+        with zipfile.ZipFile(zip_path, "r") as src_zf, zipfile.ZipFile(tmp_path, "w") as dst_zf:
+            for info in src_zf.infolist():
+                if info.filename.rstrip("/").casefold() == target_entry:
+                    continue
+                new_info = zipfile.ZipInfo(info.filename, date_time=info.date_time)
+                new_info.compress_type = info.compress_type
+                new_info.external_attr = info.external_attr
+                new_info.create_system = info.create_system
+                if info.is_dir():
+                    dst_zf.writestr(new_info, b"")
+                else:
+                    with src_zf.open(info, "r") as src_member, dst_zf.open(new_info, "w") as dst_member:
+                        shutil.copyfileobj(src_member, dst_member, length=65536)
+
+            conf_info = zipfile.ZipInfo(
+                f"{top}/dosbox.conf",
+                date_time=_dt.datetime.now().timetuple()[:6],
+            )
+            conf_info.compress_type = zipfile.ZIP_DEFLATED
+            dst_zf.writestr(conf_info, edited_conf)
+
+        if overwrite:
+            os.replace(tmp_path, out_zip)
+            tmp_path = None
+        else:
+            try:
+                os.link(tmp_path, out_zip)
+            except OSError as link_exc:
+                if isinstance(link_exc, FileExistsError):
+                    raise
+                fd = os.open(out_zip, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+                try:
+                    with os.fdopen(fd, "wb") as dst_fh, tmp_path.open("rb") as src_fh:
+                        shutil.copyfileobj(src_fh, dst_fh, length=65536)
+                except Exception:
+                    out_zip.unlink(missing_ok=True)
+                    raise
+    except Exception as exc:
+        msg = f"SKIP [{tag}]: failed to write output zip: {exc}"
+        if error_log:
+            _exo_append_error_log(error_log, msg)
+        return {"zip_path": str(zip_path), "status": "skipped_error", "top_dir": top,
+                "output_zip": "", "rewritten_lines": 0, "detail": msg, "preview_conf": ""}
+    finally:
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
+
+    return {
+        "zip_path": str(zip_path),
+        "status": "processed",
+        "top_dir": top,
+        "output_zip": str(out_zip),
+        "rewritten_lines": rewritten_lines,
+        "detail": f"OK [{tag}] -> {out_zip} (conf from {top}/, {rewritten_lines} mount line(s) rewritten)",
+        "preview_conf": "",
+    }
+
+
+def run_exo2romm(cfg: dict | None = None) -> dict:
+    """Preview or run eXo2romm repackaging over one or more eXoDOS zips/folders."""
+    cfg = cfg if isinstance(cfg, dict) else {}
+    dos_dir = Path(str(cfg.get("dos_dir") or DEFAULT_EXO2ROMM_PROFILE["dos_dir"]).strip()
+                   or str(DEFAULT_EXO2ROMM_PROFILE["dos_dir"]))
+    output_dir = Path(str(cfg.get("output_dir") or DEFAULT_EXO2ROMM_PROFILE["output_dir"]).strip()
+                      or str(DEFAULT_EXO2ROMM_PROFILE["output_dir"]))
+    err_raw = str(cfg.get("error_log") or "").strip()
+    error_log = Path(err_raw) if err_raw else (output_dir / "eXo2romm-errors.log")
+    dry_run = bool(cfg.get("dry_run", False))
+    overwrite = bool(cfg.get("overwrite", False))
+
+    raw_inputs = cfg.get("input_paths")
+    if raw_inputs is None and cfg.get("input_path"):
+        raw_inputs = [cfg.get("input_path")]
+    if isinstance(raw_inputs, str):
+        items = [part.strip() for part in re.split(r"[\r\n,]+", raw_inputs) if part.strip()]
+    elif isinstance(raw_inputs, list):
+        items = [str(part or "").strip() for part in raw_inputs if str(part or "").strip()]
+    else:
+        items = []
+
+    if not items:
+        return {
+            "ok": False,
+            "error": "input_paths is required (one or more .zip files or a folder containing eXoDOS .zip archives).",
+            "credit": EXO2ROMM_CREDIT,
+            "upstream_url": EXO2ROMM_UPSTREAM_URL,
+        }
+
+    zips: list[Path] = []
+    dir_results: list[dict] = []
+    for text in items:
+        p = Path(text)
+        if p.is_dir():
+            try:
+                found = sorted(f for f in p.iterdir() if f.is_file() and f.suffix.lower() == ".zip")
+            except OSError as exc:
+                msg = f"SKIP [{p.name or p}]: cannot list directory: {exc}"
+                if error_log and not dry_run:
+                    _exo_append_error_log(error_log, msg)
+                dir_results.append({
+                    "zip_path": str(p),
+                    "status": "skipped_error",
+                    "top_dir": "",
+                    "output_zip": "",
+                    "rewritten_lines": 0,
+                    "detail": msg,
+                    "preview_conf": "",
+                })
+                continue
+            zips.extend(found)
+        else:
+            zips.append(p)
+
+    if not zips and not dir_results:
+        return {
+            "ok": False,
+            "error": "No .zip archives found in the provided input_paths.",
+            "credit": EXO2ROMM_CREDIT,
+            "upstream_url": EXO2ROMM_UPSTREAM_URL,
+        }
+
+    results = dir_results + [
+        repackage_exo_zip(
+            zp,
+            dos_dir,
+            output_dir,
+            dry_run=dry_run,
+            overwrite=overwrite,
+            error_log=error_log,
+        )
+        for zp in zips
+    ]
+    processed = sum(1 for r in results if r["status"] in ("processed", "dry_run"))
+    skipped = len(results) - processed
+    return {
+        "ok": True,
+        "clean": not any(r["status"] == "skipped_error" for r in results),
+        "dry_run": dry_run,
+        "processed": processed,
+        "skipped": skipped,
+        "summary": f"{processed} processed, {skipped} skipped",
+        "dos_dir": str(dos_dir),
+        "output_dir": str(output_dir),
+        "error_log": str(error_log),
+        "credit": EXO2ROMM_CREDIT,
+        "inspired_note": EXO2ROMM_INSPIRED_NOTE,
+        "upstream_url": EXO2ROMM_UPSTREAM_URL,
+        "results": results,
     }

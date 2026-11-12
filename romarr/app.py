@@ -8233,6 +8233,8 @@ def make_handler(service: ROMarr):
                 return self._json(200, hub.plugins())
             if route.path == "/api/v1/hub/igir":
                 return self._json(200, hub.igir_status())
+            if route.path == "/api/v1/hub/exo2romm":
+                return self._json(200, hub.exo2romm_status())
             if route.path == "/api/v1/hub/fleet":
                 return self._json(200, hub.fleet_profiles())
             if route.path == "/api/v1/mcp":
@@ -8946,6 +8948,9 @@ def make_handler(service: ROMarr):
                 return self._json(200 if result.get("ok") else 500, result)
             if route.path == "/api/v1/hub/igir":
                 res = hub.run_igir(body if isinstance(body, dict) else {})
+                return self._json(200 if res.get("ok") else 400, res)
+            if route.path == "/api/v1/hub/exo2romm":
+                res = hub.run_exo2romm(body if isinstance(body, dict) else {})
                 return self._json(200 if res.get("ok") else 400, res)
             if route.path == "/api/v1/hub/fleet":
                 res = hub.build_fleet_sync_plan(body if isinstance(body, dict) else {})
