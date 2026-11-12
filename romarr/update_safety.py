@@ -112,7 +112,7 @@ def preflight(env, target: str) -> dict:
     health = _health_url()
     return {"repo": repo, "gitdir": gitdir, "branch": env.branch,
             "commit": full, "remote": remote, "service": service,
-            "python": str(Path(env.python).resolve(strict=True)),
+            "python": str(Path(env.python).absolute()),
             "target": target, "health_url": health}
 
 
