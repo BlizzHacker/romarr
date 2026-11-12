@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from romarr import hub
-from romarr.platforms import PLATFORMS, by_slug
+from romarr.platforms import PLATFORMS, by_slug, resolve
 from romarr.profiles import ReleaseProfile
 from romarr.selection import (
     Release,
@@ -182,18 +182,22 @@ def test_frozen_smb3_nes_exact_ranking_order():
         usa_usenet,
         world_usenet,
         europe_usenet,
-        japan_usenet,
         hub_bare,
+        japan_usenet,
     ]
     assert all(s > 0 for s, _ in ranked[:6])
     assert all(s < 0 for s, _ in ranked[6:])
     assert best_release(pool, "Super Mario Bros. 3", NES, profile=profile) is verified_usa
 
-    # Hub +5 source weight breaks bare ties without outranking explicit higher-tier regions.
+    # Unmarked bare Usenet release without platform/region evidence cannot qualify on title alone,
+    # whereas a platform-scoped Hub release is accepted; explicit higher-tier Europe+ext still beats Hub Japan.
     bare_usenet = _usenet("Super Mario Bros. 3", 610 * KB)
+    europe_nes = _usenet("Super Mario Bros. 3 (Europe).nes", 410 * KB)
     hub_japan = _hub("Super Mario Bros. 3 (Japan)", 384 * KB)
+    assert not judge(bare_usenet, "Super Mario Bros. 3", NES).accepted
+    assert judge(bare_usenet, "Super Mario Bros. 3", NES).points == 0
     assert score(hub_bare, "Super Mario Bros. 3", NES) > score(bare_usenet, "Super Mario Bros. 3", NES)
-    assert score(hub_japan, "Super Mario Bros. 3", NES) < score(europe_usenet, "Super Mario Bros. 3", NES)
+    assert score(hub_japan, "Super Mario Bros. 3", NES) < score(europe_nes, "Super Mario Bros. 3", NES)
 
     # Compact "+" compilation, subtitle spin-off, and mismatched release years are refused by judge too.
     assert not judge(wrong_compact_combo, "Super Mario Bros", NES, profile=profile).accepted
@@ -230,6 +234,7 @@ def test_frozen_smb3_nes_exact_ranking_order():
         ("Legend of Zelda, The - A Link to the Past (USA).sfc", "The Legend of Zelda: A Link to the Past"),
         ("Super Mario Bros. 3 - NES (USA).nes", "Super Mario Bros. 3"),
         ("Disgaea 5 Complete+ (Switch)", "Disgaea 5 Complete"),
+        ("Battle Heat - NEC PC-FX", "Battle Heat"),
     ],
 )
 def test_title_matches_accepts_valid_variants(release_title: str, wanted: str):
@@ -349,8 +354,31 @@ def test_nintendo_word_does_not_award_nes_bonus_or_infer_nes():
     """Generic publisher word 'Nintendo' must never earn NES bonus or infer NES."""
     rel = _usenet("Example Game (Nintendo)", 500 * KB)
     verdict = judge(rel, "Example Game", NES)
+    assert not verdict.accepted
+    assert verdict.points == 0
     assert not any("Nintendo Entertainment System" in line for line in verdict.why())
     assert infer_platform(rel) is None
+
+
+def test_unmarked_usenet_release_without_platform_evidence_is_not_accepted():
+    """Bare indexer results without platform, region, or seeder evidence cannot win on title alone."""
+    unmarked = _usenet("Tetris", 500 * KB)
+    generic_nintendo = _usenet("Tetris (Nintendo)", 500 * KB)
+    marked_name = _usenet("Tetris (NES)", 500 * KB)
+    marked_ext = _usenet("Tetris.nes", 500 * KB)
+    hub_tetris = _hub("Tetris", 500 * KB)
+
+    for rel in (unmarked, generic_nintendo):
+        verdict = judge(rel, "Tetris", NES)
+        assert not verdict.accepted
+        assert verdict.points == 0
+        assert verdict.why()
+
+    assert best_release([unmarked, generic_nintendo], "Tetris", NES) is None
+    assert judge(marked_name, "Tetris", NES).accepted
+    assert judge(marked_ext, "Tetris", NES).accepted
+    assert judge(hub_tetris, "Tetris", NES).accepted
+    assert best_release([unmarked, hub_tetris], "Tetris", NES) is hub_tetris
 
 
 def test_foreign_platform_markers_catch_cross_system_ports_and_keep_pc_fx():
@@ -363,9 +391,11 @@ def test_foreign_platform_markers_catch_cross_system_ports_and_keep_pc_fx():
     tg16 = by_slug("turbografx16--1")
     pc_fx = by_slug("pc-fx")
     xbox360 = by_slug("xbox360")
+    assert resolve("NEC PC-FX") == pc_fx
     assert score(_torrent("Bonk's Adventure [PC Engine].pce", 512 * KB), "Bonk's Adventure", tg16) > 0
     assert score(_torrent("Bonk's Adventure [PC]", 512 * KB), "Bonk's Adventure", tg16) < 0
     assert score(_torrent("Battle Heat (NEC PC-FX)", 400 * MB), "Battle Heat", pc_fx) > 0
+    assert score(_usenet("Battle Heat - NEC PC-FX", 400 * MB), "Battle Heat", pc_fx) > 0
     assert score(_torrent("Battle Heat [PC]", 400 * MB), "Battle Heat", pc_fx) < 0
     assert score(_torrent("Geometry Wars [XBLA]", 200 * MB), "Geometry Wars", xbox360) > 0
 

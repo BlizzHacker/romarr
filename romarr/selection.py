@@ -388,6 +388,7 @@ def _normalise_marker(text: str) -> str:
     return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", (text or "").lower())).strip()
 
 
+_DASH_CHARS = "\\-\u2013\u2014"
 _EXT_TOKEN_RE = re.compile(
     r"(?<=\S)\.([a-z0-9]{2,8})\s*$",
     re.IGNORECASE,
@@ -395,12 +396,12 @@ _EXT_TOKEN_RE = re.compile(
 _BRACKET_GROUP_RE = re.compile(
     r"\((?!(?:19|20)\d{2}\))[^()]*\)|\[(?!(?:19|20)\d{2}\])[^\[\]]*\]|\{[^{}]*\}"
 )
-_INVERTED_ARTICLE_RE = re.compile(r",\s*(?:the|an?)(?=\s*$|\s*[:\-–—])", re.IGNORECASE)
+_INVERTED_ARTICLE_RE = re.compile(rf",\s*(?:the|an?)(?=\s*$|\s*[:{_DASH_CHARS}])", re.IGNORECASE)
 _LEADING_ARTICLE_RE = re.compile(r"^\s*(?:the|an?)\s+", re.IGNORECASE)
 _PLUS_SEP_RE = re.compile(r"\s*\+\s*")
-_PLATFORM_SEP_RE = re.compile(r"\s+[-–—]\s+|:\s+")
-_TRAILING_SUBTITLE_SEP_RE = re.compile(r"^\s*(?::|[-–—]+(?=\s))")
-_TRAILING_CHUNK_SPLIT_RE = re.compile(r"\s*(?::|[-–—]+)\s*")
+_PLATFORM_SEP_RE = re.compile(rf"\s+[{_DASH_CHARS}]\s+|:\s+")
+_TRAILING_SUBTITLE_SEP_RE = re.compile(rf"^\s*(?::|[{_DASH_CHARS}]+(?=\s))")
+_TRAILING_CHUNK_SPLIT_RE = re.compile(rf"\s*:\s*|\s+[{_DASH_CHARS}]+\s+")
 _ALPHA_NUM_TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 # Single-word console acronyms safe to strip as unbracketed prefixes before a
@@ -690,7 +691,11 @@ class Judgement:
             return [self.verdict]
         lines = [f"{d:+d} {text}" for d, text in
                  sorted(self.reasons, key=lambda pair: pair[0])]
-        return lines or [f"{self.points:+d} matched release"]
+        if lines:
+            return lines
+        if self.points > 0:
+            return [f"{self.points:+d} matched release"]
+        return [f"{self.points:+d} no positive platform, region, or seeder score"]
 
 
 def judge(release: Release, wanted: str,
@@ -732,10 +737,6 @@ def judge(release: Release, wanted: str,
         points += delta
         if delta:
             reasons.append((delta, text))
-
-    add(10, "title matches")
-    if release.protocol == "hub":
-        add(5, "ROM Hub source")
 
     # Availability. Usenet has no seeders, so it is not penalised for having none.
     #
@@ -950,6 +951,10 @@ def judge(release: Release, wanted: str,
             if not has_ext:
                 return Judgement(-300, verdict="collection path has no platform evidence")
 
+    has_ext = False
+    names_plat = False
+    names_explicit_name = False
+    has_native_marker = False
     if platform is not None:
         scoring_aliases = [a for a in platform.aliases
                            if a.lower() not in _NON_SCORING_ALIASES]
@@ -957,6 +962,8 @@ def judge(release: Release, wanted: str,
         names_plat = _mentions(lowered, platform.slug.lower()) or any(
             _mentions(lowered, alias) for alias in scoring_aliases
         )
+        names_explicit_name = _mentions(lowered, platform.name.lower())
+        has_native_marker = any(_mentions(lowered, m) for m in platform.native_markers)
         if has_ext:
             add(60, f"carries a {platform.name} ROM extension")
         elif names_plat:
@@ -964,6 +971,23 @@ def judge(release: Release, wanted: str,
         if platform.is_disc and release.protocol != "hub":
             if not (has_ext or names_plat or path_confirms_platform):
                 add(-40, f"no extension, platform name or path for {platform.name}")
+
+    # Award the title-match tie-breaker when no platform was constrained, when
+    # the release came from a platform-scoped ROM Hub, or when positive platform
+    # evidence exists — so an unmarked indexer upload cannot qualify on title alone.
+    has_platform_evidence = (
+        platform is None
+        or release.protocol == "hub"
+        or path_confirms_platform
+        or has_ext
+        or names_plat
+        or names_explicit_name
+        or has_native_marker
+    )
+    if has_platform_evidence:
+        add(10, "title matches")
+    if release.protocol == "hub":
+        add(5, "ROM Hub source")
 
     # A cartridge ROM is small. An oversized "release" for a cartridge platform
     # is a romset, a PC port, or a disc image -- none of which this pipeline can
