@@ -381,3 +381,33 @@ def test_reconcile_after_import_setting_persists_controls_sweep_and_ui(tmp_path)
     assert [(w.game, w.platform) for w in s.store.wanted] == [
         ("Cotton - Fantastic Night Dreams", "snes")
     ]
+
+
+def test_reconcile_does_not_cache_when_member_hash_returns_none(tmp_path, monkeypatch):
+    """If source.hash returns None for any member, keep it uncached so a later call retries."""
+    from romarr import library as lib
+
+    s = svc(tmp_path, dat_for("Retry Game (USA)"))
+    place_verified(tmp_path, "retry.sfc")
+    s.store.want("Retry Game", "snes")
+
+    real_hash = lib._PathSource.hash
+    attempts = {"n": 0}
+
+    def flaky_hash(self, name, suffix=""):
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            return None
+        return real_hash(self, name, suffix=suffix)
+
+    monkeypatch.setattr(lib._PathSource, "hash", flaky_hash)
+
+    first = s.reconcile_platform("snes")
+    assert first["verified"] == 0
+    assert len(s.store.wanted) == 1
+
+    second = s.reconcile_platform("snes")
+    assert second["verified"] == 1
+    assert second["count"] == 1
+    assert s.store.wanted == []
+    assert attempts["n"] == 2

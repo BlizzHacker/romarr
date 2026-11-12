@@ -3543,15 +3543,18 @@ class ROMarr:
 
         source = _source_for(path, platform)
         computed: list[dict] = []
+        complete = True
         for member in source.names():
             suffix = Path(member.replace("\\", "/")).suffix
             hashes = source.hash(member, suffix=suffix)
-            if hashes is not None:
-                computed.append(hashes)
+            if hashes is None:
+                complete = False
+                continue
+            computed.append(hashes)
         result = tuple(computed)
 
         st_after = path.stat()
-        if (st_after.st_size, st_after.st_mtime_ns, st_after.st_ctime_ns) == sig:
+        if complete and (st_after.st_size, st_after.st_mtime_ns, st_after.st_ctime_ns) == sig:
             with lock:
                 cache[cache_key] = result
                 cache.move_to_end(cache_key)
