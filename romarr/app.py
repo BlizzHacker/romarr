@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import inspect
 import json
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from copy import copy, deepcopy
@@ -743,6 +744,12 @@ class ROMarr:
         #: peer_id -> (rows, fetched_at). A friend's shelf, so browsing and
         #: filtering it does not bill their server per keystroke.
         self._friend_shelves: dict[str, tuple[list, float]] = {}
+
+        #: (path, archive_is_the_rom, size, mtime_ns, ctime_ns) -> tuple of
+        #: streamed member hash dicts for reconcile_platform (#161).
+        self._reconcile_hash_cache: OrderedDict[
+            tuple[str, bool, int, int, int], tuple[dict, ...]] = OrderedDict()
+        self._reconcile_cache_lock = threading.Lock()
 
         self.logring = LogRing()
         logging.getLogger().addHandler(self.logring.handler())
@@ -3504,6 +3511,54 @@ class ROMarr:
     def dat_names(self) -> list[str]:
         return [d.name for d in self.dats.dats if d.name]
 
+    _RECONCILE_CACHE_MAX = 50_000
+
+    def _reconcile_file_hashes(self, path: Path, platform) -> tuple[dict, ...]:
+        """Return streamed DAT hashes for every member of ``path``.
+
+        Caches computed hash dicts by ``(path, archive_is_the_rom, size,
+        mtime_ns, ctime_ns)`` so repeated reconciles skip rehashing unchanged
+        library files while still re-evaluating ``self.dats`` on DAT reloads.
+        """
+        from .library import _source_for
+
+        st = path.stat()
+        archive_as_rom = bool(getattr(platform, "archive_is_the_rom", False))
+        sig = (st.st_size, st.st_mtime_ns, st.st_ctime_ns)
+        cache_key = (str(path), archive_as_rom, *sig)
+
+        cache = getattr(self, "_reconcile_hash_cache", None)
+        lock = getattr(self, "_reconcile_cache_lock", None)
+        if cache is None or lock is None:
+            cache = OrderedDict()
+            lock = threading.Lock()
+            self._reconcile_hash_cache = cache
+            self._reconcile_cache_lock = lock
+
+        with lock:
+            cached = cache.get(cache_key)
+            if cached is not None:
+                cache.move_to_end(cache_key)
+                return cached
+
+        source = _source_for(path, platform)
+        computed: list[dict] = []
+        for member in source.names():
+            suffix = Path(member.replace("\\", "/")).suffix
+            hashes = source.hash(member, suffix=suffix)
+            if hashes is not None:
+                computed.append(hashes)
+        result = tuple(computed)
+
+        st_after = path.stat()
+        if (st_after.st_size, st_after.st_mtime_ns, st_after.st_ctime_ns) == sig:
+            with lock:
+                cache[cache_key] = result
+                cache.move_to_end(cache_key)
+                while len(cache) > self._RECONCILE_CACHE_MAX:
+                    cache.popitem(last=False)
+        return result
+
     def reconcile_platform(self, platform_slug: str = "") -> dict:
         """Drop Wanted entries whose verified dump is already in the library.
 
@@ -3511,19 +3566,22 @@ class ROMarr:
         imported file's name in punctuation, word order or region tags, so it
         survives every import and stays on the Missing tab even though the
         bytes are present and hash-verified. Walks the platform's library dir,
-        verifies each file against the loaded DATs, and fulfils any
+        stream-verifies each file against the loaded DATs, and fulfils any
         same-platform wanted title that maps to a verified dump. Runs after
         each import (scoped to the importing platform) and via
         ``POST /api/v1/collection/reconcile``.
         """
-        from .library import _source_for
-        from .dat import VERIFIED as _VERIFIED, hash_bytes as _hash_bytes
+        from .dat import VERIFIED as _VERIFIED
 
         platform = resolve(platform_slug)
         if platform is None:
             return {"ok": False,
                     "error": f"unknown platform {platform_slug!r}",
                     "platform": platform_slug, "dropped": 0}
+
+        if self.dats is None or (hasattr(self.dats, "dats") and not self.dats.dats):
+            return {"ok": True, "platform": platform_slug,
+                    "verified": 0, "dropped": [], "count": 0}
 
         verified_titles: set[str] = set()
         for cfg, _ in self.game_libraries:
@@ -3536,14 +3594,8 @@ class ROMarr:
                 if not path.is_file():
                     continue
                 try:
-                    source = _source_for(path, platform)
-                    for member in source.names():
-                        data = source.read(member)
-                        if data is None:
-                            continue
-                        match = self.dats.lookup(**_hash_bytes(
-                            data,
-                            suffix=Path(member.replace("\\", "/")).suffix))
+                    for hashes in self._reconcile_file_hashes(path, platform):
+                        match = self.dats.lookup(**hashes)
                         if match.status == _VERIFIED and match.game:
                             verified_titles.add(match.game)
                 except Exception:  # noqa: BLE001 - one bad file must not stop it
@@ -3559,7 +3611,8 @@ class ROMarr:
             if any(_titles_are_same(w.game, vt) for vt in verified_titles):
                 self.store.fulfil(w.game, w.platform)
                 dropped.append([w.game, w.platform])
-        self.store.save()
+        if dropped:
+            self.store.save()
         return {"ok": True, "platform": platform_slug,
                 "verified": len(verified_titles), "dropped": dropped,
                 "count": len(dropped)}
