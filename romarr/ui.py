@@ -3688,7 +3688,11 @@ RENDER.profiles=async()=>{
     };
 
     const minSize=getVal('min_size_mb',0);
-    const maxSize=getVal('max_size_mb',platInfo?platInfo.max_size_mb:8192);
+    const rawGlobalMax=(SETTINGS.max_size_mb&&Number(SETTINGS.max_size_mb)!==8192)?Number(SETTINGS.max_size_mb):0;
+    const rawPlatMax=(!isGlobal&&overrides&&overrides.max_size_mb&&Number(overrides.max_size_mb)!==8192)?Number(overrides.max_size_mb):0;
+    const maxSize=isGlobal
+      ?rawGlobalMax
+      :(rawPlatMax||(platInfo?(rawGlobalMax>0?Math.min(platInfo.max_size_mb,rawGlobalMax):platInfo.max_size_mb):rawGlobalMax));
     const minSeeders=getVal('min_seeders',1);
     const sizePref=getVal('size_preference','auto');
     const sizeWeight=getVal('size_weight',0);
@@ -3866,9 +3870,16 @@ RENDER.profiles=async()=>{
       };
     }
 
+    let maxSizeDirty=false;
+    const maxSizeEl=$('#prof-max-size');
+    if(maxSizeEl){
+      maxSizeEl.oninput=()=>{maxSizeDirty=true;};
+    }
+
     $('#prof-save-btn').onclick=async()=>{
       const minSz=Number($('#prof-min-size').value)||0;
-      const maxSz=Number($('#prof-max-size').value)||0;
+      const inputMaxSz=Number($('#prof-max-size').value)||0;
+      const maxSz=(!isGlobal&&!maxSizeDirty&&!rawPlatMax)?0:inputMaxSz;
       const seeders=Number($('#prof-min-seeders').value)||1;
       const sPref=$('#prof-size-pref').value;
       const sWeight=Number($('#prof-size-weight').value)||0;

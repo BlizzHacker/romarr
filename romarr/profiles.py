@@ -33,6 +33,10 @@ log = logging.getLogger(__name__)
 #: `(Rev 10)` cannot be expressed as a substring.
 _REGEX_TERM = re.compile(r"^/(.*)/$", re.DOTALL)
 
+#: Historical unconfigured global max_size_mb default; treat stored 8192 as unset
+#: so existing installs still enforce per-platform ceilings (e.g. 8 MB for NES).
+_LEGACY_DEFAULT_MAX_SIZE_MB = 8192.0
+
 
 def _matches(term: str, haystack: str) -> bool:
     """Whether `term` -- literal or `/regex/` -- appears in `haystack`."""
@@ -131,6 +135,7 @@ class ReleaseProfile:
     #: Fan translation policy: "exclude" | "prefer" | "fill" | "keep_both"
     translation_policy: str = "exclude"
     _settings_ref: dict | None = None
+    _max_size_is_global: bool = field(default=False, repr=False, compare=False)
 
     @property
     def min_size_bytes(self) -> int:
@@ -200,8 +205,20 @@ class ReleaseProfile:
 
         min_size = _to_float(platform_cfg.get("min_size_mb"),
                              _to_float(settings.get("min_size_mb")))
-        max_size = _to_float(platform_cfg.get("max_size_mb"),
-                             _to_float(settings.get("max_size_mb")))
+        plat_max_size = _to_float(platform_cfg.get("max_size_mb"))
+        if plat_max_size == _LEGACY_DEFAULT_MAX_SIZE_MB:
+            plat_max_size = None
+        if plat_max_size is not None:
+            max_size = plat_max_size
+            max_size_is_global = False
+        else:
+            global_max_size = _to_float(settings.get("max_size_mb"))
+            if global_max_size == _LEGACY_DEFAULT_MAX_SIZE_MB:
+                max_size = None
+                max_size_is_global = False
+            else:
+                max_size = global_max_size
+                max_size_is_global = global_max_size is not None
 
         min_seeders = platform_cfg.get("min_seeders")
         if min_seeders is None or min_seeders == "":
@@ -271,6 +288,7 @@ class ReleaseProfile:
             region_mode=region_mode,
             translation_policy=translation_policy,
             _settings_ref=settings,
+            _max_size_is_global=max_size_is_global,
         )
 
     def refusal(self, lowered: str, size: int = 0, *, content_path: str = "") -> str:
