@@ -19,6 +19,14 @@ def magnet_hash(magnet):
     return ""
 
 
+def _tag_from_id(download_id: str) -> str:
+    raw = str(download_id or "")
+    for prefix in ("qbit-tag:", "mdm-tag:"):
+        if raw.startswith(prefix):
+            return raw[len(prefix):]
+    return ""
+
+
 def owner_records(owners):
     out = []
     for owner in owners:
@@ -28,7 +36,7 @@ def owner_records(owners):
             record = {"client": getattr(owner, "download_client", ""),
                       "download_id": getattr(owner, "download_id", ""),
                       "selected_file": getattr(owner, "selected_file", {})}
-        if record.get("selected_file") and str(record.get("download_id") or "").startswith("qbit-tag:"):
+        if record.get("selected_file") and _tag_from_id(record.get("download_id")):
             out.append(record)
     return out
 
@@ -38,7 +46,7 @@ def validate_owners(row, files, owners, client, category):
     known = [o for o in owner_records(owners) if o.get("client") == client
              and o["selected_file"].get("hash") == torrent_hash]
     tags = {t.strip() for t in str(row.get("tags") or "").split(",") if t.strip()}
-    known_tags = {o["download_id"][9:] for o in known}
+    known_tags = {_tag_from_id(o["download_id"]) for o in known}
     if not client or not known or row.get("category") != category or not tags or tags != known_tags:
         raise ValueError("retained torrent ownership/category/tags are missing or ambiguous")
     indexes = [f.get("index") for f in files]

@@ -44,7 +44,24 @@ from urllib.robotparser import RobotFileParser
 
 import requests
 
+from .mdm import (
+    MdmDirectClient,
+    MdmDirectConfig,
+    MdmTorrentClient,
+    MdmTorrentConfig,
+)
+from .nntp import BuiltinNzbClient, BuiltinNzbConfig
+
 log = logging.getLogger(__name__)
+
+
+def _torrent_tag(download_id: str) -> str:
+    """Return the ROMarr torrent correlation tag for qBit or MDM job IDs."""
+    raw = str(download_id or "")
+    for prefix in ("qbit-tag:", "mdm-tag:"):
+        if raw.startswith(prefix):
+            return raw[len(prefix):]
+    return ""
 
 
 def _bounded_timeout(base: float, deadline: float | None) -> float | None:
@@ -3822,7 +3839,7 @@ def match_queue_item(queue, download: dict, *,
         download_client = str(getattr(item, "download_client", "") or "").strip()
         if download_client and reporting_id and download_client != reporting_id:
             return False
-        if ((download_id.startswith("qbit-tag:") or release_id.startswith("btih:"))
+        if ((_torrent_tag(download_id) or release_id.startswith("btih:"))
                 and reporting_protocol and reporting_protocol != "torrent"):
             return False
         return True
@@ -3830,8 +3847,8 @@ def match_queue_item(queue, download: dict, *,
     tags = {part.strip() for part in str(download.get("tags") or "").split(",")
             if part.strip()}
     tag_matches = [item for item in queue
-                   if str(getattr(item, "download_id", "") or "").startswith("qbit-tag:")
-                   and item.download_id[9:] in tags
+                   if _torrent_tag(getattr(item, "download_id", ""))
+                   and _torrent_tag(item.download_id) in tags
                    and client_matches(item)]
     if tag_matches:
         exact_tags = [item for item in tag_matches
@@ -3861,10 +3878,10 @@ def match_queue_item(queue, download: dict, *,
         download_client = str(getattr(item, "download_client", "") or "").strip()
         if download_client and reporting_id and download_client != reporting_id:
             return True
-        if ((download_id.startswith("qbit-tag:") or release_id.startswith("btih:"))
+        if ((_torrent_tag(download_id) or release_id.startswith("btih:"))
                 and reporting_protocol and reporting_protocol != "torrent"):
             return True
-        if download_id.startswith("qbit-tag:"):
+        if _torrent_tag(download_id):
             return bool(tags)  # A matching tag would already have matched.
         if found and release_id.startswith("btih:"):
             return True  # An equal hash would already have matched above.
@@ -3939,6 +3956,36 @@ def _debrid_fields(token_help: str, save_default: str,
                    "ROMarr downloads the result into here and imports from "
                    "it. Only what ROMarr itself sent is ever touched."),
     ]
+
+def _mdm_fields(default_name: str, save_default: str, *,
+                category_default: str = "romarr",
+                extra: list | None = None) -> list:
+    """Shared form schema for Mister Download Manager companion clients."""
+    fields = [
+        FIELD("name", "Name", default=default_name),
+        FIELD("enable", "Enable", "bool", True),
+        FIELD("mode", "Mode", "select", "cli",
+              options=[("cli", "Local MDM CLI (Standalone)"),
+                       ("remote", "Remote MDM Daemon / Desktop (HTTPS)")],
+              help="Local CLI runs misterdownloadmanager-cli directly; "
+                   "Remote talks to `misterdownloadmanager --headless` or Desktop."),
+        FIELD("save_path", "Save Path", default=save_default,
+              help="Where finished files land; the importer reads here."),
+        FIELD("cli_path", "MDM CLI Binary (optional)",
+              help="Blank uses the managed MDM binary or misterdownloadmanager-cli on PATH."),
+        FIELD("remote_url", "Remote MDM URL",
+              help="Only for Remote mode, e.g. https://127.0.0.1:8463"),
+        FIELD("api_token", "Remote API Token", "secret",
+              help="Bearer token shown by MDM Remote Access (Remote mode only)."),
+        FIELD("verify_tls", "Verify TLS Certificate", "bool", False,
+              help="Leave unchecked for MDM's self-signed HTTPS certificate."),
+        FIELD("category", "Category", default=category_default,
+              help="Optional MDM category in Remote mode (programs, compressed, other)."),
+    ]
+    if extra:
+        fields.extend(extra)
+    return fields
+
 
 CLIENT_TYPES = {
     "qbittorrent": {
@@ -4322,6 +4369,43 @@ CLIENT_TYPES = {
             FIELD("delay", "Seconds between requests", "int", 5),
         ],
     },
+    "mdm_torrent": {
+        "label": "Standalone BitTorrent (MDM)",
+        "protocol": "torrent",
+        "default_port": 0,
+        "fields": _mdm_fields("Standalone BitTorrent (MDM)", "/downloads/torrents"),
+    },
+    "mdm_http": {
+        "label": "Standalone Direct HTTP (MDM)",
+        "protocol": "direct",
+        "default_port": 0,
+        "fields": _mdm_fields(
+            "Standalone Direct HTTP (MDM)", "/downloads/sites", category_default="",
+            extra=[FIELD("connections", "Connections", "int", 8,
+                         help="Parallel HTTP range connections (1 to 128).")],
+        ),
+    },
+    "builtin_nzb": {
+        "label": "Standalone Usenet (NNTP)",
+        "protocol": "usenet",
+        "default_port": 563,
+        "fields": [
+            FIELD("name", "Name", default="Standalone Usenet (NNTP)"),
+            FIELD("enable", "Enable", "bool", True),
+            FIELD("host", "NNTP Host", default="",
+                  help="Usenet news server hostname (e.g. news.example.com)."),
+            FIELD("port", "NNTP Port", "int", 563),
+            FIELD("use_ssl", "Use SSL / TLS", "bool", True),
+            FIELD("verify_tls", "Verify TLS Certificate", "bool", True),
+            FIELD("username", "Username"),
+            FIELD("password", "Password", "secret"),
+            FIELD("connections", "Connections", "int", 8,
+                  help="Concurrent NNTP connections (1 to 32)."),
+            FIELD("save_path", "Save Path", default="/downloads/usenet",
+                  help="Where decoded Usenet downloads land; the importer reads here."),
+            FIELD("category", "Category", default="romarr"),
+        ],
+    },
 }
 
 SECRET_PLACEHOLDER = "********"
@@ -4347,7 +4431,7 @@ def base_url_for(cfg: dict) -> str:
     return f"{base}/{url_base}" if url_base else base
 
 
-def build_client(cfg: dict):
+def build_client(cfg: dict, *, data_dir: str = ""):
     """Turn a stored configuration into a live client, or None if unknown."""
     kind = str(cfg.get("type") or "").lower()
     spec = CLIENT_TYPES.get(kind)
@@ -4475,6 +4559,46 @@ def build_client(cfg: dict):
             base_url=endpoint,
             remote_download_dir=cfg.get("remote_download_dir", ""),
             delay=float(cfg.get("delay") or SITE_DELAY)))
+    elif kind == "mdm_torrent":
+        client = MdmTorrentClient(MdmTorrentConfig(
+            mode=str(cfg.get("mode") or "cli"),
+            save_path=cfg.get("save_path", ""),
+            cli_path=cfg.get("cli_path", ""),
+            remote_url=cfg.get("remote_url", ""),
+            api_token=cfg.get("api_token", ""),
+            verify_tls=bool(cfg.get("verify_tls", False)),
+            category=cfg.get("category", "romarr"),
+            data_dir=data_dir,
+        ))
+    elif kind == "mdm_http":
+        raw_conns = cfg.get("connections")
+        conns = int(raw_conns) if raw_conns not in (None, "") else 8
+        client = MdmDirectClient(MdmDirectConfig(
+            mode=str(cfg.get("mode") or "cli"),
+            save_path=cfg.get("save_path", ""),
+            connections=conns,
+            cli_path=cfg.get("cli_path", ""),
+            remote_url=cfg.get("remote_url", ""),
+            api_token=cfg.get("api_token", ""),
+            verify_tls=bool(cfg.get("verify_tls", False)),
+            category=cfg.get("category", ""),
+            data_dir=data_dir,
+        ))
+    elif kind == "builtin_nzb":
+        raw_port = cfg.get("port")
+        raw_conns = cfg.get("connections")
+        use_ssl = bool(cfg.get("use_ssl", True))
+        client = BuiltinNzbClient(BuiltinNzbConfig(
+            host=cfg.get("host", ""),
+            port=int(raw_port) if raw_port not in (None, "") else (563 if use_ssl else 119),
+            use_ssl=use_ssl,
+            verify_tls=bool(cfg.get("verify_tls", True)),
+            username=cfg.get("username", ""),
+            password=cfg.get("password", ""),
+            connections=int(raw_conns) if raw_conns not in (None, "") else 8,
+            save_path=cfg.get("save_path", ""),
+            category=cfg.get("category", "romarr"),
+        ))
     else:
         return None
 

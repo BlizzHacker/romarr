@@ -947,9 +947,11 @@ EXPECTED = {
                 "synology", "vuze", "biglybt", "utorrent", "aria2", "flood",
                 "freebox", "hadouken", "porla", "torrentblackhole",
                 "realdebrid", "alldebrid", "premiumize", "torbox",
-                "debridlink", "offcloud", "putio", "linksnappy"},
-    "usenet": {"sabnzbd", "nzbget", "nzbvortex", "usenetblackhole"},
-    "direct": {"direct"},
+                "debridlink", "offcloud", "putio", "linksnappy",
+                "mdm_torrent"},
+    "usenet": {"sabnzbd", "nzbget", "nzbvortex", "usenetblackhole",
+               "builtin_nzb"},
+    "direct": {"direct", "mdm_http"},
     "browser": {"browser"},
 }
 
