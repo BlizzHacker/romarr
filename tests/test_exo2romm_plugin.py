@@ -36,6 +36,10 @@ def test_ui_and_ecosystem_credit_derkommutator_for_exo2romm():
     assert "https://github.com/derkommutator/eXo2romm" in html
     assert "https://github.com/BlizzHacker/rom-hub-exo2romm" in html
     assert "inspired to assist with more users having this" in html
+    for fid in ("exo-in", "exo-dos", "exo-out", "exo-log", "exo-overwrite"):
+        assert f'for="{fid}"' in html and f'id="{fid}"' in html
+    assert "exoJobSeq" in html
+    assert "split(/[\\r\\n]+/)" in html
 
     projects = {p.name: p for p in ecosystem.all_projects()}
     assert "eXo2romm" in projects
@@ -194,7 +198,7 @@ def test_run_exo2romm_dry_run_repackage_resume_overwrite_and_error_log(tmp_path)
     })
     assert run3["processed"] == 1
 
-    # Missing template writes to error log and does not crash batch
+    # Missing template writes to error log and reports all-failed batch as ok=False
     bad_zip = in_dir / "MissingTemplate.zip"
     with zipfile.ZipFile(bad_zip, "w") as zf:
         zf.writestr("NoTemplate/GAME.EXE", b"x")
@@ -204,17 +208,64 @@ def test_run_exo2romm_dry_run_repackage_resume_overwrite_and_error_log(tmp_path)
         "output_dir": str(out_dir),
         "dry_run": False,
     })
-    assert run4["ok"] is True
+    assert run4["ok"] is False
     assert run4["clean"] is False
     assert run4["skipped"] == 1
+    assert "MissingTemplate" in run4["error"]
     log_text = Path(run4["error_log"]).read_text(encoding="utf-8")
     assert "MissingTemplate.zip" in log_text
+
+    # Omitting dry_run uses default_profile (dry_run=True), even when output exists
+    default_preview = hub.run_exo2romm({
+        "input_paths": [str(in_zip)],
+        "dos_dir": str(dos_dir),
+        "output_dir": str(out_dir),
+    })
+    assert default_preview["ok"] is True
+    assert default_preview["dry_run"] is True
+    assert default_preview["results"][0]["status"] == "dry_run"
+    assert "mount c .\\" in default_preview["results"][0]["preview_conf"]
+
+    # Non-boolean flags are rejected explicitly
+    bad_over = hub.run_exo2romm({
+        "input_paths": [str(in_zip)],
+        "dos_dir": str(dos_dir),
+        "output_dir": str(out_dir),
+        "overwrite": "false",
+    })
+    assert bad_over["ok"] is False
+    assert "boolean" in bad_over["error"]
+
+    # Refuses replacing source archive in-place when output_dir == input zip parent
+    same_path = hub.run_exo2romm({
+        "input_paths": [str(in_zip)],
+        "dos_dir": str(dos_dir),
+        "output_dir": str(in_zip.parent),
+        "dry_run": False,
+        "overwrite": True,
+    })
+    assert same_path["ok"] is False
+    assert "overwrite input" in same_path["error"]
+
+    # Preserves commas inside zip filenames
+    comma_zip = in_dir / "Tetris, The.zip"
+    with zipfile.ZipFile(comma_zip, "w") as zf:
+        zf.writestr("Abaron/GAME.EXE", b"mz")
+    comma_res = hub.run_exo2romm({
+        "input_paths": str(comma_zip),
+        "dos_dir": str(dos_dir),
+        "output_dir": str(out_dir),
+    })
+    assert comma_res["ok"] is True
+    assert comma_res["processed"] == 1
 
 
 def test_http_endpoints_and_openapi_and_mcp_manifest(tmp_path):
     spec = openapi.spec("1.0.0")
     assert "get" in spec["paths"]["/api/v1/hub/exo2romm"]
-    assert "post" in spec["paths"]["/api/v1/hub/exo2romm"]
+    post_op = spec["paths"]["/api/v1/hub/exo2romm"]["post"]
+    props = post_op["requestBody"]["content"]["application/json"]["schema"]["properties"]
+    assert "input_paths" in props and "dry_run" in props and "overwrite" in props
     tool_names = {t["name"] for t in hub.mcp_manifest()["tools"]}
     assert "romarr_exo2romm_repackage" in tool_names
 

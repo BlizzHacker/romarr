@@ -466,6 +466,46 @@ def spec(version: str = "0.0.0", *, base_url: str = "") -> dict:
     paths["/api/v1/hub/exo2romm"].update(_operation(
         "/api/v1/hub/exo2romm", "POST",
         "Preview or run eXo2romm eXoDOS-to-RomM ZIP repackaging (crediting derkommutator/eXo2romm)."))
+    paths["/api/v1/hub/exo2romm"]["post"]["requestBody"] = {
+        "required": True,
+        "content": {"application/json": {"schema": {
+            "type": "object",
+            "properties": {
+                "input_paths": {
+                    "type": "array",
+                    "items": {"type": "string", "minLength": 1},
+                    "minItems": 1,
+                    "description": "One or more eXoDOS .zip file paths or folders containing .zip archives.",
+                },
+                "dos_dir": {
+                    "type": "string",
+                    "description": "eXoDOS !dos template folder containing <top>/dosbox.conf.",
+                },
+                "output_dir": {
+                    "type": "string",
+                    "description": "Target RomM DOS output directory for repackaged zips.",
+                },
+                "error_log": {
+                    "type": "string",
+                    "description": "Optional error log file path override.",
+                },
+                "dry_run": {
+                    "type": "boolean",
+                    "default": True,
+                    "description": "When true (default), validate archives and preview rewritten dosbox.conf without writing files.",
+                },
+                "overwrite": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "When true, replace existing output archives instead of skipping them.",
+                },
+            },
+            "required": ["input_paths"],
+        }}},
+    }
+    paths["/api/v1/hub/exo2romm"]["post"]["responses"]["400"] = {
+        "description": "Invalid request payload or all input archives failed processing.",
+    }
     _guide_contracts(paths)
 
     return {

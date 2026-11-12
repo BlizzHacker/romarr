@@ -1357,12 +1357,12 @@ RENDER.hub=async()=>{
       +'Credits <a href="https://github.com/derkommutator/eXo2romm" target="_blank" rel="noopener">derkommutator/eXo2romm</a> (Unlicense) '
       +'&mdash; this plugin was inspired to assist with more users having this.</p>'
       +'<div class="panels" style="margin-top:8px">'
-      +'<div class="field"><label>Input Zip(s) or Folder</label><input id="exo-in" placeholder="/data/eXoDOS/roms or /data/eXoDOS/Abaron (1995).zip"></div>'
-      +'<div class="field"><label>eXoDOS !dos Template Directory (DOS_DIR)</label><input id="exo-dos" value="/data/eXoDOS/Content/eXo/eXoDOS/!dos"></div>'
-      +'<div class="field"><label>RomM DOS Output Directory (OUTPUT_DIR)</label><input id="exo-out" value="/var/lib/romm/library/roms/dos"></div>'
-      +'<div class="field"><label>Error Log (optional override)</label><input id="exo-log" placeholder="Default: <OUTPUT_DIR>/eXo2romm-errors.log"></div>'
+      +'<div class="field"><label for="exo-in">Input Zip(s) or Folder</label><input id="exo-in" placeholder="/data/eXoDOS/roms or /data/eXoDOS/Abaron (1995).zip"></div>'
+      +'<div class="field"><label for="exo-dos">eXoDOS !dos Template Directory (DOS_DIR)</label><input id="exo-dos" value="/data/eXoDOS/Content/eXo/eXoDOS/!dos"></div>'
+      +'<div class="field"><label for="exo-out">RomM DOS Output Directory (OUTPUT_DIR)</label><input id="exo-out" value="/var/lib/romm/library/roms/dos"></div>'
+      +'<div class="field"><label for="exo-log">Error Log (optional override)</label><input id="exo-log" placeholder="Default: <OUTPUT_DIR>/eXo2romm-errors.log"></div>'
       +'</div>'
-      +'<label class="check" style="margin-top:4px"><input type="checkbox" id="exo-overwrite"><span>Overwrite existing output zips (unchecked preserves resume-safe skipping)</span></label>'
+      +'<label class="check" for="exo-overwrite" style="margin-top:4px"><input type="checkbox" id="exo-overwrite"><span>Overwrite existing output zips (unchecked preserves resume-safe skipping)</span></label>'
       +'<div class="row" style="margin-top:8px">'
       +'<button class="btn" id="exo-dry">Preview / Dry-Run (check dosbox.conf)</button>'
       +'<button class="btn ghost" id="exo-run">Repackage eXoDOS ZIPs</button>'
@@ -1426,11 +1426,13 @@ RENDER.hub=async()=>{
     };
     if($('#igir-dry')) $('#igir-dry').onclick=()=>runIgirJob(true);
     if($('#igir-run')) $('#igir-run').onclick=()=>runIgirJob(false);
+    let exoJobSeq=0;
     const runExoJob=async(dry)=>{
       const box=$('#exo-msg');
       if(!box) return;
       const runVer=typeof pageVersion==='number'?pageVersion:0;
-      const inputs=($('#exo-in').value||'').split(/[\r\n,]+/).map(s=>s.trim()).filter(Boolean);
+      const seq=++exoJobSeq;
+      const inputs=($('#exo-in').value||'').split(/[\r\n]+/).map(s=>s.trim()).filter(Boolean);
       if(!inputs.length){
         box.innerHTML='<div class="panel-note panel-warn">Enter at least one eXoDOS .zip path or folder above.</div>';
         return;
@@ -1447,25 +1449,25 @@ RENDER.hub=async()=>{
       try{
         const r=await fetch('/api/v1/hub/exo2romm',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
         const res=await r.json();
-        if((typeof activePage!=='undefined'&&activePage!=='hub')||(typeof pageVersion==='number'&&pageVersion!==runVer)) return;
+        if((typeof activePage!=='undefined'&&activePage!=='hub')||(typeof pageVersion==='number'&&pageVersion!==runVer)||seq!==exoJobSeq) return;
         const targetBox=$('#exo-msg');
         if(!targetBox) return;
-        if(!r.ok||!res.ok){
-          targetBox.innerHTML='<div class="panel-note panel-warn">'+esc(res.error||'eXo2romm failed.')+'</div>';
-          return;
-        }
         const rows=(res.results||[]).slice(0,25).map(item=>
           '<div style="margin-top:4px;font-size:12px"><code>'+esc(item.status||'')+'</code> '+esc(item.detail||'')
           +(item.preview_conf?'<pre style="margin:6px 0 0;padding:8px;background:var(--bg);border:1px solid var(--line);overflow:auto">'+esc(item.preview_conf)+'</pre>':'')
           +'</div>'
         ).join('');
         const extra=(res.results||[]).length>25?'<div class="help" style="margin-top:6px">Showing first 25 of '+res.results.length+' archive(s).</div>':'';
+        if(!r.ok||!res.ok){
+          targetBox.innerHTML='<div class="panel-note panel-warn"><b>'+esc(res.error||res.summary||'eXo2romm failed.')+'</b>'+rows+extra+'</div>';
+          return;
+        }
         targetBox.innerHTML='<div class="panel-note'+(res.clean===false?' panel-warn':'')+'"><b>'+esc(res.summary||'Done')+'</b>'
           +(res.credit?'<br><span class="help" style="margin:0">'+esc(res.credit)+'</span>':'')
           +(res.error_log?'<br><span class="help" style="margin:0">Error log: <code>'+esc(res.error_log)+'</code></span>':'')
           +rows+extra+'</div>';
       }catch(e){
-        if((typeof activePage!=='undefined'&&activePage!=='hub')||(typeof pageVersion==='number'&&pageVersion!==runVer)) return;
+        if((typeof activePage!=='undefined'&&activePage!=='hub')||(typeof pageVersion==='number'&&pageVersion!==runVer)||seq!==exoJobSeq) return;
         const targetBox=$('#exo-msg');
         if(targetBox) targetBox.innerHTML='<div class="panel-note panel-warn">Could not reach /api/v1/hub/exo2romm</div>';
       }

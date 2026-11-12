@@ -1219,7 +1219,14 @@ def repackage_exo_zip(
         return {"zip_path": str(zip_path), "status": "skipped_error", "top_dir": top,
                 "output_zip": "", "rewritten_lines": 0, "detail": msg, "preview_conf": ""}
 
-    if out_zip.exists() and not overwrite:
+    if out_zip.resolve() == zip_path.resolve():
+        msg = f"SKIP [{tag}]: output archive path cannot overwrite input archive"
+        if error_log and not dry_run:
+            _exo_append_error_log(error_log, msg)
+        return {"zip_path": str(zip_path), "status": "skipped_error", "top_dir": top,
+                "output_zip": "", "rewritten_lines": 0, "detail": msg, "preview_conf": ""}
+
+    if not dry_run and out_zip.exists() and not overwrite:
         return {
             "zip_path": str(zip_path),
             "status": "skipped_exists",
@@ -1293,13 +1300,16 @@ def repackage_exo_zip(
             except OSError as link_exc:
                 if isinstance(link_exc, FileExistsError):
                     raise
-                fd = os.open(out_zip, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+                lock_path = out_base / f".{out_zip.name}.lock"
+                lock_fd = os.open(lock_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+                os.close(lock_fd)
                 try:
-                    with os.fdopen(fd, "wb") as dst_fh, tmp_path.open("rb") as src_fh:
-                        shutil.copyfileobj(src_fh, dst_fh, length=65536)
-                except Exception:
-                    out_zip.unlink(missing_ok=True)
-                    raise
+                    if out_zip.exists() or out_zip.is_symlink():
+                        raise FileExistsError(f"output appeared concurrently: {out_zip}")
+                    os.replace(tmp_path, out_zip)
+                    tmp_path = None
+                finally:
+                    lock_path.unlink(missing_ok=True)
     except Exception as exc:
         msg = f"SKIP [{tag}]: failed to write output zip: {exc}"
         if error_log:
@@ -1330,14 +1340,37 @@ def run_exo2romm(cfg: dict | None = None) -> dict:
                       or str(DEFAULT_EXO2ROMM_PROFILE["output_dir"]))
     err_raw = str(cfg.get("error_log") or "").strip()
     error_log = Path(err_raw) if err_raw else (output_dir / "eXo2romm-errors.log")
-    dry_run = bool(cfg.get("dry_run", False))
-    overwrite = bool(cfg.get("overwrite", False))
+    raw_dry = cfg.get("dry_run")
+    if raw_dry is None:
+        dry_run = bool(DEFAULT_EXO2ROMM_PROFILE["dry_run"])
+    elif isinstance(raw_dry, bool):
+        dry_run = raw_dry
+    else:
+        return {
+            "ok": False,
+            "error": "dry_run must be a JSON boolean.",
+            "credit": EXO2ROMM_CREDIT,
+            "upstream_url": EXO2ROMM_UPSTREAM_URL,
+        }
+
+    raw_over = cfg.get("overwrite")
+    if raw_over is None:
+        overwrite = bool(DEFAULT_EXO2ROMM_PROFILE["overwrite"])
+    elif isinstance(raw_over, bool):
+        overwrite = raw_over
+    else:
+        return {
+            "ok": False,
+            "error": "overwrite must be a JSON boolean.",
+            "credit": EXO2ROMM_CREDIT,
+            "upstream_url": EXO2ROMM_UPSTREAM_URL,
+        }
 
     raw_inputs = cfg.get("input_paths")
     if raw_inputs is None and cfg.get("input_path"):
         raw_inputs = [cfg.get("input_path")]
     if isinstance(raw_inputs, str):
-        items = [part.strip() for part in re.split(r"[\r\n,]+", raw_inputs) if part.strip()]
+        items = [part.strip() for part in re.split(r"[\r\n]+", raw_inputs) if part.strip()]
     elif isinstance(raw_inputs, list):
         items = [str(part or "").strip() for part in raw_inputs if str(part or "").strip()]
     else:
@@ -1397,9 +1430,11 @@ def run_exo2romm(cfg: dict | None = None) -> dict:
     ]
     processed = sum(1 for r in results if r["status"] in ("processed", "dry_run"))
     skipped = len(results) - processed
-    return {
-        "ok": True,
-        "clean": not any(r["status"] == "skipped_error" for r in results),
+    clean = not any(r["status"] == "skipped_error" for r in results)
+    batch_ok = any(r["status"] != "skipped_error" for r in results)
+    payload: dict = {
+        "ok": batch_ok,
+        "clean": clean,
         "dry_run": dry_run,
         "processed": processed,
         "skipped": skipped,
@@ -1412,3 +1447,6 @@ def run_exo2romm(cfg: dict | None = None) -> dict:
         "upstream_url": EXO2ROMM_UPSTREAM_URL,
         "results": results,
     }
+    if not batch_ok:
+        payload["error"] = results[0]["detail"] if results else "No archives could be processed."
+    return payload
