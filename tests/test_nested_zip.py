@@ -894,7 +894,8 @@ def test_nested_disc_sheet_with_no_track_references_is_rejected(
 
     preview = preview_import(download, resolve("dc"), library_root)
     assert all(not item["primary"].endswith(sheet) for item in preview["items"])
-    result, = import_rom(download, resolve("dc"), library_root)
+    result, = import_rom(download, resolve("dc"), library_root,
+                         selected_primaries=[f"disc.zip/{sheet}"])
     assert not result.ok
     assert not library_root.exists()
     assert download.read_bytes() == original
@@ -915,7 +916,8 @@ def test_nested_disc_reference_cannot_match_wrong_directory(
     library_root = tmp_path / "library"
     preview = preview_import(download, resolve("dc"), library_root)
     assert all(not item["primary"].endswith(sheet) for item in preview["items"])
-    result, = import_rom(download, resolve("dc"), library_root)
+    result, = import_rom(download, resolve("dc"), library_root,
+                         selected_primaries=[f"disc.zip/{sheet}"])
     assert not result.ok
     assert not library_root.exists()
     assert download.read_bytes() == original
