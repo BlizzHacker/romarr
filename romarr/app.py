@@ -1342,6 +1342,13 @@ class ROMarr:
             })
         return out
 
+    def _build_client(self, cfg: dict):
+        """Instantiate a configured client, preserving legacy 1-arg build_client mocks."""
+        params = inspect.signature(build_client).parameters.values()
+        if any(p.name == "data_dir" or p.kind == inspect.Parameter.VAR_KEYWORD for p in params):
+            return build_client(cfg, data_dir=str(self.store.path.parent))
+        return build_client(cfg)
+
     def reload_clients(self) -> None:
         """Rebuild the live clients from stored configuration.
 
@@ -1354,7 +1361,7 @@ class ROMarr:
             for cfg in self.store.list_items("download_clients"):
                 if not cfg.get("enable", True):
                     continue
-                client = build_client(cfg, data_dir=str(self.store.path.parent))
+                client = self._build_client(cfg)
                 if client is not None:
                     client.romarr_id = str(cfg.get("id") or "")
                     client.romarr_name = str(cfg.get("name") or "")
@@ -1591,7 +1598,7 @@ class ROMarr:
 
     def test_client(self, cfg: dict) -> dict:
         """Try a configuration without saving it, the way *arr's Test does."""
-        client = build_client(cfg, data_dir=str(self.store.path.parent))
+        client = self._build_client(cfg)
         if client is None:
             return {"ok": False, "message": f"unknown client type: {cfg.get('type')!r}"}
         try:

@@ -440,3 +440,25 @@ def test_app_grab_allows_mdm_torrent_selective(tmp_path):
     assert svc.queue[-1].selected_file["path"] == "SNES/Chrono Trigger (USA).sfc"
     assert "mdm_torrent" in CLIENT_TYPES and "mdm_http" in CLIENT_TYPES
 
+
+def test_build_client_helper_preserves_legacy_single_arg_factory(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    import romarr.app as app_module
+
+    seen = []
+
+    def legacy_factory(cfg):
+        seen.append(cfg["type"])
+        return SimpleNamespace(name=cfg.get("name", "legacy"), reachable=lambda: True)
+
+    svc = ROMarr(env={"ROMARR_DATA": str(tmp_path / "romarr.json")})
+    svc.store.put_item("download_clients", {"id": "c1", "type": "qbittorrent", "name": "qbit", "enable": True})
+    monkeypatch.setattr(app_module, "build_client", legacy_factory)
+
+    svc.reload_clients()
+    tested = svc.test_client({"type": "qbittorrent", "name": "qbit"})
+
+    assert seen == ["qbittorrent", "qbittorrent"]
+    assert len(svc.clients) == 1
+    assert tested["ok"] is True
+
