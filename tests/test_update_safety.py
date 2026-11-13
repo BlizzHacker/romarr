@@ -311,7 +311,7 @@ def test_launch_failure_preserves_ambiguous_claim(checkout, monkeypatch):
     assert (repo / ".git" / safety.LOCK_NAME).exists()
 
 
-def _run_worker(checkout, monkeypatch, *, pip="success", restart="success", dirty_on_pip=False):
+def _run_worker(checkout, monkeypatch, *, pip="success", restart="success", dirty_on_pip=False, fail_status=False):
     publisher, repo, _origin, env = checkout
     req = "placeholder\n" if pip != "none" else None
     new_head = publish(publisher, requirements=req)
@@ -321,6 +321,11 @@ def _run_worker(checkout, monkeypatch, *, pip="success", restart="success", dirt
     (lock / "run_id").write_text("test-run")
     testbin = repo.parent / "testbin"
     testbin.mkdir()
+    if fail_status:
+        real_git = shutil.which("git")
+        wrapper = testbin / "git"
+        wrapper.write_text('#!/bin/sh\nif [ "$1" = status ]; then exit 2; fi\nexec ' + real_git + ' "$@"\n')
+        wrapper.chmod(0o755)
     ctl = testbin / "systemctl"
     ctl.write_text("#!/bin/sh\n" +
                    ("if [ \"$1\" = restart ]; then exit 2; fi\n" if restart == "fail" else "") +
@@ -378,3 +383,51 @@ def test_restart_failure_keeps_recovery_claim(checkout, monkeypatch):
     assert git("rev-parse", "HEAD", cwd=repo) == new
     assert lock.exists()
     assert "restart failed; RECOVERY REQUIRED" in log
+
+
+def test_git_status_probe_failure_is_not_treated_as_clean(checkout, monkeypatch):
+    """A failing Git cleanliness probe must stop before moving the checkout."""
+    repo, env, _new, lock, log, result = _run_worker(
+        checkout, monkeypatch, pip="none", fail_status=True)
+    assert result.returncode != 0
+    assert git("rev-parse", "HEAD", cwd=repo) == env.commit
+    assert lock.exists()
+    assert "source identity, branch or worktree changed" in log
+
+
+@pytest.mark.parametrize("optimized", [False, True])
+def test_health_false_verdict_fails_even_with_python_optimization(checkout, optimized):
+    """Readiness validation must remain effective when assertions are disabled."""
+    import shlex
+    import threading
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+    class Handler(BaseHTTPRequestHandler):
+        """Return a successful HTTP response with a failed application verdict."""
+
+        def do_GET(self):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'{"ok":false}')
+
+        def log_message(self, *args):
+            pass
+
+    _pub, _repo, _origin, env = checkout
+    state = safety.preflight(env, "origin/main")
+    script = safety.build_script(state, "probe", state["gitdir"] / "a.log",
+                                 state["gitdir"] / "lock")
+    line = next(line.strip() for line in script.splitlines() if " -c " in line)
+    tokens = shlex.split(line)
+    probe = tokens[tokens.index("-c") + 1]
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        args = [sys.executable] + (["-O"] if optimized else [])
+        result = subprocess.run(args + ["-c", probe,
+            f"http://127.0.0.1:{server.server_port}/api/health"],
+            capture_output=True, timeout=10)
+        assert result.returncode != 0
+    finally:
+        server.shutdown()
+        server.server_close()

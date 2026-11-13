@@ -162,7 +162,7 @@ def build_script(state: dict, run_id: str, log_path: Path, lock: Path) -> str:
         'opener=urllib.request.build_opener(urllib.request.ProxyHandler({})); '
         'r=opener.open(urllib.request.Request(sys.argv[1],'
         'headers={"Cache-Control":"no-cache"}),timeout=4); '
-        'assert r.status==200 and json.load(r).get("ok") is True'
+        'sys.exit(0 if r.status==200 and json.load(r).get("ok") is True else 1)'
     )
     script = f'''#!/bin/sh
 set -eu
@@ -190,7 +190,8 @@ valid_state() {{
   test "$(git rev-parse --absolute-git-dir)" = "$GITDIR" &&
   test "$(git symbolic-ref --quiet --short HEAD)" = "$BRANCH" &&
   test "$(git remote get-url origin)" = "$REMOTE" &&
-  test -z "$(git status --porcelain --untracked-files=all)"
+  STATUS=$(git status --porcelain --untracked-files=all) &&
+  test -z "$STATUS"
 }}
 health_two() {{
   n=0
