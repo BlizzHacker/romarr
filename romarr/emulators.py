@@ -82,22 +82,37 @@ def _portable(name: str) -> bool:
 
 
 def _matches_host(name: str) -> bool:
-    """Select only explicitly named host builds and reject source/debug packages."""
+    """Match delimited host/architecture markers and exclude source or symbol bundles."""
     lower = name.lower()
-    if any(token in lower for token in ("source", "symbols", "debug", ".zsync", "mingw-src")):
+
+    def marker(pattern: str, text: str = lower) -> bool:
+        """Require filename delimiters around labels, including composite labels."""
+        return bool(re.search(r"(?:^|[^a-z0-9])(?:" + pattern + r")(?=$|[^a-z0-9])", text))
+
+    if marker(r"source|sources|src|symbols?|debug|pdbs?|dbg|dsyms?|zsync"):
         return False
+    os_markers = {
+        "windows": r"windows|win64|win32|win[-_.](?:x64|x86|arm64)",
+        "linux": r"linux|ubuntu|appimage",
+        "darwin": r"macos|mac|osx|darwin",
+    }
     system = platform.system().lower()
-    os_tokens = {"windows": ("windows", "win64", "win-x64", "win32"),
-                 "linux": ("linux", "ubuntu", ".appimage"),
-                 "darwin": ("macos", "mac-", "osx", "darwin")}
-    if not any(token in lower for token in os_tokens.get(system, ())):
+    if system not in os_markers or not marker(os_markers[system]):
         return False
     machine = platform.machine().lower()
     if machine not in ("x86_64", "amd64", "x64", "arm64", "aarch64"):
         return False
-    arm = machine in ("arm64", "aarch64")
-    named_arm = bool(re.search(r"(?:arm64|aarch64|armhf)", lower))
-    return arm == named_arm
+    # ARM32 and x86 builds cannot run as native ARM64/x64 packages. Remove
+    # composite x86_64 labels before checking a standalone x86 marker.
+    without_x64 = re.sub(r"(?<![a-z0-9])x86[-_.]64(?![a-z0-9])", "", lower)
+    if marker(r"armhf|arm32|aarch32|armv[5-7](?:l|hf)?|armv8l"):
+        return False
+    if marker(r"x86|i[3-6]86|ia32|x32|win32", without_x64):
+        return False
+    if marker(r"universal2?"):
+        return True
+    named_arm64 = marker(r"arm64|aarch64")
+    return (machine in ("arm64", "aarch64")) == named_arm64
 
 
 class EmulatorHub:
