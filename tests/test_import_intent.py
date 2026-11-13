@@ -174,3 +174,77 @@ def test_http_preview_is_read_only_and_confirm_survives_restart(tmp_path, monkey
     finally:
         server.shutdown()
         server.server_close()
+
+
+# --- NUP containers: the role comes from the header, not the name ----------
+
+def _nup(tmp_path, name, packages):
+    """Write a NUP container to `tmp_path/name` and return its path."""
+    from tests.nup_builder import build_nup
+
+    path = tmp_path / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(build_nup(packages))
+    return path
+
+
+def test_a_loose_nup_base_is_read_from_its_header(tmp_path):
+    from tests.nup_builder import KIND_UPDATE, Pkg
+
+    path = _nup(tmp_path, "Game.nup", [Pkg(0x0100ABCD12340000), Pkg(0x0100ABCD12340000, KIND_UPDATE, 0x10000)])
+    p = preview_import(path, resolve("switch"), tmp_path / "lib")
+    item = p["items"][0]
+    assert (item["role"], item["confidence"]) == ("base", "header")
+    assert "base+update" in item["evidence"] and "0100ABCD12340000" in item["evidence"]
+    assert item["selected"] and not p["requires_review"]
+
+
+@pytest.mark.parametrize(("kind", "role"), [(1, "update"), (2, "dlc")])
+def test_a_loose_nup_update_or_dlc_gets_its_role(tmp_path, kind, role):
+    from tests.nup_builder import FLAG_STANDALONE_UPDATE, Pkg
+
+    flags = FLAG_STANDALONE_UPDATE if role == "update" else 0
+    path = _nup(tmp_path, "Game.nup", [Pkg(0x0100ABCD12341001, kind, 0x10000, flags)])
+    item = preview_import(path, resolve("switch"), tmp_path / "lib")["items"][0]
+    assert (item["role"], item["confidence"]) == (role, "header")
+
+
+@pytest.mark.parametrize("blob", [b"", b"NUP\x01" + b"\x00" * 300], ids=["empty", "truncated"])
+def test_an_unreadable_nup_requires_review(tmp_path, blob):
+    path = tmp_path / "Game.nup"
+    path.write_bytes(blob)
+    p = preview_import(path, resolve("switch"), tmp_path / "lib")
+    assert p["items"][0]["role"] == "unknown"
+    assert not p["items"][0]["selected"]
+    assert p["requires_review"]
+
+
+def test_a_system_only_nup_requires_review(tmp_path):
+    from tests.nup_builder import KIND_SYSTEM, Pkg
+
+    path = _nup(tmp_path, "Firmware.nup", [Pkg(0x0100000000000809, KIND_SYSTEM)])
+    p = preview_import(path, resolve("switch"), tmp_path / "lib")
+    assert p["items"][0]["role"] == "unknown" and p["requires_review"]
+
+
+def test_a_nup_folder_is_classified_for_review(tmp_path):
+    """Several sets still go to review, but each arrives correctly labelled."""
+    from tests.nup_builder import FLAG_STANDALONE_UPDATE, KIND_ADDON, KIND_UPDATE, Pkg
+
+    folder = tmp_path / "Game"
+    _nup(folder, "Game.nup", [Pkg(0x0100ABCD12340000)])
+    _nup(folder, "Game update.nup", [Pkg(0x0100ABCD12340000, KIND_UPDATE, 0x30000, FLAG_STANDALONE_UPDATE)])
+    _nup(folder, "Game DLC.nup", [Pkg(0x0100ABCD12341001, KIND_ADDON)])
+    p = preview_import(folder, resolve("switch"), tmp_path / "lib")
+    assert p["requires_review"]
+    assert {i["primary"]: i["role"] for i in p["items"]} == {
+        "Game.nup": "base", "Game update.nup": "update", "Game DLC.nup": "dlc"}
+    choose_import(p, [{"primary": i["primary"], "role": i["role"]} for i in p["items"]])
+
+
+def test_a_nup_inside_an_archive_is_not_opened(tmp_path):
+    from tests.nup_builder import Pkg, build_nup
+
+    path = archive(tmp_path, {"Game.nup": build_nup([Pkg(0x0100ABCD12340000)])})
+    item = preview_import(path, resolve("switch"), tmp_path / "lib")["items"][0]
+    assert (item["role"], item["confidence"]) == ("base", "format-only")

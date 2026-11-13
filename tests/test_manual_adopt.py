@@ -197,3 +197,83 @@ def test_importing_twice_does_not_silently_duplicate(service, tmp_path):
     assert again["refused"][0]["needs_force"] is False, (
         "already-present is not a verification problem and must not offer a "
         "force override")
+
+
+# --- the header's opinion ---------------------------------------------------
+
+def test_a_header_mismatch_imports_and_says_so(service, tmp_path):
+    """The operator picked Switch for a Switch 2 NUP. Their choice stands, and
+    the result carries the header's opinion for the page to show."""
+    from tests.nup_builder import Pkg, build_nup
+    svc, lib = service
+    path = drop(tmp_path, "Bananza.nup", build_nup([Pkg(0x040074A01BF12000)]))
+
+    got = svc.adopt(str(path), "switch")
+
+    assert got["ok"] is True, got
+    assert got["header_says"] == "switch-2"
+    assert "040074A01BF12000" in got["header_detail"]
+    assert (lib / "switch" / "Bananza.nup").exists()
+
+
+def test_an_agreeing_header_adds_no_warning(service, tmp_path):
+    from tests.nup_builder import Pkg, build_nup
+    svc, _ = service
+    path = drop(tmp_path, "Bananza.nup", build_nup([Pkg(0x040074A01BF12000)]))
+
+    got = svc.adopt(str(path), "switch-2")
+
+    assert got["ok"] is True, got
+    assert "header_says" not in got
+
+
+def _run_adopt_in_node(response: dict) -> str:
+    """Run the Manual Import page's adopt() against one canned response and
+    return what it wrote into the row's status cell."""
+    import json
+    import shutil
+    import subprocess
+
+    from romarr import ui
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed")
+    start = ui.JS.index("const headerPill=")
+    end = ui.JS.index("$('#miscan').onclick=", start)
+    script = f"""
+const esc = s => String(s ?? '');
+const j = async () => ({json.dumps(response)});
+const cells = {{
+  '.mi-go': {{ disabled: false, remove() {{}} }},
+  '.mi-st': {{ innerHTML: '', textContent: '' }},
+  '.mi-pf': {{ value: 'switch', disabled: false }},
+}};
+const row = {{ dataset: {{ path: '/downloads/x.nup' }}, querySelector: s => cells[s] }};
+{ui.JS[start:end]}
+adopt(row, false).then(() => console.log(cells['.mi-st'].innerHTML))
+  .catch(err => {{ console.error(err); process.exit(1); }});
+"""
+    res = subprocess.run([node, "-e", script], capture_output=True, text=True, timeout=15)
+    assert res.returncode == 0, res.stderr
+    return res.stdout
+
+
+def test_the_page_shows_the_header_warning_after_an_import():
+    """The scan row's badge alone is not enough: the platform can be changed
+    after the scan, and the import result is the last thing the operator sees."""
+    shown = _run_adopt_in_node({
+        "ok": True, "imported": [{"forced": False}], "refused": [],
+        "header_says": "switch-2",
+        "header_detail": "NUP title ID 040074A01BF12000 (Switch 2)"})
+
+    assert "imported" in shown
+    assert "header says switch-2" in shown
+    assert "NUP title ID 040074A01BF12000 (Switch 2)" in shown
+
+
+def test_the_page_shows_no_badge_when_the_header_agrees():
+    shown = _run_adopt_in_node({"ok": True, "imported": [{"forced": False}], "refused": []})
+
+    assert "imported" in shown
+    assert "header says" not in shown

@@ -9,7 +9,7 @@ from pathlib import PurePosixPath
 ROM_SUFFIXES = {
     ".zip", ".7z", ".rar", ".gz", ".chd", ".cue", ".bin", ".iso",
     ".img", ".ccd", ".sub", ".mds", ".mdf", ".gdi", ".cdi", ".cso",
-    ".pbp", ".rvz", ".wud", ".wux", ".wua", ".nsp", ".xci", ".nes",
+    ".pbp", ".rvz", ".wud", ".wux", ".wua", ".nsp", ".xci", ".nup", ".nes",
     ".sfc", ".smc", ".gb", ".gbc", ".gba", ".nds", ".3ds", ".cia",
     ".rom", ".a26", ".a78", ".lnx", ".dsk", ".adf", ".tap", ".tzx",
     ".m3u", ".toc", ".wav", ".ape", ".flac",

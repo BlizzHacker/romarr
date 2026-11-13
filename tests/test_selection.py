@@ -761,6 +761,93 @@ def test_infer_switch_generations(title, file_path, expected):
     assert infer_platform(release).slug == expected
 
 
+@pytest.mark.parametrize(("title", "expected"), [
+    ("The Legend of Zelda Tears of the Kingdom [0100F2C0115B6000][v0].nup", "switch"),
+    ("Donkey Kong Bananza (Nintendo Switch 2) [040074A01BF12000].nup", "switch-2"),
+    ("Donkey Kong Bananza [040074A01BF12000][Switch 2] (NUP)", "switch-2"),
+])
+def test_infer_switch_generation_of_a_nup(title, expected):
+    """.nup belongs to both consoles, so it resolves exactly like .nsp does."""
+    from romarr.selection import infer_platform
+
+    release = Release(title=title, download_url="", size=0, seeders=0,
+                      indexer="test", categories=(), protocol="torrent")
+    assert infer_platform(release).slug == expected
+
+
+# Frozen release titles for the NUP ranking rule. A NUP is a decrypted dump in
+# one file: RomM reads it, but nothing installs it, so an equal NSP or XCI must
+# win whatever the seeders say, and a NUP must still be taken when alone.
+_TOTK = "The Legend of Zelda Tears of the Kingdom [0100F2C0115B6000][v0]"
+_BANANZA = "Donkey Kong Bananza [040074A01BF12000][v0]"
+_SWITCH_GB = 16 * 1024 ** 3
+
+
+@pytest.mark.parametrize("nsp_seeders", [1, 5, 50])
+@pytest.mark.parametrize(("slug", "base", "wanted", "nsp", "nup"), [
+    ("switch", _TOTK, "the legend of zelda tears of the kingdom", " (NSP)", " (NUP)"),
+    ("switch", _TOTK, "the legend of zelda tears of the kingdom", ".nsp", ".nup"),
+    ("switch", _TOTK, "the legend of zelda tears of the kingdom", ".xci", ".nup"),
+    ("switch-2", _BANANZA, "donkey kong bananza", " (NSP)", " (NUP)"),
+    ("switch-2", _BANANZA, "donkey kong bananza", ".nsp", ".nup"),
+])
+def test_an_installable_switch_release_beats_a_nup(slug, base, wanted, nsp, nup,
+                                                    nsp_seeders):
+    platform = by_slug(slug)
+    installable = rel(base + nsp, size=_SWITCH_GB, seeders=nsp_seeders)
+    container = rel(base + nup, size=_SWITCH_GB, seeders=50)
+
+    assert best_release([container, installable], wanted, platform) is installable
+    assert best_release([installable, container], wanted, platform) is installable
+
+
+@pytest.mark.parametrize("slug", ["switch", "switch-2"])
+@pytest.mark.parametrize("suffix", [".nup", " (NUP)", " [nup]"])
+def test_a_lone_nup_is_still_taken(slug, suffix):
+    """A tag with no extension has no +60 to absorb the penalty, which stops at 1."""
+    container = rel(_TOTK + suffix, size=_SWITCH_GB, seeders=1)
+
+    assert score(container, "the legend of zelda tears of the kingdom", by_slug(slug)) > 0
+    assert best_release([container], "the legend of zelda tears of the kingdom",
+                        by_slug(slug)) is container
+
+
+def test_two_tagged_nups_keep_the_usual_ordering():
+    """The "(NUP)" tag is Switch evidence, so a tagged NUP earns the title-match
+    bonus and a busy one stays above the floor: seeders decide, not size."""
+    switch = by_slug("switch")
+    quiet = rel(_TOTK + " (NUP)", size=_SWITCH_GB, seeders=2)
+    busy = rel(_TOTK + " (NUP)", size=_SWITCH_GB + 1024, seeders=30)
+
+    assert score(busy, "the legend of zelda tears of the kingdom", switch) \
+        > score(quiet, "the legend of zelda tears of the kingdom", switch) >= 1
+    assert best_release([quiet, busy], "the legend of zelda tears of the kingdom",
+                        switch) is busy
+
+
+def test_two_nup_files_keep_the_usual_ordering():
+    """With the extension the penalty never reaches the floor, so it is the
+    same for both and seeders decide as they do for any other release."""
+    switch = by_slug("switch")
+    busy = rel(_TOTK + ".nup", size=_SWITCH_GB, seeders=30)
+    quiet = rel(_TOTK + ".nup", size=_SWITCH_GB, seeders=2)
+
+    assert score(busy, "the legend of zelda tears of the kingdom", switch) \
+        > score(quiet, "the legend of zelda tears of the kingdom", switch)
+    assert best_release([quiet, busy], "the legend of zelda tears of the kingdom",
+                        switch) is busy
+
+
+def test_a_nup_is_never_chosen_for_a_snes_request():
+    """Same trap as '(NSP)': the title matches, the container is a Switch dump."""
+    snes = by_slug("snes")
+    container = rel("Super Mario World (NUP)", size=2 * 1024 * 1024)
+    cart = rel("Super Mario World (USA).sfc", size=512 * 1024)
+
+    assert score(container, "super mario world", snes) < 0
+    assert best_release([container, cart], "super mario world", snes) is cart
+
+
 def test_switch_release_scoring_distinguishes_the_two_consoles():
     from romarr.platforms import resolve
     from romarr.selection import judge
@@ -771,3 +858,14 @@ def test_switch_release_scoring_distinguishes_the_two_consoles():
         release = rel(f"Example Game ({marker}).nsp", size=1024 * 1024)
         assert judge(release, "Example Game", native).points >= 0
         assert judge(release, "Example Game", foreign).points < 0
+
+
+@pytest.mark.parametrize("platform", ["switch", "switch-2"])
+def test_installable_tag_outranks_nup_extension_in_both_orders(platform):
+    """Format preference applies equally to tags and real extensions."""
+    from romarr.selection import best_release
+    from romarr.platforms import by_slug
+    installable = rel("Example Game (NSP)", seeders=1)
+    container = rel("Example Game.nup", seeders=50)
+    for pair in ([installable, container], [container, installable]):
+        assert best_release(pair, "Example Game", by_slug(platform)) == installable
