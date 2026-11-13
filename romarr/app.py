@@ -60,7 +60,7 @@ from .libraries import (
 from .clients import QBittorrent, QbitConfig, QbitAuthenticationError, Romm, RommConfig
 from . import hub  # ROM Hub bridge -- the Cartridge plugin layer
 from . import clamav
-from . import nup
+from . import nup, mdm
 from .dat import DatIndex, parse_dat
 from .decompress import run_batch as run_decompress_batch, scan_compressed
 from .titled import TitleDBIndex, build_index as build_titled_index, validate_switch_rom
@@ -484,6 +484,7 @@ class ROMarr:
         # Coordinates provider writes, reloads and revision-bearing reads.
         self._metadata_lock = threading.RLock()
         self._collection_source_lock = threading.Lock()
+        self._mdm_lock = threading.Lock()
         # Lets a configuration change wake the background refresh instead of
         # waiting out its interval. Created before reload_libraries, which sets
         # it.
@@ -1341,6 +1342,36 @@ class ROMarr:
             })
         return out
 
+    def _nzb_allowed_origins(self) -> tuple[str, ...]:
+        """Return configured Prowlarr and direct indexer origins allowed for NZB fetches."""
+        urls: list[str] = []
+        prowlarr_cfg = getattr(self.prowlarr, "_config", None)
+        if prowlarr_cfg is not None:
+            url = str(getattr(prowlarr_cfg, "base_url", "") or "").strip()
+            if url:
+                urls.append(url)
+        stored_prowlarr = str(self.store.settings.get("_prowlarr_url") or "").strip()
+        if stored_prowlarr:
+            urls.append(stored_prowlarr)
+        for cfg in self.store.list_items("indexers"):
+            if not cfg.get("enable", True):
+                continue
+            url = str(cfg.get("url") or "").strip()
+            if url:
+                urls.append(url)
+        return tuple(dict.fromkeys(urls))
+
+    def _build_client(self, cfg: dict):
+        """Instantiate a configured client, preserving legacy 1-arg build_client mocks."""
+        params = inspect.signature(build_client).parameters.values()
+        if any(p.name == "data_dir" or p.kind == inspect.Parameter.VAR_KEYWORD for p in params):
+            client = build_client(cfg, data_dir=str(self.store.path.parent))
+        else:
+            client = build_client(cfg)
+        if client is not None and hasattr(client, "allowed_origins_provider"):
+            client.allowed_origins_provider = self._nzb_allowed_origins
+        return client
+
     def reload_clients(self) -> None:
         """Rebuild the live clients from stored configuration.
 
@@ -1353,7 +1384,7 @@ class ROMarr:
             for cfg in self.store.list_items("download_clients"):
                 if not cfg.get("enable", True):
                     continue
-                client = build_client(cfg)
+                client = self._build_client(cfg)
                 if client is not None:
                     client.romarr_id = str(cfg.get("id") or "")
                     client.romarr_name = str(cfg.get("name") or "")
@@ -1590,15 +1621,19 @@ class ROMarr:
 
     def test_client(self, cfg: dict) -> dict:
         """Try a configuration without saving it, the way *arr's Test does."""
-        client = build_client(cfg)
+        client = self._build_client(cfg)
         if client is None:
             return {"ok": False, "message": f"unknown client type: {cfg.get('type')!r}"}
         try:
             ok = client.reachable()
         except Exception as err:
             return {"ok": False, "message": f"{type(err).__name__}: {err}"}
-        return {"ok": bool(ok),
-                "message": "Connected" if ok else "Could not connect or authenticate"}
+        detail = str(getattr(client, "detail", "") or "").strip()
+        if ok:
+            msg = f"Connected ({detail})" if detail else "Connected"
+        else:
+            msg = detail or "Could not connect or authenticate"
+        return {"ok": bool(ok), "message": msg}
 
     def _library_folder_warnings(self, backend, cfg: dict,
                                  root: Path) -> list[str]:
@@ -2170,15 +2205,19 @@ class ROMarr:
         required_file = bool(getattr(pick, "file_selection_required", False))
         selected_file = str(getattr(pick, "torrent_file_path", "") or "")
         local_fetch = getattr(self.prowlarr, "is_prowlarr_download_url", None)
+        supports_selective = isinstance(client, QBittorrent) or bool(
+            getattr(client, "supports_selective", False))
+        supports_torrent_file = isinstance(client, QBittorrent) or bool(
+            getattr(client, "supports_torrent_file", False))
         if required_file and not selected_file:
             ok, download_id = False, ""
             release_fault = False
             failure_detail = "the source did not provide the exact file path"
-        elif required_file and not isinstance(client, QBittorrent):
+        elif required_file and not supports_selective:
             ok, download_id = False, ""
             release_fault = False
             failure_detail = (
-                "this collection source requires qBittorrent for exact file selection")
+                "this collection source requires qBittorrent or Standalone MDM CLI for exact file selection")
         elif required_file:
             ok = client.add_magnet_selective(
                 pick.download_url, selected_file, owned_selections=self._retained_owners())
@@ -2186,12 +2225,12 @@ class ROMarr:
             release_fault = False
             if not ok:
                 failure_detail = (client.last_error or
-                                  "qBittorrent could not select the exact file")
-        elif (isinstance(client, QBittorrent) and callable(local_fetch)
+                                  "could not select the exact file")
+        elif (supports_torrent_file and callable(local_fetch)
                 and local_fetch(pick.download_url)):
             # Prowlarr's authenticated URL is LAN-only and contains its API
             # key. Fetch it here, then upload only the .torrent bytes to the
-            # download client; never give qBittorrent that URL.
+            # download client; never give an external client that URL.
             try:
                 torrent = self.prowlarr.fetch_torrent(pick.download_url)
             except ProwlarrDownloadError as err:
@@ -2201,7 +2240,7 @@ class ROMarr:
             else:
                 # Prowlarr may answer a .torrent request with a terminal magnet
                 # redirect. Keep the safe local fetch path, then pass that URI
-                # to qBittorrent instead of treating it as torrent bytes.
+                # to the client instead of treating it as torrent bytes.
                 if isinstance(torrent, str):
                     ok = client.add(torrent)
                 else:
@@ -2209,8 +2248,11 @@ class ROMarr:
                 download_id = client.last_job_id if ok else ""
                 release_fault = False
                 if not ok:
+                    client_label = getattr(client, "display_name", getattr(client, "name", "Download client"))
                     failure_detail = (
-                        "qBittorrent did not confirm the uploaded torrent")
+                        getattr(client, "last_error", "")
+                        or f"{client_label} did not confirm the uploaded torrent"
+                    )
         else:
             ok, download_id = hand_off_with_id(client, pick.download_url,
                                                name=pick.title)
@@ -2413,7 +2455,7 @@ class ROMarr:
             remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
             budget_exhausted = remaining is not None and remaining <= 0
             try:
-                if isinstance(client, QBittorrent):
+                if isinstance(client, QBittorrent) or getattr(client, "supports_selective", False):
                     if budget_exhausted:
                         continue
                     raw_timeout = getattr(getattr(client, "_config", None), "timeout", 5) or 5
@@ -2422,8 +2464,8 @@ class ROMarr:
                         probe_timeout = min(probe_timeout, remaining)
                     bounded = max(0.01, probe_timeout)
 
-                    def _probe_qbit(c=client, pt=bounded):
-                        """Query selective and general qBittorrent completions within `pt`."""
+                    def _probe_selective(c=client, pt=bounded):
+                        """Query selective and general torrent completions within `pt`."""
                         local_deadline = time.monotonic() + pt
                         selective = c.selective_completed(
                             items,
@@ -2439,14 +2481,16 @@ class ROMarr:
                         else:
                             next_timeout = pt
                         try:
-                            return selective + c.completed(repair=False, timeout=next_timeout)
+                            if isinstance(c, QBittorrent):
+                                return selective + c.completed(repair=False, timeout=next_timeout)
+                            return selective + c.completed(timeout=next_timeout)
                         except Exception as exc:
                             log.warning("%s completed() failed: %s", getattr(c, "name", c), exc)
                             return selective
 
                     candidates = (
-                        self._call_with_timeout(client, _probe_qbit, bounded)
-                        if deadline is not None else _probe_qbit()
+                        self._call_with_timeout(client, _probe_selective, bounded)
+                        if deadline is not None else _probe_selective()
                     )
                 elif isinstance(client, DebridClient):
                     if budget_exhausted:
@@ -2747,6 +2791,36 @@ class ROMarr:
             "refuses": ["captchas", "bot-detection challenges",
                         "header spoofing", "logins ROMarr cannot pass"],
         }
+
+    def mdm_capability(self) -> dict:
+        """Report local/managed Mister Download Manager availability and clients."""
+        rows = [c for c in self.clients
+                if type(c).__name__ in ("MdmTorrentClient", "MdmDirectClient")]
+        configured_path = next(
+            (getattr(getattr(c, "_config", None), "cli_path", "") for c in rows
+             if getattr(getattr(c, "_config", None), "cli_path", "")),
+            "",
+        )
+        info = mdm.availability(configured_path, data_dir=self.store.path.parent)
+        info["configured"] = bool(rows)
+        info["usenet_builtin"] = any(
+            type(c).__name__ == "BuiltinNzbClient" and getattr(c, "configured", False)
+            for c in self.clients
+        )
+        return info
+
+    def mdm_install(self, version: str = "") -> dict:
+        """Download, SHA-256 verify, and install the companion MDM CLI locally."""
+        clean_version = str(version or mdm.MDM_VERSION).strip()
+        if not re.fullmatch(r"v?\d+\.\d+\.\d+", clean_version):
+            raise ValueError("invalid MDM version format")
+        with self._mdm_lock:
+            result = mdm.install_mdm(
+                target_dir=mdm.default_install_dir(self.store.path.parent),
+                version=clean_version,
+            )
+            self.reload_clients()
+            return result
 
     def ggrequestz(self) -> dict:
         """Whether GG Requestz is reachable, the way Seerr reports Radarr.
@@ -3181,7 +3255,7 @@ class ROMarr:
                         if match_queue_item([row], item, client_id=client_id, client_protocol=client_protocol) is None:
                             continue
                         progress = float(item.get("progress", 0) or 0)
-                        if progress >= 1.0:
+                        if progress >= 1.0 or item.get("worker_active") is True:
                             return True
                         dlspeed = int(item.get("dlspeed", 0) or 0)
                         state = str(item.get("state") or "")
@@ -7056,7 +7130,7 @@ class ROMarr:
             if not getattr(client, "configured", True):
                 continue
             try:
-                if isinstance(client, QBittorrent):
+                if isinstance(client, QBittorrent) or getattr(client, "supports_selective", False):
                     finished.extend(dict(row, _romarr_client=client)
                                     for row in client.selective_completed(list(self.queue), ownership=self._retained_owners()))
                 finished.extend(dict(row, _romarr_client=client)
@@ -7310,8 +7384,14 @@ class ROMarr:
                     for q in self.queue) > 1
                 if (not shared_collection and not queue_item.import_intent
                         and not self.store.settings.get("retain_downloads_after_import", True)
-                        and str(queue_item.download_id or "").startswith("qbit-tag:")):
+                        and str(queue_item.download_id or "").startswith(("qbit-tag:", "mdm-tag:", "mdm-remote:"))):
                     for client in self.clients:
+                        client_id = str(getattr(client, "romarr_id", "")
+                                        or getattr(client, "config_id", ""))
+                        if source_client is not client and (
+                                not queue_item.download_client
+                                or client_id != str(queue_item.download_client)):
+                            continue
                         remover = getattr(client, "remove_download", None)
                         if callable(remover):
                             try:
@@ -7860,6 +7940,8 @@ def make_handler(service: ROMarr):
                 return self._json(200, {"types": CLIENT_TYPES})
             if route.path == "/api/v1/downloadclient/browser":
                 return self._json(200, service.browser_capability())
+            if route.path == "/api/v1/downloadclient/mdm":
+                return self._json(200, service.mdm_capability())
             if route.path == "/metrics":
                 # Authenticated like everything else. A metrics endpoint that
                 # is open while the rest of the app is not is a hole with a
@@ -9147,6 +9229,11 @@ def make_handler(service: ROMarr):
                 # filled back in, so Test reflects what Save would store.
                 existing = service.store.get_item("download_clients", body.get("id"))                     if body.get("id") else None
                 return self._json(200, service.test_client(merge_secrets(dict(body), existing)))
+            if route.path == "/api/v1/downloadclient/mdm/install":
+                try:
+                    return self._json(200, service.mdm_install(body.get("version", "")))
+                except (mdm.MdmError, OSError, ValueError) as err:
+                    return self._json(400, {"ok": False, "error": str(err)})
             if route.path == "/api/v1/indexer/test":
                 # merge_indexer_secrets: a Test pressed on a saved indexer
                 # whose form still shows `********` must test the STORED key,
