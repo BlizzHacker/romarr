@@ -21,11 +21,19 @@ Firmware, BIOS and console keys belong in the locations specified by the emulato
 
 ## Browse the full catalog
 
-The catalog snapshot contains 1,213 emulator, fork and companion-tool entries. Search by name, system, license or forge, and use Previous / Next to see every result. Free and noncommercial software is included; the license on each project still applies. Entries identify upstream sources and do not imply that every project has been installed or tested.
+The catalog snapshot contains 1,214 emulator, fork and companion-tool entries. Search by name, system, license or forge, and use Previous / Next to see every result. Free and noncommercial software is included; the license on each project still applies. Entries identify upstream sources and do not imply that every project has been installed or tested.
 
 **Browse forks** retrieves public fork pages directly from GitHub, GitLab or Forgejo. **More forks** continues through the network instead of stopping at a fixed list. Discovery keeps local records so they can be searched afterward. An unavailable or private project cannot be restored by catalog discovery.
 
 Sources include the [Emulation General Wiki](https://emulation.gametechwiki.com/index.php/Main_Page), [DerekTurtleRoe's emulator list](https://github.com/DerekTurtleRoe/awesome-emulators), [alnacle's list](https://github.com/alnacle/awesome-emulators), and upstream forge APIs. Attribution and source links are included in the bundled catalog. Eden and Ryubing use their own Forgejo repositories. AnyPS5 is an executable porting tool; its listing does not promise general PS5 compatibility.
+
+## Sources and references
+
+Choose **Sources and references** in the Emulator Hub for the 58 browser, source and preservation resources from the supplied list. They are kept separate from the emulator count. Thirty-six have identified links; 22 ambiguous or unverified destinations keep their names and notes without a guessed link.
+
+Open **ROM Hub plugins** to find supported acquisition integrations, including MiNERVA and Internet Archive. A reference listing does not install a plugin or bypass a source's access requirements.
+
+Major source repositories are backed up in [ROMarr Emulator Backups](https://gitea.moveweight.com/romarr-emulators). All 55 mirrors passed Git object-connectivity checks and matched their upstream heads at verification. They refresh every 24 hours. These preserve source history and upstream licenses; release binaries and Git LFS objects are not included. The [verification record](proof/emulator-mirrors-2026-11-13.json) lists each source and commit.
 
 ## Set up RetroArch and its cores
 

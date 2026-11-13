@@ -346,6 +346,7 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
                                               "logins, and reports such sites "
                                               "as unavailable instead."),
     "/api/v1/emulators": ("GET", "Searchable, paginated emulator catalog and installed portable builds."),
+    "/api/v1/emulators/resources": ("GET", "Browse source directories, browser portals and preservation references."),
     "/api/v1/emulators/forks": ("GET", "Browse and retain a page of public upstream forks."),
     "/api/v1/emulators/cores": ("GET", "Search all upstream libretro core metadata."),
     "/api/v1/emulators/cores/readiness": ("GET", "Check required core firmware file presence."),

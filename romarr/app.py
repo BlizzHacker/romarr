@@ -62,6 +62,7 @@ from . import hub  # ROM Hub bridge -- the Cartridge plugin layer
 from . import clamav, scanners, nup, mdm
 from .emulators import EmulatorHub
 from .libretro import CoreHub
+from .emulator_catalog import resource_catalog
 from .dat import DatIndex, parse_dat
 from .decompress import run_batch as run_decompress_batch, scan_compressed
 from .titled import TitleDBIndex, build_index as build_titled_index, validate_switch_rom
@@ -8035,6 +8036,13 @@ def make_handler(service: ROMarr):
                     return self._json(200, result)
                 except (ValueError, OSError):
                     return self._json(400, {"error": "Could not load this catalog page"})
+            if route.path == "/api/v1/emulators/resources":
+                try:
+                    return self._json(200, resource_catalog(
+                        (query.get("q") or [""])[0], int((query.get("offset") or ["0"])[0]),
+                        int((query.get("limit") or ["60"])[0])))
+                except (ValueError, OSError):
+                    return self._json(400, {"error": "Could not load this resource page"})
             if route.path == "/api/v1/emulators/forks":
                 try:
                     result = EmulatorHub(service.store.path.parent).inventory.forks(

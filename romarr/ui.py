@@ -4871,19 +4871,19 @@ RENDER.connections=async()=>{
 RENDER.emulators=async()=>{
   const version=pageVersion;
   const current=()=>version===pageVersion && activePage==='emulators';
-  let offset=0, query='', mode='projects', request=0;
+  let offset=0, query='', mode='projects', request=0, inspection=0;
   $('#page').innerHTML=`<div class="card"><h3>Emulator Hub</h3>
     <p>Find an emulator, check its setup guide, then add your games. Install buttons install on the
     <b>ROMarr host</b>. Use the upstream downloads on a different gaming device.</p>
     <p class="help">Free and noncommercial projects are included. Each project keeps its own terms.
     Experimental projects and forks can have limited compatibility. A catalog entry is not a gameplay test.</p>
     <div class="row"><select id="emu-mode" aria-label="Catalog"><option value="projects">Emulators and tools</option>
-    <option value="cores">RetroArch cores</option></select>
+    <option value="cores">RetroArch cores</option><option value="resources">Sources and references</option></select>
     <input id="emu-search" type="search" placeholder="Search name, system, license or source" aria-label="Search emulators">
     <button class="btn" id="emu-find">Search</button></div>
     <p><a href="https://emulation.gametechwiki.com/index.php/Main_Page" target="_blank" rel="noopener">Emulation General Wiki</a>
     · <a href="https://docs.libretro.com/" target="_blank" rel="noopener">RetroArch setup and core guides</a>
-    · <a href="#plugins">ROM Hub plugins for Minerva, Internet Archive and other sources</a></p>
+    · <a href="#hub">ROM Hub plugins for Minerva, Internet Archive and other sources</a></p>
     <div id="emu-count" role="status"></div><div class="row"><button class="btn ghost" id="emu-prev">Previous</button>
     <button class="btn ghost" id="emu-next">Next</button><button class="btn ghost" id="core-config">Prepare RetroArch folders</button></div>
     <pre id="core-config-result" role="status"></pre></div>
@@ -4899,12 +4899,16 @@ RENDER.emulators=async()=>{
     const serial=++request;
     $('#emu-count').textContent='Loading catalog…';
     try{
-      const d=await j('/api/v1/emulators'+(mode==='cores'?'/cores':'')+'?q='+encodeURIComponent(query)+'&offset='+offset);
+      const d=await j('/api/v1/emulators'+(mode==='cores'?'/cores':mode==='resources'?'/resources':'')+'?q='+encodeURIComponent(query)+'&offset='+offset);
       if(!current()||serial!==request)return;
       if(d.error)throw new Error(d.error);
       $('#emu-count').textContent=d.total+' matches · '+d.available+' catalog entries · showing '+(d.total?offset+1:0)+'–'+Math.min(offset+d.items.length,d.total)+' · snapshot '+d.verified_date;
       $('#emu-prev').disabled=offset===0;$('#emu-next').disabled=offset+d.items.length>=d.total;
-      $('#emu-cards').innerHTML=d.items.map(item=>mode==='cores'?`<div class="card">
+      $('#emu-cards').innerHTML=d.items.map(item=>mode==='resources'?`<div class="card">
+        <h3>${esc(item.name)}</h3><p class="help">${esc(item.category)}</p><p>${esc(item.description||'')}</p>
+        <div class="row">${item.url?'<a class="btn ghost" href="'+esc(item.url)+'" target="_blank" rel="noopener">Open resource</a>':'<span class="help">Link not verified yet.</span>'}
+        ${item.category==='source'?'<a class="btn ghost" href="#hub">Find ROM Hub plugins</a>':''}</div>
+        <p class="help">External resource. Availability, access and terms are set by its operator.</p></div>`:mode==='cores'?`<div class="card">
         <h3>${esc(item.name)}</h3><p>${esc(item.systems)}</p><p class="help">${esc(item.description)}</p>
         <p>${esc(item.license)} · ${item.installed?'Installed':'Not installed'}</p>
         <p class="help">${item.firmware.length+' firmware entries. Required files are checked before setup; game compatibility still depends on the core.'}</p>
@@ -4988,12 +4992,13 @@ RENDER.emulators=async()=>{
     if(current())$('#core-config-result').textContent=JSON.stringify(result,null,2);
   };
   document.querySelectorAll('[data-inspect]').forEach(button=>button.onclick=async()=>{
+    const inspectVersion=++inspection;
     button.disabled=true;
     const output=$('#lab-result');output.textContent='Contacting your lab…';
     try{
       const result=await j('/api/v1/security/inspect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:$('#lab-path').value,engine:button.dataset.inspect})});
-      if(current())output.textContent=JSON.stringify(result,null,2);
-    }catch(error){if(current())output.textContent=error.message;}
+      if(current()&&inspectVersion===inspection)output.textContent=JSON.stringify(result,null,2);
+    }catch(error){if(current()&&inspectVersion===inspection)output.textContent=error.message;}
     finally{if(current())button.disabled=false;}
   });
   await load();

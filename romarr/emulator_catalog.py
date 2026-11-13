@@ -125,3 +125,14 @@ class RepositoryCatalog:
             has_next = page * per_page < int(total)
         return {"items": rows, "page": page, "has_next": has_next, "total": total,
                 "source": entry["website"]}
+
+
+def resource_catalog(query: str = "", offset: int = 0, limit: int = 60) -> dict:
+    """List companion references separately from installable emulator projects."""
+    data = json.loads(Path(__file__).with_name("emulator_resources.json").read_text(encoding="utf-8"))
+    needle = query.strip().casefold()
+    rows = [row for row in data["items"] if needle in " ".join(
+        str(row.get(key) or "") for key in ("name", "description", "category")).casefold()]
+    offset, limit = max(0, int(offset)), min(100, max(1, int(limit)))
+    return {"items": rows[offset:offset + limit], "total": len(rows), "available": len(data["items"]),
+            "offset": offset, "limit": limit, "verified_date": data["verified_date"]}
