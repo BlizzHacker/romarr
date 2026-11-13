@@ -171,3 +171,26 @@ def test_opt_in_request_disables_hardlink_publication(tmp_path):
     assert len(outcomes) == 1 and outcomes[0].ok, outcomes
     assert outcomes[0].import_method != "hardlink"
     assert outcomes[0].destination.read_bytes() == ROM
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_incomplete_multitrack_dat_game_never_published(tmp_path, nested):
+    """One verified member must not stand in for a two-ROM DAT game."""
+    source = _zip(tmp_path / "dl.zip", nested=nested)
+    crc_first = f"{zlib.crc32(ROM) & 0xFFFFFFFF:08x}"
+    crc_second = f"{zlib.crc32(b'B' * len(ROM)) & 0xFFFFFFFF:08x}"
+    catalog = parse_dat(f"""
+    <datafile><header><name>Nintendo - SNES</name></header>
+      <game name="Super Metroid (USA)">
+        <rom name="Super Metroid (USA).sfc" size="{len(ROM)}" crc="{crc_first}"/>
+        <rom name="Super Metroid (Disc 2).sfc" size="{len(ROM)}" crc="{crc_second}"/>
+      </game>
+    </datafile>""")
+    index = DatIndex()
+    index.add(catalog)
+    results = _import(tmp_path, source, dats=index)
+
+    assert len(results) == 1 and not results[0].ok
+    assert "SOURCE_INCOMPLETE" in results[0].reason
+    assert not (tmp_path / "library").exists()
+    assert source.exists()
