@@ -1,4 +1,4 @@
-"""Self-update: pulling the latest ROMarr (and ROM Hub plugins) from GitHub.
+"""Git/source update detection, safe worker delegation and Docker guidance.
 
 The UpdateCheck task always answered "a newer version exists" and stopped
 there, on the theory that an *arr that updates itself is an *arr that
@@ -36,7 +36,6 @@ but what `git fetch` verifies against the remote.
 
 from __future__ import annotations
 
-import logging
 import os
 import shutil
 import subprocess
@@ -44,17 +43,15 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-log = logging.getLogger(__name__)
+from . import update_safety
 
 #: The unit restarted after a git-channel update. Overridable because the
 #: service file's name belongs to the operator, not to ROMarr.
 SERVICE = os.environ.get("ROMARR_SERVICE", "romarr")
 
-#: Where the detached apply script and its log live, inside the checkout.
-#: Dot-prefixed and never committed; the log is tailed by the Update page so
-#: an operator watching a restart sees WHY it restarted.
-SCRIPT_NAME = ".romarr-selfupdate.sh"
-LOG_NAME = ".romarr-selfupdate.log"
+#: Compatibility identifiers for legacy callers; new runs use Git-metadata state.
+SCRIPT_NAME = "romarr-selfupdate.lock/run.sh"
+LOG_NAME = update_safety.LOG_NAME
 
 
 @dataclass(frozen=True)
@@ -185,83 +182,21 @@ def resolve_target(env: Environment, channel: str, latest_tag: str) -> tuple[str
 
 
 def build_script(env: Environment, target: str, log_path: str) -> str:
-    """The detached updater.
-
-    Written as one small sh script rather than driven from Python because
-    its last act restarts the service that would be driving it. Every step
-    is fail-stop, and the log path is where the UI reads progress from.
-
-    `sleep 3` first: the API response that triggered this must reach the
-    browser before the service dies, or the operator sees a failed request
-    instead of "update started".
-    """
-    return f"""#!/bin/sh
-# ROMarr self-update -- detached; survives the restart it performs.
-set -e
-exec >>{log_path!r} 2>&1
-echo "=== $(date -u '+%Y-%m-%dT%H:%M:%SZ') self-update start: target {target} ==="
-sleep 3
-cd {env.repo!r}
-git fetch --tags origin
-PRE=$(git rev-parse HEAD)
-echo "pre-update commit: $(git rev-parse --short HEAD)"
-git checkout {env.branch or 'main'} 2>/dev/null || git checkout main
-git merge --ff-only {target}
-echo "post-update commit: $(git rev-parse --short HEAD)"
-# Dependencies must install into the SAME interpreter that runs ROMarr
-# ({env.python!r} -- sys.executable, i.e. the venv on a normal install).
-# If they cannot, a restart would come up on new code with missing imports,
-# which is worse than staying on the old version: roll the checkout back and
-# stop here, leaving the running service untouched.
-if [ -f requirements.txt ]; then
-  if ! {env.python!r} -m pip install -q -r requirements.txt; then
-    echo "ERROR: dependency install failed; rolling back to $PRE, NOT restarting"
-    git reset --hard "$PRE"
-    exit 1
-  fi
-fi
-echo "restarting {env.service}..."
-if command -v systemctl >/dev/null 2>&1; then
-  systemctl restart {env.service} || echo "WARN: systemctl restart failed"
-else
-  echo "WARN: no systemctl; the operator must restart ROMarr manually"
-fi
-echo "=== self-update done ==="
-"""
+    """Render a diagnostic worker preview only after exact source preflight."""
+    state = update_safety.preflight(env, target)
+    return update_safety.build_script(
+        state, "preview-only", Path(log_path),
+        state["gitdir"] / update_safety.LOCK_NAME)
 
 
 def launch(env: Environment, target: str) -> dict:
-    """Write and start the detached updater. Returns immediately; the script
-    outlives this process by design (start_new_session)."""
-    if not env.can_apply:
-        return {"ok": False, "error": f"cannot self-update: {env.detail}"}
-    repo = Path(env.repo)
-    log_path = str(repo / LOG_NAME)
-    script = repo / SCRIPT_NAME
-    script.write_text(build_script(env, target, log_path), encoding="utf-8")
-    script.chmod(0o755)
-    # Truncate the old log so the Update page never shows a stale run as the
-    # current one; the script appends from here.
-    Path(log_path).write_text("", encoding="utf-8")
-    subprocess.Popen(["/bin/sh", str(script)], cwd=str(repo),
-                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                     start_new_session=True)
-    log.info("self-update launched: %s -> %s", env.commit, target)
-    return {"ok": True, "target": target, "from_commit": env.commit,
-            "log": log_path,
-            "message": f"update to {target} started; ROMarr will restart"}
+    """Reserve and launch one fail-closed worker outside the ROMarr service."""
+    return update_safety.launch(env, target)
 
 
 def read_log(env: Environment, tail_lines: int = 40) -> str:
-    """The tail of the last (or running) self-update, for the UI."""
-    path = Path(env.repo) / LOG_NAME if env.repo else None
-    if not path or not path.exists():
-        return ""
-    try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-        return "\n".join(lines[-tail_lines:])
-    except OSError:
-        return ""
+    """Read the persistent worker log from the checkout's Git metadata."""
+    return update_safety.read_log(env, tail_lines=tail_lines)
 
 
 def docker_guidance(image: str = "ghcr.io/blizzhacker/romarr:latest") -> dict:
