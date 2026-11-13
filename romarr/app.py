@@ -35,7 +35,7 @@ import inspect
 import json
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from copy import copy, deepcopy
 import logging
 import os
@@ -3453,6 +3453,48 @@ class ROMarr:
         except OSError as err:
             log.warning("could not roll back %s: %s", destination, err)
 
+    @contextmanager
+    def _scanned_manual_source(self, source: Path, platform):
+        """Scan private copies of every selected loose disc member before import."""
+        import shutil
+        import tempfile
+        from .library import _PathSource
+        enabled = any(self.store.settings.get(key) for key in (
+            "clamav_enabled", "scanner_defender_enabled", "scanner_mwm_enabled",
+            "scanner_vt_enabled"))
+        if not enabled:
+            yield source, None
+            return
+        with tempfile.TemporaryDirectory(prefix=".manual-scan-", dir=self.store.path.parent) as scratch:
+            stage = Path(scratch) / source.name
+            if source.suffix.lower() in (".cue", ".gdi") and source.is_file():
+                origin = _PathSource(source.parent)
+                chosen = next((group for group in origin.rom_sets(platform)
+                               if group.primary == source.name), None)
+                if chosen is None:
+                    raise ValueError("Could not resolve the selected disc set")
+                stage.mkdir()
+                root = source.parent.resolve()
+                for member in chosen.members:
+                    original = source.parent / member
+                    if not original.resolve().is_relative_to(root) or original.is_symlink():
+                        raise ValueError("Disc member escapes its source directory")
+                    destination = stage / member
+                    if not destination.resolve().is_relative_to(stage.resolve()):
+                        raise ValueError("Disc member escapes its staging directory")
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(original, destination)
+            elif source.is_dir():
+                if source.is_symlink() or any(p.is_symlink() for p in source.rglob("*")):
+                    raise ValueError("Manual scan source cannot contain symbolic links")
+                shutil.copytree(source, stage)
+            else:
+                if source.is_symlink():
+                    raise ValueError("Manual scan source cannot be a symbolic link")
+                shutil.copyfile(source, stage)
+            refusal = self._virus_check(stage, source.name, platform, None)
+            yield stage, refusal
+
     def adopt(self, path: str, platform_slug: str = "", *,
               force: bool = False, require_verified: bool = False) -> dict:
         """Import one file the operator picked out of a manual-import scan.
@@ -3501,10 +3543,6 @@ class ROMarr:
         from .sniff import disagrees_with
 
         mismatch = disagrees_with(source, platform.slug)
-        refused = self._virus_check(source, source.name, platform, None)
-        if refused is not None:
-            return refused
-
         target = self.library_for(platform.slug)
         if target is None:
             return {"ok": False,
@@ -3513,14 +3551,24 @@ class ROMarr:
         label = target_cfg.get("name") or getattr(target_lib, "name", "library")
         target_folders = self.platform_folders(target_cfg)
 
-        outcomes = import_rom(source, platform, self.library_root(target_cfg),
-                              dats=self.dats,
-                              require_verified=require_verified,
-                              rename=bool(self.store.settings.get("rename_on_import", True)),
-                prefer_hardlinks=bool(self.store.settings.get("prefer_hardlinks", False)),
-                              layout=self.library_layout(target_cfg),
-                              translation=is_translation(source.name),
-                              platform_folders=target_folders)
+        try:
+            with self._scanned_manual_source(source, platform) as (staged_source, scan_refusal):
+                if scan_refusal is not None:
+                    return {**scan_refusal, "refused": [{
+                        "file": source.name, "reason": scan_refusal["reason"],
+                        "needs_force": False}], "imported": []}
+                outcomes = import_rom(staged_source, platform, self.library_root(target_cfg),
+                                      dats=self.dats,
+                                      require_verified=require_verified,
+                                      rename=bool(self.store.settings.get("rename_on_import", True)),
+                        prefer_hardlinks=staged_source == source and bool(self.store.settings.get("prefer_hardlinks", False)),
+                                      layout=self.library_layout(target_cfg),
+                                      translation=is_translation(source.name),
+                                      platform_folders=target_folders)
+        except (OSError, ValueError) as err:
+            reason = f"could not prepare scanned import: {err}"
+            return {"ok": False, "reason": reason, "imported": [], "refused": [
+                {"file": source.name, "reason": reason, "needs_force": False}]}
 
         imported, refused = [], []
         for outcome in outcomes:

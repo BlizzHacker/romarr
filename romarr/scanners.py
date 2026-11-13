@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -96,7 +97,15 @@ def scan(settings: dict, env: dict, target: Path, session=None) -> tuple[list[Fi
         except (OSError, subprocess.SubprocessError) as err:
             raise ScanUnavailable("Microsoft Defender could not finish the scan") from err
         if result.returncode == 2:
-            findings.append(Finding(str(target), "Microsoft Defender reported a threat"))
+            output = (getattr(result, "stdout", b"") or b"") + (getattr(result, "stderr", b"") or b"")
+            if isinstance(output, bytes):
+                output = output.decode(errors="replace")
+            # Exit 2 also covers operational errors. Only explicit threat output
+            # establishes a detection; an ambiguous result still holds import.
+            if re.search(r"(?im)^\s*(?:Threat(?:\s+Name)?|ThreatID)\s*[:=]\s*\S+", output):
+                findings.append(Finding(str(target), "Microsoft Defender reported a threat"))
+            else:
+                raise ScanUnavailable("Microsoft Defender exited with code 2 without explicit detection evidence")
         elif result.returncode != 0:
             raise ScanUnavailable(f"Microsoft Defender exited with code {result.returncode}")
     if settings.get("scanner_mwm_enabled"):

@@ -129,7 +129,7 @@ def test_defender_threat_is_returned_without_remediation(tmp_path, monkeypatch):
     def run(command, **kwargs):
         """Return Defender's documented threat result."""
         commands.append(command)
-        return SimpleNamespace(returncode=2)
+        return SimpleNamespace(returncode=2, stdout=b"Threat Name: Test:Fixture\n", stderr=b"")
     monkeypatch.setattr(scanners.subprocess, "run", run)
     findings, _ = scanners.scan({"scanner_defender_enabled": True}, {}, target)
     assert findings
