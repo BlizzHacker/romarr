@@ -75,6 +75,8 @@ FOREIGN_PLATFORM_MARKERS = {
     # GameCube request for Paper Mario accepted the Switch remake's update patch,
     # and a PSP request for Lumines accepted a Vita release.
     "nsw", "psv",
+    # A Switch dump container, so "Super Mario World (NUP)" is not a SNES ROM.
+    "nup",
 }
 
 # Generic brand alias ("nintendo") only exists for resolve("nintendo") -> nes;
@@ -292,6 +294,11 @@ _CREDITED_TO_A_GROUP = re.compile(r"\bby\s+\S")
 _TRANSLATION_PENALTY = 150
 _CREDIT_PENALTY = 80
 _GOOD_DUMP_BONUS = 50
+# A .nup is a decrypted dump in one file: RomM reads it, but Tinfoil and the
+# console cannot install it. 45 beats the 40-point seeder cap, so an otherwise
+# equal .nsp/.xci always wins; `judge` stops it at 1 point, so a lone .nup is
+# still taken when nothing else exists.
+_NUP_PENALTY = 45
 
 # GoodTools "verified good dump": the strongest quality signal a ROM title
 # carries, and worth more than any region preference.
@@ -964,6 +971,9 @@ def judge(release: Release, wanted: str,
         scoring_aliases = [a for a in platform.aliases
                            if a.lower() not in _NON_SCORING_ALIASES]
         has_ext = _has_extension(lowered, platform.extensions)
+        if platform.slug in ("switch", "switch-2") and any(
+                _mentions(lowered, marker) for marker in ("nsp", "xci", "nsz", "xcz")):
+            has_ext = True
         names_plat = _mentions(lowered, platform.slug.lower()) or any(
             _mentions(lowered, alias) for alias in scoring_aliases
         )
@@ -1049,6 +1059,14 @@ def judge(release: Release, wanted: str,
     if profile:
         for delta, text in profile.adjustments(lowered):
             add(delta, text)
+
+    # Last, and never below 1: it ranks a NUP under an equal installable
+    # release, but is not on its own the reason a lone NUP is refused. A title
+    # tagged "(NUP)" without the extension has no +60 for it to come out of.
+    if platform is not None and platform.slug in ("switch", "switch-2") and points > 1 and (
+            _has_extension(lowered, (".nup",)) or _mentions(lowered, "nup")):
+        add(-min(_NUP_PENALTY, points - 1),
+            "NUP container: installable formats are preferred")
 
     return Judgement(points, tuple(reasons))
 

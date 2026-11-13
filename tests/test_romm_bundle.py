@@ -178,3 +178,11 @@ def test_route_directory_permission_failure_returns_failed_outcome(tmp_path,monk
     result,=import_rom(source,resolve("switch"),root,selected_primaries=list(routes),bundle_routes=routes)
     assert not result.ok and "destination preparation failed" in result.reason
     assert source.exists() and not (root/"switch/Fixture Game/update/Fixture Game update.nsp").exists()
+
+
+def test_a_nup_is_not_an_existing_game_package():
+    """RomM bundles are routed around .nsp/.xci packages; a NUP is a whole
+    dump in one file, so it never marks a folder as an existing game."""
+    from romarr.romm_bundle import PACKAGE_SUFFIXES
+
+    assert ".nup" not in PACKAGE_SUFFIXES

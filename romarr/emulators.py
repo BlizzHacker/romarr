@@ -166,7 +166,9 @@ class EmulatorHub:
                 raise ValueError("Insufficient free space for this package")
             destination = parent / (tag + "-" + expected_sha256[:12])
             if destination.exists():
-                return {"ok": True, "path": str(destination), "already_installed": True}
+                if scanner:
+                    scanner(destination / "app")
+                return {"ok": True, "path": str(destination / "app"), "already_installed": True}
             stage = Path(tempfile.mkdtemp(prefix=".install-", dir=parent))
             try:
                 archive = stage / asset_name

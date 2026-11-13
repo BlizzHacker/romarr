@@ -59,9 +59,8 @@ from .libraries import (
 )
 from .clients import QBittorrent, QbitConfig, QbitAuthenticationError, Romm, RommConfig
 from . import hub  # ROM Hub bridge -- the Cartridge plugin layer
-from . import clamav, scanners
+from . import clamav, scanners, nup, mdm
 from .emulators import EmulatorHub
-from . import mdm
 from .dat import DatIndex, parse_dat
 from .decompress import run_batch as run_decompress_batch, scan_compressed
 from .titled import TitleDBIndex, build_index as build_titled_index, validate_switch_rom
@@ -7058,6 +7057,72 @@ class ROMarr:
             queue_item.detail = detail
         return {"name": name, "ok": False, "reason": detail}
 
+    def _nup_gate(self, path: Path, name: str, platform, queue_item, *,
+                  inferred: bool, selected_primaries=None) -> tuple:
+        """Check a download's loose `.nup` files against its platform.
+
+        A NUP's header is a validated table of contents, so unlike a release
+        title it can be trusted. Returns `(platform, None)` to carry on, with
+        the platform moved to Switch 2 when it was only inferred and a 0x04
+        title says otherwise, or `(platform, result)` when the import stops:
+
+          * an invalid NUP fails the import, but not as the release's fault --
+            a truncated file looks the same as an incomplete download;
+          * a Switch 2 title in a row the operator requested for Switch goes to
+            review, because overriding their choice silently is worse than
+            asking.
+
+        A 0x01 title ID is never evidence: Switch 2 Editions keep their Switch
+        1 base ID. Archives are not opened; their platform stands as requested.
+        """
+        if platform.slug not in ("switch", "switch-2"):
+            return platform, None
+        if path.is_file():
+            loose = [path] if path.suffix.lower() == ".nup" else []
+        elif path.is_dir():
+            loose = sorted(p for p in path.rglob("*")
+                           if p.suffix.lower() == ".nup" and p.is_file())
+        else:
+            loose = []
+        if selected_primaries is not None:
+            selected = {str(primary).replace(chr(92), "/") for primary in selected_primaries}
+            loose = [p for p in loose
+                     if (p.relative_to(path).as_posix() if path.is_dir() else p.name) in selected]
+        game = queue_item.game if queue_item is not None else name
+        for nup_path in loose:
+            try:
+                header = nup.read_header(nup_path)
+            except (nup.NupError, OSError) as err:
+                detail = f"{nup_path.name} is not a valid NUP: {err}"
+                self.store.record(Event(kind="failed", game=game,
+                                        platform=platform.slug, detail=detail))
+                if queue_item is not None:
+                    queue_item.state = "import-failed"
+                    queue_item.detail = detail
+                return platform, {"name": name, "ok": False, "reason": detail}
+            if not (header.is_switch2 and platform.slug == "switch"):
+                continue
+            title_id = header.primary.title_id
+            if inferred:
+                log.info("%s: NUP title %s is Switch 2; importing under switch-2",
+                         name, title_id)
+                platform = by_slug("switch-2")
+                if queue_item is not None:
+                    queue_item.platform = platform.slug
+                continue
+            detail = (f"{nup_path.name} is a Switch 2 title ({title_id}) but was "
+                      "requested for Switch. Request it for Switch 2, or file it "
+                      "with Manual Import, which reads the header.")
+            if queue_item is not None:
+                # Review rows are re-checked every sweep; record the event once.
+                if (queue_item.state, queue_item.detail) != ("import-review", detail):
+                    self.store.record(Event(kind="failed", game=game,
+                                            platform=platform.slug, detail=detail))
+                queue_item.state = "import-review"
+                queue_item.detail = detail
+            return platform, {"name": name, "ok": False, "reason": detail}
+        return platform, None
+
     def import_finished(self, *, retry_failed: bool = True) -> list[dict]:
         with self._collection_lock:
             return self._import_finished(retry_failed=retry_failed)
@@ -7097,6 +7162,7 @@ class ROMarr:
         for torrent in finished:
             name = torrent.get("name", "")
             platform = None
+            platform_inferred = False
             queue_item = None
             source_client = torrent.get("_romarr_client")
             client_id = str(
@@ -7131,7 +7197,7 @@ class ROMarr:
                             ))
                             if inferred is not None:
                                 platform = inferred
-                                match.platform = inferred.slug
+                                platform_inferred = True
             if queue_item is not None and queue_item.state in ("imported", "import-failed"):
                 continue
             if platform is None:
@@ -7194,8 +7260,21 @@ class ROMarr:
                     continue
             refused = self._virus_check(path, name, platform, queue_item)
             if refused is not None:
+                if platform_inferred and queue_item is not None and queue_item.state == "import-failed":
+                    queue_item.platform = platform.slug
                 results.append(refused)
                 continue
+            # A reviewed selection is validated below before its NUPs are gated.
+            if not (queue_item and queue_item.import_intent):
+                platform, held = self._nup_gate(path, name, platform, queue_item,
+                                                inferred=platform_inferred)
+                if held is not None:
+                    if platform_inferred and queue_item is not None:
+                        queue_item.platform = platform.slug
+                    results.append(held)
+                    continue
+            if platform_inferred and queue_item is not None:
+                queue_item.platform = platform.slug
             # Which library this platform belongs to. A platform rule wins over
             # the default, so "PSX goes to Gaseous" is one row in the Libraries
             # page rather than a second ROMarr.
@@ -7261,6 +7340,14 @@ class ROMarr:
                             queue_item.detail = str(exc)
                             results.append({"name": name, "ok": False, "reason": str(exc)})
                             continue
+
+            if selected_primaries is not None:
+                platform, held = self._nup_gate(
+                    path, name, platform, queue_item, inferred=False,
+                    selected_primaries=selected_primaries)
+                if held is not None:
+                    results.append(held)
+                    continue
 
             outcomes = import_rom(
                 path, platform, self.library_root(target_cfg),

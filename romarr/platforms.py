@@ -263,17 +263,18 @@ PLATFORMS: tuple[Platform, ...] = (
     # Nintendo Switch uses TitleDB for validation instead of DAT files, since
     # NoIntro/Redump do not publish Switch DATs. Switch games come as .nsp
     # (digital/eShop) or .xci (cartridge dump) files, identified by their
-    # 16-character title ID.
+    # 16-character title ID. A .nup packs a decrypted dump into one file; it
+    # is listed last and `selection` ranks it below the installable formats.
     Platform("switch", "Nintendo Switch",
-             (".nsp", ".xci", ".nca", ".xcz", ".nsz"),
+             (".nsp", ".xci", ".nca", ".xcz", ".nsz", ".nup"),
              ("nintendo switch", "switch"),
              max_size=32 * GB, media=CARTRIDGE,
-             native_markers=("eshop", "nsp", "xci", "nsw")),
+             native_markers=("eshop", "nsp", "xci", "nsw", "nup")),
     Platform("switch-2", "Nintendo Switch 2",
-             (".nsp", ".xci", ".xcz", ".nsz"),
+             (".nsp", ".xci", ".xcz", ".nsz", ".nup"),
              ("switch 2", "switch2"),
              max_size=128 * GB, media=CARTRIDGE,
-             native_markers=("eshop", "nsp", "xci")),
+             native_markers=("eshop", "nsp", "xci", "nup")),
     # The two Xbox generations are separate folders in RomM and separate
     # machines to every emulator, so they are separate here. Naming them is
     # also what lets `selection` tell them apart: "xbox" is a foreign-platform

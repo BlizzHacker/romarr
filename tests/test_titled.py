@@ -12,6 +12,8 @@ GitHub being reachable fails for reasons that are not the code's.
 
 from __future__ import annotations
 
+import pytest
+
 from romarr.platforms import resolve
 from romarr.titled import (
     SwitchTitle, TitleDBIndex, base_tid_of, classify_tid,
@@ -58,6 +60,14 @@ def test_switch_extensions_cover_the_dump_formats():
     # .nsp digital, .xci cartridge, .nsz/.xcz compressed -- every form a
     # Switch dump arrives in.
     assert {".nsp", ".xci", ".nsz", ".xcz"} <= exts
+
+
+@pytest.mark.parametrize("slug", ["switch", "switch-2"])
+def test_both_switch_generations_accept_a_nup(slug):
+    """A NUP container is a Switch or Switch 2 dump, and it is listed last."""
+    p = resolve(slug)
+    assert p.extensions[-1] == ".nup"
+    assert "nup" in p.native_markers
 
 
 def test_switch_ceiling_admits_a_32gb_card():
@@ -199,3 +209,12 @@ def test_a_long_digit_run_is_not_mistaken_for_a_title_id():
     # The 16-digit window inside the run must NOT be extracted as an ID.
     result2 = validate_switch_rom("1234567890123456789012.nsp", index=_index())
     assert result2["status"] != "verified"
+
+
+def test_a_nup_is_a_library_file_for_rename_and_collections():
+    """Library rename and collection planning treat a .nup like an .nsp."""
+    from romarr.collection_torrent import ROM_SUFFIXES as COLLECTION_SUFFIXES
+    from romarr.library_rename import DISC_SUFFIXES
+
+    assert ".nup" in DISC_SUFFIXES
+    assert ".nup" in COLLECTION_SUFFIXES

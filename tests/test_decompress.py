@@ -344,3 +344,13 @@ def test_dry_run_submits_nothing(library, monkeypatch):
     assert report.to_dict()["skipped"] == 1
     assert library["source"].exists()
     assert not library["output"].exists()
+
+
+def test_a_nup_is_never_decompression_work(tmp_path):
+    """A NUP may hold zstd extents, but it is one container RomM reads whole.
+    Unpacking it is not a Compressatorium job, and a scan must not queue one."""
+    assert ".nup" not in decompress.COMPRESSED_EXTENSIONS
+    assert mode_for("Game.nup") == ""
+    (tmp_path / "Game.nup").write_bytes(b"NUP\x01")
+
+    assert decompress.scan_compressed(tmp_path) == []

@@ -26,7 +26,7 @@ def _journal_lock(library: Path, manifest_id: str):
 
 DISC_SUFFIXES = {".cue", ".gdi", ".m3u", ".ccd", ".sub", ".mds",
                  ".mdf", ".iso", ".chd", ".cso", ".pbp", ".pkg",
-                 ".nsp", ".xci", ".nca", ".nsz", ".xcz"}
+                 ".nsp", ".xci", ".nca", ".nsz", ".xcz", ".nup"}
 ROM_SUFFIXES = {
     ".rom", ".bin", ".nes", ".fds", ".sfc", ".smc", ".gb", ".gbc",
     ".gba", ".nds", ".3ds", ".cia", ".n64", ".z64", ".v64", ".md",
@@ -237,6 +237,16 @@ def plan(library: Path, platform_slug: str, dat_index, *,
     exact = _sha1_index(dat_index)
     for path in page:
         rel = path.relative_to(library).as_posix()
+        if path.suffix.lower() in DISC_SUFFIXES:
+            try:
+                size = path.stat().st_size
+                reason = "Disc images and their sets are left in place."
+            except OSError as err:
+                size = 0
+                reason = f"Could not read file: {err}"
+            entries.append({"file": rel, "target": "", "eligible": False,
+                            "reason": reason, "sha1": "", "size": size})
+            continue
         try:
             digest = hash_file(path)
             sha1 = str(digest.get("sha1") or "").lower()
