@@ -90,3 +90,11 @@ ROMarr's **Hub → Library Shell** (`/#portal`), **Hub → Plugins** (`/#hub`), 
 - **Multi-Device & Network Fleet Manager (`/api/v1/hub/fleet`)**: Synchronize verified 1G1R sets and `gamelist.xml` / Playnite / LaunchBox manifests across local LAN/SMB/NFS shares, SSH/Tailscale handhelds, and cloud WebDAV targets — supporting **ES-DE**, **Raspberry Pi / RetroPie / ArcadePunks / Batocera**, **Argosy Launcher**, **Grout** (muOS/NextUI), **DeckRommSync** (Steam Deck), **SwitchRomM / Tinfoil**, **pkgj / pkgi / fpkgi**, **Kekatsu**, and **RetroArch Cloud Sync**.
 - **Igir v5.8.0 1G1R Front-End (`/api/v1/hub/igir`)**: Full GUI and API wrapper for Igir v5.8.0 with native `{romm}`, `{es}`, and `{batocera}` output folder tokens.
 - **Open-Eyes & ROMarr MCP Bridge (`/api/v1/mcp`)**: Ready-to-copy `mcpServers` configuration pairing [BlizzHacker/open-eyes](https://github.com/BlizzHacker/open-eyes) desktop control with ROMarr's API tools.
+
+### Platform-specific searches
+
+Interactive Search translates ROMarr platform names into the identifiers
+ROM Hub sources expect. For example, selecting **Sega Genesis / Mega Drive**
+queries the plugins as `genesis`; you do not need to clear the platform filter.
+The same translation covers TurboGrafx-16, Odyssey 2, ZX81, and Apple II.
+Your saved platform choices and library folders stay the same.
