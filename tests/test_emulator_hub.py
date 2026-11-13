@@ -171,3 +171,41 @@ def test_release_rate_limit_falls_back_to_published_manifest(tmp_path):
     assert release["tag"]
     assert any(a["sha256"] and a["installable"] for a in release["assets"])
     assert "verified catalog" in release["note"]
+
+
+@pytest.mark.parametrize("status,stats,blocked,infected", [
+    (404, {}, True, False),
+    (429, {}, True, False),
+    (200, {}, True, False),
+    (200, {"undetected": 12}, False, False),
+    (200, {"malicious": 1}, False, True),
+])
+def test_virustotal_uses_hash_only_and_holds_unknown_results(tmp_path, status, stats, blocked, infected):
+    """Never upload bytes or clear an import without a usable hash report."""
+    target = tmp_path / "private-name.sfc"
+    target.write_bytes(b"synthetic fixture")
+    class HashService:
+        def get(self, url, **kwargs):
+            assert url == "https://www.virustotal.com/api/v3/files/" + hashlib.sha256(target.read_bytes()).hexdigest()
+            assert kwargs["headers"] == {"x-apikey": "fixture-token"}
+            assert "files" not in kwargs and "data" not in kwargs
+            response = Response({"data": {"attributes": {"last_analysis_stats": stats}}})
+            response.status_code = status
+            return response
+    settings = {"scanner_vt_enabled": True}
+    env = {"ROMARR_VIRUSTOTAL_API_KEY": "fixture-token"}
+    if blocked:
+        with pytest.raises(scanners.ScanUnavailable):
+            scanners.scan(settings, env, target, HashService())
+    else:
+        findings, _ = scanners.scan(settings, env, target, HashService())
+        assert bool(findings) is infected
+
+
+def test_clamav_size_limit_holds_import_for_a_complete_scan(tmp_path, monkeypatch):
+    """A file refused by ClamAV must not be silently imported unscanned."""
+    target = tmp_path / "large.nsp"
+    target.write_bytes(b"fixture")
+    monkeypatch.setattr(scanners.clamav, "scan", lambda *args: ([], [str(target)]))
+    with pytest.raises(scanners.ScanUnavailable, match="size limit"):
+        scanners.scan({"clamav_enabled": True, "clamav_address": "tcp://fixture:3310"}, {}, target)
