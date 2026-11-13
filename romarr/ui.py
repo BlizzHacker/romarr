@@ -4276,7 +4276,21 @@ RENDER.indexers=async()=>{
     editItem('indexer', d.items[Number(b.dataset.iedit)]));
 };
 
-RENDER.general=()=>settingsPage('General',
+RENDER.general=async()=>{
+  const opVer=pageVersion;
+  $('#page').innerHTML='<div class="empty">Loading settings…</div>';
+  let fresh;
+  try {
+    fresh=await j('/api/v1/config');
+  } catch (_) {
+    if(activePage==='general'&&pageVersion===opVer)
+      $('#page').innerHTML='<div class="empty">Could not load settings. Reopen General to retry.</div>';
+    return;
+  }
+  // A slow response must not overwrite a later page's content or form state.
+  if(activePage!=='general'||pageVersion!==opVer) return;
+  SETTINGS=fresh;
+  settingsPage('General',
   'Connections to the rest of the stack. Edit download clients and indexers '
   +'on their dedicated Settings pages. The OIDC client secret below is '
   +'write-only — it is never read back.',
@@ -4401,6 +4415,7 @@ RENDER.general=()=>settingsPage('General',
       $('#g-totpout').style.display='none';
     };
   });
+};
 
 /* ---------------- system ---------------- */
 RENDER.status=async()=>{
