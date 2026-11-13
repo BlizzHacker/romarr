@@ -61,6 +61,7 @@ from .clients import QBittorrent, QbitConfig, QbitAuthenticationError, Romm, Rom
 from . import hub  # ROM Hub bridge -- the Cartridge plugin layer
 from . import clamav, scanners, nup, mdm
 from .emulators import EmulatorHub
+from .libretro import CoreHub
 from .dat import DatIndex, parse_dat
 from .decompress import run_batch as run_decompress_batch, scan_compressed
 from .titled import TitleDBIndex, build_index as build_titled_index, validate_switch_rom
@@ -7962,7 +7963,31 @@ def make_handler(service: ROMarr):
             if route.path == "/api/v1/downloadclient/browser":
                 return self._json(200, service.browser_capability())
             if route.path == "/api/v1/emulators":
-                return self._json(200, EmulatorHub(service.store.path.parent).catalog())
+                try:
+                    result = EmulatorHub(service.store.path.parent).catalog(
+                        (query.get("q") or [""])[0], int((query.get("offset") or ["0"])[0]),
+                        int((query.get("limit") or ["60"])[0]))
+                    return self._json(200, result)
+                except (ValueError, OSError):
+                    return self._json(400, {"error": "Could not load this catalog page"})
+            if route.path == "/api/v1/emulators/forks":
+                try:
+                    result = EmulatorHub(service.store.path.parent).inventory.forks(
+                        (query.get("id") or [""])[0], int((query.get("page") or ["1"])[0]))
+                    return self._json(200, result)
+                except (ValueError, OSError, requests.RequestException):
+                    return self._json(400, {"error": "Could not load this fork page. Open the source repository to browse forks."})
+            if route.path in ("/api/v1/emulators/cores", "/api/v1/emulators/cores/readiness"):
+                try:
+                    core_hub = CoreHub(service.store.path.parent)
+                    if route.path.endswith("/readiness"):
+                        result = core_hub.readiness((query.get("id") or [""])[0])
+                    else:
+                        result = core_hub.catalog((query.get("q") or [""])[0],
+                            int((query.get("offset") or ["0"])[0]), int((query.get("limit") or ["60"])[0]))
+                    return self._json(200, result)
+                except (ValueError, OSError):
+                    return self._json(400, {"error": "Could not load this core"})
             if route.path == "/api/v1/emulators/release":
                 try:
                     result = EmulatorHub(service.store.path.parent).release(
@@ -9259,6 +9284,16 @@ def make_handler(service: ROMarr):
                 # filled back in, so Test reflects what Save would store.
                 existing = service.store.get_item("download_clients", body.get("id"))                     if body.get("id") else None
                 return self._json(200, service.test_client(merge_secrets(dict(body), existing)))
+            if route.path in ("/api/v1/emulators/cores/install", "/api/v1/emulators/cores/configure"):
+                try:
+                    core_hub = CoreHub(service.store.path.parent)
+                    result = (core_hub.configure() if route.path.endswith("/configure") else
+                              core_hub.install(str(body.get("id") or ""), scanner=service.scan_installation))
+                    return self._json(200, result)
+                except (ValueError, OSError, requests.RequestException, scanners.ScanUnavailable) as err:
+                    log.warning("Core installation failed: %s", type(err).__name__)
+                    return self._json(400, {"error": str(err) if isinstance(err, (ValueError, scanners.ScanUnavailable))
+                                           else "Could not install this core"})
             if route.path == "/api/v1/emulators/install":
                 try:
                     emulator_hub = EmulatorHub(service.store.path.parent)

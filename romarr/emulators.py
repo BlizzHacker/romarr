@@ -12,6 +12,8 @@ import tarfile
 import tempfile
 import threading
 import zipfile
+
+from .emulator_catalog import RepositoryCatalog, bundled, api_url, request_headers
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
 
@@ -104,30 +106,51 @@ class EmulatorHub:
     def __init__(self, data_dir: Path, session=None):
         self.root = Path(data_dir) / "tools" / "emulators"
         self.http = session or requests.Session()
+        self.inventory = RepositoryCatalog(data_dir)
 
-    def catalog(self) -> dict:
+    def entry(self, slug: str) -> dict:
+        """Resolve the full catalog, retaining the original featured identifiers."""
+        try:
+            return self.inventory.get(slug)
+        except ValueError:
+            return _entry(slug)
+
+    def catalog(self, query: str = "", offset: int = 0, limit: int = 60) -> dict:
         """Return the curated roster without making external network calls."""
         items = []
-        for entry in CATALOG:
-            row = _entry(entry[0])
-            records = sorted((self.root / row["id"]).glob("*/romarr-install.json"))
-            row["installed"] = [p.parent.name for p in records]
-            row["managed_releases"] = bool(row["repo"])
+        records = self.inventory.records()
+        featured = {entry[0]: index for index, entry in enumerate(CATALOG)}
+        records.sort(key=lambda row: (featured.get(row["id"], len(featured)),
+                                      -int(row.get("stars") or 0), row["name"].lower()))
+        wanted = query.strip().casefold()
+        for record in records:
+            row = dict(record)
+            if wanted and wanted not in " ".join(str(row.get(k) or "") for k in
+                                                 ("name", "systems", "description", "repo", "license", "provider")).casefold():
+                continue
+            saved = sorted((self.root / row["id"]).glob("*/romarr-install.json"))
+            row["installed"] = [p.parent.name for p in saved]
+            row["managed_releases"] = row.get("provider") in ("github", "gitlab", "forgejo") and bool(row.get("repo"))
             app_id = FLATPAKS.get(row["id"], "")
             row["flatpak"] = ("https://dl.flathub.org/repo/appstream/" + app_id
                               + ".flatpakref") if app_id else ""
             items.append(row)
+        limit = min(100, max(1, int(limit)))
+        offset = max(0, int(offset))
         return {"host": platform.system() + " " + platform.machine(),
-                "install_dir": str(self.root), "items": items}
+                "install_dir": str(self.root), "items": items[offset:offset + limit],
+                "total": len(items), "available": len(records), "offset": offset, "limit": limit,
+                "coverage": bundled()["coverage"], "verified_date": bundled()["verified_date"]}
 
     def release(self, slug: str) -> dict:
         """Resolve a project's own GitHub release assets and their published digests."""
-        entry = _entry(slug)
-        if not entry["repo"]:
+        entry = self.entry(slug)
+        if not entry.get("repo") or entry.get("provider", "github") not in ("github", "gitlab", "forgejo"):
             return {**entry, "assets": [], "note": "Use the project's downloads page."}
-        url = "https://api.github.com/repos/" + entry["repo"] + "/releases/latest"
-        token = os.environ.get("ROMARR_GITHUB_TOKEN", "").strip()
-        headers = {"Authorization": "Bearer " + token} if token else {}
+        provider = entry.get("provider", "github")
+        suffix = "/releases/permalink/latest" if provider == "gitlab" else "/releases" if provider == "forgejo" else "/releases/latest"
+        url = api_url(entry, suffix)
+        headers = request_headers(provider)
         cached = False
         try:
             with self.http.get(url, timeout=15, headers=headers) as response:
@@ -141,13 +164,21 @@ class EmulatorHub:
             if release is None:
                 raise
             cached = True
+        if isinstance(release, list):
+            release = next((row for row in release if not row.get("draft")), {})
+        if not isinstance(release, dict):
+            raise ValueError("The source did not return a release")
         assets = []
-        for asset in release.get("assets", []):
+        raw_assets = release.get("assets", [])
+        if isinstance(raw_assets, dict):
+            raw_assets = raw_assets.get("links", [])
+        for asset in raw_assets:
             name = str(asset.get("name") or "")
             digest = str(asset.get("digest") or "")
+            url = str(asset.get("browser_download_url") or asset.get("direct_asset_url") or asset.get("url") or "")
             assets.append({"name": name, "bytes": asset.get("size", 0),
                            "sha256": digest.removeprefix("sha256:") if re.fullmatch(r"sha256:[a-fA-F0-9]{64}", digest) else "",
-                           "url": asset.get("browser_download_url", ""),
+                           "url": url,
                            "installable": _portable(name) and _matches_host(name)
                                           and bool(re.fullmatch(r"sha256:[a-fA-F0-9]{64}", digest))})
         return {**entry, "tag": release.get("tag_name", ""), "assets": assets,
@@ -168,9 +199,10 @@ class EmulatorHub:
             tag = _component(str(release["tag"]))
             _component(asset_name)
             parts = urlsplit(asset["url"])
-            if parts.scheme != "https" or parts.hostname != "github.com":
-                raise ValueError("Release asset must be hosted by GitHub")
-            if not parts.path.startswith("/" + release["repo"] + "/releases/download/"):
+            source = urlsplit(release["website"])
+            if parts.scheme != "https" or parts.hostname not in ("github.com", source.hostname):
+                raise ValueError("Release asset must be hosted by the project's forge")
+            if parts.hostname == "github.com" and not parts.path.startswith("/" + release["repo"] + "/releases/download/"):
                 raise ValueError("Release asset belongs to another repository")
             parent = self.root / slug
             parent.mkdir(parents=True, exist_ok=True)

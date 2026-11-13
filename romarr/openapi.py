@@ -345,7 +345,12 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
                                               "challenges, header spoofing and "
                                               "logins, and reports such sites "
                                               "as unavailable instead."),
-    "/api/v1/emulators": ("GET", "Curated emulator catalog and installed portable builds."),
+    "/api/v1/emulators": ("GET", "Searchable, paginated emulator catalog and installed portable builds."),
+    "/api/v1/emulators/forks": ("GET", "Browse and retain a page of public upstream forks."),
+    "/api/v1/emulators/cores": ("GET", "Search all upstream libretro core metadata."),
+    "/api/v1/emulators/cores/readiness": ("GET", "Check required core firmware file presence."),
+    "/api/v1/emulators/cores/install": ("POST", "Install an official host core with CRC32 verification and configured scanning."),
+    "/api/v1/emulators/cores/configure": ("POST", "Create a dedicated RetroArch configuration and save directories."),
     "/api/v1/emulators/release": ("GET", "Check the selected emulator's official release assets."),
     "/api/v1/emulators/install": ("POST", "Verify, scan and install a portable emulator on the ROMarr host."),
     "/api/v1/security/inspect": ("POST", "Inspect an explicitly selected shared file with MWM or Arkana."),

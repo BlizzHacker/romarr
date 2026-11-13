@@ -19,6 +19,27 @@ Lime3DS users should use Azahar. Eden and Ryubing host their own distribution si
 
 Firmware, BIOS and console keys belong in the locations specified by the emulator's setup guide. Supply your own dumps. Adding a directory to ROMarr's library does not add that directory to an emulator automatically.
 
+## Browse the full catalog
+
+The catalog snapshot contains 1,213 emulator, fork and companion-tool entries. Search by name, system, license or forge, and use Previous / Next to see every result. Free and noncommercial software is included; the license on each project still applies. Entries identify upstream sources and do not imply that every project has been installed or tested.
+
+**Browse forks** retrieves public fork pages directly from GitHub, GitLab or Forgejo. **More forks** continues through the network instead of stopping at a fixed list. Discovery keeps local records so they can be searched afterward. An unavailable or private project cannot be restored by catalog discovery.
+
+Sources include the [Emulation General Wiki](https://emulation.gametechwiki.com/index.php/Main_Page), [DerekTurtleRoe's emulator list](https://github.com/DerekTurtleRoe/awesome-emulators), [alnacle's list](https://github.com/alnacle/awesome-emulators), and upstream forge APIs. Attribution and source links are included in the bundled catalog. Eden and Ryubing use their own Forgejo repositories. AnyPS5 is an executable porting tool; its listing does not promise general PS5 compatibility.
+
+## Set up RetroArch and its cores
+
+1. Install RetroArch on the gaming computer using its official download or the Linux / SteamOS Flatpak link.
+2. In **Hub → Emulators**, choose **RetroArch cores**. All 350 current upstream core-info records are searchable, including engines and experimental cores.
+3. On the same computer as ROMarr, click **Install host core**. ROMarr downloads the official libretro build, checks the extracted library's CRC32 against the buildbot index, runs your enabled scanners, and records a local SHA-256 receipt. The buildbot CRC is an integrity check, not a publisher signature.
+4. Click **Prepare RetroArch folders** to create a separate configuration, cores, system, saves and states directories. This preserves your existing RetroArch settings. The result includes the launch command.
+5. Click **Check firmware** to see exact required filenames and the system directory. Put your firmware there, then check again. This checks presence and nonzero size; consult the core guide for expected hashes.
+6. Start RetroArch with the shown configuration, load the installed core, then load a compatible game. Controllers and graphics settings depend on your gaming device.
+
+Cores vary by host and some have no published binary. Those return a clear message rather than pretending to install. If ROMarr runs on a server and you play on a PC, use RetroArch's Online Updater on the PC.
+
+Open **Hub → Plugins** to install or configure ROM Hub sources such as MiNERVA and Internet Archive, then search and import games through ROMarr's existing library flow. Availability, source access and game compatibility differ. A missing BIOS or console key is not supplied by an emulator installer.
+
 ## Scan imports
 
 Open **Settings → Media Management** and enable the scanners you want to require.
