@@ -38,7 +38,7 @@ The default MSIX identity is for development. Supply the exact identity and
 publisher assigned to the app in Partner Center:
 
 ```powershell
-./scripts/build-windows-desktop.ps1 -Version 1.9.2 -StoreVersion 1.9.2.0 `
+./scripts/build-windows-desktop.ps1 -Version 1.9.3 -StoreVersion 1.9.3.0 `
   -StoreIdentityName "YourPartnerCenterIdentity" `
   -StorePublisher "CN=YourPartnerCenterPublisher" `
   -StorePublisherDisplayName "Your publisher name"

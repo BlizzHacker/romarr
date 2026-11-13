@@ -25,6 +25,9 @@ from __future__ import annotations
 import logging
 import os
 import re
+import time
+from collections import deque
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
@@ -664,6 +667,15 @@ class FolderConfig:
     root: str
 
 
+class FolderScanError(OSError):
+    """A read that yielded usable games but encountered unreadable entries."""
+
+    def __init__(self, failures):
+        """Retain error classes only, never private paths or exception messages."""
+        self.folder_failures = tuple(failures)
+        super().__init__(f"Library read incomplete: {len(self.folder_failures)} filesystem errors")
+
+
 class FolderLibrary:
     """A directory, which is what most of the emulation world actually uses.
 
@@ -709,21 +721,68 @@ class FolderLibrary:
         known = {ext for p in PLATFORMS for ext in p.extensions}
         return known | set(self.ARCHIVES)
 
+    @staticmethod
+    def _fs_call(operation):
+        """Retry temporary nonblocking filesystem failures with a small budget."""
+        for attempt in range(3):
+            try:
+                return operation()
+            except BlockingIOError:
+                if attempt == 2:
+                    raise
+                time.sleep((0.05, 0.15)[attempt])
+
+    @staticmethod
+    def _directory_entries(directory):
+        """Stream one directory, resuming without duplicates after a busy share."""
+        seen = set()
+        for attempt in range(3):
+            try:
+                with os.scandir(directory) as entries:
+                    for entry in entries:
+                        if entry.name not in seen:
+                            seen.add(entry.name)
+                            yield entry
+                return
+            except BlockingIOError:
+                if attempt == 2:
+                    raise
+                time.sleep((0.05, 0.15)[attempt])
+
     def _walk(self, limit: int):
-        """ROM-looking files under the root, newest-shallowest first."""
-        if not self.configured:
+        """Stream ROM-looking paths breadth-first, without sorting the whole tree."""
+        if not self.configured or limit <= 0:
             return
         exts = self._extensions()
+        pending = deque([self._root])
         seen = 0
-        for path in sorted(self._root.rglob("*")):
-            if seen >= limit:
-                return
-            if not path.is_file():
-                continue
-            if path.suffix.lower() not in exts:
-                continue
-            seen += 1
-            yield path
+        failures = []
+        while pending and seen < limit:
+            directory = pending.popleft()
+            try:
+                for entry in self._directory_entries(directory):
+                    try:
+                        if self._fs_call(lambda: entry.is_dir(follow_symlinks=False)):
+                            pending.append(Path(entry.path))
+                        elif (os.path.splitext(entry.name)[1].lower() in exts
+                              and self._fs_call(entry.is_file)):
+                            seen += 1
+                            yield Path(entry.path)
+                            if seen >= limit:
+                                break
+                    except OSError as err:
+                        failures.append(type(err).__name__)
+            except OSError as err:
+                failures.append(type(err).__name__)
+        if failures:
+            raise FolderScanError(failures)
+
+    def iter_games(self, limit: int | None = None):
+        """Read a folder once for progressive refresh; propagate incomplete reads."""
+        for path in self._walk(self.MAX_SCAN if limit is None else limit):
+            yield Game(id=str(path), name=path.stem,
+                       platform=path.parent.name if path.parent != self._root else "",
+                       extension=path.suffix.lower())
 
     def reachable(self) -> bool:
         """Whether the directory is there. Cheap, because a page waits on it."""
@@ -734,11 +793,13 @@ class FolderLibrary:
             return False
 
     def count(self) -> int:
+        """Count bounded readable games; expose incomplete reads as failures."""
         try:
             return sum(1 for _ in self._walk(self.MAX_SCAN))
-        except OSError as err:
-            log.warning("folder library count failed: %s", err.__class__.__name__)
-            return 0
+        except FolderScanError as err:
+            if set(err.folder_failures) == {"FileNotFoundError"} and not self._root.exists():
+                return 0
+            raise
 
     def games(self, limit: int = 60, offset: int = 0,
               timeout: int | None = None) -> list[Game]:
@@ -748,22 +809,14 @@ class FolderLibrary:
         every one of these frontends imposes -- and it is the same layout the
         importer writes, so a ROM filed by ROMarr lands where it will be found.
         """
-        out: list[Game] = []
+        from itertools import islice
+
         try:
-            for n, path in enumerate(self._walk(offset + limit)):
-                if n < offset:
-                    continue
-                out.append(Game(
-                    id=str(path),
-                    name=path.stem,
-                    platform=path.parent.name if path.parent != self._root else "",
-                    # Free here, where every other backend has to be asked
-                    # for it: the walk is over real files.
-                    extension=path.suffix.lower(),
-                ))
-        except OSError as err:
-            log.warning("folder library read failed: %s", err.__class__.__name__)
-        return out
+            return list(islice(self.iter_games(limit=offset + limit), offset, offset + limit))
+        except FolderScanError as err:
+            if set(err.folder_failures) == {"FileNotFoundError"} and not self._root.exists():
+                return []
+            raise
 
     def rescan(self, platform_slug: str | None = None) -> bool:
         """Nothing to tell. The file is on disk; the frontend finds it.

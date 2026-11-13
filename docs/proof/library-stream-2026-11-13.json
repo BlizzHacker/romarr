@@ -1,0 +1,11 @@
+{
+  "fixture_files": 2000,
+  "platform_folders": 20,
+  "previous_directory_opens": 924,
+  "streaming_directory_opens": 21,
+  "same_games": true,
+  "note": "Local fixture measures traversal work, not NAS throughput or the reported Mac issue.",
+  "baseline_commit": "2f1715598338fca25f7ff3e724eeda76f2b34242",
+  "method": "Instrumented os.scandir and Python 3.13 pathlib glob scanner; previous count plus offset pages versus one iter_games pass.",
+  "page_size": 100
+}

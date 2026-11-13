@@ -2256,6 +2256,7 @@ class RealDebrid(DebridClient):
     """
 
     name = "Real-Debrid"
+    magnet_only = True
 
     LEDGER = ".romarr-realdebrid.json"
     DEFAULT_URL = "https://api.real-debrid.com/rest/1.0"
