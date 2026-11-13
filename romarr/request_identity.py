@@ -56,11 +56,20 @@ def _strict_title_key(value: str) -> str:
     subtitles and content words. A false negative holds for review; a false
     positive could publish the wrong game, so prefer strict evidence.
     """
-    value = unicodedata.normalize("NFKD", str(value or ""))
-    value = "".join(char for char in value if not unicodedata.combining(char))
-    value = re.sub(r"\((?:USA|Europe|Japan|World|Rev(?:ision)?[ .-]*[\da-z]+|En|Fr|De)\)",
+    value = unicodedata.normalize("NFKC", str(value or ""))
+    # Fold Latin accents without erasing meaningful combining marks in other
+    # scripts (e.g. Japanese kana); never drop non-ASCII title letters.
+    value = "".join(
+        "".join(part for part in unicodedata.normalize("NFKD", char)
+                if not unicodedata.combining(part))
+        if "LATIN" in unicodedata.name(char, "") else char
+        for char in value
+    )
+    # Revision identifiers are digits or one letter, not words like Revenge.
+    value = re.sub(r"\((?:USA|Europe|Japan|World|Rev(?:ision)?[ .-]*(?:\d+[a-z]?|[a-z])|En|Fr|De)\)",
                    " ", value, flags=re.IGNORECASE)
-    return " ".join(re.findall(r"[a-z0-9]+", value.casefold()))
+    return " ".join("".join(char if char.isalnum() else " "
+                            for char in value.casefold()).split())
 
 
 def decide_request(
