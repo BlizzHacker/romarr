@@ -158,3 +158,16 @@ def test_mwm_and_arkana_use_documented_inspection_commands(tmp_path, monkeypatch
     assert service.security_inspect(str(target), "mwm")["report"]["score"] == 0
     assert service.security_inspect(str(target), "arkana")["report"] == 42
     assert [c[0] for c in calls] == ["lab_analyze", "arkana_analyze"]
+
+
+def test_release_rate_limit_falls_back_to_published_manifest(tmp_path):
+    """A public API rate limit still offers a pinned, digest-verified release."""
+    import requests
+    class LimitedServer:
+        def get(self, *args, **kwargs):
+            raise requests.HTTPError("API rate limit")
+    release = emulators.EmulatorHub(tmp_path, LimitedServer()).release("melonds")
+    assert release["cached_release"]
+    assert release["tag"]
+    assert any(a["sha256"] and a["installable"] for a in release["assets"])
+    assert "verified catalog" in release["note"]

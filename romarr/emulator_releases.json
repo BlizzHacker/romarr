@@ -1,0 +1,1225 @@
+{
+  "verified_date": "2026-11-12",
+  "releases": {
+    "libretro/RetroArch": {
+      "tag_name": "v1.22.2",
+      "assets": [
+        {
+          "name": "retroarch-sourceonly-1.22.2.tar.xz",
+          "size": 13564476,
+          "digest": "sha256:2a8b1713f7f4d2b53bad3e2297e48d78f5666098cf00d583d3e08f3c213f8aa6",
+          "browser_download_url": "https://github.com/libretro/RetroArch/releases/download/v1.22.2/retroarch-sourceonly-1.22.2.tar.xz"
+        }
+      ]
+    },
+    "stenzek/duckstation": {
+      "tag_name": "latest",
+      "assets": [
+        {
+          "name": "DuckStation-arm64.AppImage",
+          "size": 88969472,
+          "digest": "sha256:d516a24918505a08f0335d4a36fc67c0b66641e85861e71d4638d5fcd319916b",
+          "browser_download_url": "https://github.com/stenzek/duckstation/releases/download/latest/DuckStation-arm64.AppImage"
+        },
+        {
+          "name": "DuckStation-armhf.AppImage",
+          "size": 85724828,
+          "digest": "sha256:e2a0c1a9a3c28a33ae4863521d60f8b5c4922d822314d5ac57950b2f0aeae7e6",
+          "browser_download_url": "https://github.com/stenzek/duckstation/releases/download/latest/DuckStation-armhf.AppImage"
+        },
+        {
+          "name": "duckstation-mac-release.zip",
+          "size": 97099171,
+          "digest": "sha256:6918746eaa8baffc55c9d7d48fd72d3b51a4165a1b039b5c70183f15f4576346",
+          "browser_download_url": "https://github.com/stenzek/duckstation/releases/download/latest/duckstation-mac-release.zip"
+        },
+        {
+          "name": "duckstation-windows-arm64-installer.exe",
+          "size": 43852052,
+          "digest": "sha256:9338264c74b27a96ffc86b47880c98a3335a5db5ddedd023a3ecfb3abafe3279",
+          "browser_download_url": "https://github.com/stenzek/duckstation/releases/download/latest/duckstation-windows-arm64-installer.exe"
+        },
+        {
+          "name": "duckstation-windows-arm64-release-symbols.7z",
+          "size": 12029271,
+          "digest": "sha256:7b0d08592000d1492115d47bd3659e6030431de3a6058bd38b6a39ffce82b706",
+          "browser_download_url": "https://github.com/stenzek/duckstation/releases/download/latest/duckstation-windows-arm64-release-symbols.7z"
+        },
+        {
+          "name": "duckstation-windows-arm64-release.zip",
+          "size": 73843212,
+          "digest": "sha256:d6caa5fd775dac8506365408b3f794c0ecfb1dca0069c30763b466dc76a2a52f",
+          "browser_download_url": "https://github.com/stenzek/duckstation/releases/download/latest/duckstation-windows-arm64-release.zip"
+        },
+        {
+          "name": "duckstation-windows-x64-installer.exe",
+          "size": 46568319,
+          "digest": "sha256:c8290dafa138a373cea4dd3c7d4469a74ee09c44a072b72bce0f48c79100dc47",
+          "browser_download_url": "https://github.com/stenzek/duckstation/releases/download/latest/duckstation-windows-x64-installer.exe"
+        },
+        {
+          "name": "duckstation-windows-x64-release-symbols.7z",
+          "size": 12383576,
+          "digest": "sha256:3c84064838efcfcd0a37283a95a87e6b3a95e52c72d91226bdce8f0d2ac740c7",
+          "browser_download_url": "https://github.com/stenzek/duckstation/releases/download/latest/duckstation-windows-x64-release-symbols.7z"
+        },
+        {
+          "name": "duckstation-windows-x64-release.zip",
+          "size": 75019319,
+          "digest": "sha256:ca02e8eac40c0c6de801638f6b16bec80b605b5df32e406fe2fba7f21016b14b",
+          "browser_download_url": "https://github.com/stenzek/duckstation/releases/download/latest/duckstation-windows-x64-release.zip"
+        },
+        {
+          "name": "duckstation-windows-x64-sse2-installer.exe",
+          "size": 46568328,
+          "digest": "sha256:529a301c76803992ccfa43440ab06b42f394d0ea67c92260f0511a177494dfc2",
+          "browser_download_url": "https://github.com/stenzek/duckstation/releases/download/latest/duckstation-windows-x64-sse2-installer.exe"
+        },
+        {
+          "name": "duckstation-windows-x64-sse2-release-symbols.7z",
+          "size": 12391000,
+          "digest": "sha256:acfa11473bb049613719b41d82f05fececc4e5f4ca9adb819af98f463c5da8b2",
+          "browser_download_url": "https://github.com/stenzek/duckstation/releases/download/latest/duckstation-windows-x64-sse2-release-symbols.7z"
+        },
+        {
+          "name": "duckstation-windows-x64-sse2-release.zip",
+          "size": 75022687,
+          "digest": "sha256:fd99507ee4785480f2a17005565012648f408cc93b28f408a5af81bd1973769a",
+          "browser_download_url": "https://github.com/stenzek/duckstation/releases/download/latest/duckstation-windows-x64-sse2-release.zip"
+        },
+        {
+          "name": "DuckStation-x64-SSE2.AppImage",
+          "size": 95650080,
+          "digest": "sha256:0cad6634fcfe1e79961a6b97bd70f1d686c4691232e9300e0e504bde28eae0b3",
+          "browser_download_url": "https://github.com/stenzek/duckstation/releases/download/latest/DuckStation-x64-SSE2.AppImage"
+        },
+        {
+          "name": "DuckStation-x64.AppImage",
+          "size": 95629600,
+          "digest": "sha256:eef887bacce0b3cd9a943fb6718e7e2b8970edcf7e88c7eb30cee750d71037d5",
+          "browser_download_url": "https://github.com/stenzek/duckstation/releases/download/latest/DuckStation-x64.AppImage"
+        }
+      ]
+    },
+    "PCSX2/pcsx2": {
+      "tag_name": "v2.8.2",
+      "assets": [
+        {
+          "name": "pcsx2-v2.8.2-linux-appimage-x64-Qt.AppImage",
+          "size": 60119544,
+          "digest": "sha256:0c46bb6a88aa2782b10853a7b07cf3387ba99cbef2b966372cd2315b8571abea",
+          "browser_download_url": "https://github.com/PCSX2/pcsx2/releases/download/v2.8.2/pcsx2-v2.8.2-linux-appimage-x64-Qt.AppImage"
+        },
+        {
+          "name": "pcsx2-v2.8.2-linux-flatpak-x64-Qt.flatpak",
+          "size": 28120408,
+          "digest": "sha256:eff40824ccd3383ef12cbb76ee334683172879d2f666e4086ba51440003b6cf8",
+          "browser_download_url": "https://github.com/PCSX2/pcsx2/releases/download/v2.8.2/pcsx2-v2.8.2-linux-flatpak-x64-Qt.flatpak"
+        },
+        {
+          "name": "pcsx2-v2.8.2-macos-Qt.tar.xz",
+          "size": 24377200,
+          "digest": "sha256:3ed9eb40a33eae67134142c24255a079be444f0616ca29575a04a37981f7d426",
+          "browser_download_url": "https://github.com/PCSX2/pcsx2/releases/download/v2.8.2/pcsx2-v2.8.2-macos-Qt.tar.xz"
+        },
+        {
+          "name": "pcsx2-v2.8.2-windows-x64-installer.exe",
+          "size": 46714216,
+          "digest": "sha256:3422f3705ccc641b7e4fdf3f280d635d05c3c8b53a56c3af55d9df115bdcf768",
+          "browser_download_url": "https://github.com/PCSX2/pcsx2/releases/download/v2.8.2/pcsx2-v2.8.2-windows-x64-installer.exe"
+        },
+        {
+          "name": "pcsx2-v2.8.2-windows-x64-Qt-symbols.7z",
+          "size": 20962364,
+          "digest": "sha256:b7736262b4d0228c72a2afc07dab7636af5c8a3d4fdb416058e2b070c370e26b",
+          "browser_download_url": "https://github.com/PCSX2/pcsx2/releases/download/v2.8.2/pcsx2-v2.8.2-windows-x64-Qt-symbols.7z"
+        },
+        {
+          "name": "pcsx2-v2.8.2-windows-x64-Qt.7z",
+          "size": 25670075,
+          "digest": "sha256:7dfc829ca1994cc1045ac49f05e39b6cf968b72e6a374c40e05c2a2b4ac200b4",
+          "browser_download_url": "https://github.com/PCSX2/pcsx2/releases/download/v2.8.2/pcsx2-v2.8.2-windows-x64-Qt.7z"
+        }
+      ]
+    },
+    "RPCS3/rpcs3-binaries-win": {
+      "tag_name": "build-9b8974d32e73c897a5fcd6bdf69413ca7e436b01",
+      "assets": [
+        {
+          "name": "rpcs3-v0.0.43-20583-9b8974d3_win64_msvc.7z",
+          "size": 37216199,
+          "digest": "sha256:67c7df344e82bcd4c77ac0d92a7a5f0b6036aa788e470bf81c1204f8e7e4e454",
+          "browser_download_url": "https://github.com/RPCS3/rpcs3-binaries-win/releases/download/build-9b8974d32e73c897a5fcd6bdf69413ca7e436b01/rpcs3-v0.0.43-20583-9b8974d3_win64_msvc.7z"
+        },
+        {
+          "name": "rpcs3-v0.0.43-20583-9b8974d3_win64_msvc.7z.sha256",
+          "size": 65,
+          "digest": "sha256:b3fbd59862d8fdbc4944b67cd5f9dcb549d44d5872bb16a462c7a05380e6f1c0",
+          "browser_download_url": "https://github.com/RPCS3/rpcs3-binaries-win/releases/download/build-9b8974d32e73c897a5fcd6bdf69413ca7e436b01/rpcs3-v0.0.43-20583-9b8974d3_win64_msvc.7z.sha256"
+        }
+      ]
+    },
+    "shadps4-emu/shadPS4": {
+      "tag_name": "v.0.21.0",
+      "assets": [
+        {
+          "name": "shadps4-linux-sdl-0.21.0.zip",
+          "size": 33362189,
+          "digest": "sha256:7c41c58254461d742b5edf564e23795697b63e9e46de11d0e1ed67bd2cbaae68",
+          "browser_download_url": "https://github.com/shadps4-emu/shadPS4/releases/download/v.0.21.0/shadps4-linux-sdl-0.21.0.zip"
+        },
+        {
+          "name": "shadps4-macos-sdl-0.21.0.zip",
+          "size": 37075102,
+          "digest": "sha256:391b585d3131ebf69c585410349117d9436e529151e430156c02f7ffde364b8f",
+          "browser_download_url": "https://github.com/shadps4-emu/shadPS4/releases/download/v.0.21.0/shadps4-macos-sdl-0.21.0.zip"
+        },
+        {
+          "name": "shadps4-win64-sdl-0.21.0.zip",
+          "size": 31725856,
+          "digest": "sha256:95295b8f109663f70c2dac685e6232aa97be1353f6ed0a5d5e0c5dd24a797d88",
+          "browser_download_url": "https://github.com/shadps4-emu/shadPS4/releases/download/v.0.21.0/shadps4-win64-sdl-0.21.0.zip"
+        }
+      ]
+    },
+    "Vita3K/Vita3K": {
+      "tag_name": "continuous",
+      "assets": [
+        {
+          "name": "android-latest.apk",
+          "size": 29616619,
+          "digest": "sha256:008efffe3771b43c77b20ec9a02ecfe9dd5e356f4314797294c200d3fafa2e15",
+          "browser_download_url": "https://github.com/Vita3K/Vita3K/releases/download/continuous/android-latest.apk"
+        },
+        {
+          "name": "macos-arm64-latest.dmg",
+          "size": 60620839,
+          "digest": "sha256:33563888a95a5a3ff6d9959148f8b5e32a518d68cb8cc3d9153efed64a7ef52b",
+          "browser_download_url": "https://github.com/Vita3K/Vita3K/releases/download/continuous/macos-arm64-latest.dmg"
+        },
+        {
+          "name": "macos-latest.dmg",
+          "size": 62533355,
+          "digest": "sha256:e201561f4644ae5978183f79768001d1ab1079935cc36b568c19539509e0a15a",
+          "browser_download_url": "https://github.com/Vita3K/Vita3K/releases/download/continuous/macos-latest.dmg"
+        },
+        {
+          "name": "ubuntu-aarch64-latest.zip",
+          "size": 17970107,
+          "digest": "sha256:b4b444abcb15818b4be50b6dafa11b43a8e61c639979b90f7fc493def7285b42",
+          "browser_download_url": "https://github.com/Vita3K/Vita3K/releases/download/continuous/ubuntu-aarch64-latest.zip"
+        },
+        {
+          "name": "ubuntu-latest.zip",
+          "size": 19492771,
+          "digest": "sha256:b1df0f85f830c2fe27fb97a6d536ae41c2fd26ad57f1d950cac54febe3cededa",
+          "browser_download_url": "https://github.com/Vita3K/Vita3K/releases/download/continuous/ubuntu-latest.zip"
+        },
+        {
+          "name": "Vita3K-aarch64.AppImage",
+          "size": 89776670,
+          "digest": "sha256:aadd2bb8e42e5beafce309f81c2b96db2040052b8d332f917f7232a83efbf29b",
+          "browser_download_url": "https://github.com/Vita3K/Vita3K/releases/download/continuous/Vita3K-aarch64.AppImage"
+        },
+        {
+          "name": "Vita3K-aarch64.AppImage.zsync",
+          "size": 307037,
+          "digest": "sha256:d9f4abef5d450aafef983ee8644082b835b7522da7c8edcfa575177a5976dcd9",
+          "browser_download_url": "https://github.com/Vita3K/Vita3K/releases/download/continuous/Vita3K-aarch64.AppImage.zsync"
+        },
+        {
+          "name": "Vita3K-x86_64.AppImage",
+          "size": 89991440,
+          "digest": "sha256:cd863d1be181549ea1a545450f468fcb8d94798e8c3e7c0005f97d3197d6ee58",
+          "browser_download_url": "https://github.com/Vita3K/Vita3K/releases/download/continuous/Vita3K-x86_64.AppImage"
+        },
+        {
+          "name": "Vita3K-x86_64.AppImage.zsync",
+          "size": 307770,
+          "digest": "sha256:f57eda13febc12cf54e592438e1826968100e8d3429fc7814e90e639c73a5f7c",
+          "browser_download_url": "https://github.com/Vita3K/Vita3K/releases/download/continuous/Vita3K-x86_64.AppImage.zsync"
+        },
+        {
+          "name": "windows-arm64-latest.zip",
+          "size": 63548604,
+          "digest": "sha256:b8ce2f37cfe4f0fe2873f996b44b065a0c316f4333a543f8810a940f69a26feb",
+          "browser_download_url": "https://github.com/Vita3K/Vita3K/releases/download/continuous/windows-arm64-latest.zip"
+        },
+        {
+          "name": "windows-latest.zip",
+          "size": 38164580,
+          "digest": "sha256:96a2d42b41cf2d02debbf0e489bea37d8d3f4317964a2d5e5509ff992eefee7d",
+          "browser_download_url": "https://github.com/Vita3K/Vita3K/releases/download/continuous/windows-latest.zip"
+        }
+      ]
+    },
+    "hrydgard/ppsspp": {
+      "tag_name": "v1.20.4",
+      "assets": [
+        {
+          "name": "org.ppsspp.ppsspp-dev-latest_v1.20.4_iphoneos-arm.deb",
+          "size": 23412564,
+          "digest": "sha256:a3f888dcba0442b4d34a0ddd859747f4aa267b6249b56f5df6a7c327908371b9",
+          "browser_download_url": "https://github.com/hrydgard/ppsspp/releases/download/v1.20.4/org.ppsspp.ppsspp-dev-latest_v1.20.4_iphoneos-arm.deb"
+        },
+        {
+          "name": "ppsspp-1.20.4.tar.xz",
+          "size": 60860348,
+          "digest": "sha256:4de21db3105d9d81a465a8a7e78c68ee3c0e0bf6597d1c1d530f7555f3ad8b31",
+          "browser_download_url": "https://github.com/hrydgard/ppsspp/releases/download/v1.20.4/ppsspp-1.20.4.tar.xz"
+        },
+        {
+          "name": "PPSSPP-iOS-v1.20.4.ipa",
+          "size": 31124277,
+          "digest": "sha256:822c7042311ff47710c9148c8edb5aab649cf85ce6ba96b9e8190feb91f45a51",
+          "browser_download_url": "https://github.com/hrydgard/ppsspp/releases/download/v1.20.4/PPSSPP-iOS-v1.20.4.ipa"
+        },
+        {
+          "name": "PPSSPP-v1.20.4-anylinux-aarch64.AppImage",
+          "size": 48581283,
+          "digest": "sha256:18c1d515fd99b0b10ca5fa8cbab192f6d4c9d8a10381e16f5de8fb8f9d39bbe1",
+          "browser_download_url": "https://github.com/hrydgard/ppsspp/releases/download/v1.20.4/PPSSPP-v1.20.4-anylinux-aarch64.AppImage"
+        },
+        {
+          "name": "PPSSPP-v1.20.4-anylinux-aarch64.AppImage.zsync",
+          "size": 166266,
+          "digest": "sha256:311698f7d176b15fe93f3ad7e0732ce68555877ff62ba507c365ffd5685b74fc",
+          "browser_download_url": "https://github.com/hrydgard/ppsspp/releases/download/v1.20.4/PPSSPP-v1.20.4-anylinux-aarch64.AppImage.zsync"
+        },
+        {
+          "name": "PPSSPP-v1.20.4-anylinux-x86_64.AppImage",
+          "size": 50689748,
+          "digest": "sha256:661c098e6b7f7610171a57b7c533ce8bba6f2312b71e76d61e850461973eba21",
+          "browser_download_url": "https://github.com/hrydgard/ppsspp/releases/download/v1.20.4/PPSSPP-v1.20.4-anylinux-x86_64.AppImage"
+        },
+        {
+          "name": "PPSSPP-v1.20.4-anylinux-x86_64.AppImage.zsync",
+          "size": 173467,
+          "digest": "sha256:e2d4c9f6d238840ac6fc0da4f90769b810dd7760bae776ed5f95771fd45976be",
+          "browser_download_url": "https://github.com/hrydgard/ppsspp/releases/download/v1.20.4/PPSSPP-v1.20.4-anylinux-x86_64.AppImage.zsync"
+        },
+        {
+          "name": "PPSSPP-v1.20.4-Windows-ARM64.zip",
+          "size": 20322129,
+          "digest": "sha256:ba73fe968f06086286174539c4e127e2bd1ec602c2fbd0bc173c5193ded0960c",
+          "browser_download_url": "https://github.com/hrydgard/ppsspp/releases/download/v1.20.4/PPSSPP-v1.20.4-Windows-ARM64.zip"
+        },
+        {
+          "name": "PPSSPP-v1.20.4-Windows-x64.zip",
+          "size": 20390334,
+          "digest": "sha256:fbc9cd2f5131b159a92424e5c458c35ce43ba603cdded64dfc98e4bd4f17ff93",
+          "browser_download_url": "https://github.com/hrydgard/ppsspp/releases/download/v1.20.4/PPSSPP-v1.20.4-Windows-x64.zip"
+        },
+        {
+          "name": "PPSSPPSDL-macOS-v1.20.4.zip",
+          "size": 37389023,
+          "digest": "sha256:fb32a215861a293c28f641bf47f3164766ba512214025f4457796c8d14242665",
+          "browser_download_url": "https://github.com/hrydgard/ppsspp/releases/download/v1.20.4/PPSSPPSDL-macOS-v1.20.4.zip"
+        }
+      ]
+    },
+    "cemu-project/Cemu": {
+      "tag_name": "v2.6",
+      "assets": [
+        {
+          "name": "cemu-2.6-macos-12-x64.dmg",
+          "size": 36588188,
+          "digest": null,
+          "browser_download_url": "https://github.com/cemu-project/Cemu/releases/download/v2.6/cemu-2.6-macos-12-x64.dmg"
+        },
+        {
+          "name": "cemu-2.6-ubuntu-22.04-x64.zip",
+          "size": 31825643,
+          "digest": "sha256:5e4592d0dae394fa0614cb8c875eff3f81b23170b349511de318d9caf7215e1b",
+          "browser_download_url": "https://github.com/cemu-project/Cemu/releases/download/v2.6/cemu-2.6-ubuntu-22.04-x64.zip"
+        },
+        {
+          "name": "cemu-2.6-windows-x64.zip",
+          "size": 26374093,
+          "digest": null,
+          "browser_download_url": "https://github.com/cemu-project/Cemu/releases/download/v2.6/cemu-2.6-windows-x64.zip"
+        },
+        {
+          "name": "Cemu-2.6-x86_64.AppImage",
+          "size": 61423960,
+          "digest": "sha256:0c20c4aeb800bb13d9bab9474ef45a6f8fcde6402cad9b32ac2a1bbd03186313",
+          "browser_download_url": "https://github.com/cemu-project/Cemu/releases/download/v2.6/Cemu-2.6-x86_64.AppImage"
+        }
+      ]
+    },
+    "melonDS-emu/melonDS": {
+      "tag_name": "1.1",
+      "assets": [
+        {
+          "name": "melonDS-1.1-appimage-aarch64.zip",
+          "size": 33391635,
+          "digest": "sha256:c537ae018d6dcedfe9da0317a1d5c0163e69201e23abfa163fa2a63e437ace09",
+          "browser_download_url": "https://github.com/melonDS-emu/melonDS/releases/download/1.1/melonDS-1.1-appimage-aarch64.zip"
+        },
+        {
+          "name": "melonDS-1.1-appimage-x86_64.zip",
+          "size": 34289284,
+          "digest": "sha256:bf377420a2e95f2cd2cdda17d5372b51c2534f858b038db9ec6d129554875124",
+          "browser_download_url": "https://github.com/melonDS-emu/melonDS/releases/download/1.1/melonDS-1.1-appimage-x86_64.zip"
+        },
+        {
+          "name": "melonDS-1.1-freebsd-x86_64.zip",
+          "size": 1704213,
+          "digest": "sha256:35a5c597c67df2beddffa102373038920862faf761d77e84d98c44ca5e2a7d3c",
+          "browser_download_url": "https://github.com/melonDS-emu/melonDS/releases/download/1.1/melonDS-1.1-freebsd-x86_64.zip"
+        },
+        {
+          "name": "melonDS-1.1-macOS-universal.zip",
+          "size": 24378474,
+          "digest": "sha256:79843a5e5cab93188bd11942bff5440b9505ee91c6f526f7e90c22e3cff6718d",
+          "browser_download_url": "https://github.com/melonDS-emu/melonDS/releases/download/1.1/melonDS-1.1-macOS-universal.zip"
+        },
+        {
+          "name": "melonDS-1.1-netbsd-x86_64.zip",
+          "size": 1673991,
+          "digest": "sha256:d9276622b028d98acdedcfdab7398d0d291ff2b7e64d41e109831befb1b61a9a",
+          "browser_download_url": "https://github.com/melonDS-emu/melonDS/releases/download/1.1/melonDS-1.1-netbsd-x86_64.zip"
+        },
+        {
+          "name": "melonDS-1.1-openbsd-x86_64.zip",
+          "size": 1917093,
+          "digest": "sha256:301988097b145e7230a66d0e4fe84c913661df2a7626817ce03066369cf207b2",
+          "browser_download_url": "https://github.com/melonDS-emu/melonDS/releases/download/1.1/melonDS-1.1-openbsd-x86_64.zip"
+        },
+        {
+          "name": "melonDS-1.1-ubuntu-aarch64.zip",
+          "size": 1805907,
+          "digest": "sha256:43bd28d9e6e864f08747905c9cbdeac701880d75f2dedad737279c7a005790f4",
+          "browser_download_url": "https://github.com/melonDS-emu/melonDS/releases/download/1.1/melonDS-1.1-ubuntu-aarch64.zip"
+        },
+        {
+          "name": "melonDS-1.1-ubuntu-x86_64.zip",
+          "size": 1861751,
+          "digest": "sha256:99465129f5413b2aad332e4377e523cf3cda905dc329d47dcb1ad01ce2cb3f66",
+          "browser_download_url": "https://github.com/melonDS-emu/melonDS/releases/download/1.1/melonDS-1.1-ubuntu-x86_64.zip"
+        },
+        {
+          "name": "melonDS-1.1-windows-aarch64.zip",
+          "size": 12552465,
+          "digest": "sha256:9bd4c3efb529540f7577e905439ca6acd372d16b5fbbff31cca8ae3fd60026ce",
+          "browser_download_url": "https://github.com/melonDS-emu/melonDS/releases/download/1.1/melonDS-1.1-windows-aarch64.zip"
+        },
+        {
+          "name": "melonDS-1.1-windows-x86_64.zip",
+          "size": 19484283,
+          "digest": "sha256:9f3f8a244103be20b5b657af5b0ed1b2a66bb20a7181476a6d294c9a53d4f8c8",
+          "browser_download_url": "https://github.com/melonDS-emu/melonDS/releases/download/1.1/melonDS-1.1-windows-x86_64.zip"
+        }
+      ]
+    },
+    "azahar-emu/azahar": {
+      "tag_name": "2126.2",
+      "assets": [
+        {
+          "name": "azahar-android-googleplay-2126.2.aab",
+          "size": 80388195,
+          "digest": "sha256:3daeb6e42f9c7eeb7f1dc17233a74436626d6a163c76a9807ce5112411334863",
+          "browser_download_url": "https://github.com/azahar-emu/azahar/releases/download/2126.2/azahar-android-googleplay-2126.2.aab"
+        },
+        {
+          "name": "azahar-android-googleplay-2126.2.apk",
+          "size": 50187147,
+          "digest": "sha256:83cf9c612c0729059f278333ebc20c0cd277826bcf799394acd7c2da5927a3c6",
+          "browser_download_url": "https://github.com/azahar-emu/azahar/releases/download/2126.2/azahar-android-googleplay-2126.2.apk"
+        },
+        {
+          "name": "azahar-android-vanilla-2126.2.aab",
+          "size": 80388210,
+          "digest": "sha256:178cd172cad68803d4cf0379e3d59fd4de6ee982b70b90ffcd88c54358d896f4",
+          "browser_download_url": "https://github.com/azahar-emu/azahar/releases/download/2126.2/azahar-android-vanilla-2126.2.aab"
+        },
+        {
+          "name": "azahar-android-vanilla-2126.2.apk",
+          "size": 50187175,
+          "digest": "sha256:b511d1d38012c5ab0dfdb4479335059bb89ef17acfbf0ba45e79107ed4185ba3",
+          "browser_download_url": "https://github.com/azahar-emu/azahar/releases/download/2126.2/azahar-android-vanilla-2126.2.apk"
+        },
+        {
+          "name": "azahar-libretro-android-arm64-v8a-2126.2.zip",
+          "size": 11716393,
+          "digest": "sha256:1998ccf0a1f803cd66ff90a36280c64d3ff915b48acf1c4b5b0e8fd2b263faf3",
+          "browser_download_url": "https://github.com/azahar-emu/azahar/releases/download/2126.2/azahar-libretro-android-arm64-v8a-2126.2.zip"
+        },
+        {
+          "name": "azahar-libretro-ios-arm64-2126.2.zip",
+          "size": 6467328,
+          "digest": "sha256:18e78a721884438b11a3588f96d19e09895f0dbb5c716448343ab185972bc451",
+          "browser_download_url": "https://github.com/azahar-emu/azahar/releases/download/2126.2/azahar-libretro-ios-arm64-2126.2.zip"
+        },
+        {
+          "name": "azahar-libretro-linux-x86_64-2126.2.zip",
+          "size": 14742826,
+          "digest": "sha256:2223444b74de2c922bae1efcfed60002f696b3c2aaf4fc73fc03e66a395dc26e",
+          "browser_download_url": "https://github.com/azahar-emu/azahar/releases/download/2126.2/azahar-libretro-linux-x86_64-2126.2.zip"
+        },
+        {
+          "name": "azahar-libretro-macos-arm64-2126.2.zip",
+          "size": 7351896,
+          "digest": "sha256:52c51e8c62f944a642590652a318fe9c5376fab383b59388384ba81556fb7494",
+          "browser_download_url": "https://github.com/azahar-emu/azahar/releases/download/2126.2/azahar-libretro-macos-arm64-2126.2.zip"
+        },
+        {
+          "name": "azahar-libretro-macos-x86_64-2126.2.zip",
+          "size": 8280438,
+          "digest": "sha256:d65abafb775c964f9064a8319099b2346cd8983d4e58c079f899f6fb5d00aaae",
+          "browser_download_url": "https://github.com/azahar-emu/azahar/releases/download/2126.2/azahar-libretro-macos-x86_64-2126.2.zip"
+        },
+        {
+          "name": "azahar-libretro-tvos-arm64-2126.2.zip",
+          "size": 6467328,
+          "digest": "sha256:17cfe924983fd77c51fa0211017794c9372f8ab954186031e1b74a7c3a65c1ad",
+          "browser_download_url": "https://github.com/azahar-emu/azahar/releases/download/2126.2/azahar-libretro-tvos-arm64-2126.2.zip"
+        },
+        {
+          "name": "azahar-libretro-windows-x86_64-2126.2.zip",
+          "size": 12097452,
+          "digest": "sha256:d863711cff775ed697ba0cc5a963f2145b9672c4ad9a891367821d7f3cc1f888",
+          "browser_download_url": "https://github.com/azahar-emu/azahar/releases/download/2126.2/azahar-libretro-windows-x86_64-2126.2.zip"
+        },
+        {
+          "name": "azahar-macos-arm64-2126.2.zip",
+          "size": 99740365,
+          "digest": "sha256:c24dec2bd5111b7d79513d686c5aece6612cdbf9737b2e6ea99cfc426f1d4aef",
+          "browser_download_url": "https://github.com/azahar-emu/azahar/releases/download/2126.2/azahar-macos-arm64-2126.2.zip"
+        },
+        {
+          "name": "azahar-macos-universal-2126.2.zip",
+          "size": 114421135,
+          "digest": "sha256:582ff52594807fc11438a8ed1596bd6db8622b0e07a856372f6bd709dc9995e7",
+          "browser_download_url": "https://github.com/azahar-emu/azahar/releases/download/2126.2/azahar-macos-universal-2126.2.zip"
+        },
+        {
+          "name": "azahar-macos-x86_64-2126.2.zip",
+          "size": 101633503,
+          "digest": "sha256:b3f87eca11ffcccf929c80abeea976f00917be81444d49f48d3dc7ceb3627947",
+          "browser_download_url": "https://github.com/azahar-emu/azahar/releases/download/2126.2/azahar-macos-x86_64-2126.2.zip"
+        },
+        {
+          "name": "azahar-room-arm64-2126.2.dockerimage",
+          "size": 178290688,
+          "digest": "sha256:42ee0b7fb8b049dbb3a7709ae800e0926d99499542cc9b6ed341d8bb31507302",
+          "browser_download_url": "https://github.com/azahar-emu/azahar/releases/download/2126.2/azahar-room-arm64-2126.2.dockerimage"
+        },
+        {
+          "name": "azahar-room-x86_64-2126.2.dockerimage",
+          "size": 156367872,
+          "digest": "sha256:5601fbbeb029dec498868e5c3ac3e9799d0e59f8aa0f1e407d47f1642db0ff4e",
+          "browser_download_url": "https://github.com/azahar-emu/azahar/releases/download/2126.2/azahar-room-x86_64-2126.2.dockerimage"
+        },
+        {
+          "name": "azahar-unified-source-2126.2.tar.xz",
+          "size": 43224348,
+          "digest": "sha256:85c8b56fac703df04720125044b8ff887997911858a6cde545dfb1107ba4cd26",
+          "browser_download_url": "https://github.com/azahar-emu/azahar/releases/download/2126.2/azahar-unified-source-2126.2.tar.xz"
+        },
+        {
+          "name": "azahar-unified-source-2126.2.tar.xz.sha256sum",
+          "size": 102,
+          "digest": "sha256:be1bec64350ae64a975d841843c8a3281270389dd3ad9175e85311f3122fad1c",
+          "browser_download_url": "https://github.com/azahar-emu/azahar/releases/download/2126.2/azahar-unified-source-2126.2.tar.xz.sha256sum"
+        },
+        {
+          "name": "azahar-windows-msvc-2126.2-installer.exe",
+          "size": 32868095,
+          "digest": "sha256:54ab4fdd20e859e6cf59f4b6dd47c7ddb0b4913090c463928e32a78eac1d1807",
+          "browser_download_url": "https://github.com/azahar-emu/azahar/releases/download/2126.2/azahar-windows-msvc-2126.2-installer.exe"
+        },
+        {
+          "name": "azahar-windows-msvc-2126.2.zip",
+          "size": 43941048,
+          "digest": "sha256:4412eac8d13123c8840f11890fc26e5b0e4c76d16aa28a608941377b948a9db0",
+          "browser_download_url": "https://github.com/azahar-emu/azahar/releases/download/2126.2/azahar-windows-msvc-2126.2.zip"
+        },
+        {
+          "name": "azahar-windows-msys2-2126.2-installer.exe",
+          "size": 43353955,
+          "digest": "sha256:c2dfcc57e3935a5356123b318554e3de8829386a76ca874eb886a9cf5578b466",
+          "browser_download_url": "https://github.com/azahar-emu/azahar/releases/download/2126.2/azahar-windows-msys2-2126.2-installer.exe"
+        },
+        {
+          "name": "azahar-windows-msys2-2126.2.zip",
+          "size": 60860359,
+          "digest": "sha256:aa6d4c631c883355e50f5f62fd26a0e053d63e4cc29b8ded6b3b7d175ec3864e",
+          "browser_download_url": "https://github.com/azahar-emu/azahar/releases/download/2126.2/azahar-windows-msys2-2126.2.zip"
+        },
+        {
+          "name": "azahar-windows-mxe-2126.2-installer.exe",
+          "size": 48199000,
+          "digest": "sha256:a4d56ceedcc7a24812e07ff15c34f72e1e402f9b90daaec575a878d3e04af2fa",
+          "browser_download_url": "https://github.com/azahar-emu/azahar/releases/download/2126.2/azahar-windows-mxe-2126.2-installer.exe"
+        },
+        {
+          "name": "azahar-windows-mxe-2126.2.zip",
+          "size": 69427557,
+          "digest": "sha256:dae9f107d9141ebc0e64ba251f9796393aab651cf3437ab9e083b45354624486",
+          "browser_download_url": "https://github.com/azahar-emu/azahar/releases/download/2126.2/azahar-windows-mxe-2126.2.zip"
+        },
+        {
+          "name": "azahar.AppImage",
+          "size": 103684600,
+          "digest": "sha256:af037f8b775198f636b14bcfe63fb401b02246ebfefe1025bb905ce042556960",
+          "browser_download_url": "https://github.com/azahar-emu/azahar/releases/download/2126.2/azahar.AppImage"
+        }
+      ]
+    },
+    "mgba-emu/mgba": {
+      "tag_name": "0.10.5",
+      "assets": [
+        {
+          "name": "mGBA-0.10.5-3ds.7z",
+          "size": 1212768,
+          "digest": null,
+          "browser_download_url": "https://github.com/mgba-emu/mgba/releases/download/0.10.5/mGBA-0.10.5-3ds.7z"
+        },
+        {
+          "name": "mGBA-0.10.5-appimage-arm64.appimage",
+          "size": 24576384,
+          "digest": null,
+          "browser_download_url": "https://github.com/mgba-emu/mgba/releases/download/0.10.5/mGBA-0.10.5-appimage-arm64.appimage"
+        },
+        {
+          "name": "mGBA-0.10.5-appimage-x64.appimage",
+          "size": 25208000,
+          "digest": null,
+          "browser_download_url": "https://github.com/mgba-emu/mgba/releases/download/0.10.5/mGBA-0.10.5-appimage-x64.appimage"
+        },
+        {
+          "name": "mGBA-0.10.5-macos.dmg",
+          "size": 33363374,
+          "digest": null,
+          "browser_download_url": "https://github.com/mgba-emu/mgba/releases/download/0.10.5/mGBA-0.10.5-macos.dmg"
+        },
+        {
+          "name": "mGBA-0.10.5-osx.dmg",
+          "size": 17364254,
+          "digest": null,
+          "browser_download_url": "https://github.com/mgba-emu/mgba/releases/download/0.10.5/mGBA-0.10.5-osx.dmg"
+        },
+        {
+          "name": "mGBA-0.10.5-switch.7z",
+          "size": 2211306,
+          "digest": "sha256:ef7a7f5cea6d6639c8a12ebb282d915e444bf844b658ff5a4dd72886c8cfa016",
+          "browser_download_url": "https://github.com/mgba-emu/mgba/releases/download/0.10.5/mGBA-0.10.5-switch.7z"
+        },
+        {
+          "name": "mGBA-0.10.5-ubuntu64-bionic.tar.xz",
+          "size": 2748896,
+          "digest": null,
+          "browser_download_url": "https://github.com/mgba-emu/mgba/releases/download/0.10.5/mGBA-0.10.5-ubuntu64-bionic.tar.xz"
+        },
+        {
+          "name": "mGBA-0.10.5-ubuntu64-focal.tar.xz",
+          "size": 2809060,
+          "digest": null,
+          "browser_download_url": "https://github.com/mgba-emu/mgba/releases/download/0.10.5/mGBA-0.10.5-ubuntu64-focal.tar.xz"
+        },
+        {
+          "name": "mGBA-0.10.5-ubuntu64-jammy.tar.xz",
+          "size": 2973412,
+          "digest": null,
+          "browser_download_url": "https://github.com/mgba-emu/mgba/releases/download/0.10.5/mGBA-0.10.5-ubuntu64-jammy.tar.xz"
+        },
+        {
+          "name": "mGBA-0.10.5-ubuntu64-noble.tar.xz",
+          "size": 2993392,
+          "digest": null,
+          "browser_download_url": "https://github.com/mgba-emu/mgba/releases/download/0.10.5/mGBA-0.10.5-ubuntu64-noble.tar.xz"
+        },
+        {
+          "name": "mGBA-0.10.5-ubuntu64-oracular.tar.xz",
+          "size": 2845940,
+          "digest": null,
+          "browser_download_url": "https://github.com/mgba-emu/mgba/releases/download/0.10.5/mGBA-0.10.5-ubuntu64-oracular.tar.xz"
+        },
+        {
+          "name": "mGBA-0.10.5-vita.7z",
+          "size": 852635,
+          "digest": null,
+          "browser_download_url": "https://github.com/mgba-emu/mgba/releases/download/0.10.5/mGBA-0.10.5-vita.7z"
+        },
+        {
+          "name": "mGBA-0.10.5-wii.7z",
+          "size": 739514,
+          "digest": null,
+          "browser_download_url": "https://github.com/mgba-emu/mgba/releases/download/0.10.5/mGBA-0.10.5-wii.7z"
+        },
+        {
+          "name": "mGBA-0.10.5-win32-installer.exe",
+          "size": 16988718,
+          "digest": null,
+          "browser_download_url": "https://github.com/mgba-emu/mgba/releases/download/0.10.5/mGBA-0.10.5-win32-installer.exe"
+        },
+        {
+          "name": "mGBA-0.10.5-win32.7z",
+          "size": 14432808,
+          "digest": null,
+          "browser_download_url": "https://github.com/mgba-emu/mgba/releases/download/0.10.5/mGBA-0.10.5-win32.7z"
+        },
+        {
+          "name": "mGBA-0.10.5-win64-installer.exe",
+          "size": 16612388,
+          "digest": null,
+          "browser_download_url": "https://github.com/mgba-emu/mgba/releases/download/0.10.5/mGBA-0.10.5-win64-installer.exe"
+        },
+        {
+          "name": "mGBA-0.10.5-win64.7z",
+          "size": 14156919,
+          "digest": null,
+          "browser_download_url": "https://github.com/mgba-emu/mgba/releases/download/0.10.5/mGBA-0.10.5-win64.7z"
+        }
+      ]
+    },
+    "flyinghead/flycast": {
+      "tag_name": "v2.7",
+      "assets": [
+        {
+          "name": "flycast-2.7.apk",
+          "size": 36280670,
+          "digest": "sha256:1ac54d77b8283f6d58d077396d0916ec12c15b7e4ada9d957836a64590756c00",
+          "browser_download_url": "https://github.com/flyinghead/flycast/releases/download/v2.7/flycast-2.7.apk"
+        },
+        {
+          "name": "flycast-2.7.appx",
+          "size": 5641655,
+          "digest": "sha256:8b6f42e19577526366805c027afab2431af1a7aa71d7b068d9c7adb51441eae6",
+          "browser_download_url": "https://github.com/flyinghead/flycast/releases/download/v2.7/flycast-2.7.appx"
+        },
+        {
+          "name": "flycast-2.7.nro",
+          "size": 31907635,
+          "digest": "sha256:898bf81c24cdbcc1c95b3d7eccca059004c9887feb8628cb9f36444048b12678",
+          "browser_download_url": "https://github.com/flyinghead/flycast/releases/download/v2.7/flycast-2.7.nro"
+        },
+        {
+          "name": "flycast-macOS-2.7.zip",
+          "size": 19424997,
+          "digest": "sha256:dbd59cb88f52a95ea4de90693bb4ac156530452d5457f2cc4f656fdfd242fc26",
+          "browser_download_url": "https://github.com/flyinghead/flycast/releases/download/v2.7/flycast-macOS-2.7.zip"
+        },
+        {
+          "name": "flycast-win64-2.7.zip",
+          "size": 9885102,
+          "digest": "sha256:7edf489ba6b3053703a18ce8233767eb71a2d89e4bda0421b312c2167a739161",
+          "browser_download_url": "https://github.com/flyinghead/flycast/releases/download/v2.7/flycast-win64-2.7.zip"
+        },
+        {
+          "name": "flycast-x86_64-2.7.AppImage",
+          "size": 20396536,
+          "digest": "sha256:5b9f8a636a6acb8446bc78fe96650d8cb8233ac9f8ce69665dab3f39a1cbaae1",
+          "browser_download_url": "https://github.com/flyinghead/flycast/releases/download/v2.7/flycast-x86_64-2.7.AppImage"
+        }
+      ]
+    },
+    "xemu-project/xemu": {
+      "tag_name": "v0.8.139",
+      "assets": [
+        {
+          "name": "xemu-0.8.139-aarch64.AppImage",
+          "size": 16706056,
+          "digest": "sha256:5f132b3a97c365bf22e8dc286954586ee0cf2202d63958dfcebc8fe9d742ecd4",
+          "browser_download_url": "https://github.com/xemu-project/xemu/releases/download/v0.8.139/xemu-0.8.139-aarch64.AppImage"
+        },
+        {
+          "name": "xemu-0.8.139-dbg-aarch64.AppImage",
+          "size": 16726536,
+          "digest": "sha256:da156a6baa0fc542c4028e03be43c3740c2972d488ec5a4252219c15f07930a6",
+          "browser_download_url": "https://github.com/xemu-project/xemu/releases/download/v0.8.139/xemu-0.8.139-dbg-aarch64.AppImage"
+        },
+        {
+          "name": "xemu-0.8.139-dbg-macos-universal-unsigned.zip",
+          "size": 25770215,
+          "digest": "sha256:95ab0a7a5e3a6fba32eee4823257da42169ba414ddb158750694dd93a9b2f0df",
+          "browser_download_url": "https://github.com/xemu-project/xemu/releases/download/v0.8.139/xemu-0.8.139-dbg-macos-universal-unsigned.zip"
+        },
+        {
+          "name": "xemu-0.8.139-dbg-windows-arm64-pdb.zip",
+          "size": 4691928,
+          "digest": "sha256:f8fbb2d07bb0aaea1ec762c19a94d57475caf8909ae169c037b4194b369efd96",
+          "browser_download_url": "https://github.com/xemu-project/xemu/releases/download/v0.8.139/xemu-0.8.139-dbg-windows-arm64-pdb.zip"
+        },
+        {
+          "name": "xemu-0.8.139-dbg-windows-arm64.zip",
+          "size": 11023479,
+          "digest": "sha256:3a235b185134a66f6acadddf63729bd0b837b2c0cff6f21fd9db3f43e348260b",
+          "browser_download_url": "https://github.com/xemu-project/xemu/releases/download/v0.8.139/xemu-0.8.139-dbg-windows-arm64.zip"
+        },
+        {
+          "name": "xemu-0.8.139-dbg-windows-x86_64-pdb.zip",
+          "size": 9444737,
+          "digest": "sha256:ae8039fb3726a79c4b6527e14d0b86952e4e72aa79fe2f38b4eab338feaf822f",
+          "browser_download_url": "https://github.com/xemu-project/xemu/releases/download/v0.8.139/xemu-0.8.139-dbg-windows-x86_64-pdb.zip"
+        },
+        {
+          "name": "xemu-0.8.139-dbg-windows-x86_64.zip",
+          "size": 11816480,
+          "digest": "sha256:993a5ceeb9be9982cf914dd054c83954bff946f1ce4109da8ffa8ecbf14f92db",
+          "browser_download_url": "https://github.com/xemu-project/xemu/releases/download/v0.8.139/xemu-0.8.139-dbg-windows-x86_64.zip"
+        },
+        {
+          "name": "xemu-0.8.139-dbg-x86_64.AppImage",
+          "size": 17877496,
+          "digest": "sha256:bd271eadb475d1c49b76c9b89d16f424a8df51bfbc001c494221bc4be9f00765",
+          "browser_download_url": "https://github.com/xemu-project/xemu/releases/download/v0.8.139/xemu-0.8.139-dbg-x86_64.AppImage"
+        },
+        {
+          "name": "xemu-0.8.139-macos-universal-unsigned.zip",
+          "size": 21356714,
+          "digest": "sha256:2fb2c5b8d78dee9c4057fd10fe0f360812394548c70b1360ad19410253a7ea9f",
+          "browser_download_url": "https://github.com/xemu-project/xemu/releases/download/v0.8.139/xemu-0.8.139-macos-universal-unsigned.zip"
+        },
+        {
+          "name": "xemu-0.8.139-macos-universal.zip",
+          "size": 21479533,
+          "digest": "sha256:9817aaa5e187a698416271a6ddc083a40d7ff5e09c3231cff32a692638c7427d",
+          "browser_download_url": "https://github.com/xemu-project/xemu/releases/download/v0.8.139/xemu-0.8.139-macos-universal.zip"
+        },
+        {
+          "name": "xemu-0.8.139-windows-arm64-pdb.zip",
+          "size": 3174975,
+          "digest": "sha256:fe4b11016f533da89ec7f07b62710b71470b60e7c2029f35b259f1b1498127a0",
+          "browser_download_url": "https://github.com/xemu-project/xemu/releases/download/v0.8.139/xemu-0.8.139-windows-arm64-pdb.zip"
+        },
+        {
+          "name": "xemu-0.8.139-windows-arm64.zip",
+          "size": 10026353,
+          "digest": "sha256:869509a5544f75bf2eda4043c931869c6a04bc8f2421236137ae89ad94c86324",
+          "browser_download_url": "https://github.com/xemu-project/xemu/releases/download/v0.8.139/xemu-0.8.139-windows-arm64.zip"
+        },
+        {
+          "name": "xemu-0.8.139-windows-x86_64-pdb.zip",
+          "size": 480056,
+          "digest": "sha256:2cc5c1a98b0f901e690357b0ebc6934ea3099b32369d1dc0c96dfe1d63153422",
+          "browser_download_url": "https://github.com/xemu-project/xemu/releases/download/v0.8.139/xemu-0.8.139-windows-x86_64-pdb.zip"
+        },
+        {
+          "name": "xemu-0.8.139-windows-x86_64.zip",
+          "size": 11420991,
+          "digest": "sha256:fbb14dd7ea08120ca9ec99c955758786645af16a5058250553b3b7d7592e8701",
+          "browser_download_url": "https://github.com/xemu-project/xemu/releases/download/v0.8.139/xemu-0.8.139-windows-x86_64.zip"
+        },
+        {
+          "name": "xemu-0.8.139-x86_64.AppImage",
+          "size": 17971704,
+          "digest": "sha256:220282aacf09b30b35c55ba900a774fb6940c70deca1408bc70a4c9cc67c322f",
+          "browser_download_url": "https://github.com/xemu-project/xemu/releases/download/v0.8.139/xemu-0.8.139-x86_64.AppImage"
+        },
+        {
+          "name": "xemu-0.8.139.tar.zst",
+          "size": 99819713,
+          "digest": "sha256:97a986bb6f58134fb96b23c96b52615a0325c16e8d02cce6b1329f4d50dff342",
+          "browser_download_url": "https://github.com/xemu-project/xemu/releases/download/v0.8.139/xemu-0.8.139.tar.zst"
+        },
+        {
+          "name": "xemu-win-aarch64-release.zip",
+          "size": 10026353,
+          "digest": "sha256:869509a5544f75bf2eda4043c931869c6a04bc8f2421236137ae89ad94c86324",
+          "browser_download_url": "https://github.com/xemu-project/xemu/releases/download/v0.8.139/xemu-win-aarch64-release.zip"
+        },
+        {
+          "name": "xemu-win-x86_64-release.zip",
+          "size": 11420991,
+          "digest": "sha256:fbb14dd7ea08120ca9ec99c955758786645af16a5058250553b3b7d7592e8701",
+          "browser_download_url": "https://github.com/xemu-project/xemu/releases/download/v0.8.139/xemu-win-x86_64-release.zip"
+        }
+      ]
+    },
+    "xenia-project/release-builds-windows": {
+      "tag_name": "v1.0.2844-master",
+      "assets": [
+        {
+          "name": "xenia-cpu-ppc-test.log",
+          "size": 48852,
+          "digest": "sha256:5c3c1101e38c67f785e91d9aa3906ff6dffc129cb15d1590ae2b2a173c997e18",
+          "browser_download_url": "https://github.com/xenia-project/release-builds-windows/releases/download/v1.0.2844-master/xenia-cpu-ppc-test.log"
+        },
+        {
+          "name": "xenia-vfs-dump_master.zip",
+          "size": 1558210,
+          "digest": "sha256:c0e2bdccd6b06b9ed2db9f0469ff6a33fa7718341d4c6c30c2137c00c200f611",
+          "browser_download_url": "https://github.com/xenia-project/release-builds-windows/releases/download/v1.0.2844-master/xenia-vfs-dump_master.zip"
+        },
+        {
+          "name": "xenia_master.zip",
+          "size": 18242678,
+          "digest": "sha256:6d41aa4bef26b395b0d48230dc4be6c43cf6ba0a93f43c0674ca2f7150f846e0",
+          "browser_download_url": "https://github.com/xenia-project/release-builds-windows/releases/download/v1.0.2844-master/xenia_master.zip"
+        }
+      ]
+    },
+    "scummvm/scummvm": {
+      "tag_name": "v2026.4.0",
+      "assets": []
+    },
+    "joncampbell123/dosbox-x": {
+      "tag_name": "dosbox-x-v2026.10.01",
+      "assets": [
+        {
+          "name": "dosbox-x-hx-dos-2026.10.01.zip",
+          "size": 10187851,
+          "digest": "sha256:cf00ec7a2aa6ebd05ae8690e145eee368fdd96f11f7a90a6106753fd5b43cd2c",
+          "browser_download_url": "https://github.com/joncampbell123/dosbox-x/releases/download/dosbox-x-v2026.10.01/dosbox-x-hx-dos-2026.10.01.zip"
+        },
+        {
+          "name": "dosbox-x-macosx-arm64-2026.10.01.zip",
+          "size": 94369585,
+          "digest": "sha256:8514ab856e8ac2611fbdac7adf334c34085c1e00d700a88711f842adec50240f",
+          "browser_download_url": "https://github.com/joncampbell123/dosbox-x/releases/download/dosbox-x-v2026.10.01/dosbox-x-macosx-arm64-2026.10.01.zip"
+        },
+        {
+          "name": "dosbox-x-macosx-x86_64-2026.10.01.zip",
+          "size": 102364921,
+          "digest": "sha256:a0605348355ff4a45c781f124c44122e97156ae3f7d048637f545c9de641bedb",
+          "browser_download_url": "https://github.com/joncampbell123/dosbox-x/releases/download/dosbox-x-v2026.10.01/dosbox-x-macosx-x86_64-2026.10.01.zip"
+        },
+        {
+          "name": "dosbox-x-mingw32-2026.10.01-portable.zip",
+          "size": 47571257,
+          "digest": "sha256:910d89688102f89b70c7b9af74ebe764aeadad22dbf04ddd90e12541a38afb42",
+          "browser_download_url": "https://github.com/joncampbell123/dosbox-x/releases/download/dosbox-x-v2026.10.01/dosbox-x-mingw32-2026.10.01-portable.zip"
+        },
+        {
+          "name": "dosbox-x-mingw32_lowend-2026.10.01-portable.zip",
+          "size": 43337813,
+          "digest": "sha256:7c22259ba64312746067caca857cf0684f40665ce0f80eb3a9152bdf59d513b7",
+          "browser_download_url": "https://github.com/joncampbell123/dosbox-x/releases/download/dosbox-x-v2026.10.01/dosbox-x-mingw32_lowend-2026.10.01-portable.zip"
+        },
+        {
+          "name": "dosbox-x-mingw32_lowend9x-2026.10.01-portable.zip",
+          "size": 21542737,
+          "digest": "sha256:c57a7a3d3d884a21bef89cbe7193eba45d31fdcd6a0675d1d68a7a3a5606ba7d",
+          "browser_download_url": "https://github.com/joncampbell123/dosbox-x/releases/download/dosbox-x-v2026.10.01/dosbox-x-mingw32_lowend9x-2026.10.01-portable.zip"
+        },
+        {
+          "name": "dosbox-x-mingw64-2026.10.01-portable.zip",
+          "size": 46509846,
+          "digest": "sha256:def2d84d4415fc26c77252839b4dafb6b476e3a4204b896292e6b05505ca8c59",
+          "browser_download_url": "https://github.com/joncampbell123/dosbox-x/releases/download/dosbox-x-v2026.10.01/dosbox-x-mingw64-2026.10.01-portable.zip"
+        },
+        {
+          "name": "dosbox-x-vsbuild-arm32-2026.10.01-portable.zip",
+          "size": 40849771,
+          "digest": "sha256:934514f2c8a48815661f9fbd441cf1bc39ee69244c15df1db0af772f70ca2128",
+          "browser_download_url": "https://github.com/joncampbell123/dosbox-x/releases/download/dosbox-x-v2026.10.01/dosbox-x-vsbuild-arm32-2026.10.01-portable.zip"
+        },
+        {
+          "name": "dosbox-x-vsbuild-arm64-2026.10.01-portable.zip",
+          "size": 40966368,
+          "digest": "sha256:f1a15bcad81610429aea07ac5b74c81b8f78b58527e34b2fabb19ffafb429614",
+          "browser_download_url": "https://github.com/joncampbell123/dosbox-x/releases/download/dosbox-x-v2026.10.01/dosbox-x-vsbuild-arm64-2026.10.01-portable.zip"
+        },
+        {
+          "name": "dosbox-x-vsbuild-win32-2026.10.01-portable.zip",
+          "size": 42083223,
+          "digest": "sha256:25724d9949cc28e97b7f1eea7d655908904212559eaa153a329688966b2370be",
+          "browser_download_url": "https://github.com/joncampbell123/dosbox-x/releases/download/dosbox-x-v2026.10.01/dosbox-x-vsbuild-win32-2026.10.01-portable.zip"
+        },
+        {
+          "name": "dosbox-x-vsbuild-win64-2026.10.01-portable.zip",
+          "size": 44575207,
+          "digest": "sha256:3c50915e63aefe35777d65ebb4391a06b4a2c2342e4c75cbee6bbda4c6916e33",
+          "browser_download_url": "https://github.com/joncampbell123/dosbox-x/releases/download/dosbox-x-v2026.10.01/dosbox-x-vsbuild-win64-2026.10.01-portable.zip"
+        },
+        {
+          "name": "dosbox-x-windows-2026.10.01-setup.exe",
+          "size": 102499755,
+          "digest": "sha256:36c36a5d7b2994495f32390f6b0d265d0b1b2334fd8848a3d0e5265eb8020d07",
+          "browser_download_url": "https://github.com/joncampbell123/dosbox-x/releases/download/dosbox-x-v2026.10.01/dosbox-x-windows-2026.10.01-setup.exe"
+        },
+        {
+          "name": "dosbox-x-winXP-2026.10.01-portable.zip",
+          "size": 51944566,
+          "digest": "sha256:c2c3223d581b10a62438041d205f1e365d271b89d8bfcdd19f89dfb73b4b4467",
+          "browser_download_url": "https://github.com/joncampbell123/dosbox-x/releases/download/dosbox-x-v2026.10.01/dosbox-x-winXP-2026.10.01-portable.zip"
+        },
+        {
+          "name": "dosbox-x-winXP-2026.10.01-setup.exe",
+          "size": 53627312,
+          "digest": "sha256:06e189e5d7058d9d9fc780ce56848dad0d2b42bfceca1e7d92a6d46953731c27",
+          "browser_download_url": "https://github.com/joncampbell123/dosbox-x/releases/download/dosbox-x-v2026.10.01/dosbox-x-winXP-2026.10.01-setup.exe"
+        }
+      ]
+    },
+    "dosbox-staging/dosbox-staging": {
+      "tag_name": "v0.83.0",
+      "assets": [
+        {
+          "name": "dosbox-staging-linux-x86_64-v0.83.0.tar.xz",
+          "size": 29377664,
+          "digest": "sha256:d3a94f7f1c3e68a47ec88d61145506c7904452adb0c9c5928cb8cfe2331d6c5c",
+          "browser_download_url": "https://github.com/dosbox-staging/dosbox-staging/releases/download/v0.83.0/dosbox-staging-linux-x86_64-v0.83.0.tar.xz"
+        },
+        {
+          "name": "dosbox-staging-macOS-v0.83.0.dmg",
+          "size": 44531761,
+          "digest": "sha256:d8a771adfb8010fa6b5f7fb5351abfba659273ad01c89f03675a92bdbdae8167",
+          "browser_download_url": "https://github.com/dosbox-staging/dosbox-staging/releases/download/v0.83.0/dosbox-staging-macOS-v0.83.0.dmg"
+        },
+        {
+          "name": "dosbox-staging-windows-x64-v0.83.0-setup.exe",
+          "size": 32860689,
+          "digest": "sha256:a3f30b34870c1a3845258bee92f325d0efe22761adce9827820fb86edeac651d",
+          "browser_download_url": "https://github.com/dosbox-staging/dosbox-staging/releases/download/v0.83.0/dosbox-staging-windows-x64-v0.83.0-setup.exe"
+        },
+        {
+          "name": "dosbox-staging-windows-x64-v0.83.0.zip",
+          "size": 37986031,
+          "digest": "sha256:725b915e325a6d410ce30a10989fd492fdad07f6611fff40ff77f160478810f4",
+          "browser_download_url": "https://github.com/dosbox-staging/dosbox-staging/releases/download/v0.83.0/dosbox-staging-windows-x64-v0.83.0.zip"
+        }
+      ]
+    },
+    "mamedev/mame": {
+      "tag_name": "mame0289",
+      "assets": [
+        {
+          "name": "mame0289b_arm64.exe",
+          "size": 85192947,
+          "digest": "sha256:f4cb463256c34b6772aee5bc553e770aca8204c31f1f947e849d8f8495bc6346",
+          "browser_download_url": "https://github.com/mamedev/mame/releases/download/mame0289/mame0289b_arm64.exe"
+        },
+        {
+          "name": "mame0289b_x64.exe",
+          "size": 87626249,
+          "digest": "sha256:a1aa7912168c9d1b05e611906bc21b8b9be3935822aead36d12a1da363150b7d",
+          "browser_download_url": "https://github.com/mamedev/mame/releases/download/mame0289/mame0289b_x64.exe"
+        },
+        {
+          "name": "mame0289lx.zip",
+          "size": 19725605,
+          "digest": "sha256:d5d8f40223aef8afddbb846c003402d4e348d07d3a867e6686267895ddbd2817",
+          "browser_download_url": "https://github.com/mamedev/mame/releases/download/mame0289/mame0289lx.zip"
+        },
+        {
+          "name": "mame0289s.exe",
+          "size": 159028505,
+          "digest": "sha256:6243eac3a80df6be602bf0af7889305691737bc26c2ded1433ec11b7c6a3c7b9",
+          "browser_download_url": "https://github.com/mamedev/mame/releases/download/mame0289/mame0289s.exe"
+        },
+        {
+          "name": "SHA1SUMS",
+          "size": 295,
+          "digest": "sha256:dbc7fdf4c0c9aa9e6e340d1a248fb61134e9adaba4bf81bb8f3e882b78a0a448",
+          "browser_download_url": "https://github.com/mamedev/mame/releases/download/mame0289/SHA1SUMS"
+        },
+        {
+          "name": "SHA256SUMS",
+          "size": 415,
+          "digest": "sha256:7957dd92eb5ed61defec5c22de02eca47689421158d29994dc425f4a64280ef3",
+          "browser_download_url": "https://github.com/mamedev/mame/releases/download/mame0289/SHA256SUMS"
+        },
+        {
+          "name": "whatsnew_0289.txt",
+          "size": 269550,
+          "digest": "sha256:ec5ffd25064d2e6a39bddd5897063973976ad43c1034c4920987b0c4ca3427fb",
+          "browser_download_url": "https://github.com/mamedev/mame/releases/download/mame0289/whatsnew_0289.txt"
+        }
+      ]
+    },
+    "ares-emulator/ares": {
+      "tag_name": "v148",
+      "assets": [
+        {
+          "name": "ares-macos-universal-dSYMs.zip",
+          "size": 77455722,
+          "digest": "sha256:289e73a3aa3d7fd5d736331be9a50f56967eca1c6449092c16b4cbf4ffa4b08d",
+          "browser_download_url": "https://github.com/ares-emulator/ares/releases/download/v148/ares-macos-universal-dSYMs.zip"
+        },
+        {
+          "name": "ares-macos-universal.zip",
+          "size": 79914130,
+          "digest": "sha256:1ae232ab6de341210f171f51d84b311527eb1399060706589334a8a7de136bb0",
+          "browser_download_url": "https://github.com/ares-emulator/ares/releases/download/v148/ares-macos-universal.zip"
+        },
+        {
+          "name": "ares-source.tar.gz",
+          "size": 5465693,
+          "digest": "sha256:06b053d0f407d33272222efd55446d46bfd61859eea46b6ae16c0cc4fa1e51e5",
+          "browser_download_url": "https://github.com/ares-emulator/ares/releases/download/v148/ares-source.tar.gz"
+        },
+        {
+          "name": "ares-windows-clang-cl-arm64-PDBs.zip",
+          "size": 28595279,
+          "digest": "sha256:85560dc8b902c19b27525550a7f4b381ad1844a0d9053c03efb2f86d0463bfc1",
+          "browser_download_url": "https://github.com/ares-emulator/ares/releases/download/v148/ares-windows-clang-cl-arm64-PDBs.zip"
+        },
+        {
+          "name": "ares-windows-clang-cl-arm64.zip",
+          "size": 63044340,
+          "digest": "sha256:16fa3f5174cd9ee37bbe2416636bf00853b7f98b7a01699b27f7786e3129fc1f",
+          "browser_download_url": "https://github.com/ares-emulator/ares/releases/download/v148/ares-windows-clang-cl-arm64.zip"
+        },
+        {
+          "name": "ares-windows-x64-PDBs.zip",
+          "size": 9209134,
+          "digest": "sha256:1f43cd5b49380180766218aa6755d8b91ee9b0613528bc7d94ac9861962f795a",
+          "browser_download_url": "https://github.com/ares-emulator/ares/releases/download/v148/ares-windows-x64-PDBs.zip"
+        },
+        {
+          "name": "ares-windows-x64.zip",
+          "size": 64799819,
+          "digest": "sha256:fa97958e1d359e3fe254353f87b6508f2762a959d7eb264c69965ad002037298",
+          "browser_download_url": "https://github.com/ares-emulator/ares/releases/download/v148/ares-windows-x64.zip"
+        }
+      ]
+    },
+    "zortos293/Lichii": {
+      "tag_name": "build-160",
+      "assets": [
+        {
+          "name": "lichii-linux-aarch64-pgo.AppImage",
+          "size": 135477768,
+          "digest": "sha256:fa1477a1b593534b88242ee7c492c72920bad9a172e7f3633927ea48aba8ad9e",
+          "browser_download_url": "https://github.com/zortos293/Lichii/releases/download/build-160/lichii-linux-aarch64-pgo.AppImage"
+        },
+        {
+          "name": "lichii-linux-aarch64-pgo.tar.gz",
+          "size": 146288148,
+          "digest": "sha256:dfabb2a33fcad8a2a333d0d93c19453e2c73b81bd936e8506aa80cf872931116",
+          "browser_download_url": "https://github.com/zortos293/Lichii/releases/download/build-160/lichii-linux-aarch64-pgo.tar.gz"
+        },
+        {
+          "name": "lichii-linux-aarch64.AppImage",
+          "size": 107633160,
+          "digest": "sha256:976d6ea582ddb4664b15e40637bc677195aba1c44fca3ac3665018265ef56a4e",
+          "browser_download_url": "https://github.com/zortos293/Lichii/releases/download/build-160/lichii-linux-aarch64.AppImage"
+        },
+        {
+          "name": "lichii-linux-aarch64.tar.gz",
+          "size": 116728421,
+          "digest": "sha256:6fc1dc3cfb685d99f12fbeb3e2bc83f8d8f7fb0307b30cef658ba75150f58089",
+          "browser_download_url": "https://github.com/zortos293/Lichii/releases/download/build-160/lichii-linux-aarch64.tar.gz"
+        },
+        {
+          "name": "lichii-linux-x86_64-pgo.AppImage",
+          "size": 144095736,
+          "digest": "sha256:cc1a09e46c3e060eaf109134040a1448ae08fdbd51b5866e13ea9f42b0d91332",
+          "browser_download_url": "https://github.com/zortos293/Lichii/releases/download/build-160/lichii-linux-x86_64-pgo.AppImage"
+        },
+        {
+          "name": "lichii-linux-x86_64-pgo.tar.gz",
+          "size": 155150185,
+          "digest": "sha256:3c89c881dce6c9cf9a06e42e15e350b6960f2fe8432d129555da8c9b379eea5f",
+          "browser_download_url": "https://github.com/zortos293/Lichii/releases/download/build-160/lichii-linux-x86_64-pgo.tar.gz"
+        },
+        {
+          "name": "lichii-linux-x86_64.AppImage",
+          "size": 115538424,
+          "digest": "sha256:809ee6a79a4ebcc902233a24ee1adef51688c10d4b61ccd29a83d7f17560f782",
+          "browser_download_url": "https://github.com/zortos293/Lichii/releases/download/build-160/lichii-linux-x86_64.AppImage"
+        },
+        {
+          "name": "lichii-linux-x86_64.tar.gz",
+          "size": 124922838,
+          "digest": "sha256:8808893f08062c9a450234a3988eb2291dcda9d686a4d7e8780c0b6b6ec21962",
+          "browser_download_url": "https://github.com/zortos293/Lichii/releases/download/build-160/lichii-linux-x86_64.tar.gz"
+        },
+        {
+          "name": "lichii-macos-arm64.dmg",
+          "size": 87990370,
+          "digest": "sha256:d73fe76be1eef2f5df83428236d9d9f2529dd1b887115865946e4f5aa5889e28",
+          "browser_download_url": "https://github.com/zortos293/Lichii/releases/download/build-160/lichii-macos-arm64.dmg"
+        },
+        {
+          "name": "lichii-macos-arm64.zip",
+          "size": 79273315,
+          "digest": "sha256:73308d7fd8266f15f774bfb6b1921a88f160fe7c539522292bedce047a40a7b7",
+          "browser_download_url": "https://github.com/zortos293/Lichii/releases/download/build-160/lichii-macos-arm64.zip"
+        },
+        {
+          "name": "lichii-windows-x86_64-pgo.zip",
+          "size": 90614716,
+          "digest": "sha256:77871df6b219a232df0c2da45f8229dc9ba854e74fe1d916d437fed92abb97ba",
+          "browser_download_url": "https://github.com/zortos293/Lichii/releases/download/build-160/lichii-windows-x86_64-pgo.zip"
+        },
+        {
+          "name": "lichii-windows-x86_64.zip",
+          "size": 90057554,
+          "digest": "sha256:215459edfbd9f6c542b4548cabf4c16d487feca8ce1003a1094f9beda5f02460",
+          "browser_download_url": "https://github.com/zortos293/Lichii/releases/download/build-160/lichii-windows-x86_64.zip"
+        }
+      ]
+    },
+    "Eglantine-Community/Eglantine": {
+      "tag_name": "v0.1.0-rc3",
+      "assets": [
+        {
+          "name": "eglantine-linux-aarch64-pgo.AppImage",
+          "size": 131893768,
+          "digest": "sha256:b01f5170dba024839b1932e300148157fd1516160361eb5543d9166ce472f3c4",
+          "browser_download_url": "https://github.com/Eglantine-Community/Eglantine/releases/download/v0.1.0-rc3/eglantine-linux-aarch64-pgo.AppImage"
+        },
+        {
+          "name": "eglantine-linux-aarch64-pgo.tar.gz",
+          "size": 24714322,
+          "digest": "sha256:a045278efc38df126ad29272f824649f994ea105f15b016c298ef55ab403445d",
+          "browser_download_url": "https://github.com/Eglantine-Community/Eglantine/releases/download/v0.1.0-rc3/eglantine-linux-aarch64-pgo.tar.gz"
+        },
+        {
+          "name": "eglantine-linux-aarch64.AppImage",
+          "size": 103803400,
+          "digest": "sha256:19fd611e0b235392456f2b51f64a913eaab2011103b0dac3c30ffcf419e2871c",
+          "browser_download_url": "https://github.com/Eglantine-Community/Eglantine/releases/download/v0.1.0-rc3/eglantine-linux-aarch64.AppImage"
+        },
+        {
+          "name": "eglantine-linux-aarch64.tar.gz",
+          "size": 29595552,
+          "digest": "sha256:4449a1affd0a5362d49ea89d28c0a09c040f83a7fb61135c01b29a49305235c8",
+          "browser_download_url": "https://github.com/Eglantine-Community/Eglantine/releases/download/v0.1.0-rc3/eglantine-linux-aarch64.tar.gz"
+        },
+        {
+          "name": "eglantine-linux-x86_64-pgo.AppImage",
+          "size": 140405240,
+          "digest": "sha256:bda2b1bc32e9fd9273477a265b49d5d11829a6f8fec71b6d53f617bd27d5185a",
+          "browser_download_url": "https://github.com/Eglantine-Community/Eglantine/releases/download/v0.1.0-rc3/eglantine-linux-x86_64-pgo.AppImage"
+        },
+        {
+          "name": "eglantine-linux-x86_64-pgo.tar.gz",
+          "size": 26247487,
+          "digest": "sha256:195037febd782889e78670fe6e1307f0b0be62749cfeb9066dedfaced2507f9e",
+          "browser_download_url": "https://github.com/Eglantine-Community/Eglantine/releases/download/v0.1.0-rc3/eglantine-linux-x86_64-pgo.tar.gz"
+        },
+        {
+          "name": "eglantine-linux-x86_64.AppImage",
+          "size": 110979576,
+          "digest": "sha256:913938c23d08ebc9cbaa29a134cfdcc3532a5c09b1d405d2a3236300828af654",
+          "browser_download_url": "https://github.com/Eglantine-Community/Eglantine/releases/download/v0.1.0-rc3/eglantine-linux-x86_64.AppImage"
+        },
+        {
+          "name": "eglantine-linux-x86_64.tar.gz",
+          "size": 31895309,
+          "digest": "sha256:826904f4186fe1925b8b57e499319785d2644fc4120617ae123f87cd25e73849",
+          "browser_download_url": "https://github.com/Eglantine-Community/Eglantine/releases/download/v0.1.0-rc3/eglantine-linux-x86_64.tar.gz"
+        },
+        {
+          "name": "eglantine-macos-arm64.dmg",
+          "size": 85559895,
+          "digest": "sha256:d21b3908c9e6f5f2cbba1cd55203b9c47fc7f0b09221bbae16dbf511ed1a6bc8",
+          "browser_download_url": "https://github.com/Eglantine-Community/Eglantine/releases/download/v0.1.0-rc3/eglantine-macos-arm64.dmg"
+        },
+        {
+          "name": "eglantine-macos-arm64.zip",
+          "size": 76125142,
+          "digest": "sha256:20711052f34d0cd7309191681e537855ed749baf7af1a90e96cde14fa01c7e80",
+          "browser_download_url": "https://github.com/Eglantine-Community/Eglantine/releases/download/v0.1.0-rc3/eglantine-macos-arm64.zip"
+        },
+        {
+          "name": "eglantine-windows-x86_64-pgo.zip",
+          "size": 69800401,
+          "digest": "sha256:73222d37627be796a63ad7ab6bccb9fbd8a3e9247bfe7b2ca04885fd17aca58b",
+          "browser_download_url": "https://github.com/Eglantine-Community/Eglantine/releases/download/v0.1.0-rc3/eglantine-windows-x86_64-pgo.zip"
+        },
+        {
+          "name": "eglantine-windows-x86_64.zip",
+          "size": 111234619,
+          "digest": "sha256:b464901d3f0cdaf1dcee0a11bd9e147a6f0c4d875b783034daf70442ef9dc76b",
+          "browser_download_url": "https://github.com/Eglantine-Community/Eglantine/releases/download/v0.1.0-rc3/eglantine-windows-x86_64.zip"
+        }
+      ]
+    }
+  }
+}

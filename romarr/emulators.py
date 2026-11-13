@@ -128,9 +128,19 @@ class EmulatorHub:
         url = "https://api.github.com/repos/" + entry["repo"] + "/releases/latest"
         token = os.environ.get("ROMARR_GITHUB_TOKEN", "").strip()
         headers = {"Authorization": "Bearer " + token} if token else {}
-        with self.http.get(url, timeout=15, headers=headers) as response:
-            response.raise_for_status()
-            release = response.json()
+        cached = False
+        try:
+            with self.http.get(url, timeout=15, headers=headers) as response:
+                response.raise_for_status()
+                release = response.json()
+        except requests.RequestException:
+            # These manifests pin the project's published asset digest and URL.
+            # A rate limit must not require handing a personal token to ROMarr.
+            manifests = json.loads(Path(__file__).with_name("emulator_releases.json").read_text(encoding="utf-8"))
+            release = manifests["releases"].get(entry["repo"])
+            if release is None:
+                raise
+            cached = True
         assets = []
         for asset in release.get("assets", []):
             name = str(asset.get("name") or "")
@@ -140,7 +150,9 @@ class EmulatorHub:
                            "url": asset.get("browser_download_url", ""),
                            "installable": _portable(name) and _matches_host(name)
                                           and bool(re.fullmatch(r"sha256:[a-fA-F0-9]{64}", digest))})
-        return {**entry, "tag": release.get("tag_name", ""), "assets": assets}
+        return {**entry, "tag": release.get("tag_name", ""), "assets": assets,
+                "cached_release": cached,
+                "note": "GitHub is unavailable. Showing the verified catalog release." if cached else ""}
 
     def install(self, slug: str, asset_name: str, expected_sha256: str, scanner=None) -> dict:
         """Verify the selected release and bytes, scan them, then publish atomically."""

@@ -11,7 +11,7 @@ Open **Hub → Emulators** to find the emulator for your system. Each entry link
 
 Installations are kept under tools/emulators beside ROMarr's state file. Supporting files and license notices stay with the package. A failed download, checksum, extraction or scan leaves the previous installation available.
 
-If GitHub rate-limits release checks, set ROMARR_GITHUB_TOKEN in the host environment and restart ROMarr. It is used only to query GitHub release metadata.
+If GitHub rate-limits release checks, the page offers the catalog's pinned, verified release and labels it clearly. Set ROMARR_GITHUB_TOKEN in the host environment to raise the API limit if you want fresh release checks. It is used only to query GitHub release metadata.
 
 Automatic installation handles verified ZIP, tar.gz, tar.xz and AppImage packages for the host's operating system and architecture. Use **Downloads** for other packages or a different device. The Flatpak links for RetroArch, PCSX2, Dolphin and ScummVM open Flathub manifests on your Linux or SteamOS device. The device's Flatpak installer handles those packages.
 

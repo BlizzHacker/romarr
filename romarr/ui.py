@@ -4881,7 +4881,7 @@ RENDER.emulators=async()=>{
       if(!current()) return;
       if(release.error) throw new Error(release.error);
       const assets=(release.assets||[]).filter(a=>a.installable);
-      output.innerHTML='<p>'+esc(release.tag||release.note||'')+'</p>'
+      output.innerHTML='<p>'+esc((release.tag||'')+(release.note?' · '+release.note:''))+'</p>'
         +(assets.length?assets.map((a,i)=>'<p><button class="mini" data-install="'+i+'">Install '
           +esc(a.name)+'</button> · '+Math.ceil(a.bytes/1048576)+' MB</p>').join('')
           :'<p class="help">No verified portable build matches this host. Use Downloads for other packages.</p>');
