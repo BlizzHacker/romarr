@@ -1,5 +1,5 @@
 {
- "verified_date": "2026-11-12",
+ "verified_date": "2026-11-13",
  "items": [
   {
    "id": "catalog-47ec7b08f1775e0e",
@@ -29917,6 +29917,33 @@
    "fork": false,
    "manual_setup": true,
    "verified_date": "2026-11-13"
+  },
+  {
+   "id": "longshot",
+   "name": "Longshot",
+   "website": "https://git.moveweight.com/romarr-emulators/magicbeandev--longshot",
+   "guide": "https://git.moveweight.com/romarr-emulators/magicbeandev--longshot/src/branch/main/README.md#install-and-play",
+   "repo": "romarr-emulators/magicbeandev--longshot",
+   "provider": "forgejo",
+   "api_base": "https://git.moveweight.com/api/v1",
+   "systems": "Windows / Linux · native console-game recompilation",
+   "license": "GPL-3.0-only",
+   "license_verified": true,
+   "license_source": "https://git.moveweight.com/romarr-emulators/magicbeandev--longshot/src/branch/main/LICENSE",
+   "description": "Experimental continuation of Hookshot. Builds a supported console game into a native Windows or Linux program from your own matching game copy; not a general-purpose emulator. Use the upstream launcher linked in the setup guide.",
+   "free_use": "Free and open source; supply your own matching game files.",
+   "manual_setup": true,
+   "featured": true,
+   "fork": false,
+   "mirror_of": "https://git.magicbean.dev/MagicBeanDev/Longshot",
+   "upstream_downloads": "https://longshot.magicbean.dev/download",
+   "sources": [
+    {
+     "source": "https://git.magicbean.dev/MagicBeanDev/Longshot",
+     "discovery": "User-requested project; upstream README and GPL license checked; public source mirror verified."
+    }
+   ],
+   "verified_date": "2026-11-13"
   }
  ],
  "coverage": {
@@ -29949,6 +29976,6 @@
    }
   ],
   "note": "Catalog snapshot plus paginated live fork discovery. Availability and compatibility are reported separately.",
-  "catalog_entries": 1214
+  "catalog_entries": 1215
  }
 }

@@ -135,7 +135,7 @@ class EmulatorHub:
         items = []
         records = self.inventory.records()
         featured = {entry[0]: index for index, entry in enumerate(CATALOG)}
-        records.sort(key=lambda row: (featured.get(row["id"], len(featured)),
+        records.sort(key=lambda row: (featured.get(row["id"], len(featured) if row.get("featured") else len(featured) + 1),
                                       -int(row.get("stars") or 0), row["name"].lower()))
         wanted = query.strip().casefold()
         for record in records:
