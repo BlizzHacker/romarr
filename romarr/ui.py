@@ -4863,6 +4863,7 @@ RENDER.emulators=async()=>{
       <div class="row"><a class="btn ghost" href="${esc(item.website)}" target="_blank" rel="noopener">Downloads</a>
       <a class="btn ghost" href="${esc(item.guide)}" target="_blank" rel="noopener">Setup guide</a>
       ${item.managed_releases?`<button class="btn" data-release="${esc(item.id)}">Check release</button>`:''}</div>
+            ${item.flatpak?'<p><a href="'+esc(item.flatpak)+'" target="_blank" rel="noopener">Flatpak for Linux / SteamOS</a></p>':''}
       <div data-assets="${esc(item.id)}" role="status"></div></div>`).join('')}</div>
     <div class="card"><h3>Inspect a file with your security lab</h3>
       <p class="help">Enter a file path visible to ROMarr and MWM. Arkana copies the selected

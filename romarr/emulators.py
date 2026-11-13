@@ -20,6 +20,12 @@ import requests
 MAX_PACKAGE = 1024 * 1024 * 1024
 MAX_EXPANDED = 4 * MAX_PACKAGE
 INSTALL_LOCK = threading.Lock()
+FLATPAKS = {
+    "retroarch": "org.libretro.RetroArch",
+    "pcsx2": "net.pcsx2.PCSX2",
+    "dolphin": "org.DolphinEmu.dolphin-emu",
+    "scummvm": "org.scummvm.ScummVM",
+}
 
 # Sources are maintained by the emulator projects. Releases are resolved on demand.
 CATALOG = [
@@ -84,7 +90,10 @@ def _matches_host(name: str) -> bool:
                  "darwin": ("macos", "mac-", "osx", "darwin")}
     if not any(token in lower for token in os_tokens.get(system, ())):
         return False
-    arm = platform.machine().lower() in ("arm64", "aarch64")
+    machine = platform.machine().lower()
+    if machine not in ("x86_64", "amd64", "x64", "arm64", "aarch64"):
+        return False
+    arm = machine in ("arm64", "aarch64")
     named_arm = bool(re.search(r"(?:arm64|aarch64|armhf)", lower))
     return arm == named_arm
 
@@ -104,6 +113,9 @@ class EmulatorHub:
             records = sorted((self.root / row["id"]).glob("*/romarr-install.json"))
             row["installed"] = [p.parent.name for p in records]
             row["managed_releases"] = bool(row["repo"])
+            app_id = FLATPAKS.get(row["id"], "")
+            row["flatpak"] = ("https://dl.flathub.org/repo/appstream/" + app_id
+                              + ".flatpakref") if app_id else ""
             items.append(row)
         return {"host": platform.system() + " " + platform.machine(),
                 "install_dir": str(self.root), "items": items}
@@ -114,7 +126,9 @@ class EmulatorHub:
         if not entry["repo"]:
             return {**entry, "assets": [], "note": "Use the project's downloads page."}
         url = "https://api.github.com/repos/" + entry["repo"] + "/releases/latest"
-        with self.http.get(url, timeout=15) as response:
+        token = os.environ.get("ROMARR_GITHUB_TOKEN", "").strip()
+        headers = {"Authorization": "Bearer " + token} if token else {}
+        with self.http.get(url, timeout=15, headers=headers) as response:
             response.raise_for_status()
             release = response.json()
         assets = []
