@@ -147,3 +147,39 @@ class RequestIdentityPolicyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# Additional PR #18 review regressions; these are intentionally separate from
+# the 36 owner-run v02 tests and must not be counted as part of that old run.
+class ReviewedNormalizationTests(unittest.TestCase):
+    def test_revenge_is_not_revision_metadata(self):
+        d = decide_request('Sonic', 'genesis', [Candidate('verified','Sonic (Revenge)','DAT','genesis')])
+        self.assertEqual(d.code, 'REQUEST_TITLE_MISMATCH')
+
+    def test_revolution_is_not_revision_metadata(self):
+        d = decide_request('Sonic', 'genesis', [Candidate('verified','Sonic (Revolution)','DAT','genesis')])
+        self.assertEqual(d.code, 'REQUEST_TITLE_MISMATCH')
+
+    def test_revival_is_not_revision_metadata(self):
+        d = decide_request('Sonic', 'genesis', [Candidate('verified','Sonic (Revival)','DAT','genesis')])
+        self.assertEqual(d.code, 'REQUEST_TITLE_MISMATCH')
+
+    def test_numeric_revision_tag_can_be_ignored(self):
+        d = decide_request('Sonic', 'genesis', [Candidate('verified','Sonic (Rev 1)','DAT','genesis')])
+        self.assertEqual(d.code, 'MATCH_CONFIRMED')
+
+    def test_single_letter_revision_tag_can_be_ignored(self):
+        d = decide_request('Sonic', 'genesis', [Candidate('verified','Sonic (Rev A)','DAT','genesis')])
+        self.assertEqual(d.code, 'MATCH_CONFIRMED')
+
+    def test_non_latin_titles_cannot_collapse_to_same_suffix(self):
+        d = decide_request('三國志 II', 'snes', [Candidate('verified','信長の野望 II','DAT','snes')])
+        self.assertEqual(d.code, 'REQUEST_TITLE_MISMATCH')
+
+    def test_japanese_kana_voice_marks_are_distinct(self):
+        d = decide_request('は', 'nes', [Candidate('verified','ば','DAT','nes')])
+        self.assertEqual(d.code, 'REQUEST_TITLE_MISMATCH')
+
+    def test_non_latin_identical_titles_are_accepted(self):
+        d = decide_request('三國志 II', 'snes', [Candidate('verified','三國志 II','DAT','snes')])
+        self.assertEqual(d.code, 'MATCH_CONFIRMED')
