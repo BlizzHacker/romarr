@@ -10,7 +10,7 @@
    "sources": [
     {
      "source": "https://emulation.gametechwiki.com/index.php/Main_Page",
-     "discovery": "User-requested named resource; official page checked"
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
     }
    ],
    "needs_plugin": false
@@ -24,7 +24,7 @@
    "sources": [
     {
      "source": "https://www.emulator-zone.com/",
-     "discovery": "User-requested named resource; official page checked"
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
     }
    ],
    "needs_plugin": false
@@ -38,7 +38,7 @@
    "sources": [
     {
      "source": "https://www.zophar.net/",
-     "discovery": "User-requested named resource; official page checked"
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
     }
    ],
    "needs_plugin": false
@@ -52,7 +52,7 @@
    "sources": [
     {
      "source": "https://ssega.com/",
-     "discovery": "User-requested named resource; official page checked"
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
     }
    ],
    "needs_plugin": false
@@ -66,7 +66,7 @@
    "sources": [
     {
      "source": "https://playclassic.games/",
-     "discovery": "User-requested named resource; official page checked"
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
     }
    ],
    "needs_plugin": false
@@ -80,7 +80,7 @@
    "sources": [
     {
      "source": "https://classicreload.com/",
-     "discovery": "User-requested named resource; official page checked"
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
     }
    ],
    "needs_plugin": false
@@ -94,7 +94,7 @@
    "sources": [
     {
      "source": "https://dosdeck.com/about/",
-     "discovery": "User-requested named resource; official page checked"
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
     }
    ],
    "needs_plugin": false
@@ -108,7 +108,7 @@
    "sources": [
     {
      "source": "https://github.com/Emupedia/EmuOS/blob/main/README.md",
-     "discovery": "User-requested named resource; official page checked"
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
     }
    ],
    "needs_plugin": false
@@ -122,7 +122,7 @@
    "sources": [
     {
      "source": "https://www.free80sarcade.com/",
-     "discovery": "User-requested named resource; official page checked"
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
     }
    ],
    "needs_plugin": false
@@ -136,7 +136,7 @@
    "sources": [
     {
      "source": "https://gba.js.org/",
-     "discovery": "User-requested named resource; official page checked"
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
     }
    ],
    "needs_plugin": false
@@ -150,7 +150,7 @@
    "sources": [
     {
      "source": "https://www.myabandonware.com/",
-     "discovery": "User-requested named resource; official page checked"
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
     }
    ],
    "needs_plugin": false
@@ -234,7 +234,7 @@
    "sources": [
     {
      "source": "https://champagne.pages.dev/gaming/emulation-roms",
-     "discovery": "User-requested named resource; official page checked"
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
     }
    ],
    "needs_plugin": true
@@ -262,7 +262,7 @@
    "sources": [
     {
      "source": "https://romhustler.org/",
-     "discovery": "User-requested named resource; official page checked"
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
     }
    ],
    "needs_plugin": true
@@ -276,7 +276,7 @@
    "sources": [
     {
      "source": "https://www.romhacking.net/",
-     "discovery": "User-requested named resource; official page checked"
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
     }
    ],
    "needs_plugin": false
@@ -290,7 +290,7 @@
    "sources": [
     {
      "source": "https://www.romulation.org/",
-     "discovery": "User-requested named resource; official page checked"
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
     }
    ],
    "needs_plugin": true
@@ -332,7 +332,7 @@
    "sources": [
     {
      "source": "https://www.consoleroms.com/contact-us",
-     "discovery": "User-requested named resource; official page checked"
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
     }
    ],
    "needs_plugin": true
@@ -360,7 +360,7 @@
    "sources": [
     {
      "source": "https://www.emu-land.net/en/",
-     "discovery": "User-requested named resource; official page checked"
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
     }
    ],
    "needs_plugin": true
@@ -444,7 +444,7 @@
    "sources": [
     {
      "source": "https://r-roms.github.io/",
-     "discovery": "User-requested named resource; official page checked"
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
     }
    ],
    "needs_plugin": true
@@ -486,7 +486,7 @@
    "sources": [
     {
      "source": "https://romheaven.com/",
-     "discovery": "User-requested named resource; official page checked"
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
     }
    ],
    "needs_plugin": true
@@ -500,7 +500,7 @@
    "sources": [
     {
      "source": "https://romshq.com/",
-     "discovery": "User-requested named resource; official page checked"
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
     }
    ],
    "needs_plugin": true
@@ -514,7 +514,7 @@
    "sources": [
     {
      "source": "https://romsim.com/contact-us/",
-     "discovery": "User-requested named resource; official page checked"
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
     }
    ],
    "needs_plugin": true
@@ -528,7 +528,7 @@
    "sources": [
     {
      "source": "https://romslab.com/faqs/",
-     "discovery": "User-requested named resource; official page checked"
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
     }
    ],
    "needs_plugin": true
@@ -556,7 +556,7 @@
    "sources": [
     {
      "source": "User-provided Archive of Knowledge list names ROMSPURE.CC explicitly",
-     "discovery": "User-requested named resource; official page checked"
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
     }
    ],
    "needs_plugin": true
@@ -598,7 +598,7 @@
    "sources": [
     {
      "source": "https://champagne.pages.dev/gaming/emulation-roms",
-     "discovery": "User-requested named resource; official page checked"
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
     }
    ],
    "needs_plugin": true
@@ -640,7 +640,7 @@
    "sources": [
     {
      "source": "https://gamehacking.org/",
-     "discovery": "User-requested named resource; official page checked"
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
     }
    ],
    "needs_plugin": false
@@ -654,7 +654,7 @@
    "sources": [
     {
      "source": "https://gamefaqs.gamespot.com/",
-     "discovery": "User-requested named resource; official page checked"
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
     }
    ],
    "needs_plugin": false
@@ -668,7 +668,7 @@
    "sources": [
     {
      "source": "https://www.savegameworld.com/",
-     "discovery": "User-requested named resource; official page checked"
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
     }
    ],
    "needs_plugin": false
@@ -682,7 +682,7 @@
    "sources": [
     {
      "source": "https://pcsx2.net/compat/",
-     "discovery": "User-requested named resource; official page checked"
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
     }
    ],
    "needs_plugin": false
@@ -696,7 +696,7 @@
    "sources": [
     {
      "source": "https://dolphin-emu.org/compat/",
-     "discovery": "User-requested named resource; official page checked"
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
     }
    ],
    "needs_plugin": false
@@ -710,7 +710,7 @@
    "sources": [
     {
      "source": "https://rpcs3.net/compatibility",
-     "discovery": "User-requested named resource; official page checked"
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
     }
    ],
    "needs_plugin": false
@@ -724,7 +724,7 @@
    "sources": [
     {
      "source": "https://docs.libretro.com/library/bios/",
-     "discovery": "User-requested named resource; official page checked"
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
     }
    ],
    "needs_plugin": false
@@ -738,7 +738,7 @@
    "sources": [
     {
      "source": "https://no-intro.org/",
-     "discovery": "User-requested named resource; official page checked"
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
     }
    ],
    "needs_plugin": false
@@ -752,7 +752,7 @@
    "sources": [
     {
      "source": "http://redump.org/",
-     "discovery": "User-requested named resource; official page checked"
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
     }
    ],
    "needs_plugin": false
@@ -766,7 +766,7 @@
    "sources": [
     {
      "source": "https://retroachievements.org/",
-     "discovery": "User-requested named resource; official page checked"
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
     }
    ],
    "needs_plugin": false
@@ -794,7 +794,7 @@
    "sources": [
     {
      "source": "https://github.com/BlizzHacker/rom-hub/tree/main/plugins-dev/minerva-archive",
-     "discovery": "User-requested named resource; official page checked"
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
     }
    ],
    "needs_plugin": true
@@ -808,7 +808,7 @@
    "sources": [
     {
      "source": "https://github.com/BlizzHacker/rom-hub/tree/main/plugins-dev/archive-org",
-     "discovery": "User-requested named resource; official page checked"
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
     }
    ],
    "needs_plugin": true
