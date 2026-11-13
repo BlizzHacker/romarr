@@ -4281,7 +4281,9 @@ RENDER.general=async()=>{
   $('#page').innerHTML='<div class="empty">Loading settings…</div>';
   let fresh;
   try {
-    fresh=await j('/api/v1/config');
+    const response=await fetch('/api/v1/config');
+    if(!response.ok) throw new Error('Settings request failed');
+    fresh=await response.json();
   } catch (_) {
     if(activePage==='general'&&pageVersion===opVer)
       $('#page').innerHTML='<div class="empty">Could not load settings. Reopen General to retry.</div>';
