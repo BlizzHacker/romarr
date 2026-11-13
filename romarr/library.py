@@ -1224,7 +1224,8 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
                require_verified: bool = False,
                layout: str = "flat", translation: bool = False,
                rename: bool = False,
-               platform_folders=None, prefer_hardlinks: bool = False, selected_primaries=None, bundle_routes=None) -> list[ImportResult]:
+               platform_folders=None, prefer_hardlinks: bool = False, selected_primaries=None, bundle_routes=None,
+               requested_game: str | None = None, catalog_platforms=None) -> list[ImportResult]:
     """Place every ROM from a finished download into the library.
 
     A cartridge zip may hold several games (a 3-in-1 collection, a bundle)
@@ -1268,7 +1269,8 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
             overwrite=overwrite, dats=dats, require_verified=require_verified,
             layout=layout, translation=translation, rename=rename,
             platform_folders=platform_folders, prefer_hardlinks=prefer_hardlinks,
-            selected_primaries=selected_primaries, bundle_routes=bundle_routes)
+            selected_primaries=selected_primaries, bundle_routes=bundle_routes,
+            requested_game=requested_game, catalog_platforms=catalog_platforms)
     finally:
         source.close()
 
@@ -1278,7 +1280,8 @@ def _import_rom_from_source(source, candidates, chosen_sets, download, platform,
                             require_verified=False, layout="flat",
                             translation=False, rename=False,
                             platform_folders=None, prefer_hardlinks=False,
-                            selected_primaries=None, bundle_routes=None):
+                            selected_primaries=None, bundle_routes=None,
+                            requested_game=None, catalog_platforms=None):
     """Finish import while the validated source and its scratch ZIPs remain open."""
     if selected_primaries is not None:
         selected = set(selected_primaries)
@@ -1290,6 +1293,22 @@ def _import_rom_from_source(source, candidates, chosen_sets, download, platform,
         return [ImportResult(
             False, None,
             f"no {platform.name} ROM among {len(candidates)} file(s)")]
+
+    # Optional request-aware gate: deliberately NOT activated by scheduled
+    # imports until app.py binds it to a durable queue/source identity. Manual
+    # and legacy import callers retain their existing behavior by default.
+    # A held/rejected result returns before any destination is created.
+    if requested_game is not None:
+        from .request_evidence import evaluate_source_request
+
+        assessment = evaluate_source_request(
+            source, chosen_sets, dats, requested_game, platform.slug,
+            catalog_platforms=catalog_platforms,
+        )
+        if assessment.decision.action != "import":
+            decision = assessment.decision
+            return [ImportResult(
+                False, None, f"request identity {decision.code}: {decision.message}")]
 
     results: list[ImportResult] = []
     planned = []
