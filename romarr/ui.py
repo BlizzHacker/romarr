@@ -3765,9 +3765,9 @@ RENDER.media=()=>settingsPage('Media Management',
   +fld('scanner_mwm_url','MoveWeight Manager URL',SETTINGS.scanner_mwm_url||'','text',
        'placeholder="https://mwm.example.com"')
   +chk('scanner_vt_enabled','Require a known VirusTotal hash report before importing',SETTINGS.scanner_vt_enabled)
-  +\`<p class="help">MWM needs ROMARR_MWM_TOKEN on this host and access to the same file paths.
+  +`<p class="help">MWM needs ROMARR_MWM_TOKEN on this host and access to the same file paths.
       VirusTotal needs ROMARR_VIRUSTOTAL_API_KEY. It receives file hashes only.
-      Enabled scanners must finish before a manual or completed download import can proceed.</p>\`
+      Enabled scanners must finish before a manual or completed download import can proceed.</p>`
   +chk('clamav_enabled','Scan downloads with ClamAV before importing them',SETTINGS.clamav_enabled)
   +fld('clamav_address','ClamAV address',SETTINGS.clamav_address||'','text',
      'placeholder="tcp://clamav:3310 or /run/clamav/clamd.sock"')
@@ -4851,26 +4851,26 @@ RENDER.emulators=async()=>{
   const current=()=>version===pageVersion && activePage==='emulators';
   const catalog=await j('/api/v1/emulators');
   if(!current()) return;
-  $('#page').innerHTML=\`<div class="card"><h3>Emulator Hub</h3>
-    <p>Install emulators on the ROMarr host, <b>\${esc(catalog.host)}</b>.
+  $('#page').innerHTML=`<div class="card"><h3>Emulator Hub</h3>
+    <p>Install emulators on the ROMarr host, <b>${esc(catalog.host)}</b>.
     If you play on another device, use the project's downloads page on that device.</p>
     <p class="help">Portable builds are checked against the publisher's SHA-256 digest.
-    Installations live in \${esc(catalog.install_dir)}. Use each project's setup guide for
+    Installations live in ${esc(catalog.install_dir)}. Use each project's setup guide for
     firmware, BIOS and your game folders. Switch 2 projects are experimental.</p></div>
-    <div class="pgrid">\${catalog.items.map(item=>\`<div class="card">
-      <h3>\${esc(item.name)}</h3><p>\${esc(item.systems)}</p>
-      <p class="help">\${item.installed.length?'Installed '+esc(item.installed.join(', ')):'Choose a release to get started.'}</p>
-      <div class="row"><a class="btn ghost" href="\${esc(item.website)}" target="_blank" rel="noopener">Downloads</a>
-      <a class="btn ghost" href="\${esc(item.guide)}" target="_blank" rel="noopener">Setup guide</a>
-      \${item.managed_releases?\`<button class="btn" data-release="\${esc(item.id)}">Check release</button>\`:''}</div>
-      <div data-assets="\${esc(item.id)}" role="status"></div></div>\`).join('')}</div>
+    <div class="pgrid">${catalog.items.map(item=>`<div class="card">
+      <h3>${esc(item.name)}</h3><p>${esc(item.systems)}</p>
+      <p class="help">${item.installed.length?'Installed '+esc(item.installed.join(', ')):'Choose a release to get started.'}</p>
+      <div class="row"><a class="btn ghost" href="${esc(item.website)}" target="_blank" rel="noopener">Downloads</a>
+      <a class="btn ghost" href="${esc(item.guide)}" target="_blank" rel="noopener">Setup guide</a>
+      ${item.managed_releases?`<button class="btn" data-release="${esc(item.id)}">Check release</button>`:''}</div>
+      <div data-assets="${esc(item.id)}" role="status"></div></div>`).join('')}</div>
     <div class="card"><h3>Inspect a file with your security lab</h3>
       <p class="help">Enter a file path visible to ROMarr and MWM. Arkana copies the selected
       file to your configured analysis lab. Follow its job in MWM.</p>
       <div class="row"><input id="lab-path" placeholder="Full path to the file">
       <button class="btn ghost" data-inspect="mwm">Inspect with MWM</button>
       <button class="btn ghost" data-inspect="arkana">Send to Arkana</button></div>
-      <pre id="lab-result" role="status"></pre></div>\`;
+      <pre id="lab-result" role="status"></pre></div>`;
   document.querySelectorAll('[data-release]').forEach(button=>button.onclick=async()=>{
     button.disabled=true;
     const id=button.dataset.release, output=document.querySelector('[data-assets="'+id+'"]');
