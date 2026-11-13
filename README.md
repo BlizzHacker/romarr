@@ -94,7 +94,7 @@ The image includes archive tools. **ROM Hub is included on amd64/arm64; it is un
 ## What else is included?
 
 - Wanted lists and scheduled searches, with the reason shown when a release is rejected.
-- Prowlarr, Torznab/Newznab and torrent RSS sources; torrent, Usenet and plugin download clients.
+- Prowlarr, Torznab/Newznab and torrent RSS sources; external or standalone download clients (including built-in NNTP Usenet and companion [Mister Download Manager](https://github.com/anefzaoui/misterdownloadmanager) CLI/Remote BitTorrent—with exact single-file selection on release grabs—& multi-connection HTTP).
 - DAT collection comparison, region/1G1R selection, and staged acquisition from an existing qBittorrent set torrent.
 - Exact duplicate audit, quarantine and restore; a preview comes before any move.
 - Preview-first renaming for DAT-verified single files already in a library, with a saved restore journal.

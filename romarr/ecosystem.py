@@ -321,6 +321,12 @@ ECOSYSTEM: dict[str, list[Project]] = {
             repo="https://github.com/qbittorrent/qBittorrent",
             site="https://www.qbittorrent.org", tab="acquisition"),
         Project(
+            "Mister Download Manager",
+            "An open-source multi-connection HTTP and BitTorrent engine that "
+            "powers ROMarr's standalone download clients.",
+            repo="https://github.com/anefzaoui/misterdownloadmanager",
+            site="https://misterdownloadmanager.com", tab="acquisition"),
+        Project(
             "ROM Hub",
             "ROMarr's plugin factory -- where a source or Igir 1G1R runner is written, run and "
             "sandboxed.",

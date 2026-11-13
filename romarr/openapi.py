@@ -345,6 +345,14 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
                                               "challenges, header spoofing and "
                                               "logins, and reports such sites "
                                               "as unavailable instead."),
+    "/api/v1/downloadclient/mdm": ("GET", "Availability of the external "
+                                          "Mister Download Manager CLI for "
+                                          "standalone torrent and accelerated "
+                                          "HTTP downloads."),
+    "/api/v1/downloadclient/mdm/install": ("POST", "Download, SHA-256 verify, "
+                                                   "and install the companion "
+                                                   "Mister Download Manager "
+                                                   "binaries locally."),
     "/api/v1/library": ("GET", "Configured library servers."),
     "/api/v1/library/schema": ("GET", "Library backend types and their fields."),
     "/api/v1/library/config": ("GET", "One library's stored configuration."),

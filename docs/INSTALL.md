@@ -552,6 +552,21 @@ offers, and it is the whole list.
 Download Station, aria2, Flood, Freebox Download, Hadouken, uTorrent /
 BitTorrent, porla, Vuze, BiglyBT.
 
+**Standalone engines (no external daemon needed)** —
+- **Standalone BitTorrent (MDM)** & **Standalone Direct HTTP (MDM)** — powered
+  by the companion open-source
+  [Mister Download Manager](https://github.com/anefzaoui/misterdownloadmanager)
+  (`misterdownloadmanager-cli`, GPL-3.0-or-later, invoked out-of-process or
+  via Remote HTTPS against `misterdownloadmanager --headless`). Supports magnets,
+  `.torrent` uploads, multi-connection HTTP (`-c 1..128`), and selective
+  collection file downloads. On glibc Linux (x86_64) and Windows (x86_64),
+  *Settings → Download Clients* offers a one-click SHA-256-verified installer
+  into `<data_dir>/tools/mdm`; on Alpine/musl Docker images, connect Remote mode
+  to a companion `misterdownloadmanager --headless` container.
+- **Standalone Usenet (NNTP)** — built-in pure-Python NNTP/NNTPS client with
+  `.nzb` parsing, concurrent connections, yEnc CRC32 verification, and
+  automatic missing-article retirement; needs only your Usenet host credentials.
+
 **Debrid and cloud** — Real-Debrid, AllDebrid, Premiumize, TorBox,
 Debrid-Link, Offcloud, put.io, Linksnappy. These do not run on your hardware:
 the service fetches the release, ROMarr downloads the result into that

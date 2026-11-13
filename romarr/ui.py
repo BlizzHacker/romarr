@@ -4081,17 +4081,33 @@ RENDER.profiles=async()=>{
 };
 
 RENDER.clients=async()=>{
-  const d=await j('/api/v1/downloadclient');
-  // Reported separately because "not installed" is a legitimate state here,
-  // not a fault: an install that only fetches plain URLs is finished. Without
-  // this line a site plugin needing a click fails with nothing on screen
-  // saying the browser lane was never set up.
-  const br=await j('/api/v1/downloadclient/browser').catch(()=>null);
+  const opVer=pageVersion;
+  const isCurrentClients=()=>activePage==='clients'&&pageVersion===opVer;
+  const [d,br,mdm]=await Promise.all([
+    j('/api/v1/downloadclient'),
+    j('/api/v1/downloadclient/browser').catch(()=>null),
+    j('/api/v1/downloadclient/mdm').catch(()=>null),
+  ]);
+  if(!isCurrentClients()) return;
   const state=c=>!c.configured?'<span class="dot"></span>not configured'
     :c.ok?'<span class="dot up"></span>connected'
     :'<span class="dot down"></span>unreachable';
   const gaps=['torrent','usenet'].filter(p=>
     !d.items.some(c=>c.protocol===p&&c.configured));
+  const mdmNote=mdm?`<div class="panel-note" style="margin:8px 0 12px">
+    <b>Standalone engines (no external *arr client needed):</b>
+    <b>Standalone Usenet (NNTP)</b> runs built-in over TLS/NNTP.
+    <b>Standalone BitTorrent &amp; Multi-Connection HTTP</b> integrate with
+    <a href="https://github.com/anefzaoui/misterdownloadmanager" target="_blank" rel="noopener">Mister Download Manager</a>
+    (<code>anefzaoui/misterdownloadmanager</code>):
+    ${mdm.available
+      ?`<span style="color:var(--ok)">ready (${esc(mdm.version||mdm.cli_path||'installed')}).</span>`
+      :mdm.installable
+        ?`<span style="color:var(--warn)">${esc(mdm.reason)}</span>
+           <div style="margin-top:6px"><button class="btn ghost" id="mdm-install">Install MDM (${esc(mdm.release_tag||'v0.5.2')})</button>
+           <span class="help" id="mdm-install-msg" style="margin-left:8px"></span></div>`
+        :`<span style="color:var(--warn)">${esc(mdm.reason)}</span>`}
+  </div>`:'';
   $('#page').innerHTML=`<div class="card">
     <div class="row" style="margin-bottom:12px">
       <h3 style="margin:0">Download Clients</h3>
@@ -4103,6 +4119,7 @@ RENDER.clients=async()=>{
     ${gaps.length?`<p class="help" style="color:var(--warn)">
       No client configured for: <b>${gaps.join(', ')}</b>.
       Those results will be found and then refused.</p>`:''}
+    ${mdmNote}
     ${br?`<p class="help">ROM sites are fetched over plain HTTP by the
       <b>Direct HTTP</b> client. A handful put the file behind a form the
       site's own page submits &mdash; those need the <b>Headless Browser</b>
@@ -4127,6 +4144,32 @@ RENDER.clients=async()=>{
     :'<div class="empty">No download clients yet. Add one to start grabbing.</div>'}
   </div>`;
   $('#c-add').onclick=()=>addItem('downloadclient');
+  const installBtn=$('#mdm-install');
+  if(installBtn){
+    let mdmBusy=false;
+    installBtn.onclick=async()=>{
+      if(mdmBusy) return;
+      mdmBusy=true;
+      installBtn.disabled=true;
+      const msg=$('#mdm-install-msg');
+      if(msg) msg.textContent='Downloading and verifying SHA-256…';
+      try{
+        const res=await j('/api/v1/downloadclient/mdm/install',{
+          method:'POST',headers:{'content-type':'application/json'},body:'{}'});
+        if(!isCurrentClients()) return;
+        if(res.ok){
+          toast('Installed '+ (res.version||'MDM'));
+          RENDER.clients();
+          return;
+        }
+        if(msg) msg.textContent=res.error||'Install failed';
+      }catch(e){
+        if(isCurrentClients()&&msg) msg.textContent=e.message||'Install failed';
+      }
+      mdmBusy=false;
+      if(isCurrentClients()) installBtn.disabled=false;
+    };
+  }
   document.querySelectorAll('[data-edit]').forEach(b=>b.onclick=async()=>{
     const row=d.items[Number(b.dataset.edit)];
     // The table is a status view; the editor needs the stored configuration.
