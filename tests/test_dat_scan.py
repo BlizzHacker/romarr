@@ -97,3 +97,42 @@ def test_reload_reports_what_it_examined(tmp_path):
     got = service.reload_dats(str(tmp_path))
     assert got["examined"] >= 1
     assert got["path"] == str(tmp_path)
+
+
+def test_unavailable_selected_dat_directory_preserves_saved_mappings(tmp_path):
+    """A temporary missing mount must not erase explicit catalog provenance."""
+    from types import SimpleNamespace
+
+    from romarr.dat import DatIndex
+
+    missing = str(tmp_path / "missing")
+    saved = {"Nintendo - SNES": "snes"}
+    service = object.__new__(app.ROMarr)
+    service.store = SimpleNamespace(
+        settings={"dat_path": missing, "dat_catalog_platforms": saved.copy()})
+    service.dats = DatIndex()
+
+    result = service._reload_dats(missing)
+
+    assert result["loaded"] == 0 and result["error"]
+    assert service.store.settings["dat_catalog_platforms"] == saved
+
+
+def test_changed_unavailable_dat_directory_drops_stale_mapping(tmp_path):
+    """A deliberate root change cannot preserve another directory's mapping."""
+    from types import SimpleNamespace
+
+    from romarr.dat import DatIndex
+
+    old = str(tmp_path / "old")
+    new = str(tmp_path / "new")
+    service = object.__new__(app.ROMarr)
+    service.store = SimpleNamespace(
+        settings={"dat_path": old, "dat_catalog_platforms": {"Nintendo - SNES": "snes"}})
+    service.dats = DatIndex()
+
+    result = service._reload_dats(new)
+
+    assert result["loaded"] == 0 and result["error"]
+    assert service.store.settings["dat_path"] == new
+    assert service.store.settings["dat_catalog_platforms"] == {}

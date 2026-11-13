@@ -2915,8 +2915,11 @@ class ROMarr:
         root = Path(directory)
         if not root.is_dir():
             if not preserve_on_empty:
+                # An unavailable mounted directory is not a new selection:
+                # preserve the operator's mapping until the mount returns.
+                if str(directory) != str(self.store.settings.get("dat_path") or ""):
+                    self.store.settings["dat_catalog_platforms"] = {}
                 self.store.settings["dat_path"] = str(directory)
-                self.store.settings["dat_catalog_platforms"] = {}
                 self.dats = DatIndex()
             log.warning("DAT_PATH %s is not a directory", root)
             return {"loaded": 0, "path": str(root),
