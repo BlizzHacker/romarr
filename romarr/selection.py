@@ -971,6 +971,9 @@ def judge(release: Release, wanted: str,
         scoring_aliases = [a for a in platform.aliases
                            if a.lower() not in _NON_SCORING_ALIASES]
         has_ext = _has_extension(lowered, platform.extensions)
+        if platform.slug in ("switch", "switch-2") and any(
+                _mentions(lowered, marker) for marker in ("nsp", "xci", "nsz", "xcz")):
+            has_ext = True
         names_plat = _mentions(lowered, platform.slug.lower()) or any(
             _mentions(lowered, alias) for alias in scoring_aliases
         )

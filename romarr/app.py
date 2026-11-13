@@ -6963,7 +6963,7 @@ class ROMarr:
         return {"name": name, "ok": False, "reason": detail}
 
     def _nup_gate(self, path: Path, name: str, platform, queue_item, *,
-                  inferred: bool) -> tuple:
+                  inferred: bool, selected_primaries=None) -> tuple:
         """Check a download's loose `.nup` files against its platform.
 
         A NUP's header is a validated table of contents, so unlike a release
@@ -6989,6 +6989,10 @@ class ROMarr:
                            if p.suffix.lower() == ".nup" and p.is_file())
         else:
             loose = []
+        if selected_primaries is not None:
+            selected = {str(primary).replace(chr(92), "/") for primary in selected_primaries}
+            loose = [p for p in loose
+                     if (p.relative_to(path).as_posix() if path.is_dir() else p.name) in selected]
         game = queue_item.game if queue_item is not None else name
         for nup_path in loose:
             try:
@@ -7099,7 +7103,6 @@ class ROMarr:
                             if inferred is not None:
                                 platform = inferred
                                 platform_inferred = True
-                                match.platform = inferred.slug
             if queue_item is not None and queue_item.state in ("imported", "import-failed"):
                 continue
             if platform is None:
@@ -7162,15 +7165,19 @@ class ROMarr:
                     continue
             refused = self._virus_check(path, name, platform, queue_item)
             if refused is not None:
+                if platform_inferred and queue_item is not None and queue_item.state == "import-failed":
+                    queue_item.platform = platform.slug
                 results.append(refused)
                 continue
-            # Before routing, since everything after keys off the platform: a
-            # NUP header can settle which Switch it is for.
-            platform, held = self._nup_gate(path, name, platform, queue_item,
-                                            inferred=platform_inferred)
-            if held is not None:
-                results.append(held)
-                continue
+            # A reviewed selection is validated below before its NUPs are gated.
+            if not (queue_item and queue_item.import_intent):
+                platform, held = self._nup_gate(path, name, platform, queue_item,
+                                                inferred=platform_inferred)
+                if held is not None:
+                    results.append(held)
+                    continue
+            if platform_inferred and queue_item is not None:
+                queue_item.platform = platform.slug
             # Which library this platform belongs to. A platform rule wins over
             # the default, so "PSX goes to Gaseous" is one row in the Libraries
             # page rather than a second ROMarr.
@@ -7236,6 +7243,14 @@ class ROMarr:
                             queue_item.detail = str(exc)
                             results.append({"name": name, "ok": False, "reason": str(exc)})
                             continue
+
+            if selected_primaries is not None:
+                platform, held = self._nup_gate(
+                    path, name, platform, queue_item, inferred=False,
+                    selected_primaries=selected_primaries)
+                if held is not None:
+                    results.append(held)
+                    continue
 
             outcomes = import_rom(
                 path, platform, self.library_root(target_cfg),

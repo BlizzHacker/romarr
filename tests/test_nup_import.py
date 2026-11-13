@@ -158,3 +158,48 @@ def test_a_nup_inside_an_archive_is_not_gated(tmp_path, sweep):
 
     assert item.state != "import-review"
     assert "NUP" not in item.detail
+
+
+def test_delayed_scan_keeps_header_inference_for_next_sweep(tmp_path, sweep, monkeypatch):
+    """A pending antivirus result must not turn a guessed platform into a request."""
+    service, item = sweep("", nup_file(tmp_path, S2_BASE))
+    monkeypatch.setattr(service, "_virus_check",
+                        lambda *args: {"name": item.game, "ok": False, "reason": "waiting"})
+    service.import_finished()
+    assert item.platform == ""
+    monkeypatch.setattr(service, "_virus_check", lambda *args: None)
+    assert service.import_finished()[0]["ok"]
+    assert item.platform == "switch-2"
+
+
+def test_confirmed_selection_excludes_foreign_nup_and_rejects_stale_plan(tmp_path, sweep):
+    """Only a current, confirmed selection can exclude a foreign container."""
+    from romarr.import_intent import preview_import, choose_import, queue_identity
+    from romarr.platforms import by_slug
+    from romarr.romm_bundle import decorate_preview
+    folder = tmp_path / "downloads"
+    folder.mkdir()
+    selected = folder / "Switch game.nup"
+    selected.write_bytes(build_nup([Pkg(S1_BASE)]))
+    foreign = folder / "Switch 2 game.nup"
+    foreign.write_bytes(build_nup([Pkg(S2_BASE)]))
+    service, item = sweep("switch", folder, release="Mixed download")
+    platform = by_slug("switch")
+    cfg, _ = service.library_for("switch")
+    preview = preview_import(folder, platform, service.library_root(cfg),
+                             layout=service.library_layout(cfg),
+                             platform_folders=service.platform_folders(cfg),
+                             queue_identity=queue_identity(item))
+    preview = decorate_preview(preview, platform, service.library_root(cfg),
+                               kind=cfg.get("type", ""), layout=service.library_layout(cfg),
+                               platform_folders=service.platform_folders(cfg))
+    item.import_intent = choose_import(preview, [{"primary": selected.name, "role": "base"}])
+    saved_token = item.import_intent["token"]
+    item.import_intent["token"] = "stale"
+    assert not service.import_finished()[0]["ok"]
+    assert item.state == "import-review"
+    item.import_intent["token"] = saved_token
+    result = service.import_finished()
+    assert item.state == "imported", result
+    assert imported_under(tmp_path, "switch") == [selected.name]
+    assert foreign.exists()

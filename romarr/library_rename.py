@@ -237,6 +237,11 @@ def plan(library: Path, platform_slug: str, dat_index, *,
     exact = _sha1_index(dat_index)
     for path in page:
         rel = path.relative_to(library).as_posix()
+        if path.suffix.lower() in DISC_SUFFIXES:
+            entries.append({"file": rel, "target": "", "eligible": False,
+                            "reason": "Disc images and their sets are left in place.",
+                            "sha1": "", "size": path.stat().st_size})
+            continue
         try:
             digest = hash_file(path)
             sha1 = str(digest.get("sha1") or "").lower()

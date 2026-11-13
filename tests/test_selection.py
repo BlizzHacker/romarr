@@ -858,3 +858,14 @@ def test_switch_release_scoring_distinguishes_the_two_consoles():
         release = rel(f"Example Game ({marker}).nsp", size=1024 * 1024)
         assert judge(release, "Example Game", native).points >= 0
         assert judge(release, "Example Game", foreign).points < 0
+
+
+@pytest.mark.parametrize("platform", ["switch", "switch-2"])
+def test_installable_tag_outranks_nup_extension_in_both_orders(platform):
+    """Format preference applies equally to tags and real extensions."""
+    from romarr.selection import best_release
+    from romarr.platforms import by_slug
+    installable = rel("Example Game (NSP)", seeders=1)
+    container = rel("Example Game.nup", seeders=50)
+    for pair in ([installable, container], [container, installable]):
+        assert best_release(pair, "Example Game", by_slug(platform)) == installable

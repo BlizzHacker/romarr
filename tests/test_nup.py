@@ -223,3 +223,9 @@ def test_blob_start_cannot_point_past_end_of_empty_container(tmp_path):
     struct.pack_into("<Q", data, 0x38, (len(data) + 31) & ~15)
     with pytest.raises(NupError, match="blob region outside"):
         read_header(write(tmp_path, data))
+
+
+def test_multiple_base_records_cannot_hide_another_console(tmp_path):
+    """Only one base package can establish a container's identity."""
+    with pytest.raises(NupError, match="more than one base"):
+        read_header(write(tmp_path, build_nup([Pkg(S1_BASE), Pkg(S2_BASE)])))

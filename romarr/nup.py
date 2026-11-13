@@ -195,6 +195,7 @@ def _parse_toc(toc: bytes, package_count: int, file_size: int,
             standalone_update=bool(pkg_flags & FLAG_STANDALONE_UPDATE),
         ))
 
+    toc = memoryview(toc)
     used_slots = 0
     for name_off, name_len, first_child, child_count, _r in _DIR.iter_unpack(
             toc[pos:pos + dir_count * _DIR.size]):
@@ -228,6 +229,8 @@ def _parse_toc(toc: bytes, package_count: int, file_size: int,
 
     # SPEC 3.1.2: an update needs its base alongside, or the standalone flag.
     has_base = any(p.kind == "base" for p in packages)
+    if sum(p.kind == "base" for p in packages) > 1:
+        raise NupError("more than one base package")
     for index, package in enumerate(packages):
         if package.kind == "update" and not has_base and not package.standalone_update:
             raise NupError(f"package {index}: update without base or standalone flag")
