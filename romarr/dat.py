@@ -555,6 +555,24 @@ class DatIndex:
         if dat.games:
             self.dats.append(dat)
 
+    def verified_candidates(self, **hashes) -> tuple[Match, ...]:
+        """Expose every verifying DAT identity from one computed hash set.
+
+        The ordinary lookup retains its legacy first-match behavior. Import
+        request matching must instead inspect all loaded catalogs: two DATs
+        can verify identical bytes but attribute them to different games or
+        systems. This method never rehashes the input or guesses a platform.
+
+        Each Dat's existing per-hash table retains only its first entry, so
+        same-catalog duplicate-hash ambiguity requires a separate index fix.
+        """
+        candidates = []
+        for dat in self.dats:
+            match = dat.lookup(**hashes)
+            if match.status == VERIFIED:
+                candidates.append(match)
+        return tuple(candidates)
+
     def lookup(self, **hashes) -> Match:
         best = Match(UNKNOWN)
         for dat in self.dats:
