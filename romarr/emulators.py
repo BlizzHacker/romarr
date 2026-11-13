@@ -160,7 +160,7 @@ class EmulatorHub:
                 "coverage": bundled()["coverage"], "verified_date": bundled()["verified_date"]}
 
     def release(self, slug: str) -> dict:
-        """Resolve a project's own GitHub release assets and their published digests."""
+        """Resolve official release assets or return manual setup instructions."""
         entry = self.entry(slug)
         if entry.get("manual_setup"):
             return {**entry, "assets": [], "note": "Use the upstream launcher and setup guide.",
