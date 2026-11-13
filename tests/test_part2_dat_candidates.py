@@ -146,3 +146,40 @@ def test_crc_only_without_size_is_not_approved_as_a_unique_candidate():
     index.add(_dat("Single System", "Requested Game"))
     assert index.lookup(crc="a1b2c3d4").status == VERIFIED
     assert index.verified_candidates(crc="a1b2c3d4") == ()
+
+
+def test_game_rom_count_returns_one_for_unique_single_rom_game():
+    index = DatIndex()
+    index.add(_dat("Platform A", "Requested Game"))
+    match = index.verified_candidates(crc="a1b2c3d4", size=4)[0]
+    assert index.game_rom_count(match) == 1
+
+
+def test_game_rom_count_rejects_incomplete_two_track_game():
+    catalog = parse_dat("""
+    <datafile><header><name>Disc System</name></header>
+      <game name="Requested Game">
+        <rom name="track01.bin" size="4" crc="a1b2c3d4"/>
+        <rom name="track02.bin" size="4" crc="12345678"/>
+      </game>
+    </datafile>""")
+    index = DatIndex()
+    index.add(catalog)
+    match = index.verified_candidates(crc="a1b2c3d4", size=4)[0]
+    assert match.game == "Requested Game"
+    assert index.game_rom_count(match) == 2
+
+
+def test_game_rom_count_fails_closed_on_ambiguous_catalog_name():
+    index = DatIndex()
+    index.add(_dat("Duplicate System", "Same Game"))
+    index.add(_dat("Duplicate System", "Same Game"))
+    matches = index.verified_candidates(crc="a1b2c3d4", size=4)
+    assert len(matches) == 2
+    assert index.game_rom_count(matches[0]) is None
+
+
+def test_game_rom_count_fails_closed_on_unverified_identity():
+    index = DatIndex()
+    index.add(_dat("Platform A", "Requested Game"))
+    assert index.game_rom_count(index.lookup(crc="00000000", size=5)) is None
