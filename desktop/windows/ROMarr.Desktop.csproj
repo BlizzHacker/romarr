@@ -3,7 +3,7 @@
     <OutputType>WinExe</OutputType><TargetFramework>net10.0-windows</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms><ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable><AssemblyName>ROMarr</AssemblyName><RootNamespace>ROMarr.Desktop</RootNamespace>
-    <Version>1.8.0</Version><Product>ROMarr</Product><Company>MoveWeight</Company>
+    <Version>1.9.0</Version><Product>ROMarr</Product><Company>MoveWeight</Company>
     <Description>Find, verify and organize your game library.</Description>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier><SelfContained>true</SelfContained>
     <PublishSingleFile>true</PublishSingleFile><IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
