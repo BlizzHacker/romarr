@@ -179,15 +179,69 @@ class CoreHub:
                 cores = self.root / "cores"
                 cores.mkdir(exist_ok=True)
                 destination = cores / binary
-                os.replace(target, destination)
                 receipt = {"id": key, "path": str(destination), "sha256": digest,
                            "core_crc32": expected, "source": BUILD_ROOT + index["folder"] + name,
                            "verification": "Official HTTPS buildbot index CRC32; SHA-256 recorded locally, not publisher-signed"}
                 receipts = self.root / "receipts"
                 receipts.mkdir(exist_ok=True)
-                temp = receipts / (key + ".tmp")
-                temp.write_text(json.dumps(receipt, indent=2), encoding="utf-8")
-                os.replace(temp, receipts / (key + ".json"))
-                return {"ok": True, **receipt, "readiness": self.readiness(key), "configuration": self.configure()}
+                # Finish all fallible setup before replacing a working core.
+                readiness = self.readiness(key)
+                configuration = self.configure()
+                staged_receipt = stage / "receipt.json"
+                with staged_receipt.open("x", encoding="utf-8") as handle:
+                    json.dump(receipt, handle, indent=2)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                self._publish(target, destination, staged_receipt,
+                              receipts / (key + ".json"), stage)
+                return {"ok": True, **receipt, "readiness": readiness, "configuration": configuration}
             finally:
-                shutil.rmtree(stage)
+                # A failed rollback leaves recovery copies for an administrator.
+                if not (stage / "RECOVERY.txt").exists():
+                    shutil.rmtree(stage, ignore_errors=True)
+
+    @staticmethod
+    def _publish(target: Path, destination: Path, receipt: Path,
+                 receipt_destination: Path, stage: Path) -> None:
+        """Publish both files together, restoring prior bytes on an update failure."""
+        previous = []
+        for path, backup_name in ((destination, "previous-core"),
+                                  (receipt_destination, "previous-receipt.json")):
+            backup = stage / backup_name
+            exists = path.exists()
+            if exists:
+                shutil.copy2(path, backup)
+            previous.append((path, backup, exists))
+        recovery = stage / "RECOVERY.txt"
+        recovery.write_text(
+            "Interrupted core update. Previous files, when present, are saved as "
+            "previous-core and previous-receipt.json. Core destination: "
+            + str(destination) + "; receipt destination: " + str(receipt_destination) + "\n",
+            encoding="utf-8")
+        changed = []
+        try:
+            os.replace(target, destination)
+            changed.append(previous[0])
+            os.replace(receipt, receipt_destination)
+            changed.append(previous[1])
+        except OSError:
+            recovery_errors = []
+            for path, backup, existed in reversed(changed):
+                try:
+                    if existed:
+                        os.replace(backup, path)
+                    else:
+                        path.unlink(missing_ok=True)
+                except OSError as error:
+                    recovery_errors.append(error)
+            if recovery_errors:
+                raise OSError("Core update rollback failed; recovery copies retained in "
+                              + str(stage)) from recovery_errors[0]
+            recovery.unlink(missing_ok=True)
+            raise
+        # Keeping a redundant recovery folder is safer than treating cleanup as
+        # an installation failure after both new files were published.
+        try:
+            recovery.unlink()
+        except OSError:
+            pass
