@@ -26472,7 +26472,7 @@
    "guide": "https://git.eden-emu.dev/crueter/eden",
    "repo": "crueter/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -26496,7 +26496,7 @@
    "guide": "https://git.eden-emu.dev/MrPurple666/eden",
    "repo": "MrPurple666/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -26520,7 +26520,7 @@
    "guide": "https://git.eden-emu.dev/TheKucks/eden",
    "repo": "TheKucks/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -26544,7 +26544,7 @@
    "guide": "https://git.eden-emu.dev/notenergydrinks/eden",
    "repo": "notenergydrinks/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -26568,7 +26568,7 @@
    "guide": "https://git.eden-emu.dev/weakboson/eden",
    "repo": "weakboson/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -26592,7 +26592,7 @@
    "guide": "https://git.eden-emu.dev/wildcard/eden",
    "repo": "wildcard/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -26616,7 +26616,7 @@
    "guide": "https://git.eden-emu.dev/guoyunhe/eden",
    "repo": "guoyunhe/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -26640,7 +26640,7 @@
    "guide": "https://git.eden-emu.dev/RedDoesStuff/eden",
    "repo": "RedDoesStuff/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -26664,7 +26664,7 @@
    "guide": "https://git.eden-emu.dev/Farees/eden",
    "repo": "Farees/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -26688,7 +26688,7 @@
    "guide": "https://git.eden-emu.dev/Calchan/eden",
    "repo": "Calchan/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -26712,7 +26712,7 @@
    "guide": "https://git.eden-emu.dev/marcin-serwin/eden",
    "repo": "marcin-serwin/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -26736,7 +26736,7 @@
    "guide": "https://git.eden-emu.dev/octocar/eden",
    "repo": "octocar/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -26760,7 +26760,7 @@
    "guide": "https://git.eden-emu.dev/festivity/eden",
    "repo": "festivity/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -26784,7 +26784,7 @@
    "guide": "https://git.eden-emu.dev/godpow/eden",
    "repo": "godpow/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -26808,7 +26808,7 @@
    "guide": "https://git.eden-emu.dev/Evilperson1337/eden",
    "repo": "Evilperson1337/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -26832,7 +26832,7 @@
    "guide": "https://git.eden-emu.dev/Mike22/eden",
    "repo": "Mike22/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -26856,7 +26856,7 @@
    "guide": "https://git.eden-emu.dev/John/eden",
    "repo": "John/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -26880,7 +26880,7 @@
    "guide": "https://git.eden-emu.dev/ForrestMarkX/eden",
    "repo": "ForrestMarkX/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -26904,7 +26904,7 @@
    "guide": "https://git.eden-emu.dev/rayman30/eden",
    "repo": "rayman30/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -26928,7 +26928,7 @@
    "guide": "https://git.eden-emu.dev/kaulfield/eden",
    "repo": "kaulfield/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -26952,7 +26952,7 @@
    "guide": "https://git.eden-emu.dev/codeman4033/eden",
    "repo": "codeman4033/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -26976,7 +26976,7 @@
    "guide": "https://git.eden-emu.dev/smiRaphi/eden",
    "repo": "smiRaphi/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -27000,7 +27000,7 @@
    "guide": "https://git.eden-emu.dev/tarako/eden",
    "repo": "tarako/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -27024,7 +27024,7 @@
    "guide": "https://git.eden-emu.dev/coolone/eden",
    "repo": "coolone/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -27048,7 +27048,7 @@
    "guide": "https://git.eden-emu.dev/xXJSONDeruloXx/eden",
    "repo": "xXJSONDeruloXx/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -27072,7 +27072,7 @@
    "guide": "https://git.eden-emu.dev/Michi/eden",
    "repo": "Michi/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -27096,7 +27096,7 @@
    "guide": "https://git.eden-emu.dev/NIK2703/eden",
    "repo": "NIK2703/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -27120,7 +27120,7 @@
    "guide": "https://git.eden-emu.dev/Hexcoder/eden",
    "repo": "Hexcoder/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -27144,7 +27144,7 @@
    "guide": "https://git.eden-emu.dev/chrelliott978/eden",
    "repo": "chrelliott978/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -27168,7 +27168,7 @@
    "guide": "https://git.eden-emu.dev/mrexodia/eden",
    "repo": "mrexodia/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -27192,7 +27192,7 @@
    "guide": "https://git.eden-emu.dev/Nikilite/eden",
    "repo": "Nikilite/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -27216,7 +27216,7 @@
    "guide": "https://git.eden-emu.dev/may/eden",
    "repo": "may/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -27240,7 +27240,7 @@
    "guide": "https://git.eden-emu.dev/CookieTraces/eden",
    "repo": "CookieTraces/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -27264,7 +27264,7 @@
    "guide": "https://git.eden-emu.dev/Kaydax/eden",
    "repo": "Kaydax/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -27288,7 +27288,7 @@
    "guide": "https://git.eden-emu.dev/fl.gs/eden",
    "repo": "fl.gs/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -27312,7 +27312,7 @@
    "guide": "https://git.eden-emu.dev/RedBlackAka/eden",
    "repo": "RedBlackAka/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -27336,7 +27336,7 @@
    "guide": "https://git.eden-emu.dev/ksco/eden",
    "repo": "ksco/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -27360,7 +27360,7 @@
    "guide": "https://git.eden-emu.dev/bdm110/eden",
    "repo": "bdm110/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -27384,7 +27384,7 @@
    "guide": "https://git.eden-emu.dev/simply0001/eden",
    "repo": "simply0001/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -27408,7 +27408,7 @@
    "guide": "https://git.eden-emu.dev/omardotdev/eden",
    "repo": "omardotdev/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -27432,7 +27432,7 @@
    "guide": "https://git.eden-emu.dev/Exverge/eden",
    "repo": "Exverge/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -27456,7 +27456,7 @@
    "guide": "https://git.eden-emu.dev/lost-saint/eden",
    "repo": "lost-saint/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -27480,7 +27480,7 @@
    "guide": "https://git.eden-emu.dev/SeppNel/eden",
    "repo": "SeppNel/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -27504,7 +27504,7 @@
    "guide": "https://git.eden-emu.dev/soarqin/eden",
    "repo": "soarqin/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -27528,7 +27528,7 @@
    "guide": "https://git.eden-emu.dev/CamilleLaVey/Eden",
    "repo": "CamilleLaVey/Eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -27552,7 +27552,7 @@
    "guide": "https://git.eden-emu.dev/rayanmargham/eden",
    "repo": "rayanmargham/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -27576,7 +27576,7 @@
    "guide": "https://git.eden-emu.dev/vonchenplus/eden",
    "repo": "vonchenplus/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -27600,7 +27600,7 @@
    "guide": "https://git.eden-emu.dev/Ahmad/eden",
    "repo": "Ahmad/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -27624,7 +27624,7 @@
    "guide": "https://git.eden-emu.dev/mleo2003/eden",
    "repo": "mleo2003/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -27648,7 +27648,7 @@
    "guide": "https://git.eden-emu.dev/melos555/eden-kledd",
    "repo": "melos555/eden-kledd",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -27672,7 +27672,7 @@
    "guide": "https://git.eden-emu.dev/mgranja/eden",
    "repo": "mgranja/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -27696,7 +27696,7 @@
    "guide": "https://git.eden-emu.dev/bagusk99/eden",
    "repo": "bagusk99/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -27720,7 +27720,7 @@
    "guide": "https://git.eden-emu.dev/Zoria/eden",
    "repo": "Zoria/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -27744,7 +27744,7 @@
    "guide": "https://git.eden-emu.dev/accurate5214/eden",
    "repo": "accurate5214/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -27768,7 +27768,7 @@
    "guide": "https://git.eden-emu.dev/Takoroka/eden-nx2",
    "repo": "Takoroka/eden-nx2",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "GPL-3.0",
    "fork": true,
    "sources": [
@@ -27792,7 +27792,7 @@
    "guide": "https://git.eden-emu.dev/Legoboy0109/eden",
    "repo": "Legoboy0109/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -27816,7 +27816,7 @@
    "guide": "https://git.eden-emu.dev/project516/eden",
    "repo": "project516/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -27840,7 +27840,7 @@
    "guide": "https://git.eden-emu.dev/ponting/eden",
    "repo": "ponting/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -27864,7 +27864,7 @@
    "guide": "https://git.eden-emu.dev/cloakedkeys/eden",
    "repo": "cloakedkeys/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -27888,7 +27888,7 @@
    "guide": "https://git.eden-emu.dev/faultytowers/eden",
    "repo": "faultytowers/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -27912,7 +27912,7 @@
    "guide": "https://git.eden-emu.dev/ZiraelStone/eden",
    "repo": "ZiraelStone/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -27936,7 +27936,7 @@
    "guide": "https://git.eden-emu.dev/tapionallanaire/eden",
    "repo": "tapionallanaire/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -27960,7 +27960,7 @@
    "guide": "https://git.eden-emu.dev/stevehsu/eden",
    "repo": "stevehsu/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -27984,7 +27984,7 @@
    "guide": "https://git.eden-emu.dev/thbmelatoe/eden",
    "repo": "thbmelatoe/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -28008,7 +28008,7 @@
    "guide": "https://git.eden-emu.dev/a83848400/eden",
    "repo": "a83848400/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -28032,7 +28032,7 @@
    "guide": "https://git.eden-emu.dev/jimmyayoade/eden",
    "repo": "jimmyayoade/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -28056,7 +28056,7 @@
    "guide": "https://git.eden-emu.dev/meownsterhunter/eden",
    "repo": "meownsterhunter/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -28080,7 +28080,7 @@
    "guide": "https://git.eden-emu.dev/JPikachu/eden-ounce",
    "repo": "JPikachu/eden-ounce",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "GPL-3.0",
    "fork": true,
    "sources": [
@@ -28104,7 +28104,7 @@
    "guide": "https://git.eden-emu.dev/Canelynho/eden",
    "repo": "Canelynho/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -28128,7 +28128,7 @@
    "guide": "https://git.eden-emu.dev/dnmodder/eden",
    "repo": "dnmodder/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -28152,7 +28152,7 @@
    "guide": "https://git.eden-emu.dev/Bix/eden",
    "repo": "Bix/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -28176,7 +28176,7 @@
    "guide": "https://git.eden-emu.dev/Nathantendo/eden",
    "repo": "Nathantendo/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -28200,7 +28200,7 @@
    "guide": "https://git.eden-emu.dev/martingh/eden",
    "repo": "martingh/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -28224,7 +28224,7 @@
    "guide": "https://git.eden-emu.dev/Dmr77680/eden",
    "repo": "Dmr77680/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -28248,7 +28248,7 @@
    "guide": "https://git.eden-emu.dev/Beelzebubsb/eden",
    "repo": "Beelzebubsb/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -28272,7 +28272,7 @@
    "guide": "https://git.eden-emu.dev/wulianji/eden",
    "repo": "wulianji/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -28296,7 +28296,7 @@
    "guide": "https://git.eden-emu.dev/nik2208/eden",
    "repo": "nik2208/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -28320,7 +28320,7 @@
    "guide": "https://git.eden-emu.dev/retrolabo/eden",
    "repo": "retrolabo/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -28344,7 +28344,7 @@
    "guide": "https://git.eden-emu.dev/Marco2000XboxBrasil/eden-UWP",
    "repo": "Marco2000XboxBrasil/eden-UWP",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "GPL-3.0",
    "fork": true,
    "sources": [
@@ -28368,7 +28368,7 @@
    "guide": "https://git.eden-emu.dev/yhywdkk/eden",
    "repo": "yhywdkk/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -28392,7 +28392,7 @@
    "guide": "https://git.eden-emu.dev/iotlineage/eden",
    "repo": "iotlineage/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -28416,7 +28416,7 @@
    "guide": "https://git.eden-emu.dev/Dandroboti/eden",
    "repo": "Dandroboti/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -28440,7 +28440,7 @@
    "guide": "https://git.eden-emu.dev/kingbri1/eden",
    "repo": "kingbri1/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -28464,7 +28464,7 @@
    "guide": "https://git.eden-emu.dev/PastaLaPate/eden",
    "repo": "PastaLaPate/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -28488,7 +28488,7 @@
    "guide": "https://git.eden-emu.dev/jaypume/eden",
    "repo": "jaypume/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -28512,7 +28512,7 @@
    "guide": "https://git.eden-emu.dev/CrusherD2/edensmash",
    "repo": "CrusherD2/edensmash",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "GPL-3.0",
    "fork": true,
    "sources": [
@@ -28536,7 +28536,7 @@
    "guide": "https://git.eden-emu.dev/petmav/eden",
    "repo": "petmav/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -28560,7 +28560,7 @@
    "guide": "https://git.eden-emu.dev/k1r4ct/eden",
    "repo": "k1r4ct/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -28584,7 +28584,7 @@
    "guide": "https://git.eden-emu.dev/Mikoto/eden",
    "repo": "Mikoto/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -28608,7 +28608,7 @@
    "guide": "https://git.eden-emu.dev/fab918/eden",
    "repo": "fab918/eden",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "See repository terms",
    "fork": true,
    "sources": [
@@ -28632,7 +28632,7 @@
    "guide": "https://git.eden-emu.dev/BerengerBrillante/eden-fork-for-GCC",
    "repo": "BerengerBrillante/eden-fork-for-GCC",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "GPL-3.0",
    "fork": true,
    "sources": [
@@ -28656,7 +28656,7 @@
    "guide": "https://git.ryujinx.app/AsperTheDog/Ryubing",
    "repo": "AsperTheDog/Ryubing",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "MIT",
    "fork": true,
    "sources": [
@@ -28680,7 +28680,7 @@
    "guide": "https://git.ryujinx.app/Neo/Ryubing",
    "repo": "Neo/Ryubing",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "MIT",
    "fork": true,
    "sources": [
@@ -28704,7 +28704,7 @@
    "guide": "https://git.ryujinx.app/avan/Ryubing",
    "repo": "avan/Ryubing",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "MIT",
    "fork": true,
    "sources": [
@@ -28728,7 +28728,7 @@
    "guide": "https://git.ryujinx.app/LotP/Ryubing",
    "repo": "LotP/Ryubing",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "MIT",
    "fork": true,
    "sources": [
@@ -28752,7 +28752,7 @@
    "guide": "https://git.ryujinx.app/Cookieso/Ryubing",
    "repo": "Cookieso/Ryubing",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "MIT",
    "fork": true,
    "sources": [
@@ -28776,7 +28776,7 @@
    "guide": "https://git.ryujinx.app/maki/Ryubing",
    "repo": "maki/Ryubing",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "MIT",
    "fork": true,
    "sources": [
@@ -28800,7 +28800,7 @@
    "guide": "https://git.ryujinx.app/MaxLastBreath/Ryubing",
    "repo": "MaxLastBreath/Ryubing",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "MIT",
    "fork": true,
    "sources": [
@@ -28824,7 +28824,7 @@
    "guide": "https://git.ryujinx.app/alextech01/Ryubing",
    "repo": "alextech01/Ryubing",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "MIT",
    "fork": true,
    "sources": [
@@ -28848,7 +28848,7 @@
    "guide": "https://git.ryujinx.app/VewDev/Ryubing",
    "repo": "VewDev/Ryubing",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "MIT",
    "fork": true,
    "sources": [
@@ -28872,7 +28872,7 @@
    "guide": "https://git.ryujinx.app/Hackchan/Ryubing",
    "repo": "Hackchan/Ryubing",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "MIT",
    "fork": true,
    "sources": [
@@ -28896,7 +28896,7 @@
    "guide": "https://git.ryujinx.app/bxym/Ryubing",
    "repo": "bxym/Ryubing",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "MIT",
    "fork": true,
    "sources": [
@@ -28920,7 +28920,7 @@
    "guide": "https://git.ryujinx.app/LeoManrique/Ryubing",
    "repo": "LeoManrique/Ryubing",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "MIT",
    "fork": true,
    "sources": [
@@ -28944,7 +28944,7 @@
    "guide": "https://git.ryujinx.app/Djibril/Ryubing",
    "repo": "Djibril/Ryubing",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "MIT",
    "fork": true,
    "sources": [
@@ -28968,7 +28968,7 @@
    "guide": "https://git.ryujinx.app/MabelAmber/Ryubing",
    "repo": "MabelAmber/Ryubing",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "MIT",
    "fork": true,
    "sources": [
@@ -28992,7 +28992,7 @@
    "guide": "https://git.ryujinx.app/Coxxs/Ryubing",
    "repo": "Coxxs/Ryubing",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "MIT",
    "fork": true,
    "sources": [
@@ -29016,7 +29016,7 @@
    "guide": "https://git.ryujinx.app/MrKev/Ryubing",
    "repo": "MrKev/Ryubing",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "MIT",
    "fork": true,
    "sources": [
@@ -29040,7 +29040,7 @@
    "guide": "https://git.ryujinx.app/Xam/Ryubing",
    "repo": "Xam/Ryubing",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "MIT",
    "fork": true,
    "sources": [
@@ -29064,7 +29064,7 @@
    "guide": "https://git.ryujinx.app/Schuay/Ryubing",
    "repo": "Schuay/Ryubing",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "MIT",
    "fork": true,
    "sources": [
@@ -29088,7 +29088,7 @@
    "guide": "https://git.ryujinx.app/frosch/Ryubing",
    "repo": "frosch/Ryubing",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "MIT",
    "fork": true,
    "sources": [
@@ -29112,7 +29112,7 @@
    "guide": "https://git.ryujinx.app/dekthaiinchina/ryujinx",
    "repo": "dekthaiinchina/ryujinx",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "MIT",
    "fork": true,
    "sources": [
@@ -29136,7 +29136,7 @@
    "guide": "https://git.ryujinx.app/souperman9/Ryubing-hdr",
    "repo": "souperman9/Ryubing-hdr",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "MIT",
    "fork": true,
    "sources": [
@@ -29160,7 +29160,7 @@
    "guide": "https://git.ryujinx.app/KeatonTheBot/Ryubing",
    "repo": "KeatonTheBot/Ryubing",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "MIT",
    "fork": true,
    "sources": [
@@ -29184,7 +29184,7 @@
    "guide": "https://git.ryujinx.app/may/Ryubing",
    "repo": "may/Ryubing",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "MIT",
    "fork": true,
    "sources": [
@@ -29208,7 +29208,7 @@
    "guide": "https://git.ryujinx.app/jocie8/Ryubing",
    "repo": "jocie8/Ryubing",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "MIT",
    "fork": true,
    "sources": [
@@ -29232,7 +29232,7 @@
    "guide": "https://git.ryujinx.app/BerryDiaboli/Ryubing",
    "repo": "BerryDiaboli/Ryubing",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "MIT",
    "fork": true,
    "sources": [
@@ -29256,7 +29256,7 @@
    "guide": "https://git.ryujinx.app/shinyoyo/Ryubing",
    "repo": "shinyoyo/Ryubing",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "MIT",
    "fork": true,
    "sources": [
@@ -29280,7 +29280,7 @@
    "guide": "https://git.ryujinx.app/DistractionRectangle/Ryubing",
    "repo": "DistractionRectangle/Ryubing",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "MIT",
    "fork": true,
    "sources": [
@@ -29304,7 +29304,7 @@
    "guide": "https://git.ryujinx.app/deReeperJosh/Ryubing",
    "repo": "deReeperJosh/Ryubing",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "MIT",
    "fork": true,
    "sources": [
@@ -29328,7 +29328,7 @@
    "guide": "https://git.ryujinx.app/stygmate/Ryubing",
    "repo": "stygmate/Ryubing",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "MIT",
    "fork": true,
    "sources": [
@@ -29352,7 +29352,7 @@
    "guide": "https://git.ryujinx.app/AllieNeedsSleep/Ryubing",
    "repo": "AllieNeedsSleep/Ryubing",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "MIT",
    "fork": true,
    "sources": [
@@ -29376,7 +29376,7 @@
    "guide": "https://git.ryujinx.app/der_zelda_player/Ryubing",
    "repo": "der_zelda_player/Ryubing",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "MIT",
    "fork": true,
    "sources": [
@@ -29400,7 +29400,7 @@
    "guide": "https://git.ryujinx.app/Babib3l/Ryubing",
    "repo": "Babib3l/Ryubing",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "MIT",
    "fork": true,
    "sources": [
@@ -29424,7 +29424,7 @@
    "guide": "https://git.ryujinx.app/Goodfeat/Ryubing",
    "repo": "Goodfeat/Ryubing",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "MIT",
    "fork": true,
    "sources": [
@@ -29448,7 +29448,7 @@
    "guide": "https://git.ryujinx.app/dhugs/Ryubing",
    "repo": "dhugs/Ryubing",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "MIT",
    "fork": true,
    "sources": [
@@ -29472,7 +29472,7 @@
    "guide": "https://git.ryujinx.app/pikminluvv/Ryubing",
    "repo": "pikminluvv/Ryubing",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "MIT",
    "fork": true,
    "sources": [
@@ -29496,7 +29496,7 @@
    "guide": "https://git.ryujinx.app/WilliamWsyHK/Ryubing",
    "repo": "WilliamWsyHK/Ryubing",
    "provider": "forgejo",
-   "systems": "Nintendo Switch / Switch 2",
+   "systems": "Nintendo Switch",
    "license": "MIT",
    "fork": true,
    "sources": [
