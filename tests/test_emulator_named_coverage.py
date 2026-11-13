@@ -33,3 +33,20 @@ def test_catalog_coverage_count_matches_inventory():
     """The published total must include the named additions."""
     catalog = bundled()
     assert catalog["coverage"]["catalog_entries"] == len(catalog["items"])
+
+
+def test_manual_longshot_entry_guides_setup_without_checking_empty_mirror_releases(tmp_path):
+    """A source-only mirror must direct users to setup instead of an empty installer."""
+    class NoReleaseNetwork:
+        def get(self, *args, **kwargs):
+            raise AssertionError("Manual setup must not query upstream release APIs")
+
+    hub = EmulatorHub(tmp_path, session=NoReleaseNetwork())
+    row = hub.catalog(query="Longshot")["items"][0]
+    assert row["license"] == "GPL-3.0-or-later"
+    assert row["managed_releases"] is False
+    assert row["website"] == "https://git.moveweight.com/romarr-emulators/magicbeandev--longshot"
+    release = hub.release("longshot")
+    assert release["assets"] == []
+    assert release["downloads"] == "https://longshot.magicbean.dev/download"
+    assert "setup guide" in release["note"]

@@ -145,7 +145,9 @@ class EmulatorHub:
                 continue
             saved = sorted((self.root / row["id"]).glob("*/romarr-install.json"))
             row["installed"] = [p.parent.name for p in saved]
-            row["managed_releases"] = row.get("provider") in ("github", "gitlab", "forgejo") and bool(row.get("repo"))
+            row["managed_releases"] = (not row.get("manual_setup") and
+                                       row.get("provider") in ("github", "gitlab", "forgejo")
+                                       and bool(row.get("repo")))
             app_id = FLATPAKS.get(row["id"], "")
             row["flatpak"] = ("https://dl.flathub.org/repo/appstream/" + app_id
                               + ".flatpakref") if app_id else ""
@@ -160,6 +162,9 @@ class EmulatorHub:
     def release(self, slug: str) -> dict:
         """Resolve a project's own GitHub release assets and their published digests."""
         entry = self.entry(slug)
+        if entry.get("manual_setup"):
+            return {**entry, "assets": [], "note": "Use the upstream launcher and setup guide.",
+                    "downloads": entry.get("upstream_downloads") or entry["website"]}
         if not entry.get("repo") or entry.get("provider", "github") not in ("github", "gitlab", "forgejo"):
             return {**entry, "assets": [], "note": "Use the project's downloads page."}
         provider = entry.get("provider", "github")

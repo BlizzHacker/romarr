@@ -29927,7 +29927,7 @@
    "provider": "forgejo",
    "api_base": "https://git.moveweight.com/api/v1",
    "systems": "Windows / Linux · native console-game recompilation",
-   "license": "GPL-3.0-only",
+   "license": "GPL-3.0-or-later",
    "license_verified": true,
    "license_source": "https://git.moveweight.com/romarr-emulators/magicbeandev--longshot/src/branch/main/LICENSE",
    "description": "Experimental continuation of Hookshot. Builds a supported console game into a native Windows or Linux program from your own matching game copy; not a general-purpose emulator. Use the upstream launcher linked in the setup guide.",
