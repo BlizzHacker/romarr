@@ -80,6 +80,34 @@ def test_general_url_never_shows_embedded_userinfo(tmp_path):
     ]
 
 
+def test_deleted_client_disappears_from_general_urls(tmp_path):
+    """Removing the last client makes General report none on the next read."""
+    service = _service(tmp_path)
+    row = service.store.put_item("download_clients", {
+        "type": "qbittorrent", "name": "Temporary", "enable": True,
+        "host": "temporary.example", "port": 8080,
+    })
+    service.reload_clients()
+    assert service.safe_settings()["_qbit_urls"] == [
+        "http://temporary.example:8080",
+    ]
+    assert service.store.delete_item("download_clients", row["id"]) is True
+    service.reload_clients()
+    assert service.safe_settings()["_qbit_urls"] == []
+
+
+def test_general_navigation_fetches_fresh_settings_with_page_guard():
+    """General must not render a boot snapshot or overwrite a later page."""
+    html = page()
+    renderer = html.split("RENDER.general=async()=>{", 1)[1].split(
+        "/* ---------------- system", 1)[0]
+    assert "fresh=await j('/api/v1/config')" in renderer
+    assert "activePage!=='general'||pageVersion!==opVer" in renderer
+    assert "SETTINGS=fresh;" in renderer
+    assert renderer.index("await j('/api/v1/config')") < renderer.index(
+        "settingsPage('General'")
+
+
 def test_general_renderer_reads_active_qbittorrent_urls():
     """The rendered JavaScript uses the new client list, not legacy _qbit_url."""
     html = page()
