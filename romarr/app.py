@@ -280,6 +280,13 @@ def _read_failure(err: Exception) -> str:
                 f"password or API key on this library.")
     if status:
         return f"HTTP {status} from the library server."
+    if isinstance(err, BlockingIOError):
+        return ("Storage is temporarily busy after bounded retries. Check the NAS "
+                "mount and Docker file sharing, then retry the library refresh.")
+    if isinstance(err, PermissionError):
+        return "Library access denied. Check the container's mount and read permissions."
+    if isinstance(err, FileNotFoundError):
+        return "Library folder is missing. Check that the NAS is mounted inside the container."
     return err.__class__.__name__
 
 
@@ -720,6 +727,7 @@ class ROMarr:
         # polling it hold the database for minutes at a time -- so a request
         # that waits its turn is a page that never paints. Fetched here,
         # retried until it lands, then served from memory.
+        self._library_scan: dict = {}
         self._library_cache: tuple[list | None, float, str] = (None, 0.0, "")
         self._count_thread = threading.Thread(target=self._refresh_counts, daemon=True)
         self._count_thread.start()
@@ -866,6 +874,9 @@ class ROMarr:
                 self._wait(self.COUNT_TTL)
                 continue
 
+            self._library_scan = {"running": True, "started": time.monotonic(),
+                                  "read": 0, "stage": "counting", "library": "",
+                                  "limit_reached": False}
             ok, total, shelf, failures = True, 0, [], []
             # Accumulated beside the total, because the total on its own is
             # the bug: a library that catalogues streamed entries answers
@@ -911,6 +922,46 @@ class ROMarr:
             multiple = len(self.game_libraries) > 1
             for cfg, backend in self.game_libraries:
                 label = cfg.get("name") or getattr(backend, "name", "library")
+                self._library_scan.update(library=label, stage="counting")
+                streamer = getattr(backend, "iter_games", None)
+                if callable(streamer):
+                    # Folder backends can yield each file once. Counting then
+                    # rewalking for every page is quadratic over a NAS tree.
+                    from itertools import islice
+
+                    self._library_scan["stage"] = "reading"
+                    stream = None
+                    try:
+                        stream = iter(streamer(limit=self.LIBRARY_MAX))
+                        read = 0
+                        while read < self.LIBRARY_MAX:
+                            batch = list(islice(stream, min(self.LIBRARY_PAGE,
+                                                           self.LIBRARY_MAX - read)))
+                            if not batch:
+                                break
+                            shelf.extend(replace(g, source=label) if multiple else g
+                                         for g in batch)
+                            read += len(batch)
+                            total += len(batch)
+                            if on_disk is not None:
+                                on_disk += len(batch)
+                            self._library_scan["read"] = len(shelf)
+                            self._count_split = {"total": total, "on_disk": on_disk,
+                                                 "catalogued": catalogued}
+                            self._publish_library(shelf, "", partial=True)
+                        if read >= self.LIBRARY_MAX:
+                            self._library_scan["limit_reached"] = True
+                    except Exception as err:
+                        ok = False
+                        failures.append(f"{label}: {err.__class__.__name__}")
+                        reasons[label] = _read_failure(err)
+                        log.warning("library refresh failed for %s: %s",
+                                    label, err.__class__.__name__)
+                    finally:
+                        close = getattr(stream, "close", None)
+                        if callable(close):
+                            close()
+                    continue
                 try:
                     split = library_counts(backend)
                     total += int(split.get("total") or 0)
@@ -945,19 +996,23 @@ class ROMarr:
                     # the page improves while the fetch runs instead of
                     # showing a spinner for the minutes a big RomM takes.
                     offset = 0
+                    self._library_scan["stage"] = "reading"
                     while offset < self.LIBRARY_MAX:
                         batch = backend.games(
-                            limit=self.LIBRARY_PAGE, offset=offset,
-                            timeout=backend.BACKGROUND_TIMEOUT)
+                            limit=min(self.LIBRARY_PAGE, self.LIBRARY_MAX - offset),
+                            offset=offset, timeout=backend.BACKGROUND_TIMEOUT)
                         if not batch:
                             break
                         shelf.extend(
                             replace(g, source=label) if multiple else g
                             for g in batch)
                         offset += len(batch)
+                        self._library_scan["read"] = len(shelf)
                         self._publish_library(shelf, "", partial=True)
                         if len(batch) < self.LIBRARY_PAGE:
                             break
+                    if offset >= self.LIBRARY_MAX:
+                        self._library_scan["limit_reached"] = True
                 except Exception as err:
                     ok = False
                     failures.append(f"{label}: {err.__class__.__name__}")
@@ -966,12 +1021,14 @@ class ROMarr:
                                 label, err.__class__.__name__)
 
             self._library_reasons = reasons
+            self._library_scan.update(running=False, finished=time.monotonic(),
+                                      stage="complete" if ok else "error")
             if shelf or ok:
                 self._count_cache = (total, time.monotonic())
                 self._count_split = {"total": total, "on_disk": on_disk,
                                      "catalogued": catalogued}
                 self._publish_library(shelf, "; ".join(failures),
-                                      partial=False)
+                                      partial=not ok or self._library_scan["limit_reached"])
                 log.info("library refreshed: %d games across %d librar%s "
                          "(%s on disk, %s catalogued elsewhere)",
                          len(shelf), len(self.game_libraries),
@@ -998,6 +1055,28 @@ class ROMarr:
         self._refresh_now.wait(seconds)
         self._refresh_now.clear()
 
+    def _library_scan_status(self) -> tuple[dict, str]:
+        """Expose scan progress without paths, credentials, or filesystem reads."""
+        state = dict(getattr(self, "_library_scan", {}))
+        if not state:
+            return {}, ""
+        elapsed = max(0, int(state.get("finished", time.monotonic()) - state["started"]))
+        status = {k: state[k] for k in ("running", "read", "stage", "library", "limit_reached")
+                  if k in state}
+        status["elapsed_seconds"] = elapsed
+        label = state.get("library") or "the library"
+        read = int(state.get("read") or 0)
+        if state.get("running"):
+            action = "Getting the library count" if state.get("stage") == "counting" else "Reading games"
+            message = f"{action} from {label}: {read:,} read, {elapsed}s elapsed."
+        elif state.get("stage") == "error":
+            message = f"Library read incomplete: {read:,} games read. Check the library connection or mount."
+        elif state.get("limit_reached"):
+            message = f"Scan limit reached after {read:,} games; more files may remain."
+        else:
+            message = f"Read {read:,} games in {elapsed}s."
+        return status, message
+
     def library_view(self, platform: str = "", q: str = "",
                      offset: int = 0, limit: int = 120, genre: str = "",
                      region: str = "", decade: str = "", origin: str = "",
@@ -1015,12 +1094,14 @@ class ROMarr:
         names = [cfg.get("name") or getattr(b, "name", "library")
                  for cfg, b in self.game_libraries]
         games, at, err = self._library_cache
+        scan, scan_message = self._library_scan_status()
         if games is None:
             where = ", ".join(names) or getattr(self.game_library, "name", "library")
             return {"items": [], "loading": True,
                     "error": err or "",
                     "libraries": names,
-                    "message": f"Reading the library from {where}…"}
+                    "scan": scan, "scan_message": scan_message,
+                    "message": scan_message or f"Reading the library from {where}…"}
 
         rows = games
         wanted = str(platform or "").strip().lower()
@@ -1071,6 +1152,7 @@ class ROMarr:
         return {"items": [asdict(g) for g in page],
                 "loading": False,
                 "partial": getattr(self, "_library_partial", False),
+                "scan": scan, "scan_message": scan_message,
                 "total": len(rows),
                 "grand_total": len(games),
                 "cached_total": len(games),

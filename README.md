@@ -116,6 +116,8 @@ Source access, available files, credentials and platform support vary. Check the
 | Need | Read |
 |---|---|
 | First setup and a successful import | [Getting started](docs/GETTING-STARTED.md) |
+| Usenet providers, indexers and failed searches | [Usenet setup and troubleshooting](docs/USENET.md) |
+| Docker Desktop, NAS mounts and slow library scans | [NAS library guide](docs/NAS-LIBRARIES.md) |
 | Safely rename existing library files | [Preview, selection and rollback guide](docs/EXISTING-LIBRARY-RENAME.md) |
 | Installation, Windows, backups, updates and environment variables | [Install guide](docs/INSTALL.md) |
 | Plugin availability and installation | [ROM Hub guide](docs/PLUGINS.md) |
