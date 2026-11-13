@@ -413,7 +413,11 @@ def test_builtin_nzb_shared_connection_cap_across_concurrent_jobs(tmp_path):
             f'<nzb><file subject=\'"{label}.sfc" yEnc (1/4)\'><segments>{"".join(segs)}</segments></file></nzb>'
         )
 
-    srv = _MockNntpServer(articles, username="", password="")
+    started = threading.Event()
+    release = threading.Event()
+    srv = _MockNntpServer(articles, username="", password="",
+                          block_msg_id="<j1-1@test>", started_event=started,
+                          block_event=release)
     t = threading.Thread(target=srv.serve_forever, daemon=True)
     t.start()
     try:
@@ -422,10 +426,14 @@ def test_builtin_nzb_shared_connection_cap_across_concurrent_jobs(tmp_path):
             connections=2, save_path=str(tmp_path / "dl"),
         ))
         assert client.add(nzb_template[0], name="Job1") is True
+        assert started.wait(3), "First job did not enter the mock NNTP server"
         assert client.add(nzb_template[1], name="Job2") is True
+        assert len(client.active_downloads()) == 2
+        release.set()
         _wait_until(lambda: len(client.completed()) == 2, timeout=6.0)
         assert srv.max_conns <= 2
     finally:
+        release.set()
         srv.shutdown()
         srv.server_close()
 
@@ -509,3 +517,19 @@ def test_builtin_nzb_remove_download_cancels_in_flight_job_cleanly(tmp_path):
         release.set()
         srv.shutdown()
         srv.server_close()
+
+
+def test_remove_timeout_retains_nzb_ledger_and_files(tmp_path, monkeypatch):
+    """Leave a timed-out worker recoverable for a later removal attempt."""
+    from romarr import nntp
+    root = tmp_path / "dl"
+    job_dir = root / "active"
+    job_dir.mkdir(parents=True)
+    payload = job_dir / "game.sfc"
+    payload.write_bytes(b"partial")
+    client = BuiltinNzbClient(BuiltinNzbConfig(host="localhost", save_path=str(root)))
+    client._ledger.upsert("active", { "status": "downloading", "job_dir": str(job_dir)})
+    monkeypatch.setattr(nntp, "stop_job", lambda *a, **kw: False)
+    assert not client.remove_download("active", delete_files=True)
+    assert client.active_downloads()[0]["id"] == "active"
+    assert payload.read_bytes() == b"partial"

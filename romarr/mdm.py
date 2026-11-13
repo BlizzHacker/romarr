@@ -24,6 +24,7 @@ import secrets
 import shutil
 import stat
 import signal
+import socket
 import subprocess
 import sys
 import tarfile
@@ -610,6 +611,16 @@ def _is_loopback_host(host: str | None) -> bool:
         return False
 
 
+def _is_internal_host(host: str | None) -> bool:
+    """Refuse unresolved hosts and any DNS answer outside public addresses."""
+    try:
+        answers = socket.getaddrinfo(str(host or ""), None, type=socket.SOCK_STREAM)
+        return not answers or any(not ipaddress.ip_address(answer[4][0]).is_global
+                                  for answer in answers)
+    except (OSError, ValueError):
+        return True
+
+
 def _close_response(resp) -> None:
     close = getattr(resp, "close", None)
     if callable(close):
@@ -863,6 +874,7 @@ def _fetch_torrent_or_magnet(
     if not current.lower().startswith(("http://", "https://")):
         return None, None, f"unsupported torrent link scheme: {urlsplit(current).scheme or 'none'}"
     initial_host = urlsplit(current).hostname
+    initial_internal = _is_internal_host(initial_host)
     for _ in range(6):
         resp = None
         try:
@@ -885,8 +897,8 @@ def _fetch_torrent_or_magnet(
                     next_parts = urlsplit(next_url)
                     if next_parts.scheme.lower() not in ("http", "https"):
                         return None, None, "unsafe redirect scheme while fetching .torrent"
-                    if _is_loopback_host(next_parts.hostname) and not _is_loopback_host(initial_host):
-                        return None, None, "unsafe loopback redirect while fetching .torrent"
+                    if _is_internal_host(next_parts.hostname) and not initial_internal:
+                        return None, None, "unsafe internal redirect while fetching .torrent"
                     current = next_url
                     continue
                 return None, None, f".torrent redirect {resp.status_code} missing Location"
@@ -1151,6 +1163,7 @@ class _MdmBaseClient:
             return [
                 {"id": f"mdm-remote:{r.get('id')}", "name": r.get("file", ""),
                  "state": str(r.get("status") or "").lower(),
+                 "worker_active": r.get("status") == "Downloading",
                  "size": int(r.get("size") or 0),
                  "downloaded": int(r.get("downloaded") or 0)}
                 for r in rows
@@ -1160,6 +1173,7 @@ class _MdmBaseClient:
             {"id": r["id"], "name": r.get("name", ""),
              "hash": r.get("hash", ""),
              "state": r.get("status", "downloading"),
+             "worker_active": r.get("status") == "downloading",
              "size": int(r.get("size") or 0),
              "downloaded": int(r.get("downloaded") or 0)}
             for r in self._ledger.rows()
@@ -1697,6 +1711,7 @@ class MdmTorrentClient(_MdmBaseClient):
                     "hash": rhash,
                     "tags": entry.get("tag", "") if entry else "",
                     "state": str(r.get("status") or "").lower(),
+                 "worker_active": r.get("status") == "Downloading",
                     "size": int(r.get("size") or 0),
                     "downloaded": int(r.get("downloaded") or 0),
                 })

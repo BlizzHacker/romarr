@@ -946,6 +946,7 @@ class BuiltinNzbClient:
                 "id": row["id"],
                 "name": row.get("name", ""),
                 "state": row.get("status", "downloading"),
+                "worker_active": row.get("status") == "downloading",
                 "size": int(row.get("size") or 0),
                 "downloaded": int(row.get("downloaded") or 0),
             }
@@ -972,6 +973,8 @@ class BuiltinNzbClient:
         if not raw_id:
             return False
         stopped = stop_job(self._ledger.path, raw_id, timeout=10.0)
+        if not stopped:
+            return False
         row = self._ledger.remove(raw_id)
         if row is None:
             return False

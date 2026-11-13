@@ -690,3 +690,35 @@ def test_remote_torrent_upload_correlates_pending_row_and_removes_by_tag(tmp_pat
     assert client.completed() == []
     assert not (tmp_path / "mdm-data" / ".romarr-mdm-torrents.json").parent.joinpath("nonexistent").exists()
     assert (tmp_path / "mdm-data" / ".romarr-mdm-torrents.json").exists()
+
+
+@pytest.mark.parametrize("address", ["10.0.0.8", "169.254.169.254", "127.0.0.1", "::1"])
+def test_public_torrent_redirect_refuses_internal_dns_answer(monkeypatch, address):
+    """Reject a public endpoint redirecting to an internal DNS destination."""
+    def resolve(host, *args, **kwargs):
+        value = "8.8.8.8" if host == "public.example" else address
+        return [(2, 1, 6, "", (value, 0))]
+
+    monkeypatch.setattr(mdm.socket, "getaddrinfo", resolve)
+    calls = []
+    def handler(method, url, kw):
+        calls.append(url)
+        return _FakeResp(status_code=302, headers={"Location": "http://internal.example/file"})
+
+    session = _FakeSession(handler)
+    _, _, error = mdm._fetch_torrent_or_magnet("https://public.example/file", session, 5)
+    assert "internal redirect" in error
+    assert len(calls) == 1
+
+
+def test_local_worker_activity_keeps_old_queue_job_alive(tmp_path):
+    """A healthy standalone worker survives the qBittorrent zero-seed heuristic."""
+    from romarr.app import ROMarr, QueueItem
+    client = mdm.MdmDirectClient(mdm.MdmDirectConfig(save_path=str(tmp_path / "dl")))
+    client.romarr_id = "standalone"
+    client._ledger.upsert("active", { "status": "downloading", "name": "Game"})
+    service = ROMarr({"ROMARR_DATA": str(tmp_path / "state.json")})
+    service.clients = [client]
+    item = QueueItem("Game", "snes", "Game", 1, "grabbed",
+                     download_id="active", download_client="standalone")
+    assert service._is_download_active_or_complete(item)

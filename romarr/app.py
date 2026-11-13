@@ -3255,7 +3255,7 @@ class ROMarr:
                         if match_queue_item([row], item, client_id=client_id, client_protocol=client_protocol) is None:
                             continue
                         progress = float(item.get("progress", 0) or 0)
-                        if progress >= 1.0:
+                        if progress >= 1.0 or item.get("worker_active") is True:
                             return True
                         dlspeed = int(item.get("dlspeed", 0) or 0)
                         state = str(item.get("state") or "")
@@ -7296,8 +7296,14 @@ class ROMarr:
                     for q in self.queue) > 1
                 if (not shared_collection and not queue_item.import_intent
                         and not self.store.settings.get("retain_downloads_after_import", True)
-                        and str(queue_item.download_id or "").startswith(("qbit-tag:", "mdm-tag:"))):
+                        and str(queue_item.download_id or "").startswith(("qbit-tag:", "mdm-tag:", "mdm-remote:"))):
                     for client in self.clients:
+                        client_id = str(getattr(client, "romarr_id", "")
+                                        or getattr(client, "config_id", ""))
+                        if source_client is not client and (
+                                not queue_item.download_client
+                                or client_id != str(queue_item.download_client)):
+                            continue
                         remover = getattr(client, "remove_download", None)
                         if callable(remover):
                             try:
