@@ -200,17 +200,25 @@ def read_log(env: Environment, tail_lines: int = 40) -> str:
 
 
 def docker_guidance(image: str = "ghcr.io/blizzhacker/romarr:latest") -> dict:
-    """What a container install CAN do: nothing from inside, everything from
-    the host. The commands are the answer, so the answer is the commands."""
+    """Explain host-owned image updates without guessing deployment commands."""
     return {
         "ok": False,
         "error": "ROMarr runs from a container image; the code is a read-only "
                  "layer and cannot update itself from inside.",
         "guidance": [
-            f"docker pull {image}",
-            "docker stop romarr && docker rm romarr",
-            "# recreate with the SAME volumes/env (compose users: "
-            "`docker compose up -d --pull always`)",
+            "Identify the actual Docker host and deployment method (Compose, "
+            "container manager, or docker run).",
+            "Record the existing image digest, volumes, environment, port "
+            "bindings, restart policy and recoverable configuration.",
+            f"Select and verify the intended image (for example {image}); "
+            "back up the existing deployment before changing it.",
+            "For Compose, use the existing validated project and service "
+            "definition to pull and recreate that service; for other methods "
+            "follow the original deployment's update procedure.",
+            "Verify health and the running build after recreation; retain the "
+            "previous image and configuration for rollback.",
+            "Do not stop, remove or recreate a container based only on "
+            "generic instructions from this page.",
         ],
         "message": "container install: re-pull the image on the host",
     }

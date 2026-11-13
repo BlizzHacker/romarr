@@ -56,8 +56,9 @@ def test_the_stats_page_reports_update_state_honestly():
     was the whole feature, false the moment auto-apply exists. Now it says
     which mode the install is in."""
     html = page()
-    assert "Auto-update is ON" in html
-    assert "Turn on auto-update" in html
+    assert "statsUpdateMessage(s,up)" in html
+    assert "auto_update_effective" in html
+    assert "Auto-update is ON — it applies" not in html
 
 
 def test_frontend_rows_survive_pathless_backend_rows(tmp_path):
