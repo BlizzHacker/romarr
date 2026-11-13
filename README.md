@@ -11,6 +11,8 @@ Find games, verify ROMs, and import them into your library.
 
 ![ROMarr interactive search, with scores and reasons beside each result](docs/img/interactive-search-live.png)
 
+**Unraid:** install the [official ROMarr listing](https://ca.unraid.net/apps/romarr-04jslct0riva81?q=romarr), using `ghcr.io/blizzhacker/romarr`. **ROMarrNG is a separate fork and is not supported by this project.** [Official builds and support policy](docs/OFFICIAL-DISTRIBUTION.md).
+
 ## What can I use it for?
 
 | I want to… | Start here | What you need |
