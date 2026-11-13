@@ -67,7 +67,7 @@ from .dat import DatIndex, parse_dat
 from .decompress import run_batch as run_decompress_batch, scan_compressed
 from .titled import TitleDBIndex, build_index as build_titled_index, validate_switch_rom
 from .downloaders import (
-    Blackhole, CLIENT_TYPES, DebridClient, HubDownloader, NZBGet, NzbgetConfig, SABnzbd, SabConfig, SiteDownloader, build_client,
+    Blackhole, CLIENT_TYPES, DebridClient, HubDownloader, NZBGet, NzbgetConfig, RealDebrid, SABnzbd, SabConfig, SiteDownloader, build_client,
     hand_off_with_id, match_queue_item, merge_secrets, pick_client, redact,
 )
 from .indexers import INDEXER_TYPES, build_indexer, merge_indexer_secrets, redact_indexer
@@ -90,6 +90,7 @@ from .notify import (NOTIFIERS, Message, Notifier, failed, grabbed, imported,
                      FIELD_HELP, FIELD_LABELS, send_test,
                      update_available)
 from .profiles import Blocklist, ReleaseProfile, release_id
+from .retained_collection import magnet_hash
 from .upgrade import is_upgrade, merge_tags, scan as scan_directory
 from .metadata import Metadata, calendar as metadata_calendar
 from .metadata import discover as metadata_discover
@@ -2221,6 +2222,7 @@ class ROMarr:
             return {"ok": False, "error": "the request was cancelled"}
         failure_detail = f"{client.name} rejected the release"
         release_fault = True
+        resolved_hash = ""
         required_file = bool(getattr(pick, "file_selection_required", False))
         selected_file = str(getattr(pick, "torrent_file_path", "") or "")
         local_fetch = getattr(self.prowlarr, "is_prowlarr_download_url", None)
@@ -2245,6 +2247,18 @@ class ROMarr:
             if not ok:
                 failure_detail = (client.last_error or
                                   "could not select the exact file")
+        elif isinstance(client, RealDebrid) and not pick.download_url.startswith("magnet:"):
+            # Resolve only our trusted Prowlarr download endpoint. The cloud
+            # service must never receive a LAN URL or the Prowlarr API key.
+            release_fault = False
+            try:
+                magnet = self.prowlarr.fetch_torrent(pick.download_url, magnet_only=True)
+            except ProwlarrDownloadError as err:
+                ok, download_id = False, ""
+                failure_detail = str(err)
+            else:
+                ok, download_id = hand_off_with_id(client, magnet, name=pick.title)
+                resolved_hash = magnet_hash(magnet)
         elif (supports_torrent_file and callable(local_fetch)
                 and local_fetch(pick.download_url)):
             # Prowlarr's authenticated URL is LAN-only and contains its API
@@ -2278,7 +2292,7 @@ class ROMarr:
         item = QueueItem(game, platform_slug, pick.title, pick.seeders,
                          "grabbed" if ok else "failed",
                          "" if ok else failure_detail,
-                         release_id=release_id(pick),
+                         release_id=(f"btih:{resolved_hash}" if resolved_hash else release_id(pick)),
                          indexer=getattr(pick, "indexer", ""),
                          size=getattr(pick, "size", 0),
                          release_fault=release_fault if not ok else False,

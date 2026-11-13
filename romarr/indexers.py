@@ -21,8 +21,9 @@ import logging
 import re
 from dataclasses import dataclass
 from threading import Lock
+from time import monotonic
 from urllib.parse import (
-    parse_qsl, unquote_plus, urlencode, urljoin, urlsplit, urlunsplit,
+    parse_qsl, unquote, unquote_plus, urlencode, urljoin, urlsplit, urlunsplit,
 )
 
 import requests
@@ -43,6 +44,18 @@ MAX_BENCODE_DEPTH = 64
 
 class ProwlarrDownloadError(ValueError):
     """A Prowlarr torrent could not be fetched safely."""
+
+
+class _ProwlarrSession(requests.Session):
+    """Keep explicit, streamed redirect requests unread until ROMarr checks them."""
+
+    def resolve_redirects(self, *args, **kwargs):
+        """Skip Response.next preparation when automatic redirects are disabled."""
+        # Requests otherwise buffers the body even with stream=True and
+        # allow_redirects=False, before our size and Location checks can run.
+        if kwargs.get("yield_requests"):
+            return iter(())
+        return super().resolve_redirects(*args, **kwargs)
 
 
 def _close_response(response) -> None:
@@ -229,7 +242,7 @@ class Prowlarr:
         """Initialize Prowlarr client with optional shared HTTP session."""
         self._config = config
         self._owns_session = session is None
-        self._session = session or requests.Session()
+        self._session = session or _ProwlarrSession()
         self._privacy: dict[int, bool] | None = None
         self._privacy_lock = Lock()
 
@@ -313,6 +326,15 @@ class Prowlarr:
         return urlunsplit((parts.scheme, parts.netloc, parts.path,
                            urlencode(query, doseq=True), ""))
 
+    def _is_download_endpoint(self, url: str) -> bool:
+        """Limit magnet resolution to download routes beneath our URL base."""
+        if (len(url) > 8192 or re.search(r"[\x00-\x20\x7f\\]", url)
+                or not self.is_prowlarr_download_url(url)):
+            return False
+        base_path = urlsplit(self._config.base_url).path.rstrip("/")
+        return re.fullmatch(re.escape(base_path) + r"/[0-9]+/download",
+                            urlsplit(url).path) is not None
+
     @classmethod
     def _terminal_magnet(cls, url: str) -> str | None:
         """Return a clean, identifiable magnet URI, or None for other values."""
@@ -350,45 +372,94 @@ class Prowlarr:
             if unquote_plus(field.partition("=")[0]).lower() != "apikey")
         return urlunsplit((parts.scheme, parts.netloc, parts.path, query, ""))
 
-    def fetch_torrent(self, download_url: str) -> bytes | str:
-        """Fetch a Prowlarr torrent locally without exposing its URL to qBittorrent.
+    def fetch_torrent(self, download_url: str, *, magnet_only: bool = False) -> bytes | str:
+        """Fetch a Prowlarr torrent locally without exposing its keyed URL.
 
         Redirects stay on the configured Prowlarr origin. In particular, a
         redirect cannot send the API key to an indexer or another host.
+        Magnet-only clients require a terminal magnet redirect, restrict HTTP
+        hops to download endpoints, and share one timeout across those hops.
         """
         if not self.is_prowlarr_download_url(download_url):
             raise ProwlarrDownloadError(
                 "Prowlarr returned a download outside its configured host")
         current = download_url
+        deadline = monotonic() + self._config.timeout if magnet_only else None
         for _ in range(6):
             if not self.is_prowlarr_download_url(current):
                 raise ProwlarrDownloadError(
                     "Prowlarr redirected the download outside its configured host")
+            if magnet_only and not self._is_download_endpoint(current):
+                raise ProwlarrDownloadError(
+                    "Prowlarr magnet resolution requires a trusted download endpoint")
+            timeout = self._config.timeout
+            if deadline is not None:
+                timeout = deadline - monotonic()
+                if timeout <= 0:
+                    raise ProwlarrDownloadError("Prowlarr magnet resolution timed out")
             try:
                 response = self._session.get(
                     self._without_api_key(current),
                     headers={"X-Api-Key": self._config.api_key},
-                    timeout=self._config.timeout, stream=True,
+                    timeout=timeout, stream=True,
                     allow_redirects=False)
-            except requests.RequestException as err:
+            except (requests.RequestException, ValueError):
                 raise ProwlarrDownloadError(
-                    "could not fetch the torrent from Prowlarr") from err
+                    "could not fetch the torrent from Prowlarr") from None
+            if deadline is not None and monotonic() >= deadline:
+                _close_response(response)
+                raise ProwlarrDownloadError("Prowlarr magnet resolution timed out")
             if response.status_code in (301, 302, 303, 307, 308):
                 location = (getattr(response, "headers", {}) or {}).get("Location", "")
                 if not location:
                     _close_response(response)
                     raise ProwlarrDownloadError(
                         "Prowlarr redirected the download without a location")
-                magnet = self._terminal_magnet(location)
                 _close_response(response)
+                if magnet_only and (len(location) > 8192
+                                    or re.search(r"[\x00-\x20\x7f\\]", location)):
+                    raise ProwlarrDownloadError("Prowlarr returned an unsafe redirect")
+                magnet = self._terminal_magnet(location)
                 if magnet is not None:
+                    if magnet_only:
+                        # Reject controls and credentials hidden in metadata
+                        # (including a nested tracker URL), not just ?apikey.
+                        decoded = magnet
+                        for _ in range(4):
+                            unescaped = unquote(decoded)
+                            if unescaped == decoded:
+                                break
+                            decoded = unescaped
+                        else:
+                            raise ProwlarrDownloadError(
+                                "Prowlarr returned an excessively encoded magnet URI")
+                        if (re.search(r"[\x00-\x1f\x7f]", decoded)
+                                or (self._config.api_key
+                                    and self._config.api_key in decoded)):
+                            raise ProwlarrDownloadError(
+                                "Prowlarr returned an unsafe magnet URI")
+                        # Canonicalize topic keys for clients/hash parsers
+                        # while preserving the values' original encoding.
+                        fields = urlsplit(magnet).query.split("&")
+                        query = "&".join(
+                            "xt=" + field.partition("=")[2]
+                            if unquote_plus(field.partition("=")[0]).lower() == "xt"
+                            else field for field in fields)
+                        magnet = "magnet:?" + query
                     return magnet
-                current = urljoin(current, location)
+                try:
+                    current = urljoin(current, location)
+                except ValueError:
+                    raise ProwlarrDownloadError("Prowlarr returned an invalid redirect") from None
                 continue
             if not response.ok:
                 _close_response(response)
                 raise ProwlarrDownloadError(
                     f"Prowlarr torrent request failed with HTTP {response.status_code}")
+            if magnet_only:
+                _close_response(response)
+                raise ProwlarrDownloadError(
+                    "Prowlarr did not redirect to a magnet URI; Real-Debrid requires a magnet")
             length = (getattr(response, "headers", {}) or {}).get("Content-Length")
             if length:
                 try:

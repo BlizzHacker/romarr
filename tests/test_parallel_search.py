@@ -209,6 +209,7 @@ def test_search_terms_share_privacy_and_retry_on_the_next_search(tmp_path, monke
 
     service = ROMarr({"ROMARR_DATA": str(tmp_path / "state.json")})
     monkeypatch.setattr(app.requests, "Session", Session)
+    monkeypatch.setattr("romarr.indexers._ProwlarrSession", Session)
     config = ProwlarrConfig(base_url="http://prowlarr:9696", api_key="k")
     service.prowlarr = Prowlarr(config, None if owns_session else Session())
     service.indexers = []
