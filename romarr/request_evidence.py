@@ -85,5 +85,24 @@ def evaluate_source_request(
                             str((catalog_platforms or {}).get(catalog) or ""))
                   for catalog, game in common]
     decision = decide_request(requested_game, requested_platform, candidates, reviewed=reviewed)
-    only_match = next(iter(common.values())) if decision.action == "import" else None
+    if decision.action != "import":
+        return RequestEvidence(decision)
+
+    # A verified track does not establish a complete DAT game. In particular,
+    # a lone BIN may verify even though its DAT game declares more tracks.
+    # Match exposes only one ROM; use the catalog's authoritative game record.
+    only_match = next(iter(common.values()))
+    member_count = getattr(dats, "game_rom_count", None)
+    if not callable(member_count):
+        return hold("DAT_IDENTITY_MISSING", "DAT game membership is unavailable; review required.")
+    try:
+        required = member_count(only_match)
+    except (KeyError, ValueError, TypeError, AttributeError):
+        return hold("DAT_IDENTITY_MISSING", "DAT game membership could not be established; review required.")
+    if type(required) is not int or required < 1:
+        return hold("DAT_IDENTITY_MISSING", "DAT game membership is ambiguous; review required.")
+    if required > len(members):
+        return hold("SOURCE_INCOMPLETE", "The selected ROM is missing required DAT game members; nothing imported.")
+    if required != 1 or len(members) != 1:
+        return hold("REVIEW_REQUIRED", "Multi-file DAT games need atomic publication; review required.")
     return RequestEvidence(decision, only_match)
