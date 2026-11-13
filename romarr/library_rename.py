@@ -238,9 +238,14 @@ def plan(library: Path, platform_slug: str, dat_index, *,
     for path in page:
         rel = path.relative_to(library).as_posix()
         if path.suffix.lower() in DISC_SUFFIXES:
+            try:
+                size = path.stat().st_size
+                reason = "Disc images and their sets are left in place."
+            except OSError as err:
+                size = 0
+                reason = f"Could not read file: {err}"
             entries.append({"file": rel, "target": "", "eligible": False,
-                            "reason": "Disc images and their sets are left in place.",
-                            "sha1": "", "size": path.stat().st_size})
+                            "reason": reason, "sha1": "", "size": size})
             continue
         try:
             digest = hash_file(path)

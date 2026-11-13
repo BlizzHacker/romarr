@@ -203,3 +203,31 @@ def test_confirmed_selection_excludes_foreign_nup_and_rejects_stale_plan(tmp_pat
     assert item.state == "imported", result
     assert imported_under(tmp_path, "switch") == [selected.name]
     assert foreign.exists()
+
+
+def test_inferred_malformed_nup_retains_platform_for_review(tmp_path, sweep):
+    """A bad companion can be excluded with the ordinary Queue review action."""
+    from romarr.import_intent import preview_import, choose_import, queue_identity
+    from romarr.platforms import by_slug
+    from romarr.romm_bundle import decorate_preview
+    folder = tmp_path / "downloads"
+    folder.mkdir()
+    good = folder / "Good.nup"
+    good.write_bytes(build_nup([Pkg(S1_BASE)]))
+    (folder / "Broken.nup").write_bytes(b"truncated")
+    service, item = sweep("", folder, release="Mixed.nup")
+    assert not service.import_finished()[0]["ok"]
+    assert item.platform == "switch"
+    platform = by_slug(item.platform)
+    cfg, _ = service.library_for(item.platform)
+    preview = preview_import(folder, platform, service.library_root(cfg),
+                             layout=service.library_layout(cfg),
+                             platform_folders=service.platform_folders(cfg),
+                             queue_identity=queue_identity(item))
+    preview = decorate_preview(preview, platform, service.library_root(cfg),
+                               kind=cfg.get("type", ""), layout=service.library_layout(cfg),
+                               platform_folders=service.platform_folders(cfg))
+    item.import_intent = choose_import(preview, [{"primary": good.name, "role": "base"}])
+    result = service.import_finished()
+    assert item.state == "imported", result
+    assert imported_under(tmp_path, "switch") == [good.name]

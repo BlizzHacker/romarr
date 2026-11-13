@@ -7174,6 +7174,8 @@ class ROMarr:
                 platform, held = self._nup_gate(path, name, platform, queue_item,
                                                 inferred=platform_inferred)
                 if held is not None:
+                    if platform_inferred and queue_item is not None:
+                        queue_item.platform = platform.slug
                     results.append(held)
                     continue
             if platform_inferred and queue_item is not None:
