@@ -47,7 +47,7 @@ from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, unquote_plus, urlparse
+from urllib.parse import parse_qs, unquote_plus, urlparse, urlsplit, urlunsplit
 
 import time
 
@@ -1433,6 +1433,23 @@ class ROMarr:
         out["download_clients"] = [redact(c) for c in out.get("download_clients", [])]
         out["indexers"] = [redact_indexer(i) for i in out.get("indexers", [])]
         out["libraries"] = [redact_library(lib) for lib in out.get("libraries", [])]
+        # General Settings shows the configured, enabled qBittorrent clients.
+        # The legacy _qbit_url is only the startup environment value.
+        qbit_urls = []
+        for client in self.clients:
+            if not isinstance(client, QBittorrent):
+                continue
+            url = str(client._config.base_url or "")
+            if not url:
+                continue
+            try:
+                parts = urlsplit(url)
+            except ValueError:
+                continue
+            # A pasted URL can contain embedded credentials; never expose them.
+            netloc = parts.netloc.rsplit("@", 1)[-1]
+            qbit_urls.append(urlunsplit((parts.scheme, netloc, parts.path, "", "")))
+        out["_qbit_urls"] = qbit_urls
         # The two settings that ARE the credential. Removed by name rather
         # than by a leading-underscore rule, because the other underscore keys
         # (`_prowlarr_url`, `_romm_url`, `_stream_url`) are deliberately shown
