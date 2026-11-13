@@ -81,3 +81,68 @@ def test_only_matching_catalogs_are_returned():
     assert [(match.game, match.dat) for match in matches] == [
         ("Requested Game", "Matches"),
     ]
+
+
+
+def test_same_catalog_crc_collision_exposes_both_games():
+    dat = parse_dat("""
+    <datafile><header><name>Single System</name></header>
+      <game name="Requested Game"><rom name="one.bin" size="4" crc="a1b2c3d4"/></game>
+      <game name="Other Game"><rom name="two.bin" size="4" crc="a1b2c3d4"/></game>
+    </datafile>""")
+    index = DatIndex()
+    index.add(dat)
+    matches = index.verified_candidates(crc="a1b2c3d4", size=4)
+    assert [(m.dat, m.game) for m in matches] == [
+        ("Single System", "Requested Game"),
+        ("Single System", "Other Game"),
+    ]
+    assert index.lookup(crc="a1b2c3d4", size=4).game == "Requested Game"
+
+
+def test_same_catalog_sha1_collision_exposes_both_games():
+    sha1 = "a" * 40
+    dat = parse_dat(f"""
+    <datafile><header><name>Single System</name></header>
+      <game name="Requested Game"><rom name="one.bin" size="4" sha1="{sha1}"/></game>
+      <game name="Other Game"><rom name="two.bin" size="4" sha1="{sha1}"/></game>
+    </datafile>""")
+    index = DatIndex()
+    index.add(dat)
+    assert [m.game for m in index.verified_candidates(sha1=sha1, size=4)] == [
+        "Requested Game", "Other Game",
+    ]
+
+
+def test_same_catalog_md5_collision_exposes_both_games():
+    md5 = "b" * 32
+    dat = parse_dat(f"""
+    <datafile><header><name>Single System</name></header>
+      <game name="Requested Game"><rom name="one.bin" size="4" md5="{md5}"/></game>
+      <game name="Other Game"><rom name="two.bin" size="4" md5="{md5}"/></game>
+    </datafile>""")
+    index = DatIndex()
+    index.add(dat)
+    assert [m.game for m in index.verified_candidates(md5=md5, size=4)] == [
+        "Requested Game", "Other Game",
+    ]
+
+
+def test_strongest_hash_first_preserves_legacy_precedence():
+    dat = parse_dat("""
+    <datafile><header><name>Single System</name></header>
+      <game name="CRC Game"><rom name="crc.bin" size="4" crc="a1b2c3d4"/></game>
+      <game name="SHA1 Game"><rom name="sha1.bin" size="4" sha1="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"/></game>
+    </datafile>""")
+    index = DatIndex()
+    index.add(dat)
+    matches = index.verified_candidates(
+        sha1="a" * 40, crc="a1b2c3d4", size=4)
+    assert [m.game for m in matches] == ["SHA1 Game"]
+
+
+def test_crc_only_without_size_is_not_approved_as_a_unique_candidate():
+    index = DatIndex()
+    index.add(_dat("Single System", "Requested Game"))
+    assert index.lookup(crc="a1b2c3d4").status == VERIFIED
+    assert index.verified_candidates(crc="a1b2c3d4") == ()
