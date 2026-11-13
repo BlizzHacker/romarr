@@ -148,7 +148,6 @@ class RequestIdentityPolicyTests(unittest.TestCase):
 if __name__ == "__main__":
     unittest.main()
 
-
 # Additional PR #18 review regressions; these are intentionally separate from
 # the 36 owner-run v02 tests and must not be counted as part of that old run.
 class ReviewedNormalizationTests(unittest.TestCase):
