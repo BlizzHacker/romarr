@@ -1163,7 +1163,7 @@ class _MdmBaseClient:
             return [
                 {"id": f"mdm-remote:{r.get('id')}", "name": r.get("file", ""),
                  "state": str(r.get("status") or "").lower(),
-                 "worker_active": r.get("status") == "Downloading",
+                 "worker_active": r.get("status") in ("Queued", "Downloading"),
                  "size": int(r.get("size") or 0),
                  "downloaded": int(r.get("downloaded") or 0)}
                 for r in rows
@@ -1173,7 +1173,7 @@ class _MdmBaseClient:
             {"id": r["id"], "name": r.get("name", ""),
              "hash": r.get("hash", ""),
              "state": r.get("status", "downloading"),
-             "worker_active": r.get("status") == "downloading",
+             "worker_active": r.get("status") in ("queued", "downloading"),
              "size": int(r.get("size") or 0),
              "downloaded": int(r.get("downloaded") or 0)}
             for r in self._ledger.rows()
@@ -1711,7 +1711,7 @@ class MdmTorrentClient(_MdmBaseClient):
                     "hash": rhash,
                     "tags": entry.get("tag", "") if entry else "",
                     "state": str(r.get("status") or "").lower(),
-                 "worker_active": r.get("status") == "Downloading",
+                 "worker_active": r.get("status") in ("Queued", "Downloading"),
                     "size": int(r.get("size") or 0),
                     "downloaded": int(r.get("downloaded") or 0),
                 })

@@ -946,7 +946,7 @@ class BuiltinNzbClient:
                 "id": row["id"],
                 "name": row.get("name", ""),
                 "state": row.get("status", "downloading"),
-                "worker_active": row.get("status") == "downloading",
+                "worker_active": row.get("status") in ("queued", "downloading"),
                 "size": int(row.get("size") or 0),
                 "downloaded": int(row.get("downloaded") or 0),
             }

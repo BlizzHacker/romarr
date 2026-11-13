@@ -711,12 +711,13 @@ def test_public_torrent_redirect_refuses_internal_dns_answer(monkeypatch, addres
     assert len(calls) == 1
 
 
-def test_local_worker_activity_keeps_old_queue_job_alive(tmp_path):
+@pytest.mark.parametrize("status", ["queued", "downloading"])
+def test_local_worker_activity_keeps_old_queue_job_alive(tmp_path, status):
     """A healthy standalone worker survives the qBittorrent zero-seed heuristic."""
     from romarr.app import ROMarr, QueueItem
     client = mdm.MdmDirectClient(mdm.MdmDirectConfig(save_path=str(tmp_path / "dl")))
     client.romarr_id = "standalone"
-    client._ledger.upsert("active", { "status": "downloading", "name": "Game"})
+    client._ledger.upsert("active", {"status": status, "name": "Game"})
     service = ROMarr({"ROMARR_DATA": str(tmp_path / "state.json")})
     service.clients = [client]
     item = QueueItem("Game", "snes", "Game", 1, "grabbed",
