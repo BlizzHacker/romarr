@@ -3192,10 +3192,10 @@ const statsUpdateMessage=(stats,update)=>{
     action='Automatic application is enabled for a future eligible scheduled check.';
   else if(kind==='docker')
     action='Docker cannot apply its own image updates. Update through the Docker host.';
-  else if(settings.auto_update&&settings.auto_update_effective===false)
-    action='Auto-update is configured but currently unavailable for this installation.';
   else if(settings.update_check===false)
     action='Scheduled update checks are disabled. Use Check now for a manual check.';
+  else if(settings.auto_update&&settings.auto_update_effective===false)
+    action='Auto-update is configured but currently unavailable for this installation.';
   return '<div class="card" style="border-color:var(--warn)">'
     +'<h3>Update available</h3><p class="help">ROMarr '
     +esc(update.latest_version||'unknown')+' is available; this install is running '

@@ -165,6 +165,18 @@ def test_stats_banner_requires_real_availability_and_effective_capability():
     assert _stats_banner(stats, _payload(check_status={"state": "current"})) == ""
 
 
+def test_stats_banner_explains_disabled_scheduled_checks():
+    """An available release does not turn a disabled scheduler back on."""
+    stats = {"version": "1.8.1"}
+    state = _payload(check_status={"state": "available"},
+                     settings={"auto_update": True,
+                               "auto_update_effective": False,
+                               "update_check": False})
+    banner = _stats_banner(stats, state)
+    assert "Scheduled update checks are disabled" in banner
+    assert "applies on the next daily check" not in banner
+
+
 def test_stats_banner_handles_failed_and_mismatched_status():
     """Do not reuse a stale or mismatched Update API verdict as current."""
     stats = {"version": "1.8.1"}
