@@ -550,27 +550,59 @@ class DatIndex:
 
     def __init__(self):
         self.dats: list[Dat] = []
+        # Sparse collision indexes: the legacy per-hash indexes intentionally
+        # return their first entry. Request approval must retain other entries.
+        self._duplicate_hits: list[tuple[dict, dict, dict]] = []
 
     def add(self, dat: Dat) -> None:
-        if dat.games:
-            self.dats.append(dat)
+        if not dat.games:
+            return
+        extra_crc: dict = {}
+        extra_md5: dict = {}
+        extra_sha1: dict = {}
+        for game_name, game in dat.games.items():
+            for rom in game.roms:
+                identity = (game_name, rom)
+                for key, first, extras in (
+                    ((rom.crc, rom.size) if rom.crc else None, dat._by_crc, extra_crc),
+                    (rom.md5 or None, dat._by_md5, extra_md5),
+                    (rom.sha1 or None, dat._by_sha1, extra_sha1),
+                ):
+                    if key is not None and key in first and first[key] != identity:
+                        hits = extras.setdefault(key, [])
+                        if identity not in hits:
+                            hits.append(identity)
+        self.dats.append(dat)
+        self._duplicate_hits.append((extra_crc, extra_md5, extra_sha1))
 
     def verified_candidates(self, **hashes) -> tuple[Match, ...]:
-        """Expose every verifying DAT identity from one computed hash set.
+        """Expose every matching DAT identity, including same-catalog collisions.
 
-        The ordinary lookup retains its legacy first-match behavior. Import
-        request matching must instead inspect all loaded catalogs: two DATs
-        can verify identical bytes but attribute them to different games or
-        systems. This method never rehashes the input or guesses a platform.
-
-        Each Dat's existing per-hash table retains only its first entry, so
-        same-catalog duplicate-hash ambiguity requires a separate index fix.
+        Preserve legacy lookup's first-match semantics for existing callers.
+        Collision maps are built only once on catalog addition, rather than
+        scanning millions of DAT records for every imported ROM.
         """
         candidates = []
-        for dat in self.dats:
+        sha1 = str(hashes.get("sha1") or "").lower()
+        md5 = str(hashes.get("md5") or "").lower()
+        crc = str(hashes.get("crc") or "").lower()
+        size = int(hashes.get("size") or 0)
+        for dat, (extra_crc, extra_md5, extra_sha1) in zip(self.dats, self._duplicate_hits):
             match = dat.lookup(**hashes)
-            if match.status == VERIFIED:
-                candidates.append(match)
+            if match.status != VERIFIED:
+                continue
+            if sha1 and sha1 in dat._by_sha1:
+                extra = extra_sha1.get(sha1, ())
+            elif md5 and md5 in dat._by_md5:
+                extra = extra_md5.get(md5, ())
+            elif crc and size and (crc, size) in dat._by_crc:
+                extra = extra_crc.get((crc, size), ())
+            else:
+                # A CRC without file size is not enough to establish unique
+                # identity when distinct sizes may share that CRC.
+                continue
+            candidates.append(match)
+            candidates.extend(Match(VERIFIED, name, rom, dat.name) for name, rom in extra)
         return tuple(candidates)
 
     def lookup(self, **hashes) -> Match:
