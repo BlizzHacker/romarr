@@ -130,6 +130,8 @@ def read_header(path: str | os.PathLike[str]) -> NupHeader:
             raise NupError("blob region misaligned or overlapping the TOC")
         if file_size != real_size:
             raise NupError(f"recorded size {file_size} != actual size {real_size}")
+        if blob_offset > file_size:
+            raise NupError("blob region outside the file")
         if package_count < 1:
             raise NupError("no packages")
         if flags:
@@ -184,7 +186,7 @@ def _parse_toc(toc: bytes, package_count: int, file_size: int,
         if root_dir >= dir_count or any(
                 d != NO_DIR and d >= dir_count for d in (exefs_dir, romfs_dir)):
             raise NupError(f"package {index}: directory out of bounds")
-        if meta_size and meta_offset + meta_size > file_size:
+        if meta_size and (meta_offset < blob_offset or meta_offset + meta_size > file_size):
             raise NupError(f"package {index}: meta block out of bounds")
         packages.append(NupPackage(
             title_id=f"{title_id:016X}",
@@ -217,6 +219,8 @@ def _parse_toc(toc: bytes, package_count: int, file_size: int,
             continue
         if ext_size == 0:
             raise NupError("non-empty file with an empty extent")
+        if codec == 0 and ext_size != size:
+            raise NupError("raw extent size differs from its file size")
         if ext_off < blob_offset or ext_off + ext_size > file_size:
             raise NupError("file extent out of bounds")
         if ext_off % EXTENT_ALIGN:

@@ -214,3 +214,12 @@ def test_looks_like_nup():
     assert looks_like_nup(build_nup([Pkg(S1_BASE)])[:16])
     for head in (b"", b"NUP", b"NUP\x02", b"PFS0\0\0\0\0"):
         assert not looks_like_nup(head)
+
+
+def test_blob_start_cannot_point_past_end_of_empty_container(tmp_path):
+    """A hash-valid empty TOC still needs an in-bounds blob region."""
+    import struct
+    data = bytearray(build_nup([Pkg(S1_BASE)]))
+    struct.pack_into("<Q", data, 0x38, (len(data) + 31) & ~15)
+    with pytest.raises(NupError, match="blob region outside"):
+        read_header(write(tmp_path, data))
