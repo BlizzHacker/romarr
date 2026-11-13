@@ -726,3 +726,12 @@ def test_local_worker_activity_keeps_old_queue_job_alive(tmp_path, status):
     item = QueueItem("Game", "snes", "Game", 1, "grabbed",
                      download_id="active", download_client="standalone")
     assert service._is_download_active_or_complete(item)
+
+
+def test_mdm_remove_timeout_retains_job_for_recovery(tmp_path, monkeypatch):
+    """MDM jobs remain removable after a worker fails to stop in time."""
+    client = mdm.MdmDirectClient(mdm.MdmDirectConfig(save_path=str(tmp_path)))
+    client._ledger.upsert("active", {"status": "downloading", "name": "Game"})
+    monkeypatch.setattr(mdm, "stop_job", lambda *a, **kw: False)
+    assert not client.remove_download("active", delete_files=True)
+    assert client._ledger.get("active") is not None

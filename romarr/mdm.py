@@ -1238,6 +1238,8 @@ class _MdmBaseClient:
                 self._ledger.remove(raw_id)
             return ok
         stopped = stop_job(self._ledger.path, raw_id, timeout=10.0)
+        if not stopped:
+            return False
         row = self._ledger.remove(raw_id)
         if row is None:
             return False
