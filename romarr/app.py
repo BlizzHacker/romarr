@@ -935,20 +935,30 @@ class ROMarr:
                         stream = iter(streamer(limit=self.LIBRARY_MAX))
                         read = 0
                         while read < self.LIBRARY_MAX:
-                            batch = list(islice(stream, min(self.LIBRARY_PAGE,
-                                                           self.LIBRARY_MAX - read)))
+                            batch = []
+                            read_error = None
+                            try:
+                                # extend keeps items yielded before an error;
+                                # constructing a list would discard that tail.
+                                batch.extend(islice(stream, min(self.LIBRARY_PAGE,
+                                                                self.LIBRARY_MAX - read)))
+                            except Exception as err:
+                                read_error = err
+                            if batch:
+                                shelf.extend(replace(g, source=label) if multiple else g
+                                             for g in batch)
+                                read += len(batch)
+                                total += len(batch)
+                                if on_disk is not None:
+                                    on_disk += len(batch)
+                                self._library_scan["read"] = len(shelf)
+                                self._count_split = {"total": total, "on_disk": on_disk,
+                                                     "catalogued": catalogued}
+                                self._publish_library(shelf, "", partial=True)
+                            if read_error is not None:
+                                raise read_error
                             if not batch:
                                 break
-                            shelf.extend(replace(g, source=label) if multiple else g
-                                         for g in batch)
-                            read += len(batch)
-                            total += len(batch)
-                            if on_disk is not None:
-                                on_disk += len(batch)
-                            self._library_scan["read"] = len(shelf)
-                            self._count_split = {"total": total, "on_disk": on_disk,
-                                                 "catalogued": catalogued}
-                            self._publish_library(shelf, "", partial=True)
                         if read >= self.LIBRARY_MAX:
                             self._library_scan["limit_reached"] = True
                     except Exception as err:

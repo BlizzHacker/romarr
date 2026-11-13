@@ -186,3 +186,20 @@ def test_progress_status_never_reads_the_filesystem(monkeypatch):
     assert scan["elapsed_seconds"] == 15 and scan["read"] == 1234
     assert "1,234 read" in message
     assert "started" not in scan and "finished" not in scan
+
+
+@pytest.mark.parametrize("readable", [1, 3])
+def test_failure_preserves_unfinished_first_page_and_later_tail(readable):
+    """Keep every readable game even when a subtree fails in the middle of a page."""
+    def stream(limit):
+        """Fail before the next complete page can be assembled."""
+        for n in range(readable):
+            yield Game(id=str(n), name=f"Game {n}", platform="snes")
+        raise PermissionError(errno.EACCES, "denied")
+
+    service, published = scan_once(SimpleNamespace(iter_games=stream, name="NAS"))
+    rows = service._library_cache[0]
+    assert rows is not None and len(rows) == readable
+    assert {g.id for g in rows} == {str(n) for n in range(readable)}
+    assert published[-1][2]
+    assert service._library_scan["read"] == readable
