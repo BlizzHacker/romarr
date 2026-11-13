@@ -35,7 +35,7 @@ import inspect
 import json
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from copy import copy, deepcopy
 import logging
 import os
@@ -59,8 +59,10 @@ from .libraries import (
 )
 from .clients import QBittorrent, QbitConfig, QbitAuthenticationError, Romm, RommConfig
 from . import hub  # ROM Hub bridge -- the Cartridge plugin layer
-from . import clamav
-from . import nup, mdm
+from . import clamav, scanners, nup, mdm
+from .emulators import EmulatorHub
+from .libretro import CoreHub
+from .emulator_catalog import resource_catalog
 from .dat import DatIndex, parse_dat
 from .decompress import run_batch as run_decompress_batch, scan_compressed
 from .titled import TitleDBIndex, build_index as build_titled_index, validate_switch_rom
@@ -2839,6 +2841,26 @@ class ROMarr:
             self.reload_clients()
             return result
 
+    def scan_installation(self, path: Path) -> None:
+        """Apply enabled malware scanners before publishing an emulator package."""
+        findings, _ = scanners.scan(self.store.settings, self._env, path)
+        if findings:
+            raise ValueError("Emulator package was refused by an enabled malware scanner")
+
+    def security_inspect(self, path: str, engine: str) -> dict:
+        """Send one explicitly chosen shared file to the user's MWM or Arkana lab."""
+        target = Path(path)
+        # Inspection accepts the same paths as Manual Import and never runs samples.
+        if not target.is_file() or target.is_symlink():
+            raise ValueError("Choose a regular file visible to both ROMarr and MWM")
+        commands = {"mwm": "lab_analyze", "arkana": "arkana_analyze"}
+        if engine not in commands:
+            raise ValueError("Choose MWM or Arkana")
+        report = scanners.mwm_call(self.store.settings, self._env, commands[engine],
+                                   {"path": str(target.resolve())})
+        return {"engine": engine, "report": report,
+                "note": "Arkana jobs can be followed in MWM's Malware Lab."}
+
     def ggrequestz(self) -> dict:
         """Whether GG Requestz is reachable, the way Seerr reports Radarr.
 
@@ -3432,6 +3454,48 @@ class ROMarr:
         except OSError as err:
             log.warning("could not roll back %s: %s", destination, err)
 
+    @contextmanager
+    def _scanned_manual_source(self, source: Path, platform):
+        """Scan private copies of every selected loose disc member before import."""
+        import shutil
+        import tempfile
+        from .library import _PathSource
+        enabled = any(self.store.settings.get(key) for key in (
+            "clamav_enabled", "scanner_defender_enabled", "scanner_mwm_enabled",
+            "scanner_vt_enabled"))
+        if not enabled:
+            yield source, None
+            return
+        with tempfile.TemporaryDirectory(prefix=".manual-scan-", dir=self.store.path.parent) as scratch:
+            stage = Path(scratch) / source.name
+            if source.suffix.lower() in (".cue", ".gdi") and source.is_file():
+                origin = _PathSource(source.parent)
+                chosen = next((group for group in origin.rom_sets(platform)
+                               if group.primary == source.name), None)
+                if chosen is None:
+                    raise ValueError("Could not resolve the selected disc set")
+                stage.mkdir()
+                root = source.parent.resolve()
+                for member in chosen.members:
+                    original = source.parent / member
+                    if not original.resolve().is_relative_to(root) or original.is_symlink():
+                        raise ValueError("Disc member escapes its source directory")
+                    destination = stage / member
+                    if not destination.resolve().is_relative_to(stage.resolve()):
+                        raise ValueError("Disc member escapes its staging directory")
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(original, destination)
+            elif source.is_dir():
+                if source.is_symlink() or any(p.is_symlink() for p in source.rglob("*")):
+                    raise ValueError("Manual scan source cannot contain symbolic links")
+                shutil.copytree(source, stage)
+            else:
+                if source.is_symlink():
+                    raise ValueError("Manual scan source cannot be a symbolic link")
+                shutil.copyfile(source, stage)
+            refusal = self._virus_check(stage, source.name, platform, None)
+            yield stage, refusal
+
     def adopt(self, path: str, platform_slug: str = "", *,
               force: bool = False, require_verified: bool = False) -> dict:
         """Import one file the operator picked out of a manual-import scan.
@@ -3480,7 +3544,6 @@ class ROMarr:
         from .sniff import disagrees_with
 
         mismatch = disagrees_with(source, platform.slug)
-
         target = self.library_for(platform.slug)
         if target is None:
             return {"ok": False,
@@ -3489,14 +3552,24 @@ class ROMarr:
         label = target_cfg.get("name") or getattr(target_lib, "name", "library")
         target_folders = self.platform_folders(target_cfg)
 
-        outcomes = import_rom(source, platform, self.library_root(target_cfg),
-                              dats=self.dats,
-                              require_verified=require_verified,
-                              rename=bool(self.store.settings.get("rename_on_import", True)),
-                prefer_hardlinks=bool(self.store.settings.get("prefer_hardlinks", False)),
-                              layout=self.library_layout(target_cfg),
-                              translation=is_translation(source.name),
-                              platform_folders=target_folders)
+        try:
+            with self._scanned_manual_source(source, platform) as (staged_source, scan_refusal):
+                if scan_refusal is not None:
+                    return {**scan_refusal, "refused": [{
+                        "file": source.name, "reason": scan_refusal["reason"],
+                        "needs_force": False}], "imported": []}
+                outcomes = import_rom(staged_source, platform, self.library_root(target_cfg),
+                                      dats=self.dats,
+                                      require_verified=require_verified,
+                                      rename=bool(self.store.settings.get("rename_on_import", True)),
+                        prefer_hardlinks=staged_source == source and bool(self.store.settings.get("prefer_hardlinks", False)),
+                                      layout=self.library_layout(target_cfg),
+                                      translation=is_translation(source.name),
+                                      platform_folders=target_folders)
+        except (OSError, ValueError) as err:
+            reason = f"could not prepare scanned import: {err}"
+            return {"ok": False, "reason": reason, "imported": [], "refused": [
+                {"file": source.name, "reason": reason, "needs_force": False}]}
 
         imported, refused = [], []
         for outcome in outcomes:
@@ -7027,22 +7100,20 @@ class ROMarr:
         infection marks the row, as the release's fault, so failed download
         handling replaces it.
         """
-        if not self.store.settings.get("clamav_enabled"):
+        enabled = any(self.store.settings.get(key) for key in (
+            "clamav_enabled", "scanner_defender_enabled", "scanner_mwm_enabled",
+            "scanner_vt_enabled"))
+        if not enabled:
             return None
-        address = str(self.store.settings.get("clamav_address") or "").strip()
         try:
-            if not address:
-                raise clamav.ScanUnavailable("ClamAV is enabled but has no address")
-            found, too_large = clamav.scan(address, path)
-        except clamav.ScanUnavailable as err:
+            found, _ = scanners.scan(self.store.settings, self._env, path)
+        except (scanners.ScanUnavailable, OSError) as err:
             log.warning("%s waits for a virus scan: %s", name, err)
-            return {"name": name, "ok": False, "reason": f"waiting for ClamAV: {err}"}
-        for file in too_large:
-            log.warning("ClamAV refused %s as larger than its StreamMaxLength; "
-                        "imported unscanned", file)
+            label = "ClamAV" if self.store.settings.get("clamav_enabled") else "malware scanner"
+            return {"name": name, "ok": False, "reason": f"waiting for {label}: {err}"}
         if not found:
             return None
-        detail = "ClamAV: " + "; ".join(
+        detail = "Malware scan: " + "; ".join(
             f"{f.signature} in {Path(f.path).name}" for f in found)
         self.store.record(Event(kind="failed", game=name, platform=platform.slug,
                                 detail=detail))
@@ -7957,6 +8028,46 @@ def make_handler(service: ROMarr):
                 return self._json(200, {"types": CLIENT_TYPES})
             if route.path == "/api/v1/downloadclient/browser":
                 return self._json(200, service.browser_capability())
+            if route.path == "/api/v1/emulators":
+                try:
+                    result = EmulatorHub(service.store.path.parent).catalog(
+                        (query.get("q") or [""])[0], int((query.get("offset") or ["0"])[0]),
+                        int((query.get("limit") or ["60"])[0]))
+                    return self._json(200, result)
+                except (ValueError, OSError):
+                    return self._json(400, {"error": "Could not load this catalog page"})
+            if route.path == "/api/v1/emulators/resources":
+                try:
+                    return self._json(200, resource_catalog(
+                        (query.get("q") or [""])[0], int((query.get("offset") or ["0"])[0]),
+                        int((query.get("limit") or ["60"])[0])))
+                except (ValueError, OSError):
+                    return self._json(400, {"error": "Could not load this resource page"})
+            if route.path == "/api/v1/emulators/forks":
+                try:
+                    result = EmulatorHub(service.store.path.parent).inventory.forks(
+                        (query.get("id") or [""])[0], int((query.get("page") or ["1"])[0]))
+                    return self._json(200, result)
+                except (ValueError, OSError, requests.RequestException):
+                    return self._json(400, {"error": "Could not load this fork page. Open the source repository to browse forks."})
+            if route.path in ("/api/v1/emulators/cores", "/api/v1/emulators/cores/readiness"):
+                try:
+                    core_hub = CoreHub(service.store.path.parent)
+                    if route.path.endswith("/readiness"):
+                        result = core_hub.readiness((query.get("id") or [""])[0])
+                    else:
+                        result = core_hub.catalog((query.get("q") or [""])[0],
+                            int((query.get("offset") or ["0"])[0]), int((query.get("limit") or ["60"])[0]))
+                    return self._json(200, result)
+                except (ValueError, OSError):
+                    return self._json(400, {"error": "Could not load this core"})
+            if route.path == "/api/v1/emulators/release":
+                try:
+                    result = EmulatorHub(service.store.path.parent).release(
+                        (query.get("id") or [""])[0])
+                    return self._json(200, result)
+                except (ValueError, requests.RequestException):
+                    return self._json(400, {"error": "Could not check this upstream release. Use its downloads page."})
             if route.path == "/api/v1/downloadclient/mdm":
                 return self._json(200, service.mdm_capability())
             if route.path == "/metrics":
@@ -9246,6 +9357,34 @@ def make_handler(service: ROMarr):
                 # filled back in, so Test reflects what Save would store.
                 existing = service.store.get_item("download_clients", body.get("id"))                     if body.get("id") else None
                 return self._json(200, service.test_client(merge_secrets(dict(body), existing)))
+            if route.path in ("/api/v1/emulators/cores/install", "/api/v1/emulators/cores/configure"):
+                try:
+                    core_hub = CoreHub(service.store.path.parent)
+                    result = (core_hub.configure() if route.path.endswith("/configure") else
+                              core_hub.install(str(body.get("id") or ""), scanner=service.scan_installation))
+                    return self._json(200, result)
+                except (ValueError, OSError, requests.RequestException, scanners.ScanUnavailable) as err:
+                    log.warning("Core installation failed: %s", type(err).__name__)
+                    return self._json(400, {"error": str(err) if isinstance(err, (ValueError, scanners.ScanUnavailable))
+                                           else "Could not install this core"})
+            if route.path == "/api/v1/emulators/install":
+                try:
+                    emulator_hub = EmulatorHub(service.store.path.parent)
+                    result = emulator_hub.install(str(body.get("id") or ""),
+                                         str(body.get("asset") or ""),
+                                         str(body.get("sha256") or ""),
+                                         scanner=service.scan_installation)
+                    return self._json(200, result)
+                except (ValueError, OSError, requests.RequestException,
+                        scanners.ScanUnavailable) as err:
+                    log.warning("Emulator installation failed: %s", type(err).__name__)
+                    return self._json(400, {"error": str(err) if isinstance(err, (ValueError, scanners.ScanUnavailable)) else "Emulator installation failed"})
+            if route.path == "/api/v1/security/inspect":
+                try:
+                    return self._json(200, service.security_inspect(
+                        str(body.get("path") or ""), str(body.get("engine") or "")))
+                except (ValueError, OSError, scanners.ScanUnavailable) as err:
+                    return self._json(400, {"error": str(err)})
             if route.path == "/api/v1/downloadclient/mdm/install":
                 try:
                     return self._json(200, service.mdm_install(body.get("version", "")))
