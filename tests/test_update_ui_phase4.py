@@ -169,6 +169,7 @@ def test_stats_banner_explains_disabled_scheduled_checks():
     """An available release does not turn a disabled scheduler back on."""
     stats = {"version": "1.8.1"}
     state = _payload(check_status={"state": "available"},
+                     install={"kind": "git", "can_apply": True},
                      settings={"auto_update": True,
                                "auto_update_effective": False,
                                "update_check": False})
@@ -230,6 +231,26 @@ pending.then(()=>console.log(JSON.stringify(root.innerHTML)))
         "stats": {"version": "1.8.1"},
         "update": _payload(),
     })) == "<div>New page</div>"
+
+
+def test_status_ignores_late_health_response_after_navigation():
+    """Health data arriving late must not repaint another page."""
+    start = ui.JS.index("RENDER.status=async()=>")
+    stop = ui.JS.index("\n};\n", start) + 4
+    setup = _BASE.replace(
+        "const j=async()=>data;",
+        "let activePage='status',pageVersion=1,resume;"
+        "const j=()=>new Promise(resolve=>{resume=resolve;});",
+    )
+    script = setup + _helpers() + ui.JS[start:stop] + """
+const pending=RENDER.status();
+root.innerHTML='<div>New page</div>';
+activePage='update';pageVersion=2;
+resume(data);
+pending.then(()=>console.log(JSON.stringify(root.innerHTML)))
+  .catch(e=>{console.error(String(e));process.exitCode=1;});
+"""
+    assert json.loads(_node(script, {"version": "1.8.1"})) == "<div>New page</div>"
 
 
 def test_stats_and_status_use_same_verified_build_presentation():
