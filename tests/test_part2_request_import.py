@@ -99,3 +99,75 @@ def test_legacy_manual_import_without_request_is_unchanged(tmp_path):
     results = import_rom(source, resolve("snes"), tmp_path / "library", dats=_catalog())
     assert len(results) == 1 and results[0].ok
     assert results[0].destination.exists()
+
+
+
+def test_same_catalog_hash_collision_holds_before_publication(tmp_path):
+    source = _zip(tmp_path / "dl.zip")
+    crc = f"{zlib.crc32(ROM) & 0xFFFFFFFF:08x}"
+    catalog = parse_dat(f"""
+    <datafile><header><name>Nintendo - SNES</name></header>
+      <game name="Super Metroid (USA)">
+        <rom name="Super Metroid (USA).sfc" size="{len(ROM)}" crc="{crc}"/>
+      </game>
+      <game name="Different Game (USA)">
+        <rom name="Different Game (USA).sfc" size="{len(ROM)}" crc="{crc}"/>
+      </game>
+    </datafile>""")
+    index = DatIndex()
+    index.add(catalog)
+    results = _import(tmp_path, source, dats=index)
+    assert len(results) == 1 and not results[0].ok
+    assert "AMBIGUOUS_MATCH" in results[0].reason
+    assert not (tmp_path / "library").exists()
+
+
+def test_source_swaps_to_another_verified_game_during_copy(tmp_path, monkeypatch):
+    from romarr import library
+
+    original = tmp_path / "Super Metroid (USA).sfc"
+    original.write_bytes(ROM)
+    different = b"\x23" * len(ROM)
+    first_crc = f"{zlib.crc32(ROM) & 0xFFFFFFFF:08x}"
+    second_crc = f"{zlib.crc32(different) & 0xFFFFFFFF:08x}"
+    catalog = parse_dat(f"""
+    <datafile><header><name>Nintendo - SNES</name></header>
+      <game name="Super Metroid (USA)">
+        <rom name="Super Metroid (USA).sfc" size="{len(ROM)}" crc="{first_crc}"/>
+      </game>
+      <game name="Different Game (USA)">
+        <rom name="Different Game (USA).sfc" size="{len(different)}" crc="{second_crc}"/>
+      </game>
+    </datafile>""")
+    index = DatIndex()
+    index.add(catalog)
+    copy_original = library._PathSource.copy
+    swapped = False
+
+    def swap_after_approval(self, name, destination):
+        nonlocal swapped
+        if self.path == original and not swapped:
+            swapped = True
+            original.write_bytes(different)
+        return copy_original(self, name, destination)
+
+    monkeypatch.setattr(library._PathSource, "copy", swap_after_approval)
+    results = _import(tmp_path, original, dats=index)
+    assert swapped
+    assert len(results) == 1 and not results[0].ok
+    assert "request identity changed during staging" in results[0].reason
+    assert list((tmp_path / "library").rglob("*.sfc")) == []
+    assert original.read_bytes() == different
+
+
+def test_opt_in_request_disables_hardlink_publication(tmp_path):
+    original = tmp_path / "Super Metroid (USA).sfc"
+    original.write_bytes(ROM)
+    outcomes = import_rom(
+        original, resolve("snes"), tmp_path / "library",
+        dats=_catalog(), requested_game="Super Metroid",
+        catalog_platforms={"Nintendo - SNES": "snes"}, prefer_hardlinks=True,
+    )
+    assert len(outcomes) == 1 and outcomes[0].ok, outcomes
+    assert outcomes[0].import_method != "hardlink"
+    assert outcomes[0].destination.read_bytes() == ROM
