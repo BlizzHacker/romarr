@@ -107,3 +107,8 @@ Example: if qBittorrent and ROMarr share host `/srv/downloads`, mount `/srv/down
 | Environment edit had no effect | Connection settings saved after first run are changed in the UI |
 
 The [install troubleshooting guide](INSTALL.md#troubleshooting) covers startup and permission errors. Include your version, install method, error and relevant log when reporting a problem; remove credentials first.
+
+
+## Emulators and security checks
+
+Use **Hub → Emulators** for portable emulator installation and the upstream setup guides. Enable import scanners under **Settings → Media Management**. See [emulators and scanning](EMULATORS-AND-SCANNING.md) for Defender, ClamAV, VirusTotal, MWM and Arkana setup.

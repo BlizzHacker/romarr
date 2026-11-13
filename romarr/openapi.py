@@ -345,6 +345,10 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
                                               "challenges, header spoofing and "
                                               "logins, and reports such sites "
                                               "as unavailable instead."),
+    "/api/v1/emulators": ("GET", "Curated emulator catalog and installed portable builds."),
+    "/api/v1/emulators/release": ("GET", "Check the selected emulator's official release assets."),
+    "/api/v1/emulators/install": ("POST", "Verify, scan and install a portable emulator on the ROMarr host."),
+    "/api/v1/security/inspect": ("POST", "Inspect an explicitly selected shared file with MWM or Arkana."),
     "/api/v1/downloadclient/mdm": ("GET", "Availability of the external "
                                           "Mister Download Manager CLI for "
                                           "standalone torrent and accelerated "

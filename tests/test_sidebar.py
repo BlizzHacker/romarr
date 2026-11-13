@@ -222,7 +222,7 @@ def test_native_navigation_preserves_routes_in_requested_order():
         'Library': 'library add discover search',
         'Wanted': 'missing lists calendar',
         'Activity': 'queue history blocklist',
-        'Hub': 'hub portal peers ecosystem',
+        'Hub': 'hub emulators portal peers ecosystem',
         'Settings': 'general media profiles indexers clients libraries connections metadata setup getstarted',
         'System': 'status stats update platforms collections manualimport tasks logs',
     }
@@ -235,7 +235,7 @@ def test_native_navigation_preserves_routes_in_requested_order():
     assert [g['data-group'] for g in groups if 'open' in g] == ['library']
     assert all(g['name'] == 'romarr-groups' for g in groups)
     links = [a for t, a in nodes if t == 'a']
-    assert len(links) == len({a['data-page'] for a in links}) == 32
+    assert len(links) == len({a['data-page'] for a in links}) == 33
     assert all(a['href'] == '#' + a['data-page'] for a in links)
     assert [a['data-ct'] for _, a in nodes if 'data-ct' in a] == [
         'games', 'missing', 'queued', 'queued']

@@ -816,6 +816,7 @@ NAV = [
     ]),
     ('Hub', [
         ('hub', 'Plugins', None),
+        ('emulators', 'Emulators', None),
         ('portal', 'Library Shell', None),
         ('peers', 'Friends', None),
         ('ecosystem', 'Ecosystem', None),
@@ -1231,7 +1232,7 @@ function go(page){
     calendar:'Release Calendar',manualimport:'Manual Import',
     collections:'Collections \u2014 full sets and 1G1R',
     getstarted:'Get Started',setup:'Setup Guide',
-    hub:'ROM Hub — Plugins',portal:'Library Shell & Device Fleet'};
+    hub:'ROM Hub — Plugins',emulators:'Emulator Hub',portal:'Library Shell & Device Fleet'};
   $('#top h1').textContent=titles[page]||'ROMarr';
   $('#search').classList.toggle('hide', page !== 'library');
   (RENDER[page]||RENDER.library)();
@@ -3759,6 +3760,14 @@ RENDER.media=()=>settingsPage('Media Management',
   +chk('overwrite_existing','Overwrite an existing file',SETTINGS.overwrite_existing)
   +chk('rescan_after_import','Tell your library server to rescan after an import',SETTINGS.rescan_after_import)
   +chk('reconcile_after_import','Reconcile Wanted aliases against verified library files after an import',SETTINGS.reconcile_after_import!==false)
+  +chk('scanner_defender_enabled','Scan imports with Microsoft Defender on this Windows host',SETTINGS.scanner_defender_enabled)
+  +chk('scanner_mwm_enabled','Require an antivirus result from MoveWeight Manager',SETTINGS.scanner_mwm_enabled)
+  +fld('scanner_mwm_url','MoveWeight Manager URL',SETTINGS.scanner_mwm_url||'','text',
+       'placeholder="https://mwm.example.com"')
+  +chk('scanner_vt_enabled','Require a known VirusTotal hash report before importing',SETTINGS.scanner_vt_enabled)
+  +\`<p class="help">MWM needs ROMARR_MWM_TOKEN on this host and access to the same file paths.
+      VirusTotal needs ROMARR_VIRUSTOTAL_API_KEY. It receives file hashes only.
+      Enabled scanners must finish before a manual or completed download import can proceed.</p>\`
   +chk('clamav_enabled','Scan downloads with ClamAV before importing them',SETTINGS.clamav_enabled)
   +fld('clamav_address','ClamAV address',SETTINGS.clamav_address||'','text',
      'placeholder="tcp://clamav:3310 or /run/clamav/clamd.sock"')
@@ -4835,6 +4844,75 @@ RENDER.connections=async()=>{
       ? res.map(x=>x.name+': '+(x.ok?'delivered':'failed')).join(' · ')
       : 'No connections configured.';
   };
+};
+
+RENDER.emulators=async()=>{
+  const version=pageVersion;
+  const current=()=>version===pageVersion && activePage==='emulators';
+  const catalog=await j('/api/v1/emulators');
+  if(!current()) return;
+  $('#page').innerHTML=\`<div class="card"><h3>Emulator Hub</h3>
+    <p>Install emulators on the ROMarr host, <b>\${esc(catalog.host)}</b>.
+    If you play on another device, use the project's downloads page on that device.</p>
+    <p class="help">Portable builds are checked against the publisher's SHA-256 digest.
+    Installations live in \${esc(catalog.install_dir)}. Use each project's setup guide for
+    firmware, BIOS and your game folders. Switch 2 projects are experimental.</p></div>
+    <div class="pgrid">\${catalog.items.map(item=>\`<div class="card">
+      <h3>\${esc(item.name)}</h3><p>\${esc(item.systems)}</p>
+      <p class="help">\${item.installed.length?'Installed '+esc(item.installed.join(', ')):'Choose a release to get started.'}</p>
+      <div class="row"><a class="btn ghost" href="\${esc(item.website)}" target="_blank" rel="noopener">Downloads</a>
+      <a class="btn ghost" href="\${esc(item.guide)}" target="_blank" rel="noopener">Setup guide</a>
+      \${item.managed_releases?\`<button class="btn" data-release="\${esc(item.id)}">Check release</button>\`:''}</div>
+      <div data-assets="\${esc(item.id)}" role="status"></div></div>\`).join('')}</div>
+    <div class="card"><h3>Inspect a file with your security lab</h3>
+      <p class="help">Enter a file path visible to ROMarr and MWM. Arkana copies the selected
+      file to your configured analysis lab. Follow its job in MWM.</p>
+      <div class="row"><input id="lab-path" placeholder="Full path to the file">
+      <button class="btn ghost" data-inspect="mwm">Inspect with MWM</button>
+      <button class="btn ghost" data-inspect="arkana">Send to Arkana</button></div>
+      <pre id="lab-result" role="status"></pre></div>\`;
+  document.querySelectorAll('[data-release]').forEach(button=>button.onclick=async()=>{
+    button.disabled=true;
+    const id=button.dataset.release, output=document.querySelector('[data-assets="'+id+'"]');
+    output.textContent='Checking the project release…';
+    try{
+      const release=await j('/api/v1/emulators/release?id='+encodeURIComponent(id));
+      if(!current()) return;
+      if(release.error) throw new Error(release.error);
+      const assets=(release.assets||[]).filter(a=>a.installable);
+      output.innerHTML='<p>'+esc(release.tag||release.note||'')+'</p>'
+        +(assets.length?assets.map((a,i)=>'<p><button class="mini" data-install="'+i+'">Install '
+          +esc(a.name)+'</button> · '+Math.ceil(a.bytes/1048576)+' MB</p>').join('')
+          :'<p class="help">No verified portable build matches this host. Use Downloads for other packages.</p>');
+      output.querySelectorAll('[data-install]').forEach(install=>install.onclick=async()=>{
+        const a=assets[Number(install.dataset.install)];
+        install.disabled=true;
+        const status=document.createElement('p');status.role='status';
+        status.textContent='Downloading, verifying and scanning…';output.append(status);
+        try{
+          const result=await j('/api/v1/emulators/install',{method:'POST',
+            headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({id,asset:a.name,sha256:a.sha256})});
+          if(!current()) return;
+          if(result.error) throw new Error(result.error);
+          status.textContent='Installed in '+result.path+'. Open the setup guide, then add your game folders in the emulator.';
+        }catch(error){if(current()) status.textContent=error.message;}
+        finally{if(current()) install.disabled=false;}
+      });
+    }catch(error){if(current()) output.textContent=error.message;}
+    finally{if(current()) button.disabled=false;}
+  });
+  document.querySelectorAll('[data-inspect]').forEach(button=>button.onclick=async()=>{
+    button.disabled=true;
+    const output=$('#lab-result');output.textContent='Contacting your lab…';
+    try{
+      const result=await j('/api/v1/security/inspect',{method:'POST',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify({
+          path:$('#lab-path').value,engine:button.dataset.inspect})});
+      if(current()) output.textContent=JSON.stringify(result,null,2);
+    }catch(error){if(current()) output.textContent=error.message;}
+    finally{if(current()) button.disabled=false;}
+  });
 };
 
 // --- Metadata --------------------------------------------------------------

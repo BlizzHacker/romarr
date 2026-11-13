@@ -59,7 +59,8 @@ from .libraries import (
 )
 from .clients import QBittorrent, QbitConfig, QbitAuthenticationError, Romm, RommConfig
 from . import hub  # ROM Hub bridge -- the Cartridge plugin layer
-from . import clamav
+from . import clamav, scanners
+from .emulators import EmulatorHub
 from . import mdm
 from .dat import DatIndex, parse_dat
 from .decompress import run_batch as run_decompress_batch, scan_compressed
@@ -2822,6 +2823,26 @@ class ROMarr:
             self.reload_clients()
             return result
 
+    def scan_installation(self, path: Path) -> None:
+        """Apply enabled malware scanners before publishing an emulator package."""
+        findings, _ = scanners.scan(self.store.settings, self._env, path)
+        if findings:
+            raise ValueError("Emulator package was refused by an enabled malware scanner")
+
+    def security_inspect(self, path: str, engine: str) -> dict:
+        """Send one explicitly chosen shared file to the user's MWM or Arkana lab."""
+        target = Path(path)
+        # Inspection accepts the same paths as Manual Import and never runs samples.
+        if not target.is_file() or target.is_symlink():
+            raise ValueError("Choose a regular file visible to both ROMarr and MWM")
+        commands = {"mwm": "lab_analyze", "arkana": "arkana_analyze"}
+        if engine not in commands:
+            raise ValueError("Choose MWM or Arkana")
+        report = scanners.mwm_call(self.store.settings, self._env, commands[engine],
+                                   {"path": str(target.resolve())})
+        return {"engine": engine, "report": report,
+                "note": "Arkana jobs can be followed in MWM's Malware Lab."}
+
     def ggrequestz(self) -> dict:
         """Whether GG Requestz is reachable, the way Seerr reports Radarr.
 
@@ -3463,6 +3484,9 @@ class ROMarr:
         from .sniff import disagrees_with
 
         mismatch = disagrees_with(source, platform.slug)
+        refused = self._virus_check(source, source.name, platform, None)
+        if refused is not None:
+            return refused
 
         target = self.library_for(platform.slug)
         if target is None:
@@ -7010,22 +7034,20 @@ class ROMarr:
         infection marks the row, as the release's fault, so failed download
         handling replaces it.
         """
-        if not self.store.settings.get("clamav_enabled"):
+        enabled = any(self.store.settings.get(key) for key in (
+            "clamav_enabled", "scanner_defender_enabled", "scanner_mwm_enabled",
+            "scanner_vt_enabled"))
+        if not enabled:
             return None
-        address = str(self.store.settings.get("clamav_address") or "").strip()
         try:
-            if not address:
-                raise clamav.ScanUnavailable("ClamAV is enabled but has no address")
-            found, too_large = clamav.scan(address, path)
-        except clamav.ScanUnavailable as err:
+            found, _ = scanners.scan(self.store.settings, self._env, path)
+        except (scanners.ScanUnavailable, OSError) as err:
             log.warning("%s waits for a virus scan: %s", name, err)
-            return {"name": name, "ok": False, "reason": f"waiting for ClamAV: {err}"}
-        for file in too_large:
-            log.warning("ClamAV refused %s as larger than its StreamMaxLength; "
-                        "imported unscanned", file)
+            label = "ClamAV" if self.store.settings.get("clamav_enabled") else "malware scanner"
+            return {"name": name, "ok": False, "reason": f"waiting for {label}: {err}"}
         if not found:
             return None
-        detail = "ClamAV: " + "; ".join(
+        detail = "Malware scan: " + "; ".join(
             f"{f.signature} in {Path(f.path).name}" for f in found)
         self.store.record(Event(kind="failed", game=name, platform=platform.slug,
                                 detail=detail))
@@ -7852,6 +7874,15 @@ def make_handler(service: ROMarr):
                 return self._json(200, {"types": CLIENT_TYPES})
             if route.path == "/api/v1/downloadclient/browser":
                 return self._json(200, service.browser_capability())
+            if route.path == "/api/v1/emulators":
+                return self._json(200, EmulatorHub(service.store.path.parent).catalog())
+            if route.path == "/api/v1/emulators/release":
+                try:
+                    result = EmulatorHub(service.store.path.parent).release(
+                        (query.get("id") or [""])[0])
+                    return self._json(200, result)
+                except (ValueError, requests.RequestException):
+                    return self._json(400, {"error": "Could not check this upstream release. Use its downloads page."})
             if route.path == "/api/v1/downloadclient/mdm":
                 return self._json(200, service.mdm_capability())
             if route.path == "/metrics":
@@ -9141,6 +9172,24 @@ def make_handler(service: ROMarr):
                 # filled back in, so Test reflects what Save would store.
                 existing = service.store.get_item("download_clients", body.get("id"))                     if body.get("id") else None
                 return self._json(200, service.test_client(merge_secrets(dict(body), existing)))
+            if route.path == "/api/v1/emulators/install":
+                try:
+                    emulator_hub = EmulatorHub(service.store.path.parent)
+                    result = emulator_hub.install(str(body.get("id") or ""),
+                                         str(body.get("asset") or ""),
+                                         str(body.get("sha256") or ""),
+                                         scanner=service.scan_installation)
+                    return self._json(200, result)
+                except (ValueError, OSError, requests.RequestException,
+                        scanners.ScanUnavailable) as err:
+                    log.warning("Emulator installation failed: %s", type(err).__name__)
+                    return self._json(400, {"error": str(err) if isinstance(err, (ValueError, scanners.ScanUnavailable)) else "Emulator installation failed"})
+            if route.path == "/api/v1/security/inspect":
+                try:
+                    return self._json(200, service.security_inspect(
+                        str(body.get("path") or ""), str(body.get("engine") or "")))
+                except (ValueError, OSError, scanners.ScanUnavailable) as err:
+                    return self._json(400, {"error": str(err)})
             if route.path == "/api/v1/downloadclient/mdm/install":
                 try:
                     return self._json(200, service.mdm_install(body.get("version", "")))

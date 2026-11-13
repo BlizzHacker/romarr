@@ -319,6 +319,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # clamav.py). The address is clamd's: tcp://host:3310, or a socket path.
     "clamav_enabled": False,
     "clamav_address": "",
+    "scanner_defender_enabled": False,
+    "scanner_mwm_enabled": False,
+    "scanner_mwm_url": "",
+    "scanner_vt_enabled": False,
     # Failed download handling, the same idea Radarr and Sonarr have: a
     # release that could not be downloaded is not one to choose again. When
     # on, a download that the client refused, that finished with no ROMs in
