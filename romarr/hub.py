@@ -418,6 +418,25 @@ def searchable_plugins() -> list[str]:
         return []
 
 
+def _search_platform(platform: str | None) -> str | None:
+    """Translate ROMarr IDs/labels to the shared ROM Hub source vocabulary.
+
+    Archive.org, No-Intro and other Hub sources use RomM identifiers for
+    these machines. Keep this conversion at the plugin boundary: persisted
+    ROMarr IDs and collection-path filtering must retain their own identity.
+    Unknown plugin-specific IDs pass through without broadening the search.
+    """
+    resolved = resolve(platform) if platform else None
+    slug = resolved.slug if resolved else platform
+    return {
+        "genesis-slash-megadrive": "genesis",
+        "turbografx16--1": "tg16",
+        "odyssey-2-slash-videopac-g7000": "odyssey-2",
+        "sinclair-zx81": "zx81",
+        "apple2": "appleii",
+    }.get(slug, slug)
+
+
 def search(query: str, platform: str | None = None, limit: int = 25,
            timeout: float = 90.0) -> tuple[list[dict], str]:
     """Search every enabled ROM Hub plugin, merged.
@@ -484,7 +503,7 @@ def search(query: str, platform: str | None = None, limit: int = 25,
             continue
         try:
             outcome = search_all(group, fetcher=fetcher, query=query,
-                                 platform=platform, limit=call_limit, timeout=timeout,
+                                 platform=_search_platform(platform), limit=call_limit, timeout=timeout,
                                  allow_unsandboxed=_unsandboxed())
         except Exception as exc:
             auth_error = f"ROM Hub search failed: {type(exc).__name__}: {exc}"
