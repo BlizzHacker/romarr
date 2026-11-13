@@ -1,6 +1,8 @@
 # Official builds and support
 
-ROMarr is maintained by **BlizzHacker / MOVE WEIGHT**. Use these sources when you want a build supported by this project.
+ROMarr is maintained by **BlizzHacker / MOVE WEIGHT**. Forks, code reuse and contributions are welcome. Independent projects should use their own name, logo and visual identity.
+
+Use these sources when you want a build supported by this project.
 
 | Item | Official source |
 | --- | --- |
@@ -28,6 +30,8 @@ Before replacing a fork, stop its container and back up its appdata and settings
 
 ROMarr's code remains under the [MIT license](../LICENSE), including its permission to fork and redistribute with the required copyright and license notices. A fork does not receive official support or endorsement.
 
-We do not approve of removed attribution, misleading claims of authorship, or names, logos and package descriptions that imply a third-party build is an official ROMarr release. Derivative projects should identify their maintainer, describe their relationship to upstream clearly, preserve required notices, and provide their own support links.
+We do not authorize ROMarr branding to serve as the product identity of an independently maintained project or distribution. Use a distinct project name, logo, artwork and package identity, and do not imply affiliation or endorsement.
+
+Crediting ROMarr as the original project, linking to upstream and accurately describing compatibility are welcome. Preserve required notices, identify your own maintainer and provide your own support links. We object to misleading branding and removed attribution, not to people building on the code.
 
 This policy does not change the MIT license or claim that a properly attributed fork is prohibited. The official distribution and support links above are the reference for this project's users.
