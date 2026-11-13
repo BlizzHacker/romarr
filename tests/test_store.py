@@ -411,7 +411,7 @@ def test_dat_catalog_platform_mapping_is_opt_in_and_persisted(tmp_path):
     path = tmp_path / "romarr.json"
     store = Store(path)
     assert store.settings["dat_catalog_platforms"] == {}
-    saved = {"Nintendo - SNES": "snes", "Sega - Mega Drive": "genesis"}
+    saved = {"Nintendo - SNES": "snes", "Sega - Mega Drive": "genesis-slash-megadrive"}
     store.update_settings({"dat_path": "/dats"})
     store.update_settings({"dat_catalog_platforms": saved})
     assert Store(path).settings["dat_catalog_platforms"] == saved
