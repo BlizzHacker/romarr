@@ -101,11 +101,22 @@ def test_general_navigation_fetches_fresh_settings_with_page_guard():
     html = page()
     renderer = html.split("RENDER.general=async()=>{", 1)[1].split(
         "/* ---------------- system", 1)[0]
-    assert "fresh=await j('/api/v1/config')" in renderer
+    assert "const response=await fetch('/api/v1/config')" in renderer
     assert "activePage!=='general'||pageVersion!==opVer" in renderer
     assert "SETTINGS=fresh;" in renderer
-    assert renderer.index("await j('/api/v1/config')") < renderer.index(
+    assert renderer.index("await fetch('/api/v1/config')") < renderer.index(
         "settingsPage('General'")
+
+
+def test_general_fetch_rejects_http_errors_before_parsing():
+    """An HTTP 401/500 JSON body is not a valid settings response."""
+    html = page()
+    renderer = html.split("RENDER.general=async()=>{", 1)[1].split(
+        "/* ---------------- system", 1)[0]
+    assert "if(!response.ok) throw new Error('Settings request failed')" in renderer
+    assert renderer.index("if(!response.ok)") < renderer.index(
+        "fresh=await response.json()")
+    assert "Could not load settings. Reopen General to retry." in renderer
 
 
 def test_general_renderer_reads_active_qbittorrent_urls():
