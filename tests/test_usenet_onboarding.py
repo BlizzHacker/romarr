@@ -146,6 +146,7 @@ const page={innerHTML:'',querySelector:()=>null};
 const $=selector=>selector==='#page'?page:{value:''};
 const esc=x=>String(x??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const num=x=>String(x),bindLibraryChips=()=>{};
+const setTimeout=()=>1,clearTimeout=()=>{};
 let response;
 const j=async()=>response;
 """ + script + r"""
@@ -164,5 +165,48 @@ const j=async()=>response;
  response={...base,scan_message:'Reading records',scan:{running:true,stage:'reading',read:7,elapsed_seconds:4}};
  await RENDER.library();
  assert(page.innerHTML.includes('still loading'));
+})().catch(error=>{console.error(error);process.exitCode=1;});
+""")
+
+
+def test_library_polls_loading_and_partial_then_stops_and_ignores_late_navigation():
+    """Exercise real render calls through progress, completion and stale responses."""
+    start = ui.JS.index("function libraryScanHelp(d){")
+    script = ui.JS[start:ui.JS.index("function bindLibraryChips", start)]
+    run_js(r"""
+const assert=require('assert'),RENDER={},SOURCE_LABEL={};
+const LIB={platform:'',genre:'',region:'',decade:'',origin:'',source:'',sort:'',offset:0,limit:120};
+const page={innerHTML:'',querySelector:()=>null};
+const $=selector=>selector==='#page'?page:{value:''};
+const esc=x=>String(x??''),num=x=>String(x),bindLibraryChips=()=>{};
+let pageVersion=1,activePage='library',calls=0,response,deferred;
+const pending=[],cleared=[];
+const setTimeout=(fn,ms)=>{pending.push({fn,ms});return pending.length;};
+const clearTimeout=id=>cleared.push(id);
+const j=()=>{calls++;return deferred?new Promise(resolve=>deferred=resolve):Promise.resolve(response);};
+""" + script + r"""
+(async()=>{
+ response={loading:true,scan:{running:true,stage:'counting',read:0},scan_message:'Count pending'};
+ await RENDER.library();
+ assert(page.innerHTML.includes('Count pending')&&pending.length===1&&pending[0].ms===5000);
+ response={loading:false,partial:true,items:[],total:0,grand_total:4,cached_total:4,totals:{total:4},facets:{},platforms:[],scan:{running:true,stage:'reading',read:4},scan_message:'Four read'};
+ await pending.shift().fn();
+ assert(page.innerHTML.includes('Four read')&&pending.length===1);
+ response={...response,partial:false,scan:{running:false,stage:'complete',read:4}};
+ await pending.shift().fn();
+ assert(pending.length===0);
+ response={loading:true,scan:{running:true,stage:'reading',read:0}};
+ await RENDER.library();
+ const before=calls;
+ activePage='clients';pageVersion++;
+ await pending.shift().fn();
+ assert(calls===before);
+ activePage='library';pageVersion++;
+ deferred=true;
+ const render=RENDER.library();
+ activePage='setup';pageVersion++;page.innerHTML='Destination page';
+ deferred({loading:true,scan:{running:true},scan_message:'STALE'});
+ await render;
+ assert(page.innerHTML==='Destination page'&&pending.length===0);
 })().catch(error=>{console.error(error);process.exitCode=1;});
 """)

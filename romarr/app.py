@@ -54,7 +54,7 @@ import time
 import requests
 
 from .libraries import (
-    LIBRARY_TYPES, RETROBAT_FOLDERS, build_library, build_library_from_config, library_counts,
+    FolderScanError, LIBRARY_TYPES, RETROBAT_FOLDERS, build_library, build_library_from_config, library_counts,
     load_backend_plugins, merge_library_secrets, redact_library, route_library,
 )
 from .clients import QBittorrent, QbitConfig, QbitAuthenticationError, Romm, RommConfig
@@ -280,6 +280,11 @@ def _read_failure(err: Exception) -> str:
                 f"password or API key on this library.")
     if status:
         return f"HTTP {status} from the library server."
+    if isinstance(err, FolderScanError):
+        failures = err.folder_failures
+        return (f"Library read incomplete: {len(failures)} filesystem errors "
+                f"({', '.join(sorted(set(failures)))}). Readable games remain available. "
+                "Check the mount and read permissions, then retry.")
     if isinstance(err, BlockingIOError):
         return ("Storage is temporarily busy after bounded retries. Check the NAS "
                 "mount and Docker file sharing, then retry the library refresh.")
@@ -2337,7 +2342,8 @@ class ROMarr:
             if not ok:
                 failure_detail = (client.last_error or
                                   "could not select the exact file")
-        elif (supports_torrent_file and callable(local_fetch)
+        elif ((supports_torrent_file or getattr(client, "magnet_only", False))
+                and callable(local_fetch)
                 and local_fetch(pick.download_url)):
             # Prowlarr's authenticated URL is LAN-only and contains its API
             # key. Fetch it here, then upload only the .torrent bytes to the
@@ -2354,15 +2360,19 @@ class ROMarr:
                 # to the client instead of treating it as torrent bytes.
                 if isinstance(torrent, str):
                     ok = client.add(torrent)
-                else:
+                elif supports_torrent_file:
                     ok = client.add_torrent_file(torrent)
-                download_id = client.last_job_id if ok else ""
+                else:
+                    ok = False
+                download_id = (getattr(client, "last_job_id", "") or "") if ok else ""
                 release_fault = False
                 if not ok:
                     client_label = getattr(client, "display_name", getattr(client, "name", "Download client"))
                     failure_detail = (
-                        getattr(client, "last_error", "")
-                        or f"{client_label} did not confirm the uploaded torrent"
+                        f"{client_label} requires a magnet; Prowlarr returned a torrent file"
+                        if not isinstance(torrent, str) and not supports_torrent_file
+                        else (getattr(client, "last_error", "")
+                              or f"{client_label} did not confirm the torrent")
                     )
         else:
             ok, download_id = hand_off_with_id(client, pick.download_url,

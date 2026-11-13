@@ -1214,6 +1214,7 @@ function go(page){
   // Hashes are untrusted input; inherited Object properties are not renderers.
   if(!Object.prototype.hasOwnProperty.call(RENDER,page)) page='library';
   if(typeof RENDER!=='undefined'&&RENDER._queueTimer){clearInterval(RENDER._queueTimer);RENDER._queueTimer=null;}
+  if(RENDER._libraryTimer){clearTimeout(RENDER._libraryTimer);RENDER._libraryTimer=null;}
   activePage=page;
   ++pageVersion;
   metadataLookup?.abort();
@@ -1647,6 +1648,12 @@ function libraryScanHelp(d){
 }
 
 RENDER.library=async()=>{
+  const version=typeof pageVersion==='number'?pageVersion:null;
+  const request=(RENDER._libraryRequest||0)+1;
+  RENDER._libraryRequest=request;
+  if(RENDER._libraryTimer){clearTimeout(RENDER._libraryTimer);RENDER._libraryTimer=null;}
+  const current=()=>request===RENDER._libraryRequest
+    &&(version===null||(pageVersion===version&&activePage==='library'));
   const p=$('#page');
   if(!p.querySelector('#lib-grid')) p.innerHTML='<div class="empty">Loading library…</div>';
   const q=($('#search').value||'').trim();
@@ -1659,6 +1666,13 @@ RENDER.library=async()=>{
     +`&source=${encodeURIComponent(LIB.source)}`
     +`&sort=${encodeURIComponent(LIB.sort)}`)
     .catch(()=>({items:[],error:'unreachable'}));
+  if(!current())return;
+  if((d.scan&&d.scan.running)||(d.loading&&!d.error&&!(d.scan&&d.scan.stage==='error'))){
+    RENDER._libraryTimer=setTimeout(()=>{
+      RENDER._libraryTimer=null;
+      if(current())return RENDER.library();
+    },5000);
+  }
 
   if(d.loading){
     // A partial network-library read is progress, not an empty collection.

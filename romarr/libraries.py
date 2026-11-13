@@ -667,6 +667,15 @@ class FolderConfig:
     root: str
 
 
+class FolderScanError(OSError):
+    """A read that yielded usable games but encountered unreadable entries."""
+
+    def __init__(self, failures):
+        """Retain error classes only, never private paths or exception messages."""
+        self.folder_failures = tuple(failures)
+        super().__init__(f"Library read incomplete: {len(self.folder_failures)} filesystem errors")
+
+
 class FolderLibrary:
     """A directory, which is what most of the emulation world actually uses.
 
@@ -747,17 +756,26 @@ class FolderLibrary:
         exts = self._extensions()
         pending = deque([self._root])
         seen = 0
-        while pending:
+        failures = []
+        while pending and seen < limit:
             directory = pending.popleft()
-            for entry in self._directory_entries(directory):
-                if self._fs_call(lambda: entry.is_dir(follow_symlinks=False)):
-                    pending.append(Path(entry.path))
-                elif (os.path.splitext(entry.name)[1].lower() in exts
-                      and self._fs_call(entry.is_file)):
-                    seen += 1
-                    yield Path(entry.path)
-                    if seen >= limit:
-                        return
+            try:
+                for entry in self._directory_entries(directory):
+                    try:
+                        if self._fs_call(lambda: entry.is_dir(follow_symlinks=False)):
+                            pending.append(Path(entry.path))
+                        elif (os.path.splitext(entry.name)[1].lower() in exts
+                              and self._fs_call(entry.is_file)):
+                            seen += 1
+                            yield Path(entry.path)
+                            if seen >= limit:
+                                break
+                    except OSError as err:
+                        failures.append(type(err).__name__)
+            except OSError as err:
+                failures.append(type(err).__name__)
+        if failures:
+            raise FolderScanError(failures)
 
     def iter_games(self, limit: int | None = None):
         """Read a folder once for progressive refresh; propagate incomplete reads."""
@@ -775,10 +793,13 @@ class FolderLibrary:
             return False
 
     def count(self) -> int:
+        """Count bounded readable games; expose incomplete reads as failures."""
         try:
             return sum(1 for _ in self._walk(self.MAX_SCAN))
-        except FileNotFoundError:
-            return 0
+        except FolderScanError as err:
+            if set(err.folder_failures) == {"FileNotFoundError"} and not self._root.exists():
+                return 0
+            raise
 
     def games(self, limit: int = 60, offset: int = 0,
               timeout: int | None = None) -> list[Game]:
@@ -792,8 +813,10 @@ class FolderLibrary:
 
         try:
             return list(islice(self.iter_games(limit=offset + limit), offset, offset + limit))
-        except FileNotFoundError:
-            return []
+        except FolderScanError as err:
+            if set(err.folder_failures) == {"FileNotFoundError"} and not self._root.exists():
+                return []
+            raise
 
     def rescan(self, platform_slug: str | None = None) -> bool:
         """Nothing to tell. The file is on disk; the frontend finds it.

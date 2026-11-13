@@ -241,3 +241,76 @@ def test_remote_qbittorrent_never_receives_prowlarr_url_or_key(tmp_path, caplog)
     assert service.queue[-1].state == "grabbed"
     assert service.queue[-1].download_id.startswith("qbit-tag:romarr-")
     assert "SUPERSECRET" not in caplog.text
+
+
+@pytest.fixture
+def debrid_service(tmp_path, monkeypatch):
+    """Use the real grab and Real-Debrid add path with isolated external calls."""
+    from romarr.downloaders import RealDebrid, RealDebridConfig
+    from romarr.scheduler import Scheduler
+    monkeypatch.setattr(Scheduler, "start", lambda self: None)
+    monkeypatch.setattr(ROMarr, "_refresh_counts", lambda self: None)
+    service = ROMarr({"ROMARR_DATA": str(tmp_path / "state.json")})
+    client = RealDebrid(RealDebridConfig(api_token="test", save_path=str(tmp_path / "downloads")))
+    calls = []
+
+    def post(path, data):
+        """Record the exact magnet submitted and model the service response."""
+        calls.append((path, data))
+        return {"id": "torrent-id"} if path == "/torrents/addMagnet" else {}
+
+    monkeypatch.setattr(client, "_post", post)
+    monkeypatch.setattr(service, "notify", lambda *args: [])
+    service.clients = [client]
+    return service, client, calls
+
+
+def debrid_release(url):
+    """Model the BlueRoms release returned through Prowlarr's proxy."""
+    return Release("Halo 2 - Xbox", 4_000_000_000, 20, (1000,), url,
+                   "torrent", indexer="Prowlarr")
+
+
+@pytest.mark.parametrize("status", [301, 302, 303, 307, 308])
+def test_realdebrid_resolves_trusted_prowlarr_magnet_redirect(debrid_service, status):
+    """Only the sanitized magnet reaches Real-Debrid, never the proxy key/URL."""
+    service, client, calls = debrid_service
+    magnet = "magnet:?xt=urn:btih:" + "a" * 40 + "&dn=Halo"
+    session = FetchSession([Response(status, headers={"Location": magnet + "&apikey=SUPERSECRET"})])
+    service.prowlarr = prowlarr(session)
+    result = service.grab(debrid_release("http://prowlarr:9696/1/download?apikey=SUPERSECRET"), "Halo 2", "xbox")
+    assert result["ok"]
+    assert calls == [("/torrents/addMagnet", {"magnet": magnet}),
+                     ("/torrents/selectFiles/torrent-id", {"files": "all"})]
+    assert "SUPERSECRET" not in repr(calls) and "prowlarr" not in repr(calls)
+    assert service.queue[-1].state == "grabbed"
+    assert client._ours() == ["torrent-id"]
+
+
+@pytest.mark.parametrize("location", ["https://attacker.example/download", "magnet:?dn=no-hash"])
+def test_realdebrid_proxy_refuses_unsafe_or_invalid_redirects(debrid_service, location, caplog):
+    """Refused redirects never contact the external destination or debrid API."""
+    service, client, calls = debrid_service
+    session = FetchSession([Response(302, headers={"Location": location})])
+    service.prowlarr = prowlarr(session)
+    result = service.grab(debrid_release("http://prowlarr:9696/1/download?apikey=SUPERSECRET"), "Halo 2", "xbox")
+    assert not result["ok"] and not calls and len(session.calls) == 1
+    assert "SUPERSECRET" not in caplog.text
+
+
+def test_realdebrid_direct_magnet_avoids_proxy_fetch(debrid_service):
+    """Keep existing direct-magnet grabs unchanged."""
+    service, client, calls = debrid_service
+    session = FetchSession([])
+    service.prowlarr = prowlarr(session)
+    magnet = "magnet:?xt=urn:btih:" + "b" * 40
+    assert service.grab(debrid_release(magnet), "Halo 2", "xbox")["ok"]
+    assert not session.calls and calls[0][1] == {"magnet": magnet}
+
+
+def test_realdebrid_torrent_file_is_clear_failure_not_exception(debrid_service):
+    """A proxy returning actual bytes must not call an unsupported upload method."""
+    service, client, calls = debrid_service
+    service.prowlarr = prowlarr(FetchSession([Response(chunks=[TORRENT])]))
+    result = service.grab(debrid_release("http://prowlarr:9696/1/download?apikey=SUPERSECRET"), "Halo 2", "xbox")
+    assert not result["ok"] and "requires a magnet" in result["error"] and not calls

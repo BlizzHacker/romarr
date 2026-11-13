@@ -203,3 +203,28 @@ def test_failure_preserves_unfinished_first_page_and_later_tail(readable):
     assert {g.id for g in rows} == {str(n) for n in range(readable)}
     assert published[-1][2]
     assert service._library_scan["read"] == readable
+
+
+def test_unreadable_platform_does_not_hide_readable_siblings(tmp_path, monkeypatch):
+    """Visit later platforms and aggregate failures after yielding their games."""
+    from romarr.libraries import FolderScanError
+    for folder in ("a-denied", "b-readable", "c-readable"):
+        (tmp_path / folder).mkdir()
+        (tmp_path / folder / "Game.sfc").write_bytes(b"rom")
+    lib = FolderLibrary(FolderConfig(root=str(tmp_path)))
+    original = lib._directory_entries
+
+    def entries(path):
+        """Force the denied directory first, regardless of filesystem ordering."""
+        if path.name == "a-denied":
+            raise PermissionError(errno.EACCES, "private mount details")
+        return sorted(original(path), key=lambda entry: entry.name)
+
+    monkeypatch.setattr(lib, "_directory_entries", entries)
+    readable = []
+    with pytest.raises(FolderScanError) as failure:
+        for game in lib.iter_games():
+            readable.append(game)
+    assert {g.platform for g in readable} == {"b-readable", "c-readable"}
+    assert failure.value.folder_failures == ("PermissionError",)
+    assert "private mount" not in str(failure.value)
