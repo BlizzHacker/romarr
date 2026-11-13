@@ -187,6 +187,51 @@ def test_stats_banner_handles_failed_and_mismatched_status():
     assert "Update status unavailable" in _stats_banner(stats, None)
 
 
+def test_update_ignores_late_api_response_after_navigation():
+    """A previous page's fetch must not repaint an unrelated newer page."""
+    start = ui.JS.index("RENDER.update=async()=>")
+    stop = ui.JS.index("RENDER.logs=async()=>", start)
+    setup = _BASE.replace(
+        "const j=async()=>data;",
+        "let activePage='update',pageVersion=1,resume;"
+        "const j=()=>new Promise(resolve=>{resume=resolve;});",
+    )
+    script = setup + _helpers() + ui.JS[start:stop] + """
+const pending=RENDER.update();
+root.innerHTML='<div>New page</div>';
+activePage='status';pageVersion=2;
+resume(data);
+pending.then(()=>console.log(JSON.stringify(root.innerHTML)))
+  .catch(e=>{console.error(String(e));process.exitCode=1;});
+"""
+    assert json.loads(_node(script, _payload())) == "<div>New page</div>"
+
+
+def test_stats_ignores_late_update_response_after_navigation():
+    """An extra Stats update-status fetch must respect page generation."""
+    start = ui.JS.index("RENDER.stats=async()=>")
+    stop = ui.JS.index("RENDER.queue=async()=>", start)
+    setup = _BASE.replace(
+        "const j=async()=>data;",
+        "let activePage='stats',pageVersion=1,resume;"
+        "const j=url=>url==='/api/v1/stats'?Promise.resolve(data.stats)"
+        ":url==='/api/v1/update'?new Promise(resolve=>{resume=resolve;})"
+        ":Promise.reject(new Error('optional audit unavailable'));",
+    )
+    script = setup + _helpers() + ui.JS[start:stop] + """
+const pending=RENDER.stats();
+root.innerHTML='<div>New page</div>';
+activePage='status';pageVersion=2;
+resume(data.update);
+pending.then(()=>console.log(JSON.stringify(root.innerHTML)))
+  .catch(e=>{console.error(String(e));process.exitCode=1;});
+"""
+    assert json.loads(_node(script, {
+        "stats": {"version": "1.8.1"},
+        "update": _payload(),
+    })) == "<div>New page</div>"
+
+
 def test_stats_and_status_use_same_verified_build_presentation():
     """Cross-page UI should share one escaped build-identity presenter."""
     source = ui.JS

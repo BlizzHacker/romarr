@@ -3203,8 +3203,11 @@ const statsUpdateMessage=(stats,update)=>{
 };
 
 RENDER.stats=async()=>{
+  const viewVersion=typeof pageVersion==='number'?pageVersion:null;
   const [s,up]=await Promise.all([j('/api/v1/stats'),
     j('/api/v1/update').catch(()=>null)]);
+  if((typeof activePage==='string'&&activePage!=='stats')
+      ||(viewVersion!==null&&pageVersion!==viewVersion))return;
   const hours=Math.floor((s.uptime_seconds||0)/3600);
   const bar=(entries)=>{
     const rows=Object.entries(entries||{});
@@ -6005,7 +6008,10 @@ RENDER.tasks=async()=>{
 
 let LOG_TIMER=null;
 RENDER.update=async()=>{
+  const viewVersion=typeof pageVersion==='number'?pageVersion:null;
   const d=await j('/api/v1/update').catch(()=>null);
+  if((typeof activePage==='string'&&activePage!=='update')
+      ||(viewVersion!==null&&pageVersion!==viewVersion))return;
   if(!d){$('#page').innerHTML='<div class="panel-note panel-warn">Could not read update status.</div>';return;}
   const inst=d.install||{}, st=d.settings||{}, verdict=updateVerdict(d.check_status);
   const kindLabel={git:'git checkout (self-update possible)',
