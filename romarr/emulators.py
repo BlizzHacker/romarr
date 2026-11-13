@@ -135,7 +135,7 @@ class EmulatorHub:
         items = []
         records = self.inventory.records()
         featured = {entry[0]: index for index, entry in enumerate(CATALOG)}
-        records.sort(key=lambda row: (featured.get(row["id"], len(featured)),
+        records.sort(key=lambda row: (featured.get(row["id"], len(featured) if row.get("featured") else len(featured) + 1),
                                       -int(row.get("stars") or 0), row["name"].lower()))
         wanted = query.strip().casefold()
         for record in records:
@@ -145,7 +145,9 @@ class EmulatorHub:
                 continue
             saved = sorted((self.root / row["id"]).glob("*/romarr-install.json"))
             row["installed"] = [p.parent.name for p in saved]
-            row["managed_releases"] = row.get("provider") in ("github", "gitlab", "forgejo") and bool(row.get("repo"))
+            row["managed_releases"] = (not row.get("manual_setup") and
+                                       row.get("provider") in ("github", "gitlab", "forgejo")
+                                       and bool(row.get("repo")))
             app_id = FLATPAKS.get(row["id"], "")
             row["flatpak"] = ("https://dl.flathub.org/repo/appstream/" + app_id
                               + ".flatpakref") if app_id else ""
@@ -158,8 +160,11 @@ class EmulatorHub:
                 "coverage": bundled()["coverage"], "verified_date": bundled()["verified_date"]}
 
     def release(self, slug: str) -> dict:
-        """Resolve a project's own GitHub release assets and their published digests."""
+        """Resolve official release assets or return manual setup instructions."""
         entry = self.entry(slug)
+        if entry.get("manual_setup"):
+            return {**entry, "assets": [], "note": "Use the upstream launcher and setup guide.",
+                    "downloads": entry.get("upstream_downloads") or entry["website"]}
         if not entry.get("repo") or entry.get("provider", "github") not in ("github", "gitlab", "forgejo"):
             return {**entry, "assets": [], "note": "Use the project's downloads page."}
         provider = entry.get("provider", "github")

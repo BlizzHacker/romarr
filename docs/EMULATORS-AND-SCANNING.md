@@ -19,9 +19,11 @@ Lime3DS users should use Azahar. Eden and Ryubing host their own distribution si
 
 Firmware, BIOS and console keys belong in the locations specified by the emulator's setup guide. Supply your own dumps. Adding a directory to ROMarr's library does not add that directory to an emulator automatically.
 
+Longshot is listed as an experimental native-game recompilation tool for Windows and Linux. Its source mirror is [hosted here](https://git.moveweight.com/romarr-emulators/magicbeandev--longshot); open its setup guide for the upstream launcher and matching game-file requirements.
+
 ## Browse the full catalog
 
-The catalog snapshot contains 1,214 emulator, fork and companion-tool entries. Search by name, system, license or forge, and use Previous / Next to see every result. Free and noncommercial software is included; the license on each project still applies. Entries identify upstream sources and do not imply that every project has been installed or tested.
+The catalog snapshot contains 1,215 emulator, fork and companion-tool entries. Search by name, system, license or forge, and use Previous / Next to see every result. Free and noncommercial software is included; the license on each project still applies. Entries identify upstream sources and do not imply that every project has been installed or tested.
 
 **Browse forks** retrieves public fork pages directly from GitHub, GitLab or Forgejo. **More forks** continues through the network instead of stopping at a fixed list. Discovery keeps local records so they can be searched afterward. An unavailable or private project cannot be restored by catalog discovery.
 
