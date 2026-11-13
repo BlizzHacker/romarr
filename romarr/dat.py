@@ -605,6 +605,23 @@ class DatIndex:
             candidates.extend(Match(VERIFIED, name, rom, dat.name) for name, rom in extra)
         return tuple(candidates)
 
+    def game_rom_count(self, match: Match) -> int | None:
+        """Count all declared ROMs for a uniquely identified, verified DAT game.
+
+        A Match carries a display catalog name, not a stable catalog ID.
+        Missing or duplicate matching catalogs must not certify completeness.
+        Preserve first-match lookup compatibility for legacy import callers.
+        """
+        if (match.status != VERIFIED or match.rom is None
+                or not match.dat or not match.game):
+            return None
+        games = [game for dat in self.dats if dat.name == match.dat
+                 if (game := dat.games.get(match.game)) is not None
+                 and match.rom in game.roms]
+        if len(games) != 1:
+            return None
+        return len(games[0].roms)
+
     def lookup(self, **hashes) -> Match:
         best = Match(UNKNOWN)
         for dat in self.dats:
