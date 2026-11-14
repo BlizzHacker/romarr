@@ -4,6 +4,8 @@ The *arr for games.
 
 Find games, verify ROMs, and import them into your library.
 
+**New here?** Start with [one system and one game](docs/FIRST-GAME.md). ROMarr finds and organizes; an emulator plays. RomM is an optional library frontend. You can bring files you already own or connect search sources when you are ready.
+
 [![Tests and images](https://github.com/BlizzHacker/romarr/actions/workflows/docker.yml/badge.svg)](https://github.com/BlizzHacker/romarr/actions/workflows/docker.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
@@ -27,7 +29,7 @@ Forks and code reuse are welcome; independent projects should use their own bran
 
 You can use a plain **folder** as your library. RomM, Gaseous, Retrom and other library integrations are optional. Your emulator or frontend plays the games; ROMarr handles finding, checking and importing files.
 
-Imports can be checked against DAT checksums. The result is **verified**, **bad dump**, or **unknown**. Without a matching DAT, a file is unknown; that does not mean it is damaged. **Rename on import** can use a verified single-file ROM's DAT name while keeping its source extension; unknown filenames are retained and existing files are not overwritten. A bulk, in-place rename planner for existing libraries is on the [roadmap](ROADMAP.md).
+Imports can be checked against DAT checksums. The result is **verified**, **bad dump**, or **unknown**. Without a matching DAT, a file is unknown; that does not mean it is damaged. **Rename on import** can use a verified single-file ROM's DAT name while keeping its source extension; unknown filenames are retained and existing files are not overwritten. For files already in your library, use the [rename preview and rollback guide](docs/EXISTING-LIBRARY-RENAME.md). Review each proposed change; multi-file disc sets and ambiguous matches are skipped.
 
 ## Install
 

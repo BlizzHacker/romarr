@@ -5487,10 +5487,11 @@ RENDER.setup=async()=>{
   const action=(id,label)=>'<button class="btn ghost" id="'+id+'">'+label+'</button>';
   let content='';
   if(active===0){
-    content='<h3>Welcome to ROMarr</h3><p class="help">Choose what you want to do first. You can change your mind and add more connections later.</p>'
+    content='<h3>Welcome to ROMarr</h3><p class="help">Let’s get one game into your library. Choose a starting point; you can add more connections later.</p>'
       +'<div class="pick"><button data-setup-mode="organize" aria-pressed="'+(SETUP.mode==='organize')+'">I already have ROMs<small>Connect a folder or library, preview existing files, and check what is missing. No indexer or download client needed.</small></button>'
       +'<button data-setup-mode="download" aria-pressed="'+(SETUP.mode==='download')+'">Find and download games<small>Connect your library, a download client, and a search source.</small></button></div>'
-      +'<p class="help" style="margin-top:16px">ROMarr organizes and acquires files. You play them in a library frontend or emulator of your choice.</p>';
+      +'<p class="help" style="margin-top:16px"><b>ROMarr finds, checks and organizes games.</b> Your emulator plays them. <b>RomM</b> is an optional library frontend with playback support for supported systems. If you already use Sonarr or Radarr, the search-and-import workflow will feel familiar.</p>';
+    content+='<p><a class="btn ghost" href="#libraries">I already use RomM — connect my library</a></p><p class="help">New to emulators? Start with one system and a game file you already have. You can use this guide without an indexer, plugins or a RomM server.</p>';
   }else if(active===1){
     content='<h3>Where should your ROMs live?</h3><p class="help">Use a plain folder, or connect RomM, Gaseous, Retrom, or another supported library. Your existing files stay in place when you add a library.</p>'
       +added(state.libraries)
@@ -5524,13 +5525,13 @@ RENDER.setup=async()=>{
       +'<a class="btn ghost" href="#hub">Browse ROM Hub plugins</a>'
       +(!state.hub_available?'<p class="help">ROM Hub is not available in this installation. The Plugins page explains how to add it; your folder and indexer setup can still work.</p>':'');
   }else{
-    content='<h3>Choose your first small task</h3><p class="help">Start with one game so you can see each step. You can reopen this guide from <b>Settings → Setup Guide</b> whenever you need it.</p>'
+    content='<h3>Choose your first small task</h3><p class="help">You’re ready to try one small task. Finishing this guide saves your choices; check History after your first import to confirm it worked. You can reopen this guide from <b>Settings → Setup Guide</b> whenever you need it.</p>'
       +(SETUP.mode==='organize'
         ?'<p><a class="btn" href="#manualimport">Preview existing ROMs</a></p><p class="help">Manual Import shows what ROMarr recognizes before you import. For missing games and DAT comparison, open <a href="#collections">Collections</a>. Exact duplicate cleanup starts with an audit under <a href="#stats">Stats</a>.</p>'
         :'<p><a class="btn" href="#search">Preview a game search</a></p><p class="help">Interactive Search shows the available releases before you choose one. Follow its progress in <a href="#queue">Queue</a>. If you prefer to start with files you already have, use <a href="#manualimport">Manual Import</a>.</p>')
       +'<h4 style="margin-top:22px">Want a dedicated player?</h4><p class="help">Cartridge is an optional companion for a RomM library. Choose the version for your device; ROMarr works without it.</p>'
       +'<div class="row" style="flex-wrap:wrap"><a class="btn ghost" href="https://github.com/BlizzHacker/romarr/releases/download/v1.8.0/Cartridge-Windows-Portable-0.2.0-x64.exe" target="_blank" rel="noopener">Cartridge for Windows</a><a class="btn ghost" href="https://apps.microsoft.com/detail/9MXC51W17LH4" target="_blank" rel="noopener">Cartridge for Xbox</a></div>'
-      +'<p class="help">Need help? <a href="https://github.com/BlizzHacker/romarr/issues" target="_blank" rel="noopener">Open a GitHub issue</a> with your ROMarr version, what you expected, and the relevant error. Remove passwords and API keys from logs.</p>';
+      +'<p class="help">Stuck? You do not need to know the technical terms. Tell us the last step you reached. <a href="https://github.com/BlizzHacker/romarr/issues" target="_blank" rel="noopener">Open a GitHub issue</a> with your ROMarr version, what you expected, and the relevant error. Remove passwords and API keys from logs.</p>';
   }
   $('#page').innerHTML='<div class="card" style="max-width:900px"><div class="row" style="justify-content:space-between"><span class="help">Setup Guide</span><button class="btn ghost" id="setup-dismiss">Set up later</button></div>'
     +'<div class="row" style="flex-wrap:wrap;gap:6px;margin:12px 0 24px">'+order.map((step,n)=>
@@ -5627,12 +5628,12 @@ RENDER.getstarted=async()=>{
 
   $('#page').innerHTML=
     '<div class="card"><h3>What ROMarr is</h3><p><a class="btn" href="#setup">Open the Setup Guide</a></p>'
-    +'<p class="help">ROMarr is the acquisition and automation layer: it '
-    +'searches your indexers, grabs the best release, checks it against a '
-    +'No-Intro or Redump DAT, and files it into your library. '
-    +'<b>It is not an emulator and not a game launcher.</b> Something else '
-    +'plays the ROM — ROMarr makes sure the right file is in the right place '
-    +'for it.</p>'
+    +'<p class="help">ROMarr helps you find, check and organize games. '
+    +'Start with files you already have, or connect a search source and a download client. '
+    +'Optional DAT catalogues compare your files with known checksums.</p>'
+    +'<p class="help"><b>Your emulator plays the games.</b> RomM is an optional '
+    +'library frontend with playback for supported systems. You can also use a plain folder. '
+    +'If you use Sonarr or Radarr, the search-and-import workflow will feel familiar.</p>'
     +'<div style="font-family:ui-monospace,monospace;font-size:12.5px;'
     +'background:var(--bg);border:1px solid var(--line);border-radius:6px;'
     +'padding:14px;overflow-x:auto;line-height:1.9">'
