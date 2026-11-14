@@ -27,6 +27,8 @@ C64, Atari 2600 and ColecoVision are included as platforms. Open **Hub → Emula
 
 ## 3. Import the file
 
+For Docker, put the game copy in a folder already mounted into ROMarr, such as the host folder mapped to `/downloads`, or add a bind mount for its source folder. Enter that folder’s container path (for example `/downloads`) when scanning; an arbitrary host path is not visible inside the container. [Path examples](GETTING-STARTED.md#paths-that-need-to-agree).
+
 First confirm your destination under **Settings → Libraries**. Then open **Manual Import**, enter the source folder and click **Scan**. Check the file, platform, explanation and DAT result, then import the selected file. Scanning alone does not move anything.
 
 Check **History** and the destination folder. A successful import means the file reached your library; playback is the next check. An **unknown** verification result means no loaded DAT identified the file, which does not by itself mean it is broken. A DAT is a catalogue of known filenames and checksums.
