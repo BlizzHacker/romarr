@@ -100,3 +100,83 @@ def test_extension_rejects_unsafe_profiles_and_packages_reproducibly(tmp_path):
     with zipfile.ZipFile(first) as archive:
         assert "manifest.json" in archive.namelist()
         assert "package.py" not in archive.namelist()
+
+
+def test_popup_serializes_deferred_storage_and_requires_successful_initialization():
+    """Run the shipped popup against delayed storage, including failure and retry."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node is needed to execute the popup")
+    script = r"""
+const vm=require('node:vm'),fs=require('node:fs'),assert=require('node:assert/strict');
+class Element {
+  constructor(tag='div'){this.tag=tag;this.children=[];this.disabled=false;this.hidden=false;this.value='';}
+  append(...children){this.children.push(...children);}
+  replaceChildren(...children){this.children=[...children];}
+  set textContent(value){this.text=value;this.children=[];}
+  get textContent(){return this.text||'';}
+  setAttribute(){}
+  querySelectorAll(selector){
+    const tags=selector.split(',');
+    return this.children.flatMap(child=>[...(tags.includes(child.tag)?[child]:[]),...child.querySelectorAll(selector)]);
+  }
+  reset(){this.resets=(this.resets||0)+1;}
+}
+function deferred(){let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};}
+const tick=()=>new Promise(resolve=>setImmediate(resolve));
+function setup(){
+  const elements=Object.fromEntries(['profiles','status','add','name','url','retry'].map(id=>[id,new Element()]));
+  elements.name.tag=elements.url.tag='input';elements.add.append(elements.name,elements.url,new Element('button'));
+  const reads=[],writes=[];
+  const storage={
+    setAccessLevel:async()=>{},
+    get:()=>{const wait=deferred();reads.push(wait);return wait.promise;},
+    set:value=>{const wait=deferred();writes.push({wait,value:structuredClone(value)});return wait.promise;}
+  };
+  const context=vm.createContext({URL,chrome:{storage:{local:storage}},document:{getElementById:id=>elements[id],createElement:tag=>new Element(tag)}});
+  vm.runInContext(fs.readFileSync('desktop/chrome/validation.js','utf8'),context);
+  vm.runInContext(fs.readFileSync('desktop/chrome/popup.js','utf8'),context);
+  const submit=()=>elements.add.onsubmit({preventDefault(){},target:elements.add});
+  const setInput=(name,url)=>{elements.name.value=name;elements.url.value=url;};
+  const names=()=>elements.profiles.children.map(article=>article.children[0].textContent);
+  return {elements,reads,writes,submit,setInput,names,buttons:()=>elements.profiles.querySelectorAll('button')};
+}
+const fixtures=['A','B','C'].map(name=>({name,url:'https://'+name.toLowerCase()+'.example/'}));
+const watchdog=setTimeout(()=>{console.error('popup harness timed out');process.exit(1);},5000);
+(async()=>{
+  const x=setup();await tick();
+  assert.equal(x.elements.name.disabled,true);
+  x.setInput('D','https://d.example/');await x.submit();assert.equal(x.writes.length,0);
+  x.reads[0].resolve({profiles:fixtures});await tick();assert.deepEqual(x.names(),['A','B','C']);
+  const remove=x.buttons()[0], first=remove.onclick();
+  assert.equal(x.writes.length,1);assert.equal(remove.disabled,true);assert.equal(x.elements.name.disabled,true);
+  await remove.onclick();x.setInput('D','https://d.example/');await x.submit();assert.equal(x.writes.length,1);
+  assert.deepEqual(x.names(),['A','B','C']); // Keep the last durable snapshot until save succeeds.
+  x.writes[0].wait.resolve();await first;assert.deepEqual(x.names(),['B','C']);
+  assert.equal(x.elements.name.disabled,false);
+  const failed=x.buttons()[0].onclick();x.writes[1].wait.reject(Error('storage failed'));await failed;
+  assert.deepEqual(x.names(),['B','C']);assert.match(x.elements.status.textContent,/storage failed/);
+  x.setInput('D','https://d.example/');const add=x.submit();await x.buttons()[0].onclick();
+  assert.equal(x.writes.length,3);assert.deepEqual(x.writes[2].value.profiles.map(p=>p.name),['B','C','D']);
+  x.writes[2].wait.resolve();await add;assert.deepEqual(x.names(),['B','C','D']);
+  x.setInput('E','https://e.example/');const failedAdd=x.submit();x.writes[3].wait.reject(Error('write rejected'));await failedAdd;
+  assert.deepEqual(x.names(),['B','C','D']);assert.equal(x.elements.name.disabled,false);
+
+  const y=setup();await tick();y.reads[0].reject(Error('read failed'));await tick();
+  assert.equal(y.elements.retry.hidden,false);assert.equal(y.elements.name.disabled,true);
+  y.setInput('New','https://new.example/');await y.submit();assert.equal(y.writes.length,0);
+  const retry=y.elements.retry.onclick();await tick();assert.equal(y.elements.retry.disabled,true);
+  y.reads[1].resolve({profiles:fixtures});await retry;assert.deepEqual(y.names(),['A','B','C']);
+  assert.equal(y.elements.retry.hidden,true);assert.equal(y.elements.name.disabled,false);
+  y.setInput('New','https://new.example/');const afterRetry=y.submit();
+  assert.deepEqual(y.writes[0].value.profiles.map(p=>p.name),['A','B','C','New']);
+  y.writes[0].wait.resolve();await afterRetry;
+
+  const full=setup();await tick();
+  full.reads[0].resolve({profiles:Array.from({length:20},(_,i)=>({name:'S'+i,url:'https://s'+i+'.example/'}))});await tick();
+  full.setInput('Extra','https://extra.example/');await full.submit();
+  assert.equal(full.writes.length,0);assert.match(full.elements.status.textContent,/20 maximum/);
+  console.log('popup deferred initialization, retry, double-remove, overlapping add/remove, rollback, and 20-profile limit passed');
+})().then(()=>clearTimeout(watchdog)).catch(error=>{clearTimeout(watchdog);console.error(error);process.exitCode=1;});
+"""
+    subprocess.run([node, "-e", script], cwd=ROOT, check=True, timeout=15)

@@ -544,6 +544,30 @@ public sealed class MainWindow : Form
         await StartBackend();
     }
 
+    /// <summary>Compares numeric package identities, treating an omitted revision as zero.</summary>
+    static bool SameVersionIdentity(string? backendVersion, Version? nativeVersion)
+    {
+        if (!Version.TryParse(backendVersion, out var backendVersionNumber) || nativeVersion is null
+            || backendVersionNumber.Build < 0 || nativeVersion.Build < 0) return false;
+        return backendVersionNumber.Major == nativeVersion.Major
+            && backendVersionNumber.Minor == nativeVersion.Minor
+            && backendVersionNumber.Build == nativeVersion.Build
+            && Math.Max(backendVersionNumber.Revision, 0) == Math.Max(nativeVersion.Revision, 0);
+    }
+
+    /// <summary>Proves three/four-component identity equivalence without dropping nonzero revisions.</summary>
+    static void ProveVersionIdentity()
+    {
+        if (!SameVersionIdentity("1.10.0", new Version(1, 10, 0, 0))
+            || !SameVersionIdentity("1.10.0.0", new Version(1, 10, 0))
+            || !SameVersionIdentity("1.10.0.4", new Version(1, 10, 0, 4))
+            || SameVersionIdentity("1.10.0", new Version(1, 10, 0, 4))
+            || SameVersionIdentity("1.10.0.4", new Version(1, 10, 0, 5))
+            || SameVersionIdentity("1.10.1", new Version(1, 10, 0, 0))
+            || SameVersionIdentity("invalid", new Version(1, 10, 0)))
+            throw new Exception("Package version identity comparison failed.");
+    }
+
     /// <summary>Exercises the actual packaged window, backend, browser and server modes.</summary>
     async Task Smoke()
     {
@@ -551,6 +575,7 @@ public sealed class MainWindow : Form
         try
         {
             ProveRemoteSignInPolicy();
+            ProveVersionIdentity();
             var key = Guid.NewGuid().ToString("N");
             Environment.SetEnvironmentVariable("ROMARR_API_KEY", key);
             port.Value = FreePort();
@@ -589,7 +614,7 @@ public sealed class MainWindow : Form
             if (anon.StatusCode != HttpStatusCode.Unauthorized) throw new Exception("Private API was not protected.");
             http.DefaultRequestHeaders.Add("X-Api-Key", key);
             var versionInfo = await http.GetFromJsonAsync<JsonElement>(origin + "/api/v1/stats");
-            if (versionInfo.GetProperty("version").GetString() != typeof(MainWindow).Assembly.GetName().Version!.ToString(3))
+            if (!SameVersionIdentity(versionInfo.GetProperty("version").GetString(), typeof(MainWindow).Assembly.GetName().Version))
                 throw new Exception("The packaged backend version does not match the native application.");
             var hub = await http.GetFromJsonAsync<JsonElement>(origin + "/api/v1/hub/catalogue");
             if (hub.GetProperty("items").GetArrayLength() == 0) throw new Exception("Bundled ROM Hub catalogue is unavailable.");
