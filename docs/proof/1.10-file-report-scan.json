@@ -1,9 +1,9 @@
 {
-  "checked_at": "2026-11-14T20:34:05.149966+00:00",
+  "checked_at": "2026-11-14T21:18:48.358253+00:00",
   "test_scope": "Report-manager integration with actual ClamAV INSTREAM; synthetic harmless and EICAR controls only",
   "daemon_version": "ClamAV 1.4.6/28183/Sat Nov 14 06:24:17 2026",
   "originals_preserved": true,
-  "source_sha256": "6157ebd4b049e4f52a4feba0a9004590703d16353cbd858c9b5c8e9cb5a9982e",
+  "source_sha256": "41b81ee0b92bed3027bc63f2a62f16a7384beedcca6ec0f88fa7573d2513f8d1",
   "cases": [
     {
       "file": "ordinary.rom",
@@ -11,7 +11,7 @@
       "status": "no-detections",
       "scanners": [
         {
-          "checked": "2026-11-14T20:34:05+00:00",
+          "checked": "2026-11-14T21:18:48+00:00",
           "engine": "ClamAV",
           "signatures": [],
           "status": "no-detections"
@@ -24,7 +24,7 @@
       "status": "antivirus-test-fixture",
       "scanners": [
         {
-          "checked": "2026-11-14T20:34:05+00:00",
+          "checked": "2026-11-14T21:18:48+00:00",
           "engine": "ClamAV",
           "signatures": [
             "Eicar-Test-Signature"
