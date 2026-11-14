@@ -27,7 +27,7 @@ C64, Atari 2600 and ColecoVision are included as platforms. Open **Hub → Emula
 
 ## 3. Import the file
 
-Open **Manual Import**, enter the source folder and click **Scan**. Check the platform and proposed destination, then import the selected file. Scanning alone does not move anything.
+First confirm your destination under **Settings → Libraries**. Then open **Manual Import**, enter the source folder and click **Scan**. Check the file, platform, explanation and DAT result, then import the selected file. Scanning alone does not move anything.
 
 Check **History** and the destination folder. A successful import means the file reached your library; playback is the next check. An **unknown** verification result means no loaded DAT identified the file, which does not by itself mean it is broken. A DAT is a catalogue of known filenames and checksums.
 
