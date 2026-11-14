@@ -90,6 +90,9 @@ def detect(root: Path | None = None) -> Environment:
     # into that hits PEP 668 ("externally-managed-environment") and fails --
     # so a real update adding a dependency would restart into broken code.
     # Proved on a live install: the log showed the venv was bypassed.
+    if os.environ.get("ROMARR_ANDROID") == "1" or sys.platform == "android":
+        return Environment(kind="none", python=sys.executable or "",
+                           detail="Android app bundle; update through your app distributor or install a newer APK")
     python = sys.executable or shutil.which("python3") or "python3"
     if _container_marker():
         return Environment(kind="docker", python=python,

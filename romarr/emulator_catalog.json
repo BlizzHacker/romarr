@@ -371,16 +371,30 @@
      "section": "Sony PlayStation 1",
      "catalog_claims_open_source": true,
      "catalog_license": "CC BY-NC-ND 4.0"
+    },
+    {
+     "source": "https://downloads.duckstation.org/android-testing/",
+     "discovery": "Official Android distribution page checked 2026-11-14; not runtime proof."
     }
    ],
-   "free_use": "Catalog lists a free version",
+   "free_use": "Free to use under upstream terms; Android beta APK redistribution prohibited.",
    "api_base": "https://api.github.com",
    "license_verified": false,
    "license_source": "https://github.com/stenzek/duckstation/blob/master/LICENSE",
    "archived": false,
    "stars": 10993,
-   "description": "Fast PlayStation 1 emulator for x86-64/AArch32/AArch64/RV64",
-   "featured": true
+   "description": "Fast PlayStation 1 emulator for x86-64/AArch32/AArch64/RV64 Android: Android beta rewrite requires Android 7+. Backup data before upgrading. Publisher prohibits redistribution of the beta APK; use the official page.",
+   "featured": true,
+   "host_platforms": [
+    "android",
+    "windows",
+    "linux",
+    "macos"
+   ],
+   "android_package": "com.github.stenzek.duckstation",
+   "android_abis": [],
+   "android_downloads": "https://downloads.duckstation.org/android-testing/",
+   "android_verified_date": "2026-11-14"
   },
   {
    "id": "catalog-f8d06fa537e09d7d",
@@ -3871,16 +3885,31 @@
      "section": "Dreamcast",
      "catalog_claims_open_source": null,
      "catalog_license": ""
+    },
+    {
+     "source": "https://github.com/flyinghead/flycast/master/shell/android-studio/flycast/build.gradle.kts",
+     "discovery": "Android package/build metadata checked 2026-11-14; ABI list is a source-build target, not a tested device claim."
     }
    ],
-   "free_use": "Catalog lists a free version",
+   "free_use": "Free open-source Dreamcast, Naomi and Atomiswave emulator; check the selected APK for supported ABIs.",
    "api_base": "https://api.github.com",
    "license_verified": true,
    "license_source": "https://github.com/flyinghead/flycast/blob/master/LICENSE",
    "archived": false,
    "stars": 2652,
-   "description": "Flycast is a multiplatform Sega Dreamcast, Naomi, Naomi 2 and Atomiswave emulator",
-   "featured": true
+   "description": "Free open-source Dreamcast, Naomi and Atomiswave emulator; check the selected APK for supported ABIs. Install the Android app manually from the official source; ROMarr does not install APKs or prove game compatibility.",
+   "featured": true,
+   "host_platforms": [
+    "android",
+    "windows",
+    "linux",
+    "macos"
+   ],
+   "android_package": "com.flycast.emulator",
+   "android_abis": [],
+   "android_downloads": "https://github.com/flyinghead/flycast/releases",
+   "android_source": "https://github.com/flyinghead/flycast/master/shell/android-studio/flycast/build.gradle.kts",
+   "android_verified_date": "2026-11-14"
   },
   {
    "id": "catalog-d20f3403c97d8e03",
@@ -6232,15 +6261,33 @@
      "section": "Nintendo DS",
      "catalog_claims_open_source": true,
      "catalog_license": "GPLv3"
+    },
+    {
+     "source": "https://github.com/rafaelvcaetano/melonDS-android/master/app/build.gradle.kts",
+     "discovery": "Android package/build metadata checked 2026-11-14; ABI list is a source-build target, not a tested device claim."
     }
    ],
-   "free_use": "Catalog lists a free version",
+   "free_use": "Free open-source Nintendo DS Android port. Release and nightly builds use different package IDs; firmware requirements depend on emulation mode.",
    "api_base": "https://api.github.com",
    "license_verified": true,
    "license_source": "https://github.com/rafaelvcaetano/melonDS-android/blob/master/LICENSE",
    "archived": false,
    "stars": 1757,
-   "description": "Android port of melonDS"
+   "description": "Free open-source Nintendo DS Android port. Release and nightly builds use different package IDs; firmware requirements depend on emulation mode. Install the Android app manually from the official source; ROMarr does not install APKs or prove game compatibility.",
+   "host_platforms": [
+    "android"
+   ],
+   "android_package": "me.magnum.melonds",
+   "android_abis": [
+    "armeabi-v7a",
+    "arm64-v8a",
+    "x86_64"
+   ],
+   "android_downloads": "https://github.com/rafaelvcaetano/melonDS-android/releases",
+   "android_source": "https://github.com/rafaelvcaetano/melonDS-android/master/app/build.gradle.kts",
+   "android_verified_date": "2026-11-14",
+   "manual_setup": true,
+   "upstream_downloads": "https://github.com/rafaelvcaetano/melonDS-android/releases"
   },
   {
    "id": "catalog-79f65335364aa7cb",
@@ -6372,16 +6419,34 @@
      "section": "Nintendo 3DS",
      "catalog_claims_open_source": true,
      "catalog_license": "GPLv2"
+    },
+    {
+     "source": "https://github.com/azahar-emu/azahar/master/src/android/app/build.gradle.kts",
+     "discovery": "Android package/build metadata checked 2026-11-14; ABI list is a source-build target, not a tested device claim."
     }
    ],
-   "free_use": "Catalog lists a free version",
+   "free_use": "Free open-source Nintendo 3DS emulator based on Citra; successor to Lime3DS and PabloMK7 Citra. Android 10 or newer.",
    "api_base": "https://api.github.com",
    "license_verified": true,
    "license_source": "https://github.com/azahar-emu/azahar/blob/master/LICENSE",
    "archived": false,
    "stars": 8653,
-   "description": "An open-source 3DS emulator project based on Citra.",
-   "featured": true
+   "description": "Free open-source Nintendo 3DS emulator based on Citra; successor to Lime3DS and PabloMK7 Citra. Android 10 or newer. Install the Android app manually from the official source; ROMarr does not install APKs or prove game compatibility.",
+   "featured": true,
+   "host_platforms": [
+    "android",
+    "windows",
+    "linux",
+    "macos"
+   ],
+   "android_package": "org.azahar_emu.azahar",
+   "android_abis": [
+    "arm64-v8a",
+    "x86_64"
+   ],
+   "android_downloads": "https://azahar-emu.org/",
+   "android_source": "https://github.com/azahar-emu/azahar/master/src/android/app/build.gradle.kts",
+   "android_verified_date": "2026-11-14"
   },
   {
    "id": "catalog-0c06b78734b1a530",
@@ -10651,16 +10716,34 @@
      "section": "GameCube / Wii",
      "catalog_claims_open_source": null,
      "catalog_license": ""
+    },
+    {
+     "source": "https://github.com/dolphin-emu/dolphin/master/Source/Android/app/build.gradle.kts",
+     "discovery": "Android package/build metadata checked 2026-11-14; ABI list is a source-build target, not a tested device claim."
     }
    ],
-   "free_use": "Catalog lists a free version",
+   "free_use": "Free open-source GameCube and Wii emulator; device GPU and game compatibility vary.",
    "api_base": "https://api.github.com",
    "license_verified": false,
    "license_source": "https://github.com/dolphin-emu/dolphin/blob/master/LICENSE",
    "archived": false,
    "stars": 15813,
-   "description": "Dolphin is a GameCube / Wii emulator, allowing you to play games for these two platforms on PC with improvements.",
-   "featured": true
+   "description": "Free open-source GameCube and Wii emulator; device GPU and game compatibility vary. Install the Android app manually from the official source; ROMarr does not install APKs or prove game compatibility.",
+   "featured": true,
+   "host_platforms": [
+    "android",
+    "windows",
+    "linux",
+    "macos"
+   ],
+   "android_package": "org.dolphinemu.dolphinemu",
+   "android_abis": [
+    "arm64-v8a",
+    "x86_64"
+   ],
+   "android_downloads": "https://dolphin-emu.org/download/",
+   "android_source": "https://github.com/dolphin-emu/dolphin/master/Source/Android/app/build.gradle.kts",
+   "android_verified_date": "2026-11-14"
   },
   {
    "id": "catalog-aa049759ed54b12f",
@@ -11071,16 +11154,35 @@
      "section": "PSP",
      "catalog_claims_open_source": null,
      "catalog_license": ""
+    },
+    {
+     "source": "https://github.com/hrydgard/ppsspp/master/android/build.gradle.kts",
+     "discovery": "Android package/build metadata checked 2026-11-14; ABI list is a source-build target, not a tested device claim."
     }
    ],
-   "free_use": "Catalog lists a free version",
+   "free_use": "Free open-source PSP emulator; optional PPSSPP Gold supports development.",
    "api_base": "https://api.github.com",
    "license_verified": false,
    "license_source": "https://github.com/hrydgard/ppsspp/blob/master/LICENSE",
    "archived": false,
    "stars": 14888,
-   "description": "A PSP emulator for Android, Windows, Mac, Linux and iOS, written in C++. Want to contribute? Join us on Discord at https://discord.gg/5NJB6dD or just send pull requests / issues.",
-   "featured": true
+   "description": "Free open-source PSP emulator; optional PPSSPP Gold supports development. Install the Android app manually from the official source; ROMarr does not install APKs or prove game compatibility.",
+   "featured": true,
+   "host_platforms": [
+    "android",
+    "windows",
+    "linux",
+    "macos"
+   ],
+   "android_package": "org.ppsspp.ppsspp",
+   "android_abis": [
+    "armeabi-v7a",
+    "arm64-v8a",
+    "x86_64"
+   ],
+   "android_downloads": "https://www.ppsspp.org/download/",
+   "android_source": "https://github.com/hrydgard/ppsspp/master/android/build.gradle.kts",
+   "android_verified_date": "2026-11-14"
   },
   {
    "id": "vita3k",
@@ -11100,16 +11202,34 @@
      "section": "PSVita",
      "catalog_claims_open_source": null,
      "catalog_license": ""
+    },
+    {
+     "source": "https://github.com/Vita3K/Vita3K/master/android/app/build.gradle",
+     "discovery": "Android package/build metadata checked 2026-11-14; ABI list is a source-build target, not a tested device claim."
     }
    ],
-   "free_use": "Catalog lists a free version",
+   "free_use": "Free experimental PlayStation Vita emulator. Android 9 or newer; many games or GPUs remain unsupported.",
    "api_base": "https://api.github.com",
    "license_verified": true,
    "license_source": "https://github.com/Vita3K/Vita3K/blob/master/LICENSE",
    "archived": false,
    "stars": 5968,
-   "description": "Experimental PlayStation Vita emulator",
-   "featured": true
+   "description": "Free experimental PlayStation Vita emulator. Android 9 or newer; many games or GPUs remain unsupported. Install the Android app manually from the official source; ROMarr does not install APKs or prove game compatibility.",
+   "featured": true,
+   "host_platforms": [
+    "android",
+    "windows",
+    "linux",
+    "macos"
+   ],
+   "android_package": "org.vita3k.emulator",
+   "android_abis": [
+    "arm64-v8a",
+    "x86_64"
+   ],
+   "android_downloads": "https://github.com/Vita3K/Vita3K/releases/tag/continuous",
+   "android_source": "https://github.com/Vita3K/Vita3K/master/android/app/build.gradle",
+   "android_verified_date": "2026-11-14"
   },
   {
    "id": "catalog-41215aef0f04343c",
@@ -29523,10 +29643,31 @@
    "systems": "Many classic systems",
    "license": "See project terms",
    "fork": false,
-   "sources": [],
-   "free_use": "Catalog lists a free version",
+   "sources": [
+    {
+     "source": "https://github.com/libretro/RetroArch/master/pkg/android/phoenix/build.gradle",
+     "discovery": "Android package/build metadata checked 2026-11-14; ABI list is a source-build target, not a tested device claim."
+    }
+   ],
+   "free_use": "Free multi-system frontend; individual cores have separate licenses and firmware requirements. Package IDs vary by build, including com.retroarch.aarch64.",
    "api_base": "https://api.github.com",
-   "featured": true
+   "featured": true,
+   "host_platforms": [
+    "android",
+    "windows",
+    "linux",
+    "macos"
+   ],
+   "android_package": "com.retroarch",
+   "android_abis": [
+    "armeabi-v7a",
+    "arm64-v8a",
+    "x86_64"
+   ],
+   "android_downloads": "https://www.retroarch.com/platforms.html",
+   "android_source": "https://github.com/libretro/RetroArch/master/pkg/android/phoenix/build.gradle",
+   "android_verified_date": "2026-11-14",
+   "description": "Free multi-system frontend; individual cores have separate licenses and firmware requirements. Package IDs vary by build, including com.retroarch.aarch64. Install the Android app manually from the official source; ROMarr does not install APKs or prove game compatibility."
   },
   {
    "id": "rpcs3",
@@ -29613,10 +29754,26 @@
    "systems": "Adventure game engines",
    "license": "See project terms",
    "fork": false,
-   "sources": [],
+   "sources": [
+    {
+     "source": "https://docs.scummvm.org/en/latest/other_platforms/android.html",
+     "discovery": "Official Android distribution page checked 2026-11-14; not runtime proof."
+    }
+   ],
    "free_use": "Catalog lists a free version",
    "api_base": "https://api.github.com",
-   "featured": true
+   "featured": true,
+   "host_platforms": [
+    "android",
+    "windows",
+    "linux",
+    "macos"
+   ],
+   "android_package": "org.scummvm.scummvm",
+   "android_abis": [],
+   "android_downloads": "https://docs.scummvm.org/en/latest/other_platforms/android.html",
+   "android_verified_date": "2026-11-14",
+   "description": " Android: Free ScummVM Android app supports selected adventure game engines; game data and compatibility depend on the engine."
   },
   {
    "id": "dosbox-staging",
@@ -29662,16 +29819,34 @@
     {
      "source": "https://git.eden-emu.dev/eden-emu/eden",
      "discovery": "Official forge API inventory"
+    },
+    {
+     "source": "https://git.eden-emu.dev/eden-emu/eden/src/branch/master/src/android/app/build.gradle.kts",
+     "discovery": "Official build metadata and v0.2.1 Android release assets checked 2026-11-14."
     }
    ],
-   "free_use": "Catalog lists a free version",
+   "free_use": "Free open-source emulator under project terms; no games, keys or firmware included.",
    "featured": true,
    "api_base": "https://git.eden-emu.dev/api/v1",
    "license_verified": true,
    "license_source": "https://git.eden-emu.dev/eden-emu/eden/src/branch/master/LICENSE.txt",
    "fork_of": "",
-   "description": "The Eden Nintendo Switch Emulator",
-   "stars": 76
+   "description": "The Eden Nintendo Switch Emulator Android Switch emulator: standard package dev.eden.eden_emulator; legacy builds use dev.legacy.eden_emulator. ARM64 phone and x86_64 ChromeOS variants differ. Install manually from official releases; firmware, keys and per-game support required.",
+   "stars": 76,
+   "host_platforms": [
+    "android",
+    "windows",
+    "linux",
+    "macos"
+   ],
+   "android_package": "dev.eden.eden_emulator",
+   "android_abis": [
+    "arm64-v8a",
+    "x86_64"
+   ],
+   "android_downloads": "https://git.eden-emu.dev/eden-emu/eden/releases",
+   "android_source": "https://git.eden-emu.dev/eden-emu/eden/src/branch/master/src/android/app/build.gradle.kts",
+   "android_verified_date": "2026-11-14"
   },
   {
    "id": "citron",
@@ -29791,15 +29966,30 @@
    "id": "catalog-240ac8760e286fa8",
    "name": "Lemuroid",
    "website": "https://github.com/Swordfish90/Lemuroid",
-   "guide": "https://github.com/Swordfish90/Lemuroid",
+   "guide": "https://github.com/Swordfish90/Lemuroid/wiki",
    "repo": "Swordfish90/Lemuroid",
    "provider": "github",
-   "systems": "Android",
+   "systems": "Multi-system",
    "license": "See project terms",
    "fork": false,
    "sources": [],
-   "free_use": "Catalog lists a free version",
-   "api_base": "https://api.github.com"
+   "free_use": "Free open-source multi-system Android emulator with bundled libretro cores; supported systems and device performance vary.",
+   "api_base": "https://api.github.com",
+   "license_verified": true,
+   "license_source": "https://github.com/Swordfish90/Lemuroid/blob/master/LICENSE",
+   "archived": false,
+   "stars": 0,
+   "host_platforms": [
+    "android"
+   ],
+   "android_package": "com.swordfish.lemuroid",
+   "android_abis": [],
+   "android_downloads": "https://github.com/Swordfish90/Lemuroid/releases",
+   "android_source": "https://github.com/Swordfish90/Lemuroid/master/lemuroid-app/build.gradle.kts",
+   "android_verified_date": "2026-11-14",
+   "description": "Free open-source multi-system Android emulator with bundled libretro cores; supported systems and device performance vary. Install the Android app manually from the official source; ROMarr does not install APKs or prove game compatibility.",
+   "manual_setup": true,
+   "upstream_downloads": "https://github.com/Swordfish90/Lemuroid/releases"
   },
   {
    "id": "catalog-762afef7f8d951e0",
@@ -29849,13 +30039,17 @@
    "guide": "https://redream.io/download",
    "systems": "Sega Dreamcast",
    "license": "Proprietary; free base version with optional paid upgrades",
-   "description": "Dreamcast emulator with a free base version. Higher-resolution rendering and extra save-state slots are optional paid upgrades. Install manually from the official downloads page.",
-   "free_use": "The publisher offers a free base version on Windows, macOS, Linux and Raspberry Pi 4.",
+   "description": "Dreamcast emulator with a free base version. Higher-resolution rendering and extra save-state slots are optional paid upgrades. Install manually from the official downloads page. Android version available from the official page; APK ABI support must be checked with the publisher.",
+   "free_use": "Publisher offers a free base version, including Android; premium features cost extra.",
    "license_source": "https://redream.io/download",
    "sources": [
     {
      "source": "https://redream.io/download",
      "discovery": "User-requested named emulator; free version confirmed on publisher download page"
+    },
+    {
+     "source": "https://redream.io/",
+     "discovery": "Official homepage Android link identifies io.recompiled.redream; not an Android runtime test."
     }
    ],
    "id": "catalog-494a09ca87590dec",
@@ -29863,7 +30057,17 @@
    "repo": "",
    "fork": false,
    "manual_setup": true,
-   "verified_date": "2026-11-13"
+   "verified_date": "2026-11-13",
+   "host_platforms": [
+    "android",
+    "windows",
+    "linux",
+    "macos"
+   ],
+   "android_package": "io.recompiled.redream",
+   "android_abis": [],
+   "android_downloads": "https://play.google.com/store/apps/details?id=io.recompiled.redream",
+   "android_verified_date": "2026-11-14"
   },
   {
    "name": "LaunchBox",
@@ -29944,6 +30148,166 @@
     }
    ],
    "verified_date": "2026-11-13"
+  },
+  {
+   "id": "m64plus-fz",
+   "name": "M64Plus FZ Emulator",
+   "systems": "Nintendo 64",
+   "website": "https://play.google.com/store/apps/details?id=org.mupen64plusae.v3.fzurita",
+   "guide": "https://play.google.com/store/apps/details?id=org.mupen64plusae.v3.fzurita",
+   "provider": "website",
+   "repo": "",
+   "fork": false,
+   "sources": [
+    {
+     "source": "https://play.google.com/store/apps/details?id=org.mupen64plusae.v3.fzurita",
+     "discovery": "Official publisher/store or source metadata checked 2026-11-14. No Android runtime test."
+    }
+   ],
+   "license": "See publisher and bundled core licenses",
+   "license_source": "https://play.google.com/store/apps/details?id=org.mupen64plusae.v3.fzurita",
+   "license_verified": false,
+   "free_use": "Free version contains ads; Pro is separate and includes netplay-server features. Store listing last updated April 2024; device/video-plugin compatibility varies.",
+   "description": "Free version contains ads; Pro is separate and includes netplay-server features. Store listing last updated April 2024; device/video-plugin compatibility varies. Install Android apps manually; ROMarr does not install APKs or guarantee game compatibility.",
+   "manual_setup": true,
+   "upstream_downloads": "https://play.google.com/store/apps/details?id=org.mupen64plusae.v3.fzurita",
+   "host_platforms": [
+    "android"
+   ],
+   "android_package": "org.mupen64plusae.v3.fzurita",
+   "android_abis": [],
+   "android_downloads": "https://play.google.com/store/apps/details?id=org.mupen64plusae.v3.fzurita",
+   "android_verified_date": "2026-11-14"
+  },
+  {
+   "id": "pizzaboy-a-basic",
+   "name": "Pizza Boy A: GBA Emulator (Basic)",
+   "systems": "Game Boy Advance",
+   "website": "https://play.google.com/store/apps/details?id=it.dbtecno.pizzaboygba",
+   "guide": "https://play.google.com/store/apps/details?id=it.dbtecno.pizzaboygba",
+   "provider": "website",
+   "repo": "",
+   "fork": false,
+   "sources": [
+    {
+     "source": "https://play.google.com/store/apps/details?id=it.dbtecno.pizzaboygba",
+     "discovery": "Official publisher/store or source metadata checked 2026-11-14. No Android runtime test."
+    }
+   ],
+   "license": "Proprietary freeware; optional paid Pro app",
+   "license_source": "https://play.google.com/store/apps/details?id=it.dbtecno.pizzaboygba",
+   "license_verified": false,
+   "free_use": "Free ad-free GBA version, formerly Pizza Boy GBA Basic; Pro is a separate paid app with extra features. Does not emulate Game Boy or Game Boy Color.",
+   "description": "Free ad-free GBA version, formerly Pizza Boy GBA Basic; Pro is a separate paid app with extra features. Does not emulate Game Boy or Game Boy Color. Install Android apps manually; ROMarr does not install APKs or guarantee game compatibility.",
+   "manual_setup": true,
+   "upstream_downloads": "https://play.google.com/store/apps/details?id=it.dbtecno.pizzaboygba",
+   "host_platforms": [
+    "android"
+   ],
+   "android_package": "it.dbtecno.pizzaboygba",
+   "android_abis": [],
+   "android_downloads": "https://play.google.com/store/apps/details?id=it.dbtecno.pizzaboygba",
+   "android_verified_date": "2026-11-14"
+  },
+  {
+   "id": "snes9x-ex-plus",
+   "name": "Snes9x EX+",
+   "systems": "Super Nintendo",
+   "website": "https://www.explusalpha.com/contents/snes9x-ex/downloads",
+   "guide": "https://www.explusalpha.com/contents/snes9x-ex/downloads",
+   "provider": "github",
+   "repo": "Rakashazi/emu-ex-plus-alpha",
+   "fork": false,
+   "sources": [
+    {
+     "source": "https://www.explusalpha.com/contents/snes9x-ex/downloads",
+     "discovery": "Official publisher/store or source metadata checked 2026-11-14. No Android runtime test."
+    }
+   ],
+   "license": "GPL components and Snes9x noncommercial license",
+   "license_source": "https://www.explusalpha.com/contents/snes9x-ex/downloads",
+   "license_verified": false,
+   "free_use": "Free SNES Android emulator; source includes GPL components and the Snes9x noncommercial license. ARMv7, ARM64 and x86 builds offered; follow publisher requirements.",
+   "description": "Free SNES Android emulator; source includes GPL components and the Snes9x noncommercial license. ARMv7, ARM64 and x86 builds offered; follow publisher requirements. Install Android apps manually; ROMarr does not install APKs or guarantee game compatibility.",
+   "manual_setup": true,
+   "upstream_downloads": "https://www.explusalpha.com/contents/snes9x-ex/downloads",
+   "host_platforms": [
+    "android"
+   ],
+   "android_package": "com.explusalpha.Snes9xPlus",
+   "android_abis": [
+    "armeabi-v7a",
+    "arm64-v8a",
+    "x86"
+   ],
+   "android_downloads": "https://www.explusalpha.com/contents/snes9x-ex/downloads",
+   "android_verified_date": "2026-11-14"
+  },
+  {
+   "id": "mame4droid-current",
+   "name": "MAME4droid (Current)",
+   "systems": "Arcade",
+   "website": "https://github.com/seleuco/MAME4droid-Current/releases",
+   "guide": "https://github.com/seleuco/MAME4droid-Current/releases",
+   "provider": "github",
+   "repo": "seleuco/MAME4droid-Current",
+   "fork": false,
+   "sources": [
+    {
+     "source": "https://github.com/seleuco/MAME4droid-Current/releases",
+     "discovery": "Official publisher/store or source metadata checked 2026-11-14. No Android runtime test."
+    }
+   ],
+   "license": "GPL-2.0 and bundled component licenses",
+   "license_source": "https://github.com/seleuco/MAME4droid-Current/releases",
+   "license_verified": false,
+   "free_use": "Free open-source Android MAME port; matching MAME version ROMsets and device performance are required. Not interchangeable with old MAME4droid 0.139u1 ROMsets.",
+   "description": "Free open-source Android MAME port; matching MAME version ROMsets and device performance are required. Not interchangeable with old MAME4droid 0.139u1 ROMsets. Install Android apps manually; ROMarr does not install APKs or guarantee game compatibility.",
+   "manual_setup": true,
+   "upstream_downloads": "https://github.com/seleuco/MAME4droid-Current/releases",
+   "host_platforms": [
+    "android"
+   ],
+   "android_package": "com.seleuco.mame4d2024",
+   "android_abis": [
+    "arm64-v8a"
+   ],
+   "android_downloads": "https://github.com/seleuco/MAME4droid-Current/releases",
+   "android_verified_date": "2026-11-14"
+  },
+  {
+   "id": "eka2l1-android",
+   "name": "EKA2L1 (Android)",
+   "systems": "Symbian and N-Gage",
+   "website": "https://github.com/EKA2L1/EKA2L1/releases",
+   "guide": "https://github.com/EKA2L1/EKA2L1/releases",
+   "provider": "github",
+   "repo": "EKA2L1/EKA2L1",
+   "fork": false,
+   "sources": [
+    {
+     "source": "https://github.com/EKA2L1/EKA2L1/releases",
+     "discovery": "Official publisher/store or source metadata checked 2026-11-14. No Android runtime test."
+    }
+   ],
+   "license": "GPL-3.0",
+   "license_source": "https://github.com/EKA2L1/EKA2L1/releases",
+   "license_verified": false,
+   "free_use": "Free open-source experimental Symbian emulator; requires compatible device firmware/system files and application support.",
+   "description": "Free open-source experimental Symbian emulator; requires compatible device firmware/system files and application support. Install Android apps manually; ROMarr does not install APKs or guarantee game compatibility.",
+   "manual_setup": true,
+   "upstream_downloads": "https://github.com/EKA2L1/EKA2L1/releases",
+   "host_platforms": [
+    "android"
+   ],
+   "android_package": "com.github.eka2l1",
+   "android_abis": [
+    "armeabi-v7a",
+    "arm64-v8a",
+    "x86_64"
+   ],
+   "android_downloads": "https://github.com/EKA2L1/EKA2L1/releases",
+   "android_verified_date": "2026-11-14"
   }
  ],
  "coverage": {
@@ -29976,6 +30340,7 @@
    }
   ],
   "note": "Catalog snapshot plus paginated live fork discovery. Availability and compatibility are reported separately.",
-  "catalog_entries": 1215
+  "catalog_entries": 1220,
+  "android_verified_entries": 17
  }
 }

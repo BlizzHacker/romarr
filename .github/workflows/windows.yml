@@ -146,6 +146,9 @@ jobs:
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
+      - name: Check native server address validation
+        shell: pwsh
+        run: dotnet run --project desktop/tests/ServerAddressChecks/ServerAddressChecks.csproj
       - name: Build self-contained ZIP and unsigned MSIX
         shell: pwsh
         env:
@@ -192,7 +195,7 @@ jobs:
             if (-not (Test-Path -LiteralPath $evidence)) { throw 'The real EXE did not produce smoke proof.' }
             Get-Content -LiteralPath $evidence
             $result = Get-Content -LiteralPath $evidence -Raw | ConvertFrom-Json
-            foreach ($property in @('nativeWindow','embeddedInterface','bundledPython','bundledHub','pluginInstall','setupGuide','authentication','persistence')) {
+            foreach ($property in @('nativeWindow','embeddedInterface','bundledPython','bundledHub','pluginInstall','setupGuide','authentication','persistence','remoteView','remoteDisconnectKeepsServer')) {
               if ($result.$property -ne $true) { throw "Native proof is missing: $property" }
             }
           } finally {

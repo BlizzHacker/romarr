@@ -83,13 +83,15 @@ def _portable(name: str) -> bool:
 
 def _matches_host(name: str) -> bool:
     """Match delimited host/architecture markers and exclude source or symbol bundles."""
+    if os.environ.get("ROMARR_ANDROID") == "1":
+        return False
     lower = name.lower()
 
     def marker(pattern: str, text: str = lower) -> bool:
         """Require filename delimiters around labels, including composite labels."""
         return bool(re.search(r"(?:^|[^a-z0-9])(?:" + pattern + r")(?=$|[^a-z0-9])", text))
 
-    if marker(r"source|sources|src|symbols?|debug|pdbs?|dbg|dsyms?|zsync"):
+    if marker(r"source|sources|src|symbols?|debug|pdbs?|dbg|dsyms?|zsync|android|ios|tvos"):
         return False
     os_markers = {
         "windows": r"windows|win64|win32|win[-_.](?:x64|x86|arm64)",
@@ -130,7 +132,8 @@ class EmulatorHub:
         except ValueError:
             return _entry(slug)
 
-    def catalog(self, query: str = "", offset: int = 0, limit: int = 60) -> dict:
+    def catalog(self, query: str = "", offset: int = 0, limit: int = 60,
+                host_platform: str = "") -> dict:
         """Return the curated roster without making external network calls."""
         items = []
         records = self.inventory.records()
@@ -138,14 +141,21 @@ class EmulatorHub:
         records.sort(key=lambda row: (featured.get(row["id"], len(featured) if row.get("featured") else len(featured) + 1),
                                       -int(row.get("stars") or 0), row["name"].lower()))
         wanted = query.strip().casefold()
+        selected_host = host_platform.strip().casefold()
+        if selected_host and selected_host not in ("android", "windows", "linux", "macos"):
+            raise ValueError("Unknown emulator host platform")
         for record in records:
             row = dict(record)
+            if selected_host and selected_host not in row.get("host_platforms", []):
+                continue
             if wanted and wanted not in " ".join(str(row.get(k) or "") for k in
-                                                 ("name", "systems", "description", "repo", "license", "provider")).casefold():
+                                                 ("name", "systems", "description", "repo", "license", "provider",
+                                                  "host_platforms", "android_package")).casefold():
                 continue
             saved = sorted((self.root / row["id"]).glob("*/romarr-install.json"))
             row["installed"] = [p.parent.name for p in saved]
-            row["managed_releases"] = (not row.get("manual_setup") and
+            row["managed_releases"] = (os.environ.get("ROMARR_ANDROID") != "1" and
+                                       not row.get("manual_setup") and
                                        row.get("provider") in ("github", "gitlab", "forgejo")
                                        and bool(row.get("repo")))
             app_id = FLATPAKS.get(row["id"], "")
@@ -157,6 +167,8 @@ class EmulatorHub:
         return {"host": platform.system() + " " + platform.machine(),
                 "install_dir": str(self.root), "items": items[offset:offset + limit],
                 "total": len(items), "available": len(records), "offset": offset, "limit": limit,
+                "host_platform": selected_host,
+                "host_platforms": sorted({host for row in records for host in row.get("host_platforms", [])}),
                 "coverage": bundled()["coverage"], "verified_date": bundled()["verified_date"]}
 
     def release(self, slug: str) -> dict:
@@ -207,6 +219,8 @@ class EmulatorHub:
 
     def install(self, slug: str, asset_name: str, expected_sha256: str, scanner=None) -> dict:
         """Verify the selected release and bytes, scan them, then publish atomically."""
+        if os.environ.get("ROMARR_ANDROID") == "1":
+            raise ValueError("Install emulator Android apps manually from their official source")
         with INSTALL_LOCK:
             release = self.release(slug)
             asset = next((a for a in release["assets"] if a["name"] == asset_name), None)

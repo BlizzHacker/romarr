@@ -21,6 +21,10 @@ VERSION = "3.1.0"
 #: which is the whole mechanism keeping this honest.
 DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "/": ("GET", "The web UI."),
+    "/manifest.webmanifest": ("GET", "Constant installable app manifest."),
+    "/service-worker.js": ("GET", "Online-only app service worker; no request interception or caching."),
+    "/app-icon-192.png": ("GET", "Constant 192 pixel app icon."),
+    "/app-icon-512.png": ("GET", "Constant 512 pixel app icon."),
     "/favicon.ico": ("GET", "The retro cartridge SVG favicon."),
     "/favicon.svg": ("GET", "The retro cartridge SVG favicon."),
     "/api/health": ("GET", "Liveness. Returns {ok} unauthenticated, the full "
