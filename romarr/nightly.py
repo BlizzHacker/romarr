@@ -30,7 +30,7 @@ def _local_git(repo: Path, *args: str) -> str | None:
     """Use a bounded, unredirected Git read without inherited path overrides."""
     git = shutil.which("git")
     if not git:
-        return ""
+        return None
     environment = os.environ.copy()
     for name in _SSH_DENY_ENV:
         environment.pop(name, None)
