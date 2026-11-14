@@ -47,6 +47,12 @@ def link(path, target, directory=False):
     try:
         path.symlink_to(target, target_is_directory=directory)
     except OSError as exc:
+        if directory and reports.sys.platform == "win32":
+            import subprocess
+            result = subprocess.run(["cmd", "/c", "mklink", "/J", str(path), str(target)],
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+            if result.returncode == 0:
+                return
         pytest.skip("Creating test symlinks requires filesystem support/Windows privilege: " + str(exc))
 
 
@@ -184,13 +190,14 @@ def test_parent_swap_at_rename_never_moves_outside_known_hash_bytes(fixture, mon
             swapped.append(swap_directory(root if root_swap else root / "snes", outside))
         return original(*args, **kwargs)
     monkeypatch.setattr(reports, "_move_no_replace", raced)
-    if reports.sys.platform != "win32":
-        with pytest.raises(ValueError, match="conflict"):
-            getattr(service, action)(row["id"])
+    try:
+        getattr(service, action)(row["id"])
+    except ValueError as exc:
+        assert "conflict" in str(exc)
+        assert swapped == [True]
         assert service._read(row["id"])["action_conflict"]
     else:
-        getattr(service, action)(row["id"])
-        assert swapped == [False]  # Native directory handles deny parent rename.
+        assert swapped == [False]  # A platform may also deny the attempted swap.
     assert (outside / "game.rom").read_bytes() == b"reviewed fixture"
     assert {p.relative_to(outside).as_posix(): p.read_bytes() for p in outside.rglob("*") if p.is_file()} == outside_before
 
@@ -308,3 +315,107 @@ def test_scan_limits_do_not_erase_real_evidence_or_turn_eicar_into_malware(fixtu
     assert engine["signatures"] == [signature]
     assert engine["incomplete"] is True
     assert engine["limit_signatures"] == ["Heuristics.Limits.Exceeded.MaxScanSize"]
+
+
+@pytest.mark.parametrize("filename", ["game.rom", "game-\U0001f3ae.rom"])
+def test_quarantine_restore_round_trip_preserves_reviewed_bytes(fixture, filename):
+    """Positive proof exercises both moves, including a supplementary UTF-16 name."""
+    service, root, _outside, _seen, pending = fixture
+    (root / "snes/game.rom").rename(root / "snes" / filename)
+    row = service.submit("snes/" + filename, "malware")
+    pending.pop(0)()
+    result = service.quarantine(row["id"])
+    assert result["quarantined"]
+    assert not (root / "snes" / filename).exists()
+    result = service.restore(row["id"])
+    assert not result["quarantined"]
+    assert (root / "snes" / filename).read_bytes() == b"reviewed fixture"
+
+
+def test_windows_stat_identity_ignores_incompatible_ctime_only(monkeypatch):
+    """Windows retains inode, size and mtime checks across stat/fstat variants."""
+    monkeypatch.setattr(reports.sys, "platform", "win32")
+    first = SimpleNamespace(st_dev=1, st_ino=2, st_size=3, st_mtime_ns=4, st_ctime_ns=5)
+    other = SimpleNamespace(**(vars(first) | {"st_ctime_ns": 999}))
+    assert reports._stat_identity(first) == reports._stat_identity(other)
+    other.st_ino = 999
+    assert reports._stat_identity(first) != reports._stat_identity(other)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Native Windows directory-handle rename proof")
+def test_windows_native_rename_survives_both_parent_replacements(tmp_path):
+    """Even rename-permitting parent handles must never redirect either side outside."""
+    import ctypes
+    from ctypes import wintypes
+    source, destination, outside = [tmp_path / name for name in ("source", "destination", "outside")]
+    for path in (source, destination, outside):
+        path.mkdir()
+    (source / "game.rom").write_bytes(b"reviewed fixture")
+    (outside / "game.rom").write_bytes(b"reviewed fixture")
+    (outside / "held.rom").write_bytes(b"outside protected destination")
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    create = kernel.CreateFileW
+    create.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+                       wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    create.restype = wintypes.HANDLE
+    close = kernel.CloseHandle
+    close.argtypes = [wintypes.HANDLE]
+    handles = []
+    try:
+        for directory in (source, destination):
+            handle = create(str(directory), 0xa0, 7, None, 3, 0x02200000, None)
+            assert handle != wintypes.HANDLE(-1).value
+            handles.append(handle)
+        assert swap_directory(source, outside)
+        assert swap_directory(destination, outside)
+        reports._move_no_replace("game.rom", "held.rom", source_dir_fd=handles[0], destination_dir_fd=handles[1])
+        assert not (tmp_path / "source-saved/game.rom").exists()
+        assert (tmp_path / "destination-saved/held.rom").read_bytes() == b"reviewed fixture"
+        assert (outside / "game.rom").read_bytes() == b"reviewed fixture"
+        assert (outside / "held.rom").read_bytes() == b"outside protected destination"
+    finally:
+        for handle in reversed(handles):
+            close(handle)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Android dirfd simulation requires POSIX filesystem APIs")
+def test_android_private_anchor_never_opens_filesystem_root(tmp_path, monkeypatch):
+    """Android's private native anchor works when SELinux denies opening '/'."""
+    import json
+    anchor = tmp_path / "app-files"
+    root = anchor / "library"
+    root.mkdir(parents=True)
+    monkeypatch.setattr(reports.sys, "platform", "android")
+    monkeypatch.setenv("ROMARR_ANDROID_FILES_ROOT", str(anchor))
+    monkeypatch.setenv("ROMARR_ANDROID_FILES_ID", json.dumps([anchor.stat().st_dev, anchor.stat().st_ino]))
+    original = os.open
+    opened = []
+    def guarded(path, *args, **kwargs):
+        """Simulate Android app policy while preserving real dirfd-relative opens."""
+        opened.append(str(path))
+        if str(path) == "/":
+            raise PermissionError("SELinux filesystem root denied")
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(os, "open", guarded)
+    monkeypatch.setattr(os, "supports_dir_fd", os.supports_dir_fd | {guarded})
+    with reports._PinnedLibrary(root) as pins:
+        assert pins.root_id == [root.stat().st_dev, root.stat().st_ino]
+    assert opened == [str(anchor), "library"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Android dirfd simulation requires POSIX filesystem APIs")
+@pytest.mark.parametrize("invalid", ["missing", "identity", "outside"])
+def test_android_anchor_is_native_identified_and_contains_library(tmp_path, monkeypatch, invalid):
+    """Missing trust, replaced app storage and external library paths fail closed."""
+    import json
+    anchor = tmp_path / "app-files"
+    anchor.mkdir()
+    root = anchor / "library"
+    root.mkdir()
+    monkeypatch.setattr(reports.sys, "platform", "android")
+    monkeypatch.setenv("ROMARR_ANDROID_FILES_ROOT", "" if invalid == "missing" else str(anchor))
+    identity = [anchor.stat().st_dev, anchor.stat().st_ino]
+    monkeypatch.setenv("ROMARR_ANDROID_FILES_ID", json.dumps([0, 0] if invalid == "identity" else identity))
+    with pytest.raises(ValueError):
+        with reports._PinnedLibrary(tmp_path if invalid == "outside" else root):
+            pass

@@ -41,7 +41,7 @@ def issue_draft(title, body):
 def _move_no_replace(source, destination, *, source_dir_fd=None, destination_dir_fd=None):
     """Atomically rename without replacement, anchored to pinned parents on Linux/Android."""
     if sys.platform == "win32":
-        os.rename(source, destination)
+        _windows_move(source, destination, source_dir_fd, destination_dir_fd)
         return
     if sys.platform.startswith("linux") or sys.platform == "android":
         import ctypes
@@ -84,18 +84,21 @@ def _object_id(observation):
     return [observation.st_dev, observation.st_ino]
 
 
-def _windows_handle(path, directory):
-    """Pin a non-reparse Windows object; directories cannot be renamed while held."""
+def _windows_handle(path, directory, parent=None, create=False):
+    """Open a non-reparse Windows object, relative to its pinned parent when supplied."""
     import ctypes
     from ctypes import wintypes
     kernel = ctypes.WinDLL("kernel32", use_last_error=True)
-    create = kernel.CreateFileW
-    create.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+    create_file = kernel.CreateFileW
+    create_file.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
                        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
-    create.restype = wintypes.HANDLE
-    # Directory access only needs attributes. Files deny concurrent writes and deletes.
-    handle = create(str(path), 0x80 if directory else 0x80000000,
-                    3 if directory else 1, None, 3, 0x00200000 | (0x02000000 if directory else 0), None)
+    create_file.restype = wintypes.HANDLE
+    # Directory handles include traverse access for native relative opens/renames.
+    if parent is not None:
+        handle = _windows_relative_open(parent, Path(path).name, directory, create=create)
+    else:
+        handle = create_file(str(path), 0xa0 if directory else 0x80000000,
+                        3 if directory else 1, None, 3, 0x00200000 | (0x02000000 if directory else 0), None)
     if handle == wintypes.HANDLE(-1).value:
         raise ctypes.WinError(ctypes.get_last_error())
     class Information(ctypes.Structure):
@@ -118,6 +121,92 @@ def _windows_handle(path, directory):
     return handle
 
 
+def _windows_relative_open(parent, name, directory, *, create=False, deleting=False):
+    """Open one entry through an existing directory handle, without reparse traversal."""
+    import ctypes
+    from ctypes import wintypes
+    if Path(name).name != name or name in ("", ".", "..") or any(c in name for c in "\\/:\x00"):
+        raise ValueError("Unsafe native entry name")
+    class UnicodeString(ctypes.Structure):
+        """Native counted UTF-16 name."""
+        _fields_ = [("length", wintypes.USHORT), ("maximum", wintypes.USHORT), ("buffer", wintypes.LPWSTR)]
+    class ObjectAttributes(ctypes.Structure):
+        """Native handle-relative object lookup."""
+        _fields_ = [("length", wintypes.ULONG), ("root", wintypes.HANDLE),
+                    ("name", ctypes.POINTER(UnicodeString)), ("attributes", wintypes.ULONG),
+                    ("security", ctypes.c_void_p), ("quality", ctypes.c_void_p)]
+    class StatusBlock(ctypes.Structure):
+        """Pointer-sized NT I/O completion status."""
+        _fields_ = [("status", ctypes.c_void_p), ("information", ctypes.c_size_t)]
+    length = len(name.encode("utf-16-le"))
+    text = ctypes.create_unicode_buffer(name, length // 2 + 1)
+    counted = UnicodeString(length, length + 2, ctypes.cast(text, wintypes.LPWSTR))
+    attributes = ObjectAttributes(ctypes.sizeof(ObjectAttributes), parent, ctypes.pointer(counted), 0x40, None, None)
+    handle = wintypes.HANDLE()
+    io = StatusBlock()
+    native = ctypes.WinDLL("ntdll")
+    open_file = native.NtCreateFile
+    open_file.argtypes = [ctypes.POINTER(wintypes.HANDLE), wintypes.ULONG, ctypes.POINTER(ObjectAttributes),
+                          ctypes.POINTER(StatusBlock), ctypes.c_void_p, wintypes.ULONG, wintypes.ULONG,
+                          wintypes.ULONG, wintypes.ULONG, ctypes.c_void_p, wintypes.ULONG]
+    open_file.restype = wintypes.LONG
+    access = (0xa0 if directory else 0x80000000) | (0x10000 if deleting else 0) | 0x100000
+    options = 0x00200000 | 0x20 | (1 if directory else 0x40)
+    status = open_file(ctypes.byref(handle), access, ctypes.byref(attributes), ctypes.byref(io), None,
+                       0, 3 if directory else 1, 3 if create else 1, options, None, 0)
+    if status < 0:
+        error = native.RtlNtStatusToDosError
+        error.argtypes = [wintypes.LONG]
+        error.restype = wintypes.ULONG
+        raise ctypes.WinError(error(status))
+    return handle.value
+
+
+def _windows_move(source, destination, source_parent, destination_parent):
+    """Rename an opened source to one name under a pinned destination directory."""
+    import ctypes
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    close = kernel.CloseHandle
+    close.argtypes = [wintypes.HANDLE]
+    owned = []
+    try:
+        if source_parent is None:
+            source_parent = _windows_handle(Path(source).parent, True)
+            owned.append(source_parent)
+        if destination_parent is None:
+            destination_parent = _windows_handle(Path(destination).parent, True)
+            owned.append(destination_parent)
+        source_handle = _windows_relative_open(source_parent, Path(source).name, False, deleting=True)
+        owned.append(source_handle)
+        name = Path(destination).name
+        if _parts(name) != [name]:
+            raise ValueError("Unsafe native destination name")
+        class RenameInformation(ctypes.Structure):
+            """Native FILE_RENAME_INFORMATION, replacement disabled."""
+            _fields_ = [("replace", wintypes.BOOLEAN), ("root", wintypes.HANDLE),
+                        ("length", wintypes.ULONG), ("name", wintypes.WCHAR * (len(name.encode("utf-16-le")) // 2 + 1))]
+        class StatusBlock(ctypes.Structure):
+            """Native I/O status for the rename request."""
+            _fields_ = [("status", ctypes.c_void_p), ("information", ctypes.c_size_t)]
+        information = RenameInformation(False, destination_parent, len(name.encode("utf-16-le")), name)
+        io = StatusBlock()
+        native = ctypes.WinDLL("ntdll")
+        rename = native.NtSetInformationFile
+        rename.argtypes = [wintypes.HANDLE, ctypes.POINTER(StatusBlock), ctypes.c_void_p,
+                           wintypes.ULONG, wintypes.ULONG]
+        rename.restype = wintypes.LONG
+        status = rename(source_handle, ctypes.byref(io), ctypes.byref(information), ctypes.sizeof(information), 10)
+        if status < 0:
+            error = native.RtlNtStatusToDosError
+            error.argtypes = [wintypes.LONG]
+            error.restype = wintypes.ULONG
+            raise ctypes.WinError(error(status))
+    finally:
+        for handle in reversed(owned):
+            close(handle)
+
+
 class _PinnedLibrary:
     """Pin the recorded root and every ancestor; all later operations use those bindings."""
 
@@ -135,8 +224,26 @@ class _PinnedLibrary:
         """Open from the filesystem anchor, rejecting links in all root ancestors."""
         try:
             current = Path(self.root.anchor)
+            components = self.root.parts[1:]
+            android_identity = None
+            if sys.platform == "android":
+                import json
+                anchor = os.environ.get("ROMARR_ANDROID_FILES_ROOT", "")
+                if not anchor or not Path(anchor).is_absolute():
+                    raise ValueError("A trusted native Android files anchor is required")
+                current = Path(anchor)
+                try:
+                    components = self.root.relative_to(current).parts
+                    android_identity = json.loads(os.environ.get("ROMARR_ANDROID_FILES_ID", ""))
+                except (ValueError, TypeError) as exc:
+                    raise ValueError("Library is outside the trusted Android files anchor") from exc
+                if (not isinstance(android_identity, list) or len(android_identity) != 2
+                        or any(type(item) is not int for item in android_identity)):
+                    raise ValueError("Invalid trusted Android files identity")
             parent = self._pin(current, None, None)
-            for component in self.root.parts[1:]:
+            if android_identity is not None and _object_id(os.fstat(parent)) != android_identity:
+                raise ValueError("The trusted Android files anchor changed")
+            for component in components:
                 current /= component
                 parent = self._pin(current, parent, component)
             self.root_fd = parent
@@ -149,14 +256,14 @@ class _PinnedLibrary:
             self.__exit__(None, None, None)
             raise
 
-    def _pin(self, path, parent, component):
+    def _pin(self, path, parent, component, create=False):
         """Hold one directory and remember its binding to its already pinned parent."""
         if self.windows:
-            handle = _windows_handle(path, True)
+            handle = _windows_handle(path, True, parent=parent, create=create)
             self.handles.append(handle)
             identity = _object_id(os.stat(path, follow_symlinks=False))
             self.bindings.append((path, identity))
-            return None
+            return handle
         if not (os.open in os.supports_dir_fd and hasattr(os, "O_NOFOLLOW")):
             raise ValueError("Secure library operations are unavailable on this platform")
         flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
@@ -175,13 +282,12 @@ class _PinnedLibrary:
             path /= component
             if create_quarantine and component == ".romarr-file-quarantine" and path.parent == self.root:
                 try:
-                    if self.windows:
-                        path.mkdir(mode=0o700)
-                    else:
+                    if not self.windows:
                         os.mkdir(component, mode=0o700, dir_fd=parent)
                 except FileExistsError:
                     pass
-            parent = self._pin(path, parent, component)
+            parent = self._pin(path, parent, component, create=(self.windows and create_quarantine
+                               and component == ".romarr-file-quarantine" and path.parent == self.root))
         self.validate()
         return parent, path, components[-1]
 
@@ -225,7 +331,7 @@ class _PinnedLibrary:
                 import ctypes
                 import msvcrt
                 from ctypes import wintypes
-                handle = _windows_handle(path / name, False)
+                handle = _windows_handle(path / name, False, parent=descriptor)
                 try:
                     final = ctypes.WinDLL("kernel32", use_last_error=True).GetFinalPathNameByHandleW
                     final.argtypes = [wintypes.HANDLE, wintypes.LPWSTR, wintypes.DWORD, wintypes.DWORD]
@@ -267,7 +373,7 @@ class _PinnedLibrary:
         """Publish a non-replacing rename relative to the same pinned library root."""
         self.validate()
         if self.windows:
-            _move_no_replace(source[1] / source[2], destination[1] / destination[2])
+            _move_no_replace(source[2], destination[2], source_dir_fd=source[0], destination_dir_fd=destination[0])
         else:
             _move_no_replace(source[2], destination[2], source_dir_fd=source[0], destination_dir_fd=destination[0])
             os.fsync(source[0]); os.fsync(destination[0])
@@ -313,8 +419,13 @@ def _digest(source):
 
 def _fd_identity(source):
     """Compare the opened object before and after copying its bytes."""
-    s = os.fstat(source.fileno())
-    return s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns
+    return _stat_identity(os.fstat(source.fileno()))
+
+
+def _stat_identity(observation):
+    """Compare consistent change metadata; Windows stat/fstat ctime meanings differ."""
+    return (observation.st_dev, observation.st_ino, observation.st_size, observation.st_mtime_ns,
+            0 if sys.platform == "win32" else observation.st_ctime_ns)
 
 
 class FileReports:
@@ -521,12 +632,12 @@ class FileReports:
                 observation = pins.entry_stat(source)
                 if not stat.S_ISREG(observation.st_mode) or _object_id(observation) != list(before[:2]):
                     raise ValueError("File changed before quarantine or restore")
-            # Windows final file handles must close before rename; ancestor handles stay pinned.
+            # Reopen the final source by its pinned parent for the native rename.
             report["quarantine_state"] = "restoring" if restoring else "moving"
             self._save(report)
             pins.validate()
             current = pins.entry_stat(source)
-            if not stat.S_ISREG(current.st_mode) or (current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns, current.st_ctime_ns) != before:
+            if not stat.S_ISREG(current.st_mode) or _stat_identity(current) != before:
                 raise ValueError("File changed before quarantine or restore")
             pins.move(source, destination)
             try:
