@@ -4501,9 +4501,12 @@ RENDER.general=async()=>{
 /* ---------------- system ---------------- */
 RENDER.status=async()=>{
   const viewVersion=typeof pageVersion==='number'?pageVersion:null;
+  const runId=RENDER._statusRunId=(RENDER._statusRunId||0)+1;
+  const current=()=>runId===RENDER._statusRunId
+    &&(typeof activePage!=='string'||activePage==='status')
+    &&(viewVersion===null||pageVersion===viewVersion);
   const h=await j('/api/v1/system/status');
-  if((typeof activePage==='string'&&activePage!=='status')
-      ||(viewVersion!==null&&pageVersion!==viewVersion))return;
+  if(!current())return;
   const row=(l,ok,extra='')=>`<tr><td>${l}</td>
     <td><span class="dot ${ok?'up':'down'}"></span>${ok?'OK':'Not available'}</td>
     <td style="color:var(--dim)">${esc(extra)}</td></tr>`;
@@ -4632,8 +4635,7 @@ RENDER.status=async()=>{
     'romarr-'+$('#ex-what').value+'.'+$('#ex-fmt').value);
 
   const fe=await j('/api/v1/frontend/formats').catch(()=>({formats:[]}));
-  if((typeof activePage==='string'&&activePage!=='status')
-      ||(viewVersion!==null&&pageVersion!==viewVersion))return;
+  if(!current())return;
   const feRow=$('#fe-row'); if(!feRow) return;   // navigated away mid-fetch
   feRow.innerHTML=(fe.formats||[]).map(f=>
     '<button class="btn ghost fe-btn" data-f="'+esc(f.name||f)+'">'
