@@ -18,6 +18,9 @@ Two things here are load-bearing and easy to get wrong:
 from __future__ import annotations
 
 import logging
+import math
+import time
+from email.utils import parsedate_to_datetime
 import re
 from dataclasses import dataclass
 from threading import Lock
@@ -39,6 +42,75 @@ SEARCH_CATEGORIES = (1000, 4050)
 MAX_TORRENT_BYTES = 32 * 1024 * 1024
 MAX_BENCODE_TOKENS = 500_000
 MAX_BENCODE_DEPTH = 64
+
+
+class IndexerBackoff(requests.RequestException):
+    """A shared indexer asked this client to pause further requests."""
+
+    def __init__(self, retry_after: int):
+        """Expose a safe retry delay without retaining credential-bearing URLs."""
+        self.retry_after = retry_after
+        super().__init__(f"indexer rate limited; retry in {retry_after} seconds")
+
+
+def indexer_timeout(cfg: dict) -> int:
+    """Validate a saved or unsaved indexer's request timeout in seconds."""
+    value = cfg.get("timeout", 60)
+    if isinstance(value, bool) or not re.fullmatch(r"[0-9]+", str(value)):
+        raise ValueError("indexer timeout must be an integer from 1 to 300 seconds")
+    value = int(value)
+    if not 1 <= value <= 300:
+        raise ValueError("indexer timeout must be an integer from 1 to 300 seconds")
+    return value
+
+
+class _IndexerRequests:
+    """Non-blocking HTTP 429 cooldown shared by one client's concurrent calls."""
+
+    def __init__(self):
+        """Keep deadlines monotonic and state updates atomic."""
+        self._lock = Lock()
+        self._until = 0.0
+        self._failures = 0
+        self._generation = 0
+
+    @staticmethod
+    def _delay(response, failures: int) -> float:
+        """Read Retry-After without trusting unbounded or malformed headers."""
+        header = str((getattr(response, "headers", {}) or {}).get("Retry-After", ""))
+        if len(header) <= 128:
+            try:
+                delay = (int(header) if re.fullmatch(r"[0-9]+", header)
+                         else parsedate_to_datetime(header).timestamp() - time.time())
+                if math.isfinite(delay) and delay > 0:
+                    # Respect a server's longer explicit pause, bounded to a day.
+                    return min(float(delay), 86400.0)
+            except (ValueError, TypeError, OverflowError, AttributeError):
+                pass
+        return float(min(30 * (2 ** min(failures - 1, 5)), 900))
+
+    def get(self, session, url: str, **kwargs):
+        """Fail fast during cooldown; never sleep or expose a keyed URL."""
+        with self._lock:
+            remaining = self._until - time.monotonic()
+            if remaining > 0:
+                raise IndexerBackoff(max(1, math.ceil(remaining)))
+            generation = self._generation
+        response = session.get(url, **kwargs)
+        if getattr(response, "status_code", None) == 429:
+            with self._lock:
+                self._failures += 1
+                self._generation += 1
+                delay = self._delay(response, self._failures)
+                self._until = max(self._until, time.monotonic() + delay)
+                remaining = max(1, math.ceil(self._until - time.monotonic()))
+            _close_response(response)
+            raise IndexerBackoff(remaining)
+        with self._lock:
+            # An older successful request cannot undo a newer rate-limit signal.
+            if generation == self._generation and getattr(response, "ok", False):
+                self._failures = 0
+        return response
 
 
 class ProwlarrDownloadError(ValueError):
@@ -230,6 +302,7 @@ class Prowlarr:
         self._config = config
         self._owns_session = session is None
         self._session = session or requests.Session()
+        self._requests = _IndexerRequests()
         self._privacy: dict[int, bool] | None = None
         self._privacy_lock = Lock()
 
@@ -255,7 +328,7 @@ class Prowlarr:
             privacy: dict[int, bool] = {}
             try:
                 url = f"{self._config.base_url.rstrip('/')}/api/v1/indexer"
-                response = self._session.get(
+                response = self._requests.get(self._session,
                     url, headers={"X-Api-Key": self._config.api_key},
                     timeout=self._config.timeout)
                 response.raise_for_status()
@@ -273,7 +346,7 @@ class Prowlarr:
         """Search every configured indexer for a game."""
         url = self._url("search", query=term, categories=list(SEARCH_CATEGORIES),
                         type="search", limit=limit)
-        response = self._session.get(
+        response = self._requests.get(self._session,
             url, headers={"X-Api-Key": self._config.api_key},
             timeout=self._config.timeout,
         )
@@ -476,7 +549,7 @@ class Prowlarr:
         tell which had won.
         """
         url = f"{self._config.base_url.rstrip('/')}/api/v1/indexer"
-        response = self._session.get(url, headers={"X-Api-Key": self._config.api_key},
+        response = self._requests.get(self._session, url, headers={"X-Api-Key": self._config.api_key},
                                      timeout=self._config.timeout)
         response.raise_for_status()
         out = []
@@ -552,6 +625,7 @@ class Torznab:
         self._config = config
         self._owns_session = session is None
         self._session = session or requests.Session()
+        self._requests = _IndexerRequests()
 
     @property
     def name(self) -> str:
@@ -560,7 +634,7 @@ class Torznab:
     def _get(self, **params) -> str:
         base = self._config.base_url.rstrip("/")
         query = urlencode({**params, "apikey": self._config.api_key}, doseq=True)
-        response = self._session.get(f"{base}?{query}", timeout=self._config.timeout)
+        response = self._requests.get(self._session, f"{base}?{query}", timeout=self._config.timeout)
         response.raise_for_status()
         return response.text
 
@@ -701,13 +775,14 @@ class TorrentRss:
         self._config = config
         self._owns_session = session is None
         self._session = session or requests.Session()
+        self._requests = _IndexerRequests()
 
     @property
     def name(self) -> str:
         return self._config.name
 
     def _body(self) -> str:
-        response = self._session.get(self._config.url,
+        response = self._requests.get(self._session, self._config.url,
                                      timeout=self._config.timeout)
         response.raise_for_status()
         return response.text
@@ -791,6 +866,7 @@ class TorrentPotato:
         self._config = config
         self._owns_session = session is None
         self._session = session or requests.Session()
+        self._requests = _IndexerRequests()
 
     @property
     def name(self) -> str:
@@ -799,7 +875,7 @@ class TorrentPotato:
     def _get(self, **params) -> dict:
         query = urlencode({**params, "user": self._config.user,
                            "passkey": self._config.passkey})
-        response = self._session.get(
+        response = self._requests.get(self._session,
             f"{self._config.url.rstrip('/')}?{query}",
             timeout=self._config.timeout)
         response.raise_for_status()
@@ -869,17 +945,18 @@ def build_indexer(cfg: dict):
         return None
     spec = INDEXER_TYPES[kind]
     name = cfg.get("name") or spec["label"]
+    timeout = indexer_timeout(cfg)
 
     if driver == "rss":
         return TorrentRss(TorrentRssConfig(
             url=cfg["url"], name=name,
-            private=bool(cfg.get("private", True))))
+            private=bool(cfg.get("private", True)), timeout=timeout))
     if driver == "potato":
         return TorrentPotato(TorrentPotatoConfig(
             url=cfg["url"], name=name,
             user=str(cfg.get("user") or ""),
             passkey=str(cfg.get("passkey") or ""),
-            private=bool(cfg.get("private", True))))
+            private=bool(cfg.get("private", True)), timeout=timeout))
 
     categories = tuple(indexer_categories(cfg)) or SEARCH_CATEGORIES
     return Torznab(TorznabConfig(
@@ -888,7 +965,7 @@ def build_indexer(cfg: dict):
         name=name,
         categories=categories,
         protocol=spec["protocol"] if spec["protocol"] != "any" else "torrent",
-        private=bool(cfg.get("private", False)),
+        private=bool(cfg.get("private", False)), timeout=timeout,
     ))
 
 
@@ -921,11 +998,16 @@ INDEXER_FIELD = lambda name, label, kind="text", default="", **kw: {  # noqa: E7
     "name": name, "label": label, "type": kind, "default": default, **kw
 }
 
+_TIMEOUT_FIELD = INDEXER_FIELD(
+    "timeout", "Request timeout (seconds)", "int", 60,
+    help="Per-indexer HTTP timeout, from 1 to 300 seconds")
+
 # 1000-1999 is console, 4050-4069 is PC games. Anything else is not a game and
 # would only add noise to the ranking.
 DEFAULT_GAME_CATEGORIES = "1000,1010,1020,1030,1040,1050,1060,1070,1080,4050"
 
 _INDEXER_COMMON = [
+    _TIMEOUT_FIELD,
     INDEXER_FIELD("name", "Name"),
     INDEXER_FIELD("enable", "Enable", "bool", True),
     INDEXER_FIELD("url", "URL", help="Base URL, e.g. https://indexer.example/api"),
@@ -973,6 +1055,7 @@ INDEXER_TYPES = {
         "managed": True,
         "help": "Aggregates every tracker you configure in it. Recommended.",
         "fields": [
+            _TIMEOUT_FIELD,
             INDEXER_FIELD("name", "Name", default="Prowlarr"),
             INDEXER_FIELD("enable", "Enable", "bool", True),
             INDEXER_FIELD("url", "URL", default="http://localhost:9696"),
@@ -1041,6 +1124,7 @@ INDEXER_TYPES = {
         "help": "A plain RSS feed of torrents. No query interface, so ROMarr "
                 "filters it here.",
         "fields": [
+            _TIMEOUT_FIELD,
             INDEXER_FIELD("name", "Name", default="Torrent RSS"),
             INDEXER_FIELD("enable", "Enable", "bool", True),
             INDEXER_FIELD("url", "Feed URL",
@@ -1056,6 +1140,7 @@ INDEXER_TYPES = {
         "help": "The TorrentPotato JSON API, exposed by a few private "
                 "trackers directly.",
         "fields": [
+            _TIMEOUT_FIELD,
             INDEXER_FIELD("name", "Name", default="TorrentPotato"),
             INDEXER_FIELD("enable", "Enable", "bool", True),
             INDEXER_FIELD("url", "URL"),

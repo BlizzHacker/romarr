@@ -70,7 +70,7 @@ from .downloaders import (
     Blackhole, CLIENT_TYPES, DebridClient, HubDownloader, NZBGet, NzbgetConfig, SABnzbd, SabConfig, SiteDownloader, build_client,
     hand_off_with_id, match_queue_item, merge_secrets, pick_client, redact,
 )
-from .indexers import INDEXER_TYPES, build_indexer, merge_indexer_secrets, redact_indexer
+from .indexers import INDEXER_TYPES, build_indexer, indexer_timeout, merge_indexer_secrets, redact_indexer
 from .indexers import Prowlarr, ProwlarrConfig, ProwlarrDownloadError
 from .library import _custom_platform_folder, import_rom, map_remote_path, platform_dir
 from .selective_import import selected_import_path
@@ -1503,7 +1503,8 @@ class ROMarr:
             for cfg in self.store.list_items("indexers"):
                 if cfg.get("type") == "prowlarr" and cfg.get("enable", True):
                     self.prowlarr = Prowlarr(ProwlarrConfig(
-                        base_url=cfg.get("url", ""), api_key=cfg.get("api_key", "")))
+                        base_url=cfg.get("url", ""), api_key=cfg.get("api_key", ""),
+                        timeout=indexer_timeout(cfg)))
                     self.store.settings["_prowlarr_url"] = cfg.get("url", "")
                     break
 
@@ -1725,7 +1726,8 @@ class ROMarr:
                                "placeholder -- type the real key"}
         try:
             if kind == "prowlarr":
-                probe = Prowlarr(ProwlarrConfig(base_url=url, api_key=key))
+                probe = Prowlarr(ProwlarrConfig(
+                    base_url=url, api_key=key, timeout=indexer_timeout(cfg)))
                 indexers = probe.indexers()
                 private = sum(1 for i in indexers if i.get("privacy") == "private")
                 return {"ok": True,
@@ -9477,6 +9479,11 @@ def make_handler(service: ROMarr):
                     merged = (merge_indexer_secrets(dict(body), existing)
                               if is_indexer
                               else merge_secrets(dict(body), existing))
+                    if is_indexer:
+                        try:
+                            merged["timeout"] = indexer_timeout(merged)
+                        except ValueError as err:
+                            return self._json(400, {"error": str(err)})
                     saved = service.store.put_item(key, merged)
                     service.reload_clients()
                 return self._json(200, redact_indexer(saved) if is_indexer
