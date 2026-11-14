@@ -383,7 +383,7 @@
    "license_source": "https://github.com/stenzek/duckstation/blob/master/LICENSE",
    "archived": false,
    "stars": 10993,
-   "description": "Fast PlayStation 1 emulator for x86-64/AArch32/AArch64/RV64 Android: Android beta rewrite requires Android 7+. Backup data before upgrading. Publisher prohibits redistribution of the beta APK; use the official page.",
+   "description": "PlayStation 1 emulator for desktop and Android. The Android beta requires Android 7 or later. Back up app data before upgrading and download the APK from the official page; its publisher prohibits redistribution.",
    "featured": true,
    "host_platforms": [
     "android",
@@ -3887,7 +3887,7 @@
      "catalog_license": ""
     },
     {
-     "source": "https://github.com/flyinghead/flycast/master/shell/android-studio/flycast/build.gradle.kts",
+     "source": "https://github.com/flyinghead/flycast/blob/master/shell/android-studio/flycast/build.gradle.kts",
      "discovery": "Android package/build metadata checked 2026-11-14; ABI list is a source-build target, not a tested device claim."
     }
    ],
@@ -3908,7 +3908,7 @@
    "android_package": "com.flycast.emulator",
    "android_abis": [],
    "android_downloads": "https://github.com/flyinghead/flycast/releases",
-   "android_source": "https://github.com/flyinghead/flycast/master/shell/android-studio/flycast/build.gradle.kts",
+   "android_source": "https://github.com/flyinghead/flycast/blob/master/shell/android-studio/flycast/build.gradle.kts",
    "android_verified_date": "2026-11-14"
   },
   {
@@ -6263,7 +6263,7 @@
      "catalog_license": "GPLv3"
     },
     {
-     "source": "https://github.com/rafaelvcaetano/melonDS-android/master/app/build.gradle.kts",
+     "source": "https://github.com/rafaelvcaetano/melonDS-android/blob/master/app/build.gradle.kts",
      "discovery": "Android package/build metadata checked 2026-11-14; ABI list is a source-build target, not a tested device claim."
     }
    ],
@@ -6284,7 +6284,7 @@
     "x86_64"
    ],
    "android_downloads": "https://github.com/rafaelvcaetano/melonDS-android/releases",
-   "android_source": "https://github.com/rafaelvcaetano/melonDS-android/master/app/build.gradle.kts",
+   "android_source": "https://github.com/rafaelvcaetano/melonDS-android/blob/master/app/build.gradle.kts",
    "android_verified_date": "2026-11-14",
    "manual_setup": true,
    "upstream_downloads": "https://github.com/rafaelvcaetano/melonDS-android/releases"
@@ -6421,7 +6421,7 @@
      "catalog_license": "GPLv2"
     },
     {
-     "source": "https://github.com/azahar-emu/azahar/master/src/android/app/build.gradle.kts",
+     "source": "https://github.com/azahar-emu/azahar/blob/master/src/android/app/build.gradle.kts",
      "discovery": "Android package/build metadata checked 2026-11-14; ABI list is a source-build target, not a tested device claim."
     }
    ],
@@ -6445,7 +6445,7 @@
     "x86_64"
    ],
    "android_downloads": "https://azahar-emu.org/",
-   "android_source": "https://github.com/azahar-emu/azahar/master/src/android/app/build.gradle.kts",
+   "android_source": "https://github.com/azahar-emu/azahar/blob/master/src/android/app/build.gradle.kts",
    "android_verified_date": "2026-11-14"
   },
   {
@@ -10718,7 +10718,7 @@
      "catalog_license": ""
     },
     {
-     "source": "https://github.com/dolphin-emu/dolphin/master/Source/Android/app/build.gradle.kts",
+     "source": "https://github.com/dolphin-emu/dolphin/blob/master/Source/Android/app/build.gradle.kts",
      "discovery": "Android package/build metadata checked 2026-11-14; ABI list is a source-build target, not a tested device claim."
     }
    ],
@@ -10742,7 +10742,7 @@
     "x86_64"
    ],
    "android_downloads": "https://dolphin-emu.org/download/",
-   "android_source": "https://github.com/dolphin-emu/dolphin/master/Source/Android/app/build.gradle.kts",
+   "android_source": "https://github.com/dolphin-emu/dolphin/blob/master/Source/Android/app/build.gradle.kts",
    "android_verified_date": "2026-11-14"
   },
   {
@@ -11156,7 +11156,7 @@
      "catalog_license": ""
     },
     {
-     "source": "https://github.com/hrydgard/ppsspp/master/android/build.gradle.kts",
+     "source": "https://github.com/hrydgard/ppsspp/blob/master/android/build.gradle.kts",
      "discovery": "Android package/build metadata checked 2026-11-14; ABI list is a source-build target, not a tested device claim."
     }
    ],
@@ -11181,7 +11181,7 @@
     "x86_64"
    ],
    "android_downloads": "https://www.ppsspp.org/download/",
-   "android_source": "https://github.com/hrydgard/ppsspp/master/android/build.gradle.kts",
+   "android_source": "https://github.com/hrydgard/ppsspp/blob/master/android/build.gradle.kts",
    "android_verified_date": "2026-11-14"
   },
   {
@@ -11204,7 +11204,7 @@
      "catalog_license": ""
     },
     {
-     "source": "https://github.com/Vita3K/Vita3K/master/android/app/build.gradle",
+     "source": "https://github.com/Vita3K/Vita3K/blob/master/android/app/build.gradle",
      "discovery": "Android package/build metadata checked 2026-11-14; ABI list is a source-build target, not a tested device claim."
     }
    ],
@@ -11228,7 +11228,7 @@
     "x86_64"
    ],
    "android_downloads": "https://github.com/Vita3K/Vita3K/releases/tag/continuous",
-   "android_source": "https://github.com/Vita3K/Vita3K/master/android/app/build.gradle",
+   "android_source": "https://github.com/Vita3K/Vita3K/blob/master/android/app/build.gradle",
    "android_verified_date": "2026-11-14"
   },
   {
@@ -29645,7 +29645,7 @@
    "fork": false,
    "sources": [
     {
-     "source": "https://github.com/libretro/RetroArch/master/pkg/android/phoenix/build.gradle",
+     "source": "https://github.com/libretro/RetroArch/blob/master/pkg/android/phoenix/build.gradle",
      "discovery": "Android package/build metadata checked 2026-11-14; ABI list is a source-build target, not a tested device claim."
     }
    ],
@@ -29665,7 +29665,7 @@
     "x86_64"
    ],
    "android_downloads": "https://www.retroarch.com/platforms.html",
-   "android_source": "https://github.com/libretro/RetroArch/master/pkg/android/phoenix/build.gradle",
+   "android_source": "https://github.com/libretro/RetroArch/blob/master/pkg/android/phoenix/build.gradle",
    "android_verified_date": "2026-11-14",
    "description": "Free multi-system frontend; individual cores have separate licenses and firmware requirements. Package IDs vary by build, including com.retroarch.aarch64. Install the Android app manually from the official source; ROMarr does not install APKs or prove game compatibility."
   },
@@ -29773,7 +29773,7 @@
    "android_abis": [],
    "android_downloads": "https://docs.scummvm.org/en/latest/other_platforms/android.html",
    "android_verified_date": "2026-11-14",
-   "description": " Android: Free ScummVM Android app supports selected adventure game engines; game data and compatibility depend on the engine."
+   "description": "ScummVM for Android runs supported adventure games. Bring your own game data and check the compatibility list for each game."
   },
   {
    "id": "dosbox-staging",
@@ -29831,7 +29831,7 @@
    "license_verified": true,
    "license_source": "https://git.eden-emu.dev/eden-emu/eden/src/branch/master/LICENSE.txt",
    "fork_of": "",
-   "description": "The Eden Nintendo Switch Emulator Android Switch emulator: standard package dev.eden.eden_emulator; legacy builds use dev.legacy.eden_emulator. ARM64 phone and x86_64 ChromeOS variants differ. Install manually from official releases; firmware, keys and per-game support required.",
+   "description": "Nintendo Switch emulator with Android builds. Use dev.eden.eden_emulator for current releases; legacy builds use dev.legacy.eden_emulator. Choose the appropriate ARM64 phone or x86_64 ChromeOS build from official releases. Compatibility varies by game; supply firmware and keys from your own console.",
    "stars": 76,
    "host_platforms": [
     "android",
@@ -29985,7 +29985,7 @@
    "android_package": "com.swordfish.lemuroid",
    "android_abis": [],
    "android_downloads": "https://github.com/Swordfish90/Lemuroid/releases",
-   "android_source": "https://github.com/Swordfish90/Lemuroid/master/lemuroid-app/build.gradle.kts",
+   "android_source": "https://github.com/Swordfish90/Lemuroid/blob/master/lemuroid-app/build.gradle.kts",
    "android_verified_date": "2026-11-14",
    "description": "Free open-source multi-system Android emulator with bundled libretro cores; supported systems and device performance vary. Install the Android app manually from the official source; ROMarr does not install APKs or prove game compatibility.",
    "manual_setup": true,

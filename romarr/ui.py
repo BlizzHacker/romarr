@@ -625,7 +625,7 @@ html:not(.sidebar-ready):has(#fallback-accent-5:checked){--accent:#7bd88f;}
 CSS += """
 #main,.page,.card,.panels>*{min-width:0}
 @media(max-width:820px){
-  table{display:block;max-width:100%;overflow-x:auto;overscroll-behavior-x:contain}
+  table,#page>table{display:block;max-width:100%;overflow-x:auto;overscroll-behavior-x:contain}
   th,td{min-width:90px;overflow-wrap:anywhere}
   .rowact{flex-wrap:wrap}
   .card h3{flex-wrap:wrap}

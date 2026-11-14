@@ -29,6 +29,7 @@ public class StandaloneTest {
   String runtime=Python.getInstance().getModule("android_backend").callAttr("runtime_facts").toString();
   android.util.Log.i("ROMarrProof",runtime);
   org.json.JSONObject facts=new org.json.JSONObject(runtime);
+  assertTrue("Private Context files anchor identity is verified",facts.getBoolean("files_anchor_verified"));
   assertTrue("Process-local automation scheduler is alive",facts.getBoolean("scheduler_alive"));
   java.util.Set<String> tasks=new java.util.HashSet<>();
   org.json.JSONArray jobs=facts.getJSONArray("tasks");
@@ -63,10 +64,18 @@ public class StandaloneTest {
   android.app.Instrumentation inst=InstrumentationRegistry.getInstrumentation();
   Context c=inst.getTargetContext();
   File library=new File(c.getFilesDir(),"library"); library.mkdirs();
-  File source=new File(library,"native-import-test.rom");
+  java.lang.reflect.Method normalize=MainActivity.class.getDeclaredMethod("importName",String.class);
+  normalize.setAccessible(true);
+  assertEquals("import.rom",normalize.invoke(null,(Object)null));
+  assertEquals("bad_name__.rom",normalize.invoke(null,"bad/name\\\n.rom"));
+  String longName="界".repeat(100)+".rom";
+  String shortened=(String)normalize.invoke(null,longName);
+  assertTrue(shortened.endsWith(".rom"));
+  assertTrue(shortened.getBytes(java.nio.charset.StandardCharsets.UTF_8).length<=240);
+  File source=new File(library,"native-日本語, [v1] & test.rom");
   byte[] fixture=new byte[]{82,79,77,97,114,114};
   try(FileOutputStream out=new FileOutputStream(source)) {out.write(fixture);}
-  File result=new File(library,"Imported/native-import-test.rom"); result.delete();
+  File result=new File(library,"Imported/native-日本語, [v1] & test.rom"); result.delete();
   android.net.Uri uri=FileProvider.getUriForFile(c,c.getPackageName()+".files",source);
   MainActivity activity=(MainActivity)inst.startActivitySync(new android.content.Intent(c,MainActivity.class).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
   inst.runOnMainSync(() -> activity.onActivityResult(10,android.app.Activity.RESULT_OK,new android.content.Intent().setData(uri)));
@@ -153,6 +162,13 @@ public class StandaloneTest {
   };
  }
  @Test public void signInRedirectRequiresAuthorityConsentAndRejectsStaleCallbacks() throws Exception {
+  java.lang.reflect.Method same=MainActivity.class.getDeclaredMethod("sameOrigin",String.class,String.class);
+  same.setAccessible(true);
+  assertEquals(true,same.invoke(null,"HTTPS://Example.COM:443/a","https://example.com/b"));
+  assertEquals(false,same.invoke(null,"https://example.com:444/a","https://example.com/b"));
+  java.lang.reflect.Method canonical=MainActivity.class.getDeclaredMethod("profileOrigin",String.class);
+  canonical.setAccessible(true);
+  assertEquals("https://example.com",canonical.invoke(null,"HTTPS://Example.COM:443/"));
   android.app.Instrumentation inst=InstrumentationRegistry.getInstrumentation();Context c=inst.getTargetContext();
   MainActivity activity=(MainActivity)inst.startActivitySync(new android.content.Intent(c,MainActivity.class).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
   java.lang.reflect.Method remote=MainActivity.class.getDeclaredMethod("remote",String.class),nav=MainActivity.class.getDeclaredMethod("navigateRequest",android.webkit.WebResourceRequest.class);

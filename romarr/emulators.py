@@ -150,7 +150,7 @@ class EmulatorHub:
                 continue
             if wanted and wanted not in " ".join(str(row.get(k) or "") for k in
                                                  ("name", "systems", "description", "repo", "license", "provider",
-                                                  "host_platforms", "android_package")).casefold():
+                                                  "android_package")).casefold():
                 continue
             saved = sorted((self.root / row["id"]).glob("*/romarr-install.json"))
             row["installed"] = [p.parent.name for p in saved]

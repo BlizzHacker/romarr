@@ -40,6 +40,15 @@ def fake_clamd(limit=1 << 20):
                 data += self._exactly(size)
                 if len(data) > limit:
                     self.request.sendall(b"INSTREAM size limit exceeded. ERROR\0")
+                    # Close the reply side gracefully, then consume pending
+                    # input so Windows does not replace this frame with a reset.
+                    self.request.shutdown(socket.SHUT_WR)
+                    self.request.settimeout(2)
+                    try:
+                        while self.request.recv(65536):
+                            pass
+                    except (OSError, TimeoutError):
+                        pass
                     return
             verdict = b"Eicar-Test-Signature FOUND" if EICAR in data else b"OK"
             self.request.sendall(b"stream: " + verdict + b"\0")

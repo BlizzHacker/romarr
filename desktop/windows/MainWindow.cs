@@ -63,7 +63,7 @@ public sealed class MainWindow : Form
         companion.DropDownItems.Add("Get Cartridge for Xbox", null, (_,_) => OpenExternal("https://apps.microsoft.com/detail/9MXC51W17LH4"));
         var help = new ToolStripMenuItem("Help");
         help.DropDownItems.Add("Getting started", null, (_,_) => OpenExternal("https://github.com/BlizzHacker/romarr/blob/main/docs/GETTING-STARTED.md"));
-        help.DropDownItems.Add("ROM Hub plugins", null, (_,_) => { if (browser.CoreWebView2 is not null) browser.CoreWebView2.Navigate(origin + "/#hub"); });
+        help.DropDownItems.Add("ROM Hub plugins", null, (_,_) => OpenHubPage());
         help.DropDownItems.Add("Roadmap", null, (_,_) => OpenExternal("https://github.com/BlizzHacker/romarr/blob/main/ROADMAP.md"));
         menu.Items.AddRange([file, companion, help]);
         MainMenuStrip = menu;
@@ -351,6 +351,23 @@ public sealed class MainWindow : Form
             || !IsSignInContinuation(true, true, false, https)
             || !IsSignInContinuation(true, false, true, https))
             throw new Exception("Remote sign-in trust policy failed.");
+        if (MatchesRemoteNavigation(null, 5) || MatchesRemoteNavigation(6, 5)
+            || !MatchesRemoteNavigation(6, 6))
+            throw new Exception("Stale remote navigation completion was accepted.");
+    }
+
+    /// <summary>Requires the completion event to belong to this connection's latest permitted navigation.</summary>
+    static bool MatchesRemoteNavigation(ulong? expected, ulong actual)
+        => expected.HasValue && expected.Value == actual;
+
+    /// <summary>Opens plugins only while a valid local or connected remote server view is active.</summary>
+    bool OpenHubPage()
+    {
+        if (browser.CoreWebView2 is null || (!remoteConnected && backend is not { HasExited: false })
+            || !Uri.TryCreate(origin, UriKind.Absolute, out var server)
+            || (server.Scheme != Uri.UriSchemeHttp && server.Scheme != Uri.UriSchemeHttps)) return false;
+        browser.CoreWebView2.Navigate(server.GetLeftPart(UriPartial.Authority) + "/#hub");
+        return true;
     }
 
     /// <summary>Connects to a user-selected server without starting a local backend.</summary>
@@ -375,9 +392,19 @@ public sealed class MainWindow : Form
             if (!CurrentRemoteSession(sessionVersion, target, browser)) return;
             var selectedBrowser = browser;
             var ready = new TaskCompletionSource(); remoteLoadReady = ready;
+            ulong? expectedNavigation = null;
+            void RemoteStarting(object? sender, CoreWebView2NavigationStartingEventArgs e)
+            {
+                if (!CurrentRemoteSession(sessionVersion, target, selectedBrowser) || e.Cancel) return;
+                var signIn = SignInOrigin(e.Uri);
+                if (e.Uri.StartsWith(target + "/", StringComparison.OrdinalIgnoreCase)
+                    || (signIn is not null && signInOrigins.Contains(signIn)))
+                    expectedNavigation = e.NavigationId;
+            }
             void RemoteLoaded(object? sender, CoreWebView2NavigationCompletedEventArgs e)
             {
-                if (!CurrentRemoteSession(sessionVersion, target, selectedBrowser)) return;
+                if (!CurrentRemoteSession(sessionVersion, target, selectedBrowser)
+                    || !MatchesRemoteNavigation(expectedNavigation, e.NavigationId)) return;
                 if (!e.IsSuccess && e.WebErrorStatus == CoreWebView2WebErrorStatus.OperationCanceled) return;
                 if (e.IsSuccess)
                 {
@@ -388,7 +415,8 @@ public sealed class MainWindow : Form
                 }
                 else ready.TrySetException(new IOException("The server page could not load. Check the address and network connection."));
             }
-            browser.NavigationCompleted += RemoteLoaded;
+            selectedBrowser.CoreWebView2.NavigationStarting += RemoteStarting;
+            selectedBrowser.NavigationCompleted += RemoteLoaded;
             try
             {
                 browser.CoreWebView2.Navigate(target + "/");
@@ -403,7 +431,12 @@ public sealed class MainWindow : Form
                 }
                 await ready.Task;
             }
-            finally { selectedBrowser.NavigationCompleted -= RemoteLoaded; if (ReferenceEquals(remoteLoadReady, ready)) remoteLoadReady = null; }
+            finally
+            {
+                selectedBrowser.CoreWebView2.NavigationStarting -= RemoteStarting;
+                selectedBrowser.NavigationCompleted -= RemoteLoaded;
+                if (ReferenceEquals(remoteLoadReady, ready)) remoteLoadReady = null;
+            }
             if (!CurrentRemoteSession(sessionVersion, target, selectedBrowser)) return;
             remoteConnected = true; preferredMode = "remote";
             stop.Text = "Disconnect"; stop.Enabled = true;
@@ -497,6 +530,12 @@ public sealed class MainWindow : Form
             if (!remoteConnected || backend is not null) throw new Exception("Server mode started a local backend or failed to connect.");
             var rendered = await browser.ExecuteScriptAsync("document.body.innerText.includes('Remote server is running')");
             if (rendered != "true") throw new Exception("The native remote view did not display the selected server.");
+            DisconnectServer();
+            if (OpenHubPage()) throw new Exception("The disconnected ROM Hub action attempted navigation.");
+            // Reconnect before about:blank can finish; its completion must not finish this attempt.
+            await ConnectServerWithMessage();
+            if (!remoteConnected || !browser.CoreWebView2.Source.StartsWith(remoteOrigin + "/", StringComparison.OrdinalIgnoreCase))
+                throw new Exception("An old blank-page navigation completed the fresh connection.");
             DisconnectServer();
             if (!(await http.GetStringAsync(remoteOrigin + "/")).Contains("Remote server is running"))
                 throw new Exception("Disconnect stopped the remote fixture.");

@@ -17,17 +17,23 @@ def start(root):
     global _server, _service
     with _lock:
         if _server is None:
-            root = Path(root)
+            root = Path(root).resolve(strict=True)
             library = root / "library"
             library.mkdir(parents=True, exist_ok=True)
             (root / "dats").mkdir(exist_ok=True)
+            anchor = root.stat()
+            native_env = {
+                "ROMARR_ANDROID": "1", "ROMARR_ANDROID_FILES_ROOT": str(root),
+                "ROMARR_ANDROID_FILES_ID": json.dumps([anchor.st_dev, anchor.st_ino]),
+            }
+            # Only the native Context supplies this private directory trust anchor.
+            os.environ.update(native_env)
             env = dict(os.environ)
             env.update(ROMARR_DATA=str(root / "romarr.json"),
                        LIBRARY_PATH=str(library), DAT_PATH=str(root / "dats"),
                        ROMARR_HOST="127.0.0.1",
                        ROMARR_ANDROID="1", ROMARR_API_KEY=secrets.token_hex(32),
                        ROMARR_AUTH="enabled")
-            os.environ["ROMARR_ANDROID"] = "1"
             from romarr.app import ROMarr, make_handler
             service = ROMarr(env)
             # Match the normal server's recovery after a prior process died.
@@ -80,8 +86,12 @@ def runtime_facts():
     """Return non-secret runtime identity for device instrumentation proof."""
     import platform
     import sys
+    anchor = Path(os.environ["ROMARR_ANDROID_FILES_ROOT"]).stat() if _service else None
+    anchor_ok = bool(anchor and [anchor.st_dev, anchor.st_ino] ==
+                     json.loads(os.environ["ROMARR_ANDROID_FILES_ID"]))
     return json.dumps({"python": platform.python_version(), "platform": sys.platform,
                        "android": os.environ.get("ROMARR_ANDROID") == "1",
+                       "files_anchor_verified": anchor_ok,
                        "loopback": _server.server_address[0] if _server else None,
                        "scheduler_alive": bool(_service and _service.scheduler._thread
                                                and _service.scheduler._thread.is_alive()),
@@ -165,7 +175,9 @@ def smoke_report_quarantine_restore(root):
         payload = b"ROMarr harmless Android report fixture"
         fixture.write_bytes(payload)
         manager = FileReports(lambda: library, base / "state", lambda: {},
-                              {"ROMARR_ANDROID": "1"}, version=core_version())
+                              {key: os.environ[key] for key in (
+                                  "ROMARR_ANDROID", "ROMARR_ANDROID_FILES_ROOT",
+                                  "ROMARR_ANDROID_FILES_ID")}, version=core_version())
         ident = manager.submit(fixture.name, "unwanted-file")["id"]
         deadline = time.monotonic() + 10
         while ident in manager.active and time.monotonic() < deadline:

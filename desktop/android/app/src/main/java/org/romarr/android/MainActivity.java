@@ -78,6 +78,14 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
    return new URI("https",null,uri.getHost().toLowerCase(java.util.Locale.ROOT),effectivePort(uri)==443 ? -1 : uri.getPort(),null,null,null).toString();
   } catch(Exception e) { return ""; }
  }
+ private static String profileOrigin(String url) throws java.net.URISyntaxException {
+  URI uri=new URI(url.trim());
+  String result=httpsOrigin(url.trim());
+  if (result.isEmpty() || uri.getRawQuery()!=null || uri.getRawFragment()!=null
+      || !(uri.getRawPath()==null || uri.getRawPath().isEmpty() || uri.getRawPath().equals("/"))
+      || uri.getPort()==0 || uri.getPort()>65535) throw new IllegalArgumentException("Invalid HTTPS origin");
+  return result;
+ }
  private void clearSignIn() {
   if (signInPrompt!=null) {signInPrompt.dismiss();signInPrompt=null;}
   signInOrigins.clear(); signingIn=false;
@@ -131,7 +139,10 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
    } catch (Exception e) { runOnUiThread(() -> message("Could not authenticate the local session.")); }
   });
  }
- private void remote(String url) { clearSignIn(); wantLocal=false; navigationGeneration++; open(url); }
+ private void remote(String url) {
+  try { String canonical=profileOrigin(url); clearSignIn(); wantLocal=false; navigationGeneration++; open(canonical); }
+  catch(Exception e) { message("Enter a valid HTTPS server origin."); }
+ }
  private void profiles() {
   android.content.SharedPreferences prefs=getSharedPreferences("servers",MODE_PRIVATE);
   java.util.ArrayList<String> names=new java.util.ArrayList<>(prefs.getAll().keySet());
@@ -140,7 +151,10 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
    if (n==names.size()-1) { addProfile(); return; }
    String name=names.get(n);
    new AlertDialog.Builder(this).setTitle(name).setItems(new String[]{"Connect","Delete"},(x,a) -> {
-    if (a==0) remote(prefs.getString(name,"")); else prefs.edit().remove(name).apply();
+    if (a==0) {
+     try {String canonical=profileOrigin(prefs.getString(name,"")); prefs.edit().putString(name,canonical).apply(); remote(canonical);}
+     catch(Exception e) {message("Saved server must be a valid HTTPS origin.");}
+    } else prefs.edit().remove(name).apply();
    }).show();
   }).show();
  }
@@ -152,13 +166,36 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
   new AlertDialog.Builder(this).setTitle("Add server").setView(form).setNegativeButton("Cancel",null)
    .setPositiveButton("Save",(d,w) -> {
     try {
-     URI u=new URI(address.getText().toString().trim());
-     if (!"https".equals(u.getScheme()) || u.getHost()==null || u.getRawUserInfo()!=null || u.getRawQuery()!=null || u.getRawFragment()!=null
-       || !(u.getPath().isEmpty() || u.getPath().equals("/")) || name.getText().toString().trim().isEmpty()) throw new IllegalArgumentException();
-     String url=u.toString().replaceAll("/$","");
+     String url=profileOrigin(address.getText().toString());
+     if (name.getText().toString().trim().isEmpty()) throw new IllegalArgumentException();
      getSharedPreferences("servers",MODE_PRIVATE).edit().putString(name.getText().toString().trim(),url).apply(); remote(url);
     } catch (Exception e) { message("Enter a named HTTPS origin without credentials, path, query or fragment."); }
    }).show();
+ }
+ private static String utf8Prefix(String value,int limit) {
+  StringBuilder result=new StringBuilder(); int bytes=0;
+  for(int offset=0;offset<value.length();) {
+   int point=value.codePointAt(offset); String part=new String(Character.toChars(point));
+   int count=part.getBytes(java.nio.charset.StandardCharsets.UTF_8).length;
+   if(bytes+count>limit) break;
+   result.append(part); bytes+=count; offset+=Character.charCount(point);
+  }
+  return result.toString();
+ }
+ private static String importName(String display) {
+  if(display==null) return "import.rom";
+  StringBuilder cleaned=new StringBuilder();
+  display.codePoints().forEach(point -> cleaned.appendCodePoint(point=='/' || point=='\\' || Character.isISOControl(point) ? '_' : point));
+  String name=cleaned.toString();
+  if(name.isEmpty() || name.equals(".") || name.equals("..")) return "import.rom";
+  // Leave 13 bytes for the backend's collision prefix on 255-byte filesystems.
+  if(name.getBytes(java.nio.charset.StandardCharsets.UTF_8).length>240) {
+   int dot=name.lastIndexOf('.');
+   String suffix=dot>0 ? name.substring(dot) : "";
+   if(suffix.getBytes(java.nio.charset.StandardCharsets.UTF_8).length>32) suffix="";
+   name=utf8Prefix(name,240-suffix.getBytes(java.nio.charset.StandardCharsets.UTF_8).length)+suffix;
+  }
+  return name;
  }
  private void importFile() {
   new AlertDialog.Builder(this).setTitle("Import to this device").setItems(new String[]{"ROM file", "DAT checksums (.dat, .xml or .zip)"}, (d,n) -> pickImport(n == 0 ? 10 : 11)).show();
@@ -178,8 +215,7 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
     try (Cursor c=getContentResolver().query(uri,new String[]{OpenableColumns.DISPLAY_NAME},null,null,null)) {
      if (c!=null && c.moveToFirst()) name=c.getString(0);
     }
-    name=name.replaceAll("[^a-zA-Z0-9._ ()-]","_");
-    if (name.isEmpty() || name.equals(".") || name.equals("..")) name="import.rom";
+    name=importName(name);
     File folder=new File(getFilesDir(),request==11 ? "dats" : "library/Imported"); folder.mkdirs();
     File staging=new File(getFilesDir(),"staging"); staging.mkdirs();
     partial=File.createTempFile("import-",".partial",staging);
