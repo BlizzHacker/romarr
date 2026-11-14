@@ -268,6 +268,8 @@ class Dat:
     name: str = ""
     version: str = ""
     games: dict[str, Game] = field(default_factory=dict)
+    # Duplicate labels make request completeness ambiguous, even when hashes match.
+    _ambiguous_game_names: set[str] = field(default_factory=set)
     _by_crc: dict[tuple[str, int], tuple[str, Rom]] = field(default_factory=dict)
     _by_sha1: dict[str, tuple[str, Rom]] = field(default_factory=dict)
     _by_md5: dict[str, tuple[str, Rom]] = field(default_factory=dict)
@@ -466,6 +468,8 @@ def _parse_clrmamepro(body: str) -> Dat:
                 dat._by_md5.setdefault(rom.md5, (name, rom))
             if rom.size:
                 dat._sizes.setdefault(rom.size, name)
+        if name in dat.games:
+            dat._ambiguous_game_names.add(name)
         dat.games[name] = Game(name=name, roms=tuple(roms), cloneof=clone)
     return dat
 
@@ -535,6 +539,8 @@ def parse_dat(body: str) -> Dat:
         parent = (node.get("cloneof") or "").strip()
         if not parent:
             parent = ids.get((node.get("cloneofid") or "").strip(), "")
+        if name in dat.games:
+            dat._ambiguous_game_names.add(name)
         dat.games[name] = Game(name=name, roms=tuple(roms), cloneof=parent)
     return dat
 
@@ -550,10 +556,94 @@ class DatIndex:
 
     def __init__(self):
         self.dats: list[Dat] = []
+        # Sparse collision indexes: the legacy per-hash indexes intentionally
+        # return their first entry. Request approval must retain other entries.
+        self._duplicate_hits: list[tuple[dict, dict, dict]] = []
 
     def add(self, dat: Dat) -> None:
-        if dat.games:
-            self.dats.append(dat)
+        if not dat.games:
+            return
+        extra_crc: dict = {}
+        extra_md5: dict = {}
+        extra_sha1: dict = {}
+        for game_name, game in dat.games.items():
+            for rom in game.roms:
+                identity = (game_name, rom)
+                for key, first, extras in (
+                    ((rom.crc, rom.size) if rom.crc else None, dat._by_crc, extra_crc),
+                    (rom.md5 or None, dat._by_md5, extra_md5),
+                    (rom.sha1 or None, dat._by_sha1, extra_sha1),
+                ):
+                    if key is not None and key in first and first[key] != identity:
+                        hits = extras.setdefault(key, [])
+                        if identity not in hits:
+                            hits.append(identity)
+        self.dats.append(dat)
+        self._duplicate_hits.append((extra_crc, extra_md5, extra_sha1))
+
+    def verified_candidates(self, **hashes) -> tuple[Match, ...]:
+        """Expose every matching DAT identity, including same-catalog collisions.
+
+        Preserve legacy lookup's first-match semantics for existing callers.
+        Collision maps are built only once on catalog addition, rather than
+        scanning millions of DAT records for every imported ROM.
+        """
+        candidates = []
+        sha1 = str(hashes.get("sha1") or "").lower()
+        md5 = str(hashes.get("md5") or "").lower()
+        crc = str(hashes.get("crc") or "").lower()
+        size = int(hashes.get("size") or 0)
+
+        def hashes_agree(rom: Rom) -> bool:
+            # Legacy lookup can fall back to CRC, but requests must not trust
+            # a candidate whose stronger declared hashes disagree.
+            return not ((size and rom.size and size != rom.size)
+                        or (sha1 and rom.sha1 and sha1 != rom.sha1)
+                        or (md5 and rom.md5 and md5 != rom.md5))
+
+        for dat, (extra_crc, extra_md5, extra_sha1) in zip(self.dats, self._duplicate_hits):
+            match = dat.lookup(**hashes)
+            if match.status != VERIFIED:
+                continue
+            if sha1 and sha1 in dat._by_sha1:
+                extra = extra_sha1.get(sha1, ())
+            elif md5 and md5 in dat._by_md5:
+                extra = extra_md5.get(md5, ())
+            elif crc and size and (crc, size) in dat._by_crc:
+                extra = extra_crc.get((crc, size), ())
+            else:
+                # A CRC without file size is not enough to establish unique
+                # identity when distinct sizes may share that CRC.
+                continue
+            if match.rom is not None and hashes_agree(match.rom):
+                candidates.append(match)
+            candidates.extend(
+                Match(VERIFIED, name, rom, dat.name)
+                for name, rom in extra if hashes_agree(rom)
+            )
+        return tuple(candidates)
+
+    def game_rom_count(self, match: Match) -> int | None:
+        """Count all declared ROMs for a uniquely identified, verified DAT game.
+
+        A Match carries a display catalog name, not a stable catalog ID.
+        Missing or duplicate matching catalogs must not certify completeness.
+        Preserve first-match lookup compatibility for legacy import callers.
+        """
+        if (match.status != VERIFIED or match.rom is None
+                or not match.dat or not match.game):
+            return None
+        # A repeated game label can hide members in either DAT parser. Do not
+        # certify a request from the surviving record, regardless of hash hit.
+        if any(dat.name == match.dat and match.game in dat._ambiguous_game_names
+               for dat in self.dats):
+            return None
+        games = [game for dat in self.dats if dat.name == match.dat
+                 if (game := dat.games.get(match.game)) is not None
+                 and match.rom in game.roms]
+        if len(games) != 1:
+            return None
+        return len(games[0].roms)
 
     def lookup(self, **hashes) -> Match:
         best = Match(UNKNOWN)

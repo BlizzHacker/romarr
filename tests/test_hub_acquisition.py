@@ -233,9 +233,10 @@ def test_authentication_status_without_shared_rom_hub(monkeypatch):
     }
 
 
-def test_authentication_configure_without_shared_rom_hub(monkeypatch):
+def test_authentication_configure_without_shared_rom_hub(tmp_path, monkeypatch):
     import sys
     from types import SimpleNamespace
+    monkeypatch.setattr(hub, "HOME", tmp_path / "rom-hub")
     monkeypatch.setitem(sys.modules, "romarr.ia_auth", None)
     monkeypatch.setattr("rom_hub.registry.Registry.get",
                         lambda self, slug: SimpleNamespace(slug=slug))
@@ -260,9 +261,10 @@ def test_partial_hub_search_warning_keeps_healthy_rows(tmp_path, monkeypatch):
     assert releases[0].indexer == "hub:homebrew"
 
 
-def test_search_falls_back_when_ia_modules_are_absent(monkeypatch):
+def test_search_falls_back_when_ia_modules_are_absent(tmp_path, monkeypatch):
     import sys
     from types import SimpleNamespace
+    monkeypatch.setattr(hub, "HOME", tmp_path / "rom-hub")
     monkeypatch.setitem(sys.modules, "romarr.ia_auth", None)
     monkeypatch.setitem(sys.modules, "romarr.ia_session", None)
     plugin = SimpleNamespace(slug="homebrew", enabled=True,
@@ -277,7 +279,9 @@ def test_search_falls_back_when_ia_modules_are_absent(monkeypatch):
     assert len(rows) == 1 and rows[0]["plugin"] == "homebrew"
 
 
-def test_clear_authentication_works_after_plugin_uninstall(monkeypatch):
+def test_clear_authentication_works_after_plugin_uninstall(tmp_path, monkeypatch):
+    monkeypatch.setattr(hub, "HOME", tmp_path / "rom-hub")
+
     def missing(_self, slug):
         raise KeyError(slug)
 

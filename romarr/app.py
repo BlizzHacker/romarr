@@ -3050,11 +3050,16 @@ class ROMarr:
             if preserve_on_empty:
                 return {"loaded": 0, "path": ""}
             self.store.settings["dat_path"] = ""
+            self.store.settings["dat_catalog_platforms"] = {}
             self.dats = DatIndex()
             return {"loaded": 0, "path": ""}
         root = Path(directory)
         if not root.is_dir():
             if not preserve_on_empty:
+                # An unavailable mounted directory is not a new selection:
+                # preserve the operator's mapping until the mount returns.
+                if str(directory) != str(self.store.settings.get("dat_path") or ""):
+                    self.store.settings["dat_catalog_platforms"] = {}
                 self.store.settings["dat_path"] = str(directory)
                 self.dats = DatIndex()
             log.warning("DAT_PATH %s is not a directory", root)
@@ -3109,6 +3114,10 @@ class ROMarr:
         # an empty/unreadable selection without exposing it to import readers.
         if preserve_on_empty and not index.dats:
             return result
+        # A new DAT directory has different provenance. Never carry an old
+        # catalog/platform assertion into an unrelated source selection.
+        if str(directory) != str(self.store.settings.get("dat_path") or ""):
+            self.store.settings["dat_catalog_platforms"] = {}
         self.store.settings["dat_path"] = str(directory)
         self.dats = index
         log.info("loaded %d DAT(s) from %s", len(index.dats), root)
@@ -9647,8 +9656,11 @@ def make_handler(service: ROMarr):
                 if "_oidc_client_secret" in body and secret in ("", "********"):
                     body.pop("_oidc_client_secret")
                 # Serialize public settings writes with the updater launch.
-                with service._lock:
-                    updated = service.store.update_settings(body)
+                try:
+                    with service._lock:
+                        updated = service.store.update_settings(body)
+                except ValueError as exc:
+                    return self._json(400, {"error": str(exc)})
                 if any(str(k).startswith("oidc") or k == "_oidc_client_secret"
                        for k in body):
                     # An SSO change takes effect at the next login attempt,

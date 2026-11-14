@@ -3821,22 +3821,27 @@ function settingsPage(title, help, body, after){
   if(after) after();
   $('#s-save').onclick=async()=>{
     const patch={};
-    document.querySelectorAll('[data-k]').forEach(el=>{
+    try{
+      document.querySelectorAll('[data-k]').forEach(el=>{
       patch[el.dataset.k]= el.type==='checkbox' ? el.checked
         : el.type==='number' ? Number(el.value)
         : el.dataset.mappings ? el.value.split('\n').map(line=>{
             const [remote,local]=line.split('=').map(x=>(x||'').trim());
             return remote&&local?{remote,local}:null;
           }).filter(Boolean)
+        : el.dataset.datcatalogmap ? readDatCatalogLines(el.value)
         : el.dataset.foldermap ? Object.fromEntries(el.value.split('\n').map(line=>{
             const [plat,folder]=line.split('=').map(x=>(x||'').trim());
             return plat&&folder?[plat,folder]:null;
           }).filter(Boolean))
         : el.dataset.list ? el.value.split(',').map(s=>s.trim()).filter(Boolean)
         : el.value;
-    });
-    SETTINGS=await j('/api/v1/config',{method:'PUT',
+      });
+    }catch(err){toast(err.message||'Invalid DAT mapping');return;}
+    const saved=await j('/api/v1/config',{method:'PUT',
       headers:{'content-type':'application/json'},body:JSON.stringify(patch)});
+    if(saved.error){toast(saved.error);return;}
+    SETTINGS=saved;
     toast('Saved');
   };
 }
@@ -3854,10 +3859,36 @@ const mapLines=m=>(m||[]).map(x=>(x.remote||'')+' = '+(x.local||'')).join('\n');
 const folderLines=m=>Array.isArray(m)
   ?m.map(x=>(x.platform||x.slug||'')+' = '+(x.folder||x.name||'')).join('\n')
   :Object.entries(m||{}).map(([k,v])=>k+' = '+v).join('\n');
+const datCatalogLines=m=>(m&&typeof m==='object'&&!Array.isArray(m)
+  ?Object.entries(m):[]).map(([catalog,slug])=>catalog+' = '+slug).join('\n');
+function readDatCatalogLines(value){
+  const out=Object.create(null), seen=new Set();
+  for(const raw of value.split(/\r?\n/)){
+    if(!raw.trim())continue;
+    const split=raw.lastIndexOf('=');
+    if(split<1)throw Error('DAT mapping: use exact catalog name = platform slug');
+    const catalog=raw.slice(0,split).trim(),slug=raw.slice(split+1).trim();
+    if(!catalog||!/^[a-z0-9][a-z0-9_-]*$/.test(slug))
+      throw Error('DAT mapping: use exact catalog name = canonical platform slug');
+    if(seen.has(catalog.toLocaleLowerCase()))
+      throw Error('DAT mapping: duplicate catalog name');
+    seen.add(catalog.toLocaleLowerCase());
+    out[catalog]=slug;
+  }
+  return out;
+}
 RENDER.media=()=>settingsPage('Media Management',
   'Where imported ROMs are filed. This must be the same path your library server scans.',
   fld('library_path','ROM library root',SETTINGS.library_path)
   +fld('dat_path','DAT directory',SETTINGS.dat_path||'')
+  +`<div class="field"><label>Trusted DAT catalog → platform mapping (optional)</label>
+     <textarea data-k="dat_catalog_platforms" data-datcatalogmap="1" rows="4"
+       style="width:100%;resize:vertical;font:12px/1.5 ui-monospace,Menlo,monospace"
+       placeholder="Nintendo - SNES = snes">${esc(datCatalogLines(SETTINGS.dat_catalog_platforms))}</textarea>
+     <div style="color:var(--dim);font-size:11.5px;margin-top:4px">
+       One per line: exact DAT header catalog name = canonical ROMarr platform slug.
+       These entries are stored for future request-aware integration; they do not
+       enable automatic queue matching. Clear them before changing the DAT directory.</div></div>`
   +`<div class="field"><label>Remote path mappings</label>
      <textarea data-k="remote_path_mappings" data-mappings="1" rows="3"
        style="width:100%;resize:vertical;font:12px/1.5 ui-monospace,Menlo,monospace"

@@ -1,6 +1,8 @@
 import json
 
-from romarr.store import DEFAULT_SETTINGS, Event, Store
+import pytest
+
+from romarr.store import DEFAULT_SETTINGS, Event, Store, validate_dat_catalog_platforms
 
 
 def test_history_and_settings_survive_a_restart(tmp_path):
@@ -400,3 +402,85 @@ def test_a_state_file_that_cannot_be_parsed_still_starts(tmp_path):
     path.write_text("{ this is not json", encoding="utf-8")
     s = Store(path)
     assert s.settings["min_seeders"] == DEFAULT_SETTINGS["min_seeders"]
+
+
+# -- Part 2 DAT catalog provenance configuration ---------------------------
+
+def test_dat_catalog_platform_mapping_is_opt_in_and_persisted(tmp_path):
+    """Canonical explicit mapping survives Store reload; no default guessing."""
+    path = tmp_path / "romarr.json"
+    store = Store(path)
+    assert store.settings["dat_catalog_platforms"] == {}
+    saved = {"Nintendo - SNES": "snes", "Sega - Mega Drive": "genesis-slash-megadrive"}
+    store.update_settings({"dat_path": "/dats"})
+    store.update_settings({"dat_catalog_platforms": saved})
+    assert Store(path).settings["dat_catalog_platforms"] == saved
+
+
+@pytest.mark.parametrize("mapping", [
+    None, [], "Nintendo - SNES = snes", {"": "snes"},
+    {" Nintendo - SNES": "snes"}, {"Nintendo - SNES": "SNES"},
+    {"Nintendo - SNES": "super nintendo"},
+    {"Nintendo - SNES": "not-a-real-platform"},
+    {"Nintendo - SNES": 42},
+    {"Nintendo - SNES": "snes", "nintendo - snes": "gba"},
+])
+def test_invalid_dat_catalog_mapping_rejected_without_partial_write(tmp_path, mapping):
+    """Bad provenance must not change unrelated settings or the saved file."""
+    path = tmp_path / "romarr.json"
+    store = Store(path)
+    store.update_settings({"dat_path": "/dats"})
+    store.update_settings({"min_seeders": 3})
+    previous = path.read_bytes()
+    with pytest.raises(ValueError):
+        store.update_settings({"dat_catalog_platforms": mapping, "min_seeders": 99})
+    assert store.settings["min_seeders"] == 3
+    assert path.read_bytes() == previous
+
+
+def test_dat_mappings_require_a_selected_directory_without_partial_save(tmp_path):
+    path = tmp_path / "romarr.json"
+    store = Store(path)
+    store.update_settings({"min_seeders": 3})
+    previous = path.read_bytes()
+    patch = {"dat_catalog_platforms": {"Nintendo - SNES": "snes"},
+             "min_seeders": 99}
+    with pytest.raises(ValueError, match="Select a DAT directory"):
+        store.update_settings(patch)
+    assert store.settings["dat_catalog_platforms"] == {}
+    assert store.settings["min_seeders"] == 3
+    assert path.read_bytes() == previous
+
+
+def test_empty_dat_directory_and_nonempty_mapping_are_rejected_atomically(tmp_path):
+    path = tmp_path / "romarr.json"
+    store = Store(path)
+    store.update_settings({"min_seeders": 3})
+    previous = path.read_bytes()
+    with pytest.raises(ValueError, match="Select a DAT directory"):
+        store.update_settings({"dat_path": "",
+                               "dat_catalog_platforms": {"Nintendo - SNES": "snes"},
+                               "min_seeders": 99})
+    assert store.settings["min_seeders"] == 3
+    assert store.settings["dat_path"] == ""
+    assert path.read_bytes() == previous
+
+
+def test_dat_directory_change_requires_mappings_to_be_cleared(tmp_path):
+    """Changing DAT roots cannot silently preserve earlier operator claims."""
+    path = tmp_path / "romarr.json"
+    store = Store(path)
+    store.update_settings({"dat_path": "/dats-a"})
+    store.update_settings({"dat_catalog_platforms": {"Nintendo - SNES": "snes"}})
+    with pytest.raises(ValueError, match="Clear DAT catalog mappings"):
+        store.update_settings({"dat_path": "/dats-b"})
+    assert store.settings["dat_path"] == "/dats-a"
+    store.update_settings({"dat_path": "/dats-b", "dat_catalog_platforms": {}})
+    assert Store(path).settings["dat_catalog_platforms"] == {}
+    assert Store(path).settings["dat_path"] == "/dats-b"
+
+
+def test_unicode_dat_catalog_name_is_preserved():
+    """Explicit non-ASCII DAT names must not be folded into ASCII guesses."""
+    assert validate_dat_catalog_platforms({"三國志 - SNES": "snes"}) == {
+        "三國志 - SNES": "snes"}

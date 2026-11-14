@@ -1224,7 +1224,8 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
                require_verified: bool = False,
                layout: str = "flat", translation: bool = False,
                rename: bool = False,
-               platform_folders=None, prefer_hardlinks: bool = False, selected_primaries=None, bundle_routes=None) -> list[ImportResult]:
+               platform_folders=None, prefer_hardlinks: bool = False, selected_primaries=None, bundle_routes=None,
+               requested_game: str | None = None, catalog_platforms=None) -> list[ImportResult]:
     """Place every ROM from a finished download into the library.
 
     A cartridge zip may hold several games (a 3-in-1 collection, a bundle)
@@ -1249,7 +1250,9 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
     try:
         source = _source_for(download, platform)
         if isinstance(source, _PathSource):
-            source.prefer_hardlinks = prefer_hardlinks
+            # A request-gated import must copy into private staging; a hardlink
+            # would let another process mutate already-verified staged bytes.
+            source.prefer_hardlinks = prefer_hardlinks and requested_game is None
         candidates = source.names()
         chosen_sets = source.rom_sets(platform)
     except (MissingArchiveTool, OSError, ValueError, zipfile.BadZipFile, RuntimeError, subprocess.SubprocessError) as exc:
@@ -1268,7 +1271,8 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
             overwrite=overwrite, dats=dats, require_verified=require_verified,
             layout=layout, translation=translation, rename=rename,
             platform_folders=platform_folders, prefer_hardlinks=prefer_hardlinks,
-            selected_primaries=selected_primaries, bundle_routes=bundle_routes)
+            selected_primaries=selected_primaries, bundle_routes=bundle_routes,
+            requested_game=requested_game, catalog_platforms=catalog_platforms)
     finally:
         source.close()
 
@@ -1278,7 +1282,8 @@ def _import_rom_from_source(source, candidates, chosen_sets, download, platform,
                             require_verified=False, layout="flat",
                             translation=False, rename=False,
                             platform_folders=None, prefer_hardlinks=False,
-                            selected_primaries=None, bundle_routes=None):
+                            selected_primaries=None, bundle_routes=None,
+                            requested_game=None, catalog_platforms=None):
     """Finish import while the validated source and its scratch ZIPs remain open."""
     if selected_primaries is not None:
         selected = set(selected_primaries)
@@ -1291,6 +1296,27 @@ def _import_rom_from_source(source, candidates, chosen_sets, download, platform,
             False, None,
             f"no {platform.name} ROM among {len(candidates)} file(s)")]
 
+    # Optional request-aware gate: deliberately NOT activated by scheduled
+    # imports until app.py binds it to a durable queue/source identity. Manual
+    # and legacy import callers retain their existing behavior by default.
+    # A held/rejected result returns before any destination is created.
+    assessment = None
+    if requested_game is not None:
+        if overwrite:
+            return [ImportResult(False, None, "request identity REVIEW_REQUIRED: overwrites need separate review")]
+        if any(group.is_multi_file for group in chosen_sets):
+            return [ImportResult(False, None, "request identity REVIEW_REQUIRED: multi-file publication needs atomic staging")]
+        from .request_evidence import evaluate_source_request
+
+        assessment = evaluate_source_request(
+            source, chosen_sets, dats, requested_game, platform.slug,
+            catalog_platforms=catalog_platforms,
+        )
+        if assessment.decision.action != "import":
+            decision = assessment.decision
+            return [ImportResult(
+                False, None, f"request identity {decision.code}: {decision.message}")]
+
     results: list[ImportResult] = []
     planned = []
     destinations = {}
@@ -1298,7 +1324,10 @@ def _import_rom_from_source(source, candidates, chosen_sets, download, platform,
     destination_parents = {}
     for chosen in chosen_sets:
         try:
-            verdict = verify_set(source, chosen.members, dats)
+            # Preserve the exact catalog/game selected by request assessment.
+            # Legacy imports retain their historic first-match DAT behavior.
+            verdict = (assessment.verification if assessment is not None
+                       else verify_set(source, chosen.members, dats))
         except (OSError, ValueError, zipfile.BadZipFile, RuntimeError, subprocess.SubprocessError) as exc:
             results.append(ImportResult(False, None, f"verification failed: {exc}"))
             continue
@@ -1371,6 +1400,20 @@ def _import_rom_from_source(source, candidates, chosen_sets, download, platform,
                         raise ValueError("empty ROM payload")
                     if platform.slug in ("ps2", "ngc", "xbox") and actual_size < 8 * 1024 * 1024:
                         raise ValueError(f"too small to be a {platform.name} disc image ({actual_size // (1024*1024)}MB < 8MB)")
+                    if assessment is not None:
+                        from .request_evidence import evaluate_source_request
+
+                        # Re-hash the copied bytes that will actually be
+                        # published. The earlier source approval is invalid if
+                        # another process changed the loose download meanwhile.
+                        staged_evidence = evaluate_source_request(
+                            _PathSource(staged), (chosen,), dats,
+                            requested_game, platform.slug,
+                            catalog_platforms=catalog_platforms,
+                        )
+                        if (staged_evidence.decision.action != "import"
+                                or staged_evidence.verification != verdict):
+                            raise ValueError("request identity changed during staging; nothing published")
                     _publish_staged(staged, destination, overwrite)
             except (OSError, ValueError, zipfile.BadZipFile, RuntimeError, subprocess.SubprocessError) as exc:
                 results.append(ImportResult(False, destination, f"copy/extraction or publication failed: {exc}"))
