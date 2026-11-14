@@ -11,6 +11,11 @@ import unicodedata
 from dataclasses import dataclass
 from typing import Callable, Iterable
 
+_RELEASE_TAG = re.compile(
+    r"(?:USA|Europe|Japan|World|Rev(?:ision)?[ .-]*(?:\d+[a-z]?|[a-z])|En|Fr|De)",
+    re.IGNORECASE,
+)
+
 REASON_CODES = frozenset({
     "MATCH_CONFIRMED", "REQUEST_MISSING", "SOURCE_INCOMPLETE",
     "SOURCE_UNSAFE", "UNSUPPORTED_FORMAT", "SAFETY_LIMIT",
@@ -66,8 +71,15 @@ def _strict_title_key(value: str) -> str:
         for char in value
     )
     # Revision identifiers are digits or one letter, not words like Revenge.
-    value = re.sub(r"\((?:USA|Europe|Japan|World|Rev(?:ision)?[ .-]*(?:\d+[a-z]?|[a-z])|En|Fr|De)\)",
-                   " ", value, flags=re.IGNORECASE)
+    # Preserve content words; discard only groups consisting entirely of
+    # recognized comma-separated region, language or revision tags.
+    value = re.sub(
+        r"\(([^()]*)\)",
+        lambda match: " " if all(_RELEASE_TAG.fullmatch(token.strip())
+                                  for token in match.group(1).split(","))
+                              else match.group(0),
+        value,
+    )
     return " ".join("".join(char if char.isalnum() else " "
                             for char in value.casefold()).split())
 

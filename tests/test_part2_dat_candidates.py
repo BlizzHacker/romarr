@@ -183,3 +183,44 @@ def test_game_rom_count_fails_closed_on_unverified_identity():
     index = DatIndex()
     index.add(_dat("Platform A", "Requested Game"))
     assert index.game_rom_count(index.lookup(crc="00000000", size=5)) is None
+
+
+def test_crc_conflicting_sha1_rejected_for_request_candidates_only():
+    dat = parse_dat("""
+    <datafile><header><name>Checksum System</name></header>
+      <game name="Game"><rom name="one.bin" size="4" crc="a1b2c3d4"
+                            sha1="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"/></game>
+    </datafile>""")
+    index = DatIndex()
+    index.add(dat)
+    supplied = dict(crc="a1b2c3d4", size=4, sha1="b" * 40)
+    assert index.lookup(**supplied).status == VERIFIED
+    assert index.verified_candidates(**supplied) == ()
+
+
+def test_crc_conflicting_md5_rejected_when_sha1_unavailable():
+    dat = parse_dat("""
+    <datafile><header><name>Checksum System</name></header>
+      <game name="Game"><rom name="one.bin" size="4" crc="a1b2c3d4"
+                            md5="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"/></game>
+    </datafile>""")
+    index = DatIndex()
+    index.add(dat)
+    supplied = dict(crc="a1b2c3d4", size=4, md5="b" * 32)
+    assert index.lookup(**supplied).status == VERIFIED
+    assert index.verified_candidates(**supplied) == ()
+
+
+def test_crc_collision_extras_discard_wrong_sha1():
+    dat = parse_dat("""
+    <datafile><header><name>Collision System</name></header>
+      <game name="One"><rom name="one.bin" size="4" crc="a1b2c3d4"
+                            sha1="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"/></game>
+      <game name="Two"><rom name="two.bin" size="4" crc="a1b2c3d4"
+                            sha1="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"/></game>
+    </datafile>""")
+    index = DatIndex()
+    index.add(dat)
+    assert index.verified_candidates(crc="a1b2c3d4", size=4, sha1="c" * 40) == ()
+    assert [m.game for m in index.verified_candidates(
+        crc="a1b2c3d4", size=4, sha1="b" * 40)] == ["Two"]

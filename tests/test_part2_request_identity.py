@@ -145,9 +145,6 @@ class RequestIdentityPolicyTests(unittest.TestCase):
             Decision("hold", "CUSTOM", "x")
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 # Additional PR #18 review regressions; these are intentionally separate from
 # the 36 owner-run v02 tests and must not be counted as part of that old run.
 class ReviewedNormalizationTests(unittest.TestCase):
@@ -182,3 +179,28 @@ class ReviewedNormalizationTests(unittest.TestCase):
     def test_non_latin_identical_titles_are_accepted(self):
         d = decide_request('三國志 II', 'snes', [Candidate('verified','三國志 II','DAT','snes')])
         self.assertEqual(d.code, 'MATCH_CONFIRMED')
+
+    def test_comma_separated_region_tags(self):
+        for tag in ("(USA, Europe)", "( usa , europe )"):
+            with self.subTest(tag=tag):
+                d = decide_request("Super Metroid", "snes", [
+                    Candidate("verified", "Super Metroid " + tag, "DAT", "snes")])
+                self.assertEqual(d.code, "MATCH_CONFIRMED")
+
+    def test_comma_separated_language_tags(self):
+        for tag in ("(En,Fr,De)", "( en, fr, de )"):
+            with self.subTest(tag=tag):
+                d = decide_request("Sonic", "genesis", [
+                    Candidate("verified", "Sonic " + tag, "DAT", "genesis")])
+                self.assertEqual(d.code, "MATCH_CONFIRMED")
+
+    def test_mixed_metadata_and_content_words_preserved(self):
+        for tag in ("(USA, Revenge)", "(En, Bonus)"):
+            with self.subTest(tag=tag):
+                d = decide_request("Sonic", "genesis", [
+                    Candidate("verified", "Sonic " + tag, "DAT", "genesis")])
+                self.assertEqual(d.code, "REQUEST_TITLE_MISMATCH")
+
+
+if __name__ == "__main__":
+    unittest.main()
