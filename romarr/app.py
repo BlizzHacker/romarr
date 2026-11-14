@@ -6378,8 +6378,9 @@ class ROMarr:
         return f"{base}/oidc/callback" if base else "/oidc/callback"
 
     def _record_update_check(self, state: str, reason: str, *,
-                             checked_channel: str,
-                             latest: str = "", error: str = "") -> None:
+                             checked_channel: str, latest: str = "",
+                             error: str = "", checked_revision: str = "",
+                             latest_revision: str = "") -> None:
         """Persist one completed check without erasing the last good comparison.
 
         The legacy Boolean is cleared for unknown/error outcomes, rather than
@@ -6394,6 +6395,10 @@ class ROMarr:
             settings["_update_error"] = error
             settings["_update_checked_version"] = VERSION
             settings["_update_checked_channel"] = checked_channel
+            settings["_update_checked_revision"] = (
+                checked_revision if checked_channel == "nightly" else "")
+            if latest_revision and state in ("available", "current"):
+                settings["_update_latest_revision"] = latest_revision
             settings["_update_available"] = state == "available"
             if latest:
                 settings["_latest_version"] = latest
@@ -6408,17 +6413,26 @@ class ROMarr:
         channel = str(settings.get("update_channel") or "stable").lower()
         state = str(settings.get("_update_state") or "never_checked")
         reason = str(settings.get("_update_reason") or "not_checked")
+        running_revision = ""
+        if channel == "nightly":
+            from . import nightly, selfupdate
+            running_revision = nightly.running_main_revision(
+                get_build_info(VERSION), selfupdate.detect())
         if state not in ("never_checked", "available", "current", "unknown", "error"):
             state, reason = "unknown", "invalid_saved_status"
-        elif state in ("available", "current") and not _comparable_version(VERSION):
-            state, reason = "unknown", "running_version_unknown"
-        elif state in ("available", "current") and (
-                get_build_info(VERSION).get("type") == "development"):
-            state, reason = "unknown", "development_build"
         elif state != "never_checked" and (
                 settings.get("_update_checked_version") != VERSION
                 or settings.get("_update_checked_channel") != channel):
             state, reason = "unknown", "build_or_channel_changed"
+        elif state in ("available", "current") and channel == "nightly" and (
+                not running_revision
+                or settings.get("_update_checked_revision") != running_revision):
+            state, reason = "unknown", "nightly_build_changed"
+        elif state in ("available", "current") and not _comparable_version(VERSION) and channel != "nightly":
+            state, reason = "unknown", "running_version_unknown"
+        elif state in ("available", "current") and channel != "nightly" and (
+                get_build_info(VERSION).get("type") == "development"):
+            state, reason = "unknown", "development_build"
         return {
             "state": state,
             "reason": reason,
@@ -6428,15 +6442,19 @@ class ROMarr:
             "last_error": (settings.get("_update_error") or ""
                            if state == "error" else ""),
             "latest_version": settings.get("_latest_version") or "",
+            "running_revision": running_revision,
+            "latest_revision": (
+                settings.get("_update_latest_revision") or ""
+                if channel == "nightly" and state in ("current", "available") else ""),
             "update_available": state == "available",
             "in_progress": self._update_check_lock.locked(),
         }
 
     def check_update(self, *, manual: bool = False) -> dict:
-        """Check the stable release without concurrent requests or stale writes.
+        """Check release tags or verified Nightly ancestry without stale writes.
 
-        The explicit command is check-only; the daily scheduler may notify or
-        apply under the existing opt-in. Nightly revision discovery is separate.
+        A Nightly check is always informational, including scheduled checks.
+        Only the existing stable scheduled path may notify or apply.
         """
         import requests as _requests
 
@@ -6450,19 +6468,55 @@ class ROMarr:
             with self._lock:
                 channel = str(self.store.settings.get("update_channel")
                               or "stable").lower()
-            if channel != "stable":
-                # A stable release endpoint cannot answer whether the Git
-                # source revision on the nightly channel has advanced.
-                reason = ("nightly_revision_not_checked" if channel == "nightly"
-                          else "unsupported_update_channel")
-                self._record_update_check("unknown", reason,
-                                          checked_channel=channel)
-                message = ("nightly revision checking is not yet supported; "
-                           "no stable-release request was made" if channel == "nightly"
-                           else f"unknown update channel {channel!r}; no check was made")
-                return {"ok": True, "state": "unknown", "latest": "",
-                        "indeterminate": True, "update_available": False,
+            if channel == "nightly":
+                from . import nightly, selfupdate
+                running = nightly.running_main_revision(
+                    get_build_info(VERSION), selfupdate.detect())
+                if not running:
+                    self._record_update_check(
+                        "unknown", "nightly_build_unverified",
+                        checked_channel=channel)
+                    return {"ok": True, "state": "unknown",
+                            "reason": "nightly_build_unverified",
+                            "indeterminate": True, "update_available": False,
+                            "message": "cannot verify this build as official main; no release or Nightly check was applied"}
+                headers = {"Accept": "application/vnd.github+json"}
+                token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+                if token:
+                    headers["Authorization"] = f"Bearer {token}"
+                verdict = nightly.compare_main_revision(running, _requests.get, headers)
+                with self._lock:
+                    active = str(self.store.settings.get("update_channel")
+                                 or "stable").lower()
+                if (active != channel or running != nightly.running_main_revision(
+                        get_build_info(VERSION), selfupdate.detect())):
+                    self._record_update_check(
+                        "unknown", "channel_or_build_changed_during_check",
+                        checked_channel=channel, checked_revision=running)
+                    return {"ok": True, "state": "unknown",
+                            "reason": "channel_or_build_changed_during_check",
+                            "indeterminate": True, "update_available": False,
+                            "message": "build or channel changed during the Nightly check; no action taken"}
+                state, reason = verdict["state"], verdict["reason"]
+                self._record_update_check(
+                    state, reason, checked_channel=channel,
+                    checked_revision=running,
+                    latest_revision=verdict.get("latest_revision", ""),
+                    error=verdict.get("error", ""))
+                message = ("new Nightly available" if state == "available" else
+                           "Nightly is up to date" if state == "current" else
+                           verdict.get("error") or "could not verify Nightly update availability")
+                return {"ok": state != "error", "state": state, "reason": reason,
+                        "indeterminate": state not in ("available", "current"),
+                        "latest_revision": verdict.get("latest_revision", ""),
+                        "update_available": state == "available",
                         "message": message}
+            if channel != "stable":
+                self._record_update_check("unknown", "unsupported_update_channel",
+                                          checked_channel=channel)
+                return {"ok": True, "state": "unknown", "indeterminate": True,
+                        "update_available": False,
+                        "message": f"unknown update channel {channel!r}; no check was made"}
 
             def failed(reason: str, message: str) -> dict:
                 """Record a failed attempt while retaining the last good release."""
