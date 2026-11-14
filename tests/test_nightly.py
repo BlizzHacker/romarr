@@ -66,6 +66,28 @@ def test_validated_official_image_without_git_checkout():
     assert nightly.running_main_revision({**OFFICIAL, "source_revision": "abc123"}) == ""
 
 
+def test_missing_git_during_status_probe_cannot_verify_checkout(
+        monkeypatch, tmp_path):
+    """A disappearing Git executable must not make a failed probe look clean."""
+    env = SimpleNamespace(kind="git", repo=str(tmp_path), branch="main",
+                          commit=RUNNING[:8])
+    answers = {"rev-parse --show-toplevel": str(tmp_path),
+               "symbolic-ref --quiet --short HEAD": "main",
+               "remote get-url origin": "https://github.com/BlizzHacker/romarr.git",
+               "rev-parse --verify HEAD": RUNNING}
+    actual_probe = nightly._local_git
+
+    def probe(repo, *args):
+        """Model Git disappearing after earlier identity probes succeed."""
+        if args[0] == "status":
+            monkeypatch.setattr(nightly.shutil, "which", lambda _: None)
+            return actual_probe(repo, *args)
+        return answers[" ".join(args)]
+
+    monkeypatch.setattr(nightly, "_local_git", probe)
+    assert nightly.git_checkout_revision(env) == ""
+
+
 def test_clean_verified_git_checkout_uses_full_sha(monkeypatch, tmp_path):
     """Git/source installs can use official HEAD without generated metadata."""
     env = SimpleNamespace(kind="git", repo=str(tmp_path), branch="main",
