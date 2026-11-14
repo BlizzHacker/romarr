@@ -127,3 +127,15 @@ Release grabs use the ID returned by search so clients do not need indexer downl
 - [Federation protocol](FEDERATION-PROTOCOL.md)
 - [Dated test evidence and known gaps](PROOF.md)
 - [Roadmap and community requests](../ROADMAP.md)
+
+### Real-Debrid and Prowlarr magnet redirects
+
+When Prowlarr returns a download-proxy URL that redirects to a magnet,
+ROMarr resolves it locally before handing the magnet to Real-Debrid.
+Only the configured Prowlarr origin is fetched; redirects to another HTTP
+origin are refused. Prowlarr credentials stay on the ROMarr-to-Prowlarr
+connection, and the magnet is validated before handoff.
+
+Direct magnets continue to work. If the proxy returns an actual torrent file
+instead, this magnet-only Real-Debrid path reports that clearly; use a client
+with torrent-file upload support for that result.

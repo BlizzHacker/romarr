@@ -41,17 +41,19 @@ Try a copy of one file first when working with an existing collection. Multi-tra
 
 ### 2. Add a download client
 
-Open **Settings → Download Clients**, add the client you already run and use **Test** before saving.
+Open **Settings → Download Clients** or the Setup Guide’s Downloads step. Choose a built-in/standalone option or connect the client you already run, then use **Test** before saving.
 
 | Source type | Client |
 |---|---|
-| Torrent or magnet | qBittorrent, Transmission, Deluge or another supported torrent client |
-| Usenet/NZB | SABnzbd, NZBGet or another supported Usenet client |
+| Torrent or magnet | Standalone BitTorrent (MDM), qBittorrent, Transmission, Deluge or another supported torrent client |
+| Usenet/NZB | Built-in Standalone Usenet (NNTP), SABnzbd or NZBGet |
 | Searchable ROM Hub plugin | **ROM Hub** client with a writable staging/save path |
-| Direct file link | **Direct HTTP** client |
+| Direct file link | **Direct HTTP** or **Standalone Direct HTTP (MDM)** client |
 | Browser-controlled download | **Headless Browser**, which needs additional setup in the [feature reference](FEATURES.md#browser-downloads) |
 
-The client must match the release protocol. Adding qBittorrent does not enable Usenet or ROM Hub downloads.
+The client must match the release protocol. Adding qBittorrent does not enable Usenet or ROM Hub downloads. MDM options need the engine installed from **Download Clients**. Built-in Usenet needs your provider’s NNTP server and login.
+
+Usenet also needs a search source: a **Newznab indexer** finds NZB listings, your **provider** supplies the articles, and the **client** downloads them. You can use Usenet without a torrent indexer. Follow the [one-search Usenet guide](USENET.md) to connect these parts and distinguish empty search results from a failed download.
 
 ### 3. Add a search source
 
@@ -107,3 +109,8 @@ Example: if qBittorrent and ROMarr share host `/srv/downloads`, mount `/srv/down
 | Environment edit had no effect | Connection settings saved after first run are changed in the UI |
 
 The [install troubleshooting guide](INSTALL.md#troubleshooting) covers startup and permission errors. Include your version, install method, error and relevant log when reporting a problem; remove credentials first.
+
+
+## Emulators and security checks
+
+Use **Hub → Emulators** for portable emulator installation and the upstream setup guides. Enable import scanners under **Settings → Media Management**. See [emulators and scanning](EMULATORS-AND-SCANNING.md) for Defender, ClamAV, VirusTotal, MWM and Arkana setup.

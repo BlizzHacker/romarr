@@ -1,12 +1,23 @@
-NOTICE: This repository is the original ROMarr, by BlizzHacker (Wade).
+ROMarr is maintained by BlizzHacker / MOVE WEIGHT.
 
-Any fork, copy, or derivative that removes this notice, strips the license,
-or presents itself as an independent project is unauthorized and has no
-claim to the ROMarr branding, code, or community.
+Forks, code reuse and contributions are welcome. Independently maintained
+projects should use their own name, logo and visual identity.
 
-The Unraid Community Application submission for "RomanRRNG" by user "snapetech"
-is a fork of this project, submitted with the original author's branding
-intact and no authorization. A formal dispute has been filed with Unraid.
+Official source: https://github.com/BlizzHacker/romarr
+Official website: https://romarr.app
+Official Unraid listing:
+https://ca.unraid.net/apps/romarr-04jslct0riva81?q=romarr
+Official container: ghcr.io/blizzhacker/romarr
 
-This file exists to establish authorship and to flag any Unraid CA
-resubmission that does not originate from this repository.
+ROMarrNG is an independently maintained third-party fork. It is not an
+official ROMarr release and is not affiliated with, endorsed by, or
+supported by the ROMarr maintainers.
+
+The MIT license remains in effect. Preserve its copyright and license
+notices when redistributing the code. Do not present a third-party build
+as an official ROMarr release or remove the original project's attribution.
+ROMarr branding is not authorized as the product identity of a separate
+project or distribution. Crediting and linking to ROMarr as upstream is welcome.
+
+See docs/OFFICIAL-DISTRIBUTION.md for supported sources and the branding
+and support policy.

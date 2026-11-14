@@ -351,7 +351,7 @@ class Prowlarr:
         return urlunsplit((parts.scheme, parts.netloc, parts.path, query, ""))
 
     def fetch_torrent(self, download_url: str) -> bytes | str:
-        """Fetch a Prowlarr torrent locally without exposing its URL to qBittorrent.
+        """Fetch a Prowlarr torrent or magnet without exposing its URL to remote clients.
 
         Redirects stay on the configured Prowlarr origin. In particular, a
         redirect cannot send the API key to an indexer or another host.

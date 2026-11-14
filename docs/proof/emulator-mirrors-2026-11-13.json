@@ -1,0 +1,394 @@
+{
+  "checked_at": "2026-11-13T06:14:59.861285+00:00",
+  "organization": "https://gitea.moveweight.com/romarr-emulators",
+  "refresh": "24h",
+  "scope": "Source Git history; release assets and Git LFS are excluded",
+  "verification": "All 55 bare repositories passed git fsck --connectivity-only and matched the recorded upstream HEAD",
+  "repositories": [
+    {
+      "source": "https://github.com/libretro/RetroArch.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/libretro--retroarch",
+      "head": "7786f59ac42e6d73965d50959a8bc6cd5b966f3d",
+      "upstream_head": "7786f59ac42e6d73965d50959a8bc6cd5b966f3d",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/libretro/libretro-core-info.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/libretro--libretro-core-info",
+      "head": "eac3a2784d428444aa2bd472039b5c5540141af1",
+      "upstream_head": "eac3a2784d428444aa2bd472039b5c5540141af1",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/stenzek/duckstation.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/stenzek--duckstation",
+      "head": "c1f10c822f8ffcb118d256bcb66d1d8298ee5e43",
+      "upstream_head": "c1f10c822f8ffcb118d256bcb66d1d8298ee5e43",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/PCSX2/pcsx2.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/pcsx2--pcsx2",
+      "head": "3ff6b1bf18bdb607944585b4f3717dc625d565a1",
+      "upstream_head": "3ff6b1bf18bdb607944585b4f3717dc625d565a1",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/RPCS3/rpcs3.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/rpcs3--rpcs3",
+      "head": "9b8974d32e73c897a5fcd6bdf69413ca7e436b01",
+      "upstream_head": "9b8974d32e73c897a5fcd6bdf69413ca7e436b01",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/shadps4-emu/shadPS4.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/shadps4-emu--shadps4",
+      "head": "b97bafa353d868fe189955491ed38776b3518ed5",
+      "upstream_head": "b97bafa353d868fe189955491ed38776b3518ed5",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/Vita3K/Vita3K.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/vita3k--vita3k",
+      "head": "3fba77ebd9697b9ac42622b15da4509edcf7d219",
+      "upstream_head": "3fba77ebd9697b9ac42622b15da4509edcf7d219",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/hrydgard/ppsspp.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/hrydgard--ppsspp",
+      "head": "1aebad2c651ff9d0684ee335e43aceff8fc7e3ec",
+      "upstream_head": "1aebad2c651ff9d0684ee335e43aceff8fc7e3ec",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/dolphin-emu/dolphin.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/dolphin-emu--dolphin",
+      "head": "e36cd326c0af3179bf75a8deb5e2ecf92ab78b72",
+      "upstream_head": "e36cd326c0af3179bf75a8deb5e2ecf92ab78b72",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/cemu-project/Cemu.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/cemu-project--cemu",
+      "head": "9cac87595d8f4d038f36de35457298796991a05e",
+      "upstream_head": "9cac87595d8f4d038f36de35457298796991a05e",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/melonDS-emu/melonDS.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/melonds-emu--melonds",
+      "head": "497aa6cdd26f45f8064b78916b00a773eab4ded7",
+      "upstream_head": "497aa6cdd26f45f8064b78916b00a773eab4ded7",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/azahar-emu/azahar.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/azahar-emu--azahar",
+      "head": "11eceda5e0e682a1f44e396bf954a1b9137097ca",
+      "upstream_head": "11eceda5e0e682a1f44e396bf954a1b9137097ca",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/mgba-emu/mgba.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/mgba-emu--mgba",
+      "head": "d58ea8a86f30598fbf3958585de3d33028535072",
+      "upstream_head": "d58ea8a86f30598fbf3958585de3d33028535072",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/flyinghead/flycast.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/flyinghead--flycast",
+      "head": "72b8e67141d85ca5c9259f04563b49f7f92f928b",
+      "upstream_head": "72b8e67141d85ca5c9259f04563b49f7f92f928b",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/xemu-project/xemu.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/xemu-project--xemu",
+      "head": "5759e9c0ee3fe0e699986f2aa939c11a69a497b1",
+      "upstream_head": "5759e9c0ee3fe0e699986f2aa939c11a69a497b1",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/xenia-project/xenia.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/xenia-project--xenia",
+      "head": "95a5c3ee250f80c3b9d139658649d9ffb6db3eec",
+      "upstream_head": "95a5c3ee250f80c3b9d139658649d9ffb6db3eec",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/xenia-canary/xenia-canary.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/xenia-canary--xenia-canary",
+      "head": "4f04bc7cc76b89bfcf7327b597d9770eaaddf935",
+      "upstream_head": "4f04bc7cc76b89bfcf7327b597d9770eaaddf935",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/scummvm/scummvm.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/scummvm--scummvm",
+      "head": "0c162bf003f93e06aa9c62ff70e15c7f0f6b7513",
+      "upstream_head": "0c162bf003f93e06aa9c62ff70e15c7f0f6b7513",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/joncampbell123/dosbox-x.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/joncampbell123--dosbox-x",
+      "head": "78c022931f0ad9e567bcaaefc155fc428d9bdc7e",
+      "upstream_head": "78c022931f0ad9e567bcaaefc155fc428d9bdc7e",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/dosbox-staging/dosbox-staging.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/dosbox-staging--dosbox-staging",
+      "head": "27b1b7ca719c21ef3444f7ad1cf2d9cd439527cc",
+      "upstream_head": "27b1b7ca719c21ef3444f7ad1cf2d9cd439527cc",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/mamedev/mame.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/mamedev--mame",
+      "head": "f031b34d8fcaf96bc5eff0550138abdb4c80f8ec",
+      "upstream_head": "f031b34d8fcaf96bc5eff0550138abdb4c80f8ec",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/ares-emulator/ares.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/ares-emulator--ares",
+      "head": "0b928930af4cc59ed99e942996f0d3c815379388",
+      "upstream_head": "0b928930af4cc59ed99e942996f0d3c815379388",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/zortos293/Lichii.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/zortos293--lichii",
+      "head": "6e887563f19a968ef7e9f2f0ea9d0f515e94684c",
+      "upstream_head": "6e887563f19a968ef7e9f2f0ea9d0f515e94684c",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/Eglantine-Community/Eglantine.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/eglantine-community--eglantine",
+      "head": "66ce46feb67a184ee4adae59ed07cf89c72aac9c",
+      "upstream_head": "66ce46feb67a184ee4adae59ed07cf89c72aac9c",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/boykopovar/AnyPS5.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/boykopovar--anyps5",
+      "head": "1965e614cb82c0a8380c793b877365c70654e0ab",
+      "upstream_head": "1965e614cb82c0a8380c793b877365c70654e0ab",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/TASEmulators/fceux.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/tasemulators--fceux",
+      "head": "39135f80a859d4ca3faeb976000b4bf2132703b7",
+      "upstream_head": "39135f80a859d4ca3faeb976000b4bf2132703b7",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/SourMesen/Mesen2.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/sourmesen--mesen2",
+      "head": "b9fa69ddc6d0a331fb103fdb5eef6904305703c2",
+      "upstream_head": "b9fa69ddc6d0a331fb103fdb5eef6904305703c2",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/project64/project64.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/project64--project64",
+      "head": "bc26f4a1aaf819c148c1de80580407c637c45de8",
+      "upstream_head": "bc26f4a1aaf819c148c1de80580407c637c45de8",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/punesemu/puNES.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/punesemu--punes",
+      "head": "b1758ec26a3d6da10abf50dc184fa837236c5f61",
+      "upstream_head": "b1758ec26a3d6da10abf50dc184fa837236c5f61",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/Rosalie241/RMG.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/rosalie241--rmg",
+      "head": "d16e25474dfc56787d82f02b0fb664def58b7f2a",
+      "upstream_head": "d16e25474dfc56787d82f02b0fb664def58b7f2a",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/LIJI32/SameBoy.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/liji32--sameboy",
+      "head": "ea667ad79aa28409f034b1fd6da7304e1844750d",
+      "upstream_head": "ea667ad79aa28409f034b1fd6da7304e1844750d",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/snes9xgit/snes9x.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/snes9xgit--snes9x",
+      "head": "1bcc369e89f08243e0a462882fb1f3e42e51de3a",
+      "upstream_head": "1bcc369e89f08243e0a462882fb1f3e42e51de3a",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/OpenEmu/OpenEmu.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/openemu--openemu",
+      "head": "1d205104640d8410659d321809889cbfd06b99a9",
+      "upstream_head": "1d205104640d8410659d321809889cbfd06b99a9",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/RetroDECK/RetroDECK.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/retrodeck--retrodeck",
+      "head": "5f258d86b57a71ae8a026c5c8c62fbb7e3b10328",
+      "upstream_head": "5f258d86b57a71ae8a026c5c8c62fbb7e3b10328",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/EmuDeck/emudeck-electron.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/emudeck--emudeck-electron",
+      "head": "b06bfcf5270f750c27b959dc3bca25425c99513c",
+      "upstream_head": "b06bfcf5270f750c27b959dc3bca25425c99513c",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/RetroBat-Official/retrobat-setup.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/retrobat-official--retrobat-setup",
+      "head": "4eb2ed0c4b40a47a077471580bb67b3c1153bbc2",
+      "upstream_head": "4eb2ed0c4b40a47a077471580bb67b3c1153bbc2",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/JosefNemec/Playnite.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/josefnemec--playnite",
+      "head": "e2e6efcda311fea38fcd92f61c8ca90811d97f28",
+      "upstream_head": "e2e6efcda311fea38fcd92f61c8ca90811d97f28",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/mmatyas/pegasus-frontend.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/mmatyas--pegasus-frontend",
+      "head": "3702598cf973c9573645b0ea732abad004427dc3",
+      "upstream_head": "3702598cf973c9573645b0ea732abad004427dc3",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/Swordfish90/Lemuroid.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/swordfish90--lemuroid",
+      "head": "3625bc121d5d79fd4b80ce930fb0f3236c9334e8",
+      "upstream_head": "3625bc121d5d79fd4b80ce930fb0f3236c9334e8",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/rileytestut/Delta.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/rileytestut--delta",
+      "head": "8d768919b1fb6bf99ec2899b6e8e0146a8268637",
+      "upstream_head": "8d768919b1fb6bf99ec2899b6e8e0146a8268637",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/Frizti/Fritchii.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/frizti--fritchii",
+      "head": "f66ea633db6058efe31a9611718019e5bd1667eb",
+      "upstream_head": "f66ea633db6058efe31a9611718019e5bd1667eb",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/MythosOfs/Orchid.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/mythosofs--orchid",
+      "head": "e9d4b5b795e585924b4dca164fe8122d45b81929",
+      "upstream_head": "e9d4b5b795e585924b4dca164fe8122d45b81929",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/CheezerWheezer/CheezyEmu.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/cheezerwheezer--cheezyemu",
+      "head": "6e7ea0b4689250c2764245518663838ba681569d",
+      "upstream_head": "6e7ea0b4689250c2764245518663838ba681569d",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/ARMSX2/ARMSX2.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/armsx2--armsx2",
+      "head": "37ed35b88fe9a0164369c8042f2c9aa707e33667",
+      "upstream_head": "37ed35b88fe9a0164369c8042f2c9aa707e33667",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/ARMSX2/ARMSX3.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/armsx2--armsx3",
+      "head": "447a3fdcace49ea0df9c3abeb1618d10b93c8d0f",
+      "upstream_head": "447a3fdcace49ea0df9c3abeb1618d10b93c8d0f",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/brunodev85/winlator.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/brunodev85--winlator",
+      "head": "30aafbdb9eea47b92669201621e03cd2cf04540d",
+      "upstream_head": "30aafbdb9eea47b92669201621e03cd2cf04540d",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/libretro/FBNeo.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/libretro--fbneo",
+      "head": "a836e52198aa5ce1f54be7b050e44872a1223797",
+      "upstream_head": "a836e52198aa5ce1f54be7b050e44872a1223797",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/libretro/pcsx_rearmed.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/libretro--pcsx_rearmed",
+      "head": "7b0e8f8fadfbce3d170d195b9d9eecaabfa08c8e",
+      "upstream_head": "7b0e8f8fadfbce3d170d195b9d9eecaabfa08c8e",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/libretro/Genesis-Plus-GX.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/libretro--genesis-plus-gx",
+      "head": "b9c2316441978d4015ba30e9a95d9b0e6f8ee981",
+      "upstream_head": "b9c2316441978d4015ba30e9a95d9b0e6f8ee981",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/libretro/mupen64plus-libretro-nx.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/libretro--mupen64plus-libretro-nx",
+      "head": "15bada85906593376e8fd697f1b0b3af3a20f512",
+      "upstream_head": "15bada85906593376e8fd697f1b0b3af3a20f512",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://github.com/libretro/picodrive.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/libretro--picodrive",
+      "head": "1890c2932234c9d30f4cd3851d02228baae8f09e",
+      "upstream_head": "1890c2932234c9d30f4cd3851d02228baae8f09e",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://git.eden-emu.dev/eden-emu/eden.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/eden-emu--eden",
+      "head": "c17bb9052c1f6af79f8d6889e666716a58ef4a5b",
+      "upstream_head": "c17bb9052c1f6af79f8d6889e666716a58ef4a5b",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://git.ryujinx.app/projects/Ryubing.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/projects--ryubing",
+      "head": "4d5a19d3311b0980fe91ba17dcce9033f57fd280",
+      "upstream_head": "4d5a19d3311b0980fe91ba17dcce9033f57fd280",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://gitlab.com/es-de/emulationstation-de.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/es-de--emulationstation-de",
+      "head": "ddc2653b26be233daf24a06f629017da6452560b",
+      "upstream_head": "ddc2653b26be233daf24a06f629017da6452560b",
+      "connectivity_verified": true
+    },
+    {
+      "source": "https://framagit.org/hatari/hatari.git",
+      "mirror": "https://git.moveweight.com/romarr-emulators/hatari--hatari",
+      "head": "b18511507bcf48dcf11f32b555774ea2f5e93fd0",
+      "upstream_head": "b18511507bcf48dcf11f32b555774ea2f5e93fd0",
+      "connectivity_verified": true
+    }
+  ]
+}

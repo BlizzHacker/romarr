@@ -816,6 +816,7 @@ NAV = [
     ]),
     ('Hub', [
         ('hub', 'Plugins', None),
+        ('emulators', 'Emulators', None),
         ('portal', 'Library Shell', None),
         ('peers', 'Friends', None),
         ('ecosystem', 'Ecosystem', None),
@@ -1213,6 +1214,7 @@ function go(page){
   // Hashes are untrusted input; inherited Object properties are not renderers.
   if(!Object.prototype.hasOwnProperty.call(RENDER,page)) page='library';
   if(typeof RENDER!=='undefined'&&RENDER._queueTimer){clearInterval(RENDER._queueTimer);RENDER._queueTimer=null;}
+  if(RENDER._libraryTimer){clearTimeout(RENDER._libraryTimer);RENDER._libraryTimer=null;}
   activePage=page;
   ++pageVersion;
   metadataLookup?.abort();
@@ -1231,7 +1233,7 @@ function go(page){
     calendar:'Release Calendar',manualimport:'Manual Import',
     collections:'Collections \u2014 full sets and 1G1R',
     getstarted:'Get Started',setup:'Setup Guide',
-    hub:'ROM Hub — Plugins',portal:'Library Shell & Device Fleet'};
+    hub:'ROM Hub — Plugins',emulators:'Emulator Hub',portal:'Library Shell & Device Fleet'};
   $('#top h1').textContent=titles[page]||'ROMarr';
   $('#search').classList.toggle('hide', page !== 'library');
   (RENDER[page]||RENDER.library)();
@@ -1621,7 +1623,37 @@ const SOURCE_LABEL={
   flashpoint:'Flashpoint (streams)',
   cloud:'Catalogued, source unknown'};
 const num=n=>(n===null||n===undefined)?'—':Number(n).toLocaleString();
+/** Explain an in-progress library read without treating a partial shelf as empty. */
+function libraryScanHelp(d){
+  const scan=d.scan||{};
+  if(!d.loading&&!d.partial&&!scan.running&&scan.stage!=='error')return '';
+  const running=scan.running===true;
+  const stage=scan.stage==='error'?'Library scan needs attention'
+    :d.partial&&!running?'Library scan incomplete'
+    :({counting:'Preparing the library scan',reading:'Reading the library',
+       complete:'Library scan complete'}[scan.stage]||'Library scan status');
+  const fallback=running?'ROMarr is reading the configured library. Loaded games remain available while the scan runs.'
+    :d.partial?'The scan did not load the complete library. Review its status or error before retrying.'
+    :'Waiting for the library status.';
+  const read=Number.isFinite(Number(scan.read))?Math.max(0,Number(scan.read)):null;
+  const elapsed=Number.isFinite(Number(scan.elapsed_seconds))?Math.max(0,Number(scan.elapsed_seconds)):null;
+  const progress=[read===null?'':num(read)+' games read',elapsed===null?'':num(elapsed)+' s elapsed'].filter(Boolean).join(' · ');
+  return `<div class="panel-note" role="status"><b>${esc(stage)}</b>
+    ${scan.library?`<span> · ${esc(scan.library)}</span>`:''}
+    <p>${esc(d.scan_message||d.message||fallback)}</p>
+    ${progress?`<p class="help">${esc(progress)}</p>`:''}
+    <p class="help">Large folders and network shares can take time. This view may contain only the games read so far.
+    For mounts, permissions and scan errors, see the
+    <a href="https://github.com/BlizzHacker/romarr/blob/main/docs/NAS-LIBRARIES.md" target="_blank" rel="noopener">NAS library guide</a>.</p></div>`;
+}
+
 RENDER.library=async()=>{
+  const version=typeof pageVersion==='number'?pageVersion:null;
+  const request=(RENDER._libraryRequest||0)+1;
+  RENDER._libraryRequest=request;
+  if(RENDER._libraryTimer){clearTimeout(RENDER._libraryTimer);RENDER._libraryTimer=null;}
+  const current=()=>request===RENDER._libraryRequest
+    &&(version===null||(pageVersion===version&&activePage==='library'));
   const p=$('#page');
   if(!p.querySelector('#lib-grid')) p.innerHTML='<div class="empty">Loading library…</div>';
   const q=($('#search').value||'').trim();
@@ -1634,16 +1666,22 @@ RENDER.library=async()=>{
     +`&source=${encodeURIComponent(LIB.source)}`
     +`&sort=${encodeURIComponent(LIB.sort)}`)
     .catch(()=>({items:[],error:'unreachable'}));
+  if(!current())return;
+  if((d.scan&&d.scan.running)||(d.loading&&!d.error&&!(d.scan&&d.scan.stage==='error'))){
+    RENDER._libraryTimer=setTimeout(()=>{
+      RENDER._libraryTimer=null;
+      if(current())return RENDER.library();
+    },5000);
+  }
 
   if(d.loading){
-    // The first fetch has not landed yet. Say so, rather than showing an
-    // empty grid that reads as "your library is empty".
-    p.innerHTML=`<div class="card"><h3>Reading the library</h3>
-      <p class="help">${esc(d.message||'Fetching from RomM…')}
-      ${d.error?` Last attempt: <b>${esc(d.error)}</b>. Retrying with backoff.`:''}</p></div>`;
+    // A partial network-library read is progress, not an empty collection.
+    p.innerHTML=libraryScanHelp(d)
+      +(d.error?'<p class="help" style="color:var(--warn)">Last attempt: '+esc(d.error)+'</p>':'');
     return;
   }
 
+  const scanRunning=!!(d.scan&&d.scan.running);
   const items=d.items||[];
   const T=d.totals||{};
   // Every platform the library server holds, from the first second --
@@ -1700,12 +1738,12 @@ RENDER.library=async()=>{
     ${T.counted_from==='cached rows'
       ?`<p class="help" style="margin:6px 0 0">Counted from the ${num(d.cached_total)}
         rows read so far — this library server does not report the split
-        itself${d.partial?', and the read is still running':''}.</p>`
+        itself${scanRunning?', and the read is still running':d.partial?', with an incomplete scan':''}.</p>`
       :((T.total!==null&&T.total!==undefined&&d.cached_total<T.total)
         ?`<p class="help" style="margin:6px 0 0">${num(d.cached_total)} of those
-          are loaded and browsable here${d.partial?' — still reading':''}.</p>`:'')}
+          are loaded and browsable here${scanRunning?' — still reading':d.partial?' — scan incomplete':''}.</p>`:'')}
   </div>`;
-  const head=banner+`<div class="row" style="flex-wrap:wrap;gap:6px;margin-bottom:10px">
+  const head=libraryScanHelp(d)+banner+`<div class="row" style="flex-wrap:wrap;gap:6px;margin-bottom:10px">
       <button class="btn ${LIB.platform?'ghost':''}" data-plat=""
         style="padding:4px 10px;font-size:12px">All
         <span style="opacity:.7">${d.grand_total}</span></button>${chips}</div>
@@ -1733,7 +1771,7 @@ RENDER.library=async()=>{
       Showing ${d.total?LIB.offset+1:0}–${Math.min(LIB.offset+items.length,d.total)}
       of ${d.total}${LIB.platform?` on ${esc(LIB.platform)}`:''}${q?` matching “${esc(q)}”`:''}
       · ${d.grand_total} cached across ${(d.platforms||[]).length} platforms
-      ${d.partial?' · <b>still loading from the library server…</b>':''}
+      ${scanRunning?' · <b>still loading from the library server…</b>':d.partial?' · <b>scan incomplete — see the scan status above</b>':''}
       ${d.error?` · <span style="color:var(--warn)">last refresh: ${esc(d.error)}</span>`:''}</p>`;
 
   if(!items.length){
@@ -1859,6 +1897,9 @@ RENDER.add=async()=>{
 };
 
 RENDER.search=async()=>{
+  const version=typeof pageVersion==='number'?pageVersion:null;
+  const current=()=>version===null||(version===pageVersion&&activePage==='search');
+  let searchRequest=0;
   $('#page').innerHTML=`<div class="card">
     <h3>Interactive search</h3>
     <p class="help">Every release your indexers returned, scored, with the
@@ -1877,6 +1918,12 @@ RENDER.search=async()=>{
     <p class="help" style="margin-top:10px">Without a platform there is no
       platform evidence to score on, so the ranking means less. Pick one when
       you can.</p>
+    <details class="help" style="margin-top:10px"><summary>New to Usenet or getting no results?</summary>
+      <p>A Newznab indexer finds NZB releases. Your Usenet provider supplies the files;
+      a download client retrieves them. Configure the indexer in <a href="#indexers">Indexers</a>
+      and the client in <a href="#clients">Download Clients</a>. A torrent indexer is optional.</p>
+      <p>Try a source that covers your platform. <a href="#hub">ROM Hub plugins</a> offer other
+      supported sources, including direct downloads. Availability and source access vary.</p></details>
     <div id="s-out" style="margin-top:16px"></div></div>`;
   enhancePlatformSelect($('#s-plat'));
 
@@ -1884,19 +1931,28 @@ RENDER.search=async()=>{
     :n>0?(n/1024).toFixed(0)+' KB':'—';
 
   const run=async()=>{
+    const request=++searchRequest;
     const game=$('#s-name').value.trim(), platform=$('#s-plat').value;
     if(!game){toast('Enter a game name');return;}
-    $('#s-out').innerHTML='<div class="empty">Searching every indexer…</div>';
+    $('#s-out').innerHTML='<div class="empty">Searching enabled sources…</div>';
     const d=await j(`/api/v1/release?game=${encodeURIComponent(game)}`
       +`&platform=${encodeURIComponent(platform)}`);
+    if(!current()||request!==searchRequest)return;
     if(d.error){
       $('#s-out').innerHTML=`<p class="help" style="color:var(--warn)">${esc(d.error)}</p>`;
       return;
     }
     if(!d.items.length){
-      $('#s-out').innerHTML='<div class="empty">Nothing found. A search where '
-        +'every indexer fails looks exactly like one that found nothing &mdash; '
-        +'check Indexers if this is unexpected.</div>';
+      $('#s-out').innerHTML='<div class="panel-note"><b>No releases returned.</b>'
+        +'<p>No download was started. Check the search source first:</p>'
+        +'<ol><li>Open <a href="#indexers">Indexers</a>, enable your source and use its <b>Test</b> button. '
+        +'For Prowlarr, check the indexer there too.</li>'
+        +'<li>Try the title on the source itself, then try a shorter title and the correct platform here. '
+        +'Check the source’s game categories and API access. A working connection does not guarantee that game is listed.</li>'
+        +'<li>For Usenet, add a <b>Newznab indexer</b> as well as your provider and download client. '
+        +'A provider login alone does not supply search results.</li></ol>'
+        +'<p>You can also browse <a href="#hub">ROM Hub sources</a> or <a href="#manualimport">import existing files</a>. '
+        +'After you grab a result, download or import failures appear in <a href="#queue">Queue</a> and <a href="#history">History</a>.</p></div>';
       return;
     }
     $('#s-out').innerHTML=`
@@ -3790,6 +3846,14 @@ RENDER.media=()=>settingsPage('Media Management',
   +chk('overwrite_existing','Overwrite an existing file',SETTINGS.overwrite_existing)
   +chk('rescan_after_import','Tell your library server to rescan after an import',SETTINGS.rescan_after_import)
   +chk('reconcile_after_import','Reconcile Wanted aliases against verified library files after an import',SETTINGS.reconcile_after_import!==false)
+  +chk('scanner_defender_enabled','Scan imports with Microsoft Defender on this Windows host',SETTINGS.scanner_defender_enabled)
+  +chk('scanner_mwm_enabled','Require an antivirus result from MoveWeight Manager',SETTINGS.scanner_mwm_enabled)
+  +fld('scanner_mwm_url','MoveWeight Manager URL',SETTINGS.scanner_mwm_url||'','text',
+       'placeholder="https://mwm.example.com"')
+  +chk('scanner_vt_enabled','Require a known VirusTotal hash report before importing',SETTINGS.scanner_vt_enabled)
+  +`<p class="help">MWM needs ROMARR_MWM_TOKEN on this host and access to the same file paths.
+      VirusTotal needs ROMARR_VIRUSTOTAL_API_KEY. It receives file hashes only.
+      Enabled scanners must finish before a manual or completed download import can proceed.</p>`
   +chk('clamav_enabled','Scan downloads with ClamAV before importing them',SETTINGS.clamav_enabled)
   +fld('clamav_address','ClamAV address',SETTINGS.clamav_address||'','text',
      'placeholder="tcp://clamav:3310 or /run/clamav/clamd.sock"')
@@ -4273,14 +4337,23 @@ RENDER.libraries=async()=>{
 };
 
 RENDER.indexers=async()=>{
+  const version=typeof pageVersion==='number'?pageVersion:null;
   const d=await j('/api/v1/indexer');
+  if(version!==null&&(version!==pageVersion||activePage!=='indexers'))return;
   $('#page').innerHTML=`<div class="card">
     <div class="row" style="margin-bottom:12px">
       <h3 style="margin:0">Indexers</h3>
       <button class="btn" id="i-add" style="margin-left:auto">Add</button>
     </div>
-    <p class="help">Add a Newznab or Torznab indexer directly, or point at
-      Prowlarr and use everything it already has configured.</p>
+    <p class="help">Use <b>Newznab for Usenet</b> or <b>Torznab for torrents</b>, or connect
+      Prowlarr to use the indexers configured there. Prowlarr manages your sources; it does not provide their content.</p>
+    <details class="help"><summary>Usenet setup: provider, indexer and client</summary>
+      <p>Your <b>Usenet provider</b> supplies an NNTP server and login. A <b>Newznab indexer</b>
+      searches release listings and returns NZBs; its URL and API key belong here.
+      A <a href="#clients">download client</a> uses the provider to fetch those NZBs.</p>
+      <p>You can use Usenet without a torrent indexer. Game coverage varies between sources:
+      test the indexer and try a title it actually lists. A successful Test checks connectivity, not game availability.
+      For other supported search sources, browse <a href="#hub">ROM Hub plugins</a>.</p></details>
     ${d.items.length?`<table><thead><tr><th>Name</th><th>Type</th><th>URL</th>
       <th>Enabled</th><th></th></tr></thead><tbody>
       ${d.items.map((it,i)=>`<tr><td>${esc(it.name||'—')}</td>
@@ -4307,14 +4380,35 @@ RENDER.indexers=async()=>{
     editItem('indexer', d.items[Number(b.dataset.iedit)]));
 };
 
-RENDER.general=()=>settingsPage('General',
-  'Connections to the rest of the stack. Download-client and indexer credentials '
-  +'live in the environment file; the OIDC client secret below is the one '
-  +'secret this page stores, write-only — it is never read back.',
+RENDER.general=async()=>{
+  const opVer=pageVersion;
+  $('#page').innerHTML='<div class="empty">Loading settings…</div>';
+  let fresh;
+  try {
+    const response=await fetch('/api/v1/config');
+    if(!response.ok) throw new Error('Settings request failed');
+    fresh=await response.json();
+  } catch (_) {
+    if(activePage==='general'&&pageVersion===opVer)
+      $('#page').innerHTML='<div class="empty">Could not load settings. Reopen General to retry.</div>';
+    return;
+  }
+  // A slow response must not overwrite a later page's content or form state.
+  if(activePage!=='general'||pageVersion!==opVer) return;
+  SETTINGS=fresh;
+  settingsPage('General',
+  'Connections to the rest of the stack. Edit download clients and indexers '
+  +'on their dedicated Settings pages. The OIDC client secret below is '
+  +'write-only — it is never read back.',
   `<div class="field"><label>Prowlarr</label>
      <input type="text" value="${esc(SETTINGS._prowlarr_url||'')}" disabled></div>
    <div class="field"><label>qBittorrent</label>
-     <input type="text" value="${esc(SETTINGS._qbit_url||'')}" disabled></div>
+     ${Array.isArray(SETTINGS._qbit_urls)&&SETTINGS._qbit_urls.length
+       ? SETTINGS._qbit_urls.map((url,i)=>
+           `<input type="text" aria-label="qBittorrent address ${i+1}"
+              value="${esc(url)}" disabled>`).join('')
+       : '<input type="text" value="" placeholder="No enabled qBittorrent client" disabled>'}
+     <div class="help">Manage connections in <a href="#clients">Download Clients</a>.</div></div>
    <div class="field"><label>RomM</label>
      <input type="text" value="${esc(SETTINGS._romm_url||'')}" disabled></div>
    <div class="field"><label>Your public URL (for Friends)</label>
@@ -4427,6 +4521,7 @@ RENDER.general=()=>settingsPage('General',
       $('#g-totpout').style.display='none';
     };
   });
+};
 
 /* ---------------- system ---------------- */
 RENDER.status=async()=>{
@@ -4868,6 +4963,142 @@ RENDER.connections=async()=>{
   };
 };
 
+RENDER.emulators=async()=>{
+  const version=pageVersion;
+  const current=()=>version===pageVersion && activePage==='emulators';
+  let offset=0, query='', mode='projects', request=0, inspection=0;
+  $('#page').innerHTML=`<div class="card"><h3>Emulator Hub</h3>
+    <p>Find an emulator, check its setup guide, then add your games. Install buttons install on the
+    <b>ROMarr host</b>. Use the upstream downloads on a different gaming device.</p>
+    <p class="help">Free and noncommercial projects are included. Each project keeps its own terms.
+    Experimental projects and forks can have limited compatibility. A catalog entry is not a gameplay test.</p>
+    <div class="row"><select id="emu-mode" aria-label="Catalog"><option value="projects">Emulators and tools</option>
+    <option value="cores">RetroArch cores</option><option value="resources">Sources and references</option></select>
+    <input id="emu-search" type="search" placeholder="Search name, system, license or source" aria-label="Search emulators">
+    <button class="btn" id="emu-find">Search</button></div>
+    <p><a href="https://emulation.gametechwiki.com/index.php/Main_Page" target="_blank" rel="noopener">Emulation General Wiki</a>
+    · <a href="https://docs.libretro.com/" target="_blank" rel="noopener">RetroArch setup and core guides</a>
+    · <a href="#hub">ROM Hub plugins for Minerva, Internet Archive and other sources</a></p>
+    <div id="emu-count" role="status"></div><div class="row"><button class="btn ghost" id="emu-prev">Previous</button>
+    <button class="btn ghost" id="emu-next">Next</button><button class="btn ghost" id="core-config">Prepare RetroArch folders</button></div>
+    <pre id="core-config-result" role="status"></pre></div>
+    <div id="emu-cards" class="pgrid"></div>
+    <div class="card"><h3>Inspect a file with your security lab</h3>
+      <p class="help">Enter a file path visible to ROMarr and MWM. Arkana copies the selected
+      file to your configured analysis lab. Follow its job in MWM.</p>
+      <div class="row"><input id="lab-path" placeholder="Full path to the file">
+      <button class="btn ghost" data-inspect="mwm">Inspect with MWM</button>
+      <button class="btn ghost" data-inspect="arkana">Send to Arkana</button></div>
+      <pre id="lab-result" role="status"></pre></div>`;
+  const load=async()=>{
+    const serial=++request;
+    $('#emu-count').textContent='Loading catalog…';
+    try{
+      const d=await j('/api/v1/emulators'+(mode==='cores'?'/cores':mode==='resources'?'/resources':'')+'?q='+encodeURIComponent(query)+'&offset='+offset);
+      if(!current()||serial!==request)return;
+      if(d.error)throw new Error(d.error);
+      $('#emu-count').textContent=d.total+' matches · '+d.available+' catalog entries · showing '+(d.total?offset+1:0)+'–'+Math.min(offset+d.items.length,d.total)+' · snapshot '+d.verified_date;
+      $('#emu-prev').disabled=offset===0;$('#emu-next').disabled=offset+d.items.length>=d.total;
+      $('#emu-cards').innerHTML=d.items.map(item=>mode==='resources'?`<div class="card">
+        <h3>${esc(item.name)}</h3><p class="help">${esc(item.category)}</p><p>${esc(item.description||'')}</p>
+        <div class="row">${item.url?'<a class="btn ghost" href="'+esc(item.url)+'" target="_blank" rel="noopener">Open resource</a>':'<span class="help">Link not verified yet.</span>'}
+        ${item.category==='source'?'<a class="btn ghost" href="#hub">Find ROM Hub plugins</a>':''}</div>
+        <p class="help">External resource. Availability, access and terms are set by its operator.</p></div>`:mode==='cores'?`<div class="card">
+        <h3>${esc(item.name)}</h3><p>${esc(item.systems)}</p><p class="help">${esc(item.description)}</p>
+        <p>${esc(item.license)} · ${item.installed?'Installed':'Not installed'}</p>
+        <p class="help">${item.firmware.length+' firmware entries. Required files are checked before setup; game compatibility still depends on the core.'}</p>
+        <div class="row"><button class="btn" data-core="${esc(item.id)}">Install host core</button>
+        <button class="btn ghost" data-ready="${esc(item.id)}">Check firmware</button>
+        <a class="btn ghost" href="${esc(item.source)}" target="_blank" rel="noopener">Core details</a></div>
+        <pre data-assets="${esc(item.id)}" role="status"></pre></div>`:`<div class="card">
+        <h3>${esc(item.name)}</h3><p>${esc(item.systems)}</p><p class="help">${esc(item.description||'')}</p>
+        <p class="help">${esc(item.license||'See upstream terms')} · ${esc(item.provider||'website')}${item.fork?' · fork':''}</p>
+        <p class="help">${item.installed.length?'Installed '+esc(item.installed.join(', ')):'Open the setup guide or check a host release.'}</p>
+        <div class="row"><a class="btn ghost" href="${esc(item.website)}" target="_blank" rel="noopener">Source / downloads</a>
+        <a class="btn ghost" href="${esc(item.guide)}" target="_blank" rel="noopener">Setup guide</a>
+        ${item.managed_releases?`<button class="btn" data-release="${esc(item.id)}">Check release</button><button class="btn ghost" data-forks="${esc(item.id)}">Browse forks</button>`:''}</div>
+        ${item.flatpak?'<p><a href="'+esc(item.flatpak)+'" target="_blank" rel="noopener">Flatpak for Linux / SteamOS</a></p>':''}
+        <div data-assets="${esc(item.id)}" role="status"></div><div data-fork-list="${esc(item.id)}"></div></div>`).join('');
+      document.querySelectorAll('[data-release]').forEach(button=>button.onclick=async()=>{
+        button.disabled=true;
+        const id=button.dataset.release, output=document.querySelector('[data-assets="'+id+'"]');
+        output.textContent='Checking the project release…';
+        try{
+          const release=await j('/api/v1/emulators/release?id='+encodeURIComponent(id));
+          if(!current()||serial!==request)return;
+          if(release.error)throw new Error(release.error);
+          const assets=(release.assets||[]).filter(a=>a.installable);
+          output.innerHTML='<p>'+esc((release.tag||'')+(release.note?' · '+release.note:''))+'</p>'
+            +(assets.length?assets.map((a,i)=>'<p><button class="mini" data-install="'+i+'">Install '+esc(a.name)+'</button> · '+Math.ceil(a.bytes/1048576)+' MB</p>').join('')
+              :'<p class="help">No publisher-SHA-256 portable build matches this host. Open Source / downloads for other packages.</p>');
+          output.querySelectorAll('[data-install]').forEach(install=>install.onclick=async()=>{
+            const a=assets[Number(install.dataset.install)];
+            install.disabled=true;
+            const status=document.createElement('p');status.role='status';status.textContent='Downloading, verifying and scanning…';output.append(status);
+            try{
+              const result=await j('/api/v1/emulators/install',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id,asset:a.name,sha256:a.sha256})});
+              if(!current()||serial!==request)return;
+              if(result.error)throw new Error(result.error);
+              status.textContent='Installed in '+result.path+'. Open the setup guide and add your game folders.';
+            }catch(error){if(current()&&serial===request)status.textContent=error.message;}
+            finally{if(current())install.disabled=false;}
+          });
+        }catch(error){if(current()&&serial===request)output.textContent=error.message;}
+        finally{if(current())button.disabled=false;}
+      });
+      document.querySelectorAll('[data-forks]').forEach(button=>{
+        let next=1;
+        button.onclick=async()=>{
+          button.disabled=true;
+          const output=document.querySelector('[data-fork-list="'+button.dataset.forks+'"]');
+          try{
+            const result=await j('/api/v1/emulators/forks?id='+encodeURIComponent(button.dataset.forks)+'&page='+next);
+            if(!current()||serial!==request)return;
+            if(result.error)throw new Error(result.error);
+            output.insertAdjacentHTML('beforeend','<p>'+result.items.map(x=>'<a href="'+esc(x.website)+'" target="_blank" rel="noopener">'+esc(x.repo)+'</a>').join('<br>')+'</p>');
+            next++;button.textContent=result.has_next?'More forks':'All returned forks shown';
+            button.disabled=!result.has_next;
+          }catch(error){if(current()&&serial===request){output.textContent=error.message;button.disabled=false;}}
+          if(current()&&button.textContent==='More forks')button.disabled=false;
+        };
+      });
+      document.querySelectorAll('[data-core],[data-ready]').forEach(button=>button.onclick=async()=>{
+        button.disabled=true;
+        const id=button.dataset.core||button.dataset.ready, output=document.querySelector('[data-assets="'+id+'"]');
+        output.textContent=button.dataset.core?'Downloading and checking the official buildbot core…':'Checking firmware files…';
+        try{
+          const result=await j('/api/v1/emulators/cores/'+(button.dataset.core?'install':'readiness')+(button.dataset.core?'':'?id='+encodeURIComponent(id)),
+            button.dataset.core?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id})}:undefined);
+          if(!current()||serial!==request)return;
+          output.textContent=JSON.stringify(result,null,2);
+        }catch(error){if(current()&&serial===request)output.textContent=error.message;}
+        finally{if(current())button.disabled=false;}
+      });
+    }catch(error){if(current()&&serial===request)$('#emu-count').textContent=error.message;}
+  };
+  const search=()=>{query=$('#emu-search').value;offset=0;load();};
+  $('#emu-find').onclick=search;
+  $('#emu-search').onkeydown=e=>{if(e.key==='Enter')search();};
+  $('#emu-mode').onchange=()=>{mode=$('#emu-mode').value;search();};
+  $('#emu-prev').onclick=()=>{offset=Math.max(0,offset-60);load();};
+  $('#emu-next').onclick=()=>{offset+=60;load();};
+  $('#core-config').onclick=async()=>{
+    const result=await j('/api/v1/emulators/cores/configure',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    if(current())$('#core-config-result').textContent=JSON.stringify(result,null,2);
+  };
+  document.querySelectorAll('[data-inspect]').forEach(button=>button.onclick=async()=>{
+    const inspectVersion=++inspection;
+    button.disabled=true;
+    const output=$('#lab-result');output.textContent='Contacting your lab…';
+    try{
+      const result=await j('/api/v1/security/inspect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:$('#lab-path').value,engine:button.dataset.inspect})});
+      if(current()&&inspectVersion===inspection)output.textContent=JSON.stringify(result,null,2);
+    }catch(error){if(current()&&inspectVersion===inspection)output.textContent=error.message;}
+    finally{if(current())button.disabled=false;}
+  });
+  await load();
+};
+
 // --- Metadata --------------------------------------------------------------
 RENDER.metadata=async()=>{
   const version=pageVersion;
@@ -5162,7 +5393,10 @@ async function requestGame(g){
 // The optional guide uses the same editors and connection checks as Settings.
 const SETUP={step:0,mode:'organize',initialized:false};
 RENDER.setup=async()=>{
+  const version=typeof pageVersion==='number'?pageVersion:null;
+  const current=()=>version===null||(version===pageVersion&&activePage==='setup');
   const state=await j('/api/v1/setup/status').catch(()=>null);
+  if(!current())return;
   if(!state||state.error){
     $('#page').innerHTML='<div class="card"><h3>Setup Guide</h3><p class="help">We could not read your setup. Refresh this page to try again.</p></div>';
     return;
@@ -5187,14 +5421,22 @@ RENDER.setup=async()=>{
       +'<p class="help">Choose the path ROMarr can see, such as <code>/roms</code>. If you use Docker, mount your ROM folder into the container first. Use <b>Test</b> in the form to check the path before saving.</p>'
       +'<p class="help">You can preview files in <a href="#manualimport">Manual Import</a> before copying them into your library. Review the platform and destination first. DAT-verified single files can use the canonical name; multi-file disc sets keep their referenced filenames.</p>';
   }else if(active===2){
-    content='<h3>Choose what downloads your files</h3><p class="help">Use qBittorrent for torrents, or SABnzbd/NZBGet for Usenet. ROMarr hands your chosen release to that app, then imports it when the download finishes.</p>'
-      +added(state.download_clients)+action('setup-client','Add a download client')
-      +'<p class="help">Enter the address ROMarr can reach. In separate Docker containers, <code>localhost</code> points back to ROMarr; use your download client’s container name or server address. Press <b>Test</b> before saving.</p>'
-      +'<p class="help">Your finished-download folder must also be readable by ROMarr. Different paths on the two apps can be connected later under <a href="#media">Media Management → Remote path mappings</a>.</p>';
+    content='<h3>Choose what downloads your files</h3><p class="help">Download on the ROMarr host, or connect an app you already run. Choose the protocol your source provides.</p>'
+      +added(state.download_clients)+'<div class="row">'
+      +action('setup-usenet','Built-in Usenet')+action('setup-torrent','Standalone torrents')
+      +action('setup-direct','Direct HTTP')+action('setup-hub-client','ROM Hub')
+      +action('setup-client','Connect an existing client')+'</div>'
+      +'<p class="help"><b>Usenet:</b> enter your provider’s NNTP server and login in Built-in Usenet. If you use SABnzbd or NZBGet, configure the provider in that app, then connect it here. Add your Newznab search source in the next step.</p>'
+      +'<p class="help"><b>Standalone torrents and Direct HTTP</b> use MDM. Install that engine from <a href="#clients">Download Clients</a> first if needed. The ROM Hub client works with supported plugins from <a href="#hub">Plugins</a>.</p>'
+      +'<p class="help">Press <b>Test</b> before saving. For an external client, enter the address ROMarr can reach; <code>localhost</code> in a separate Docker container points back to ROMarr.</p>'
+      +'<p class="help">Choose a writable finished-download folder visible to ROMarr. External clients with different paths can use <a href="#media">Media Management → Remote path mappings</a>.</p>';
   }else if(active===3){
-    content='<h3>Where should ROMarr search?</h3><p class="help">An indexer lists available releases. Connect an existing Prowlarr instance, or add a Torznab/Newznab source directly. A download client alone does not provide search results.</p>'
-      +added(state.indexers)+'<div class="row">'+action('setup-prowlarr','Connect Prowlarr')+action('setup-indexer','Add another indexer')+'</div>'
-      +'<p class="help">Use the source’s address and API key, then press <b>Test</b>. ROM Hub plugins are another optional way to add supported sources; you can explore those next.</p>';
+    content='<h3>Where should ROMarr search?</h3><p class="help">For Usenet, a <b>Newznab indexer</b> finds NZB release listings. Your provider supplies the files, and your download client retrieves them. A provider login alone does not add search results.</p>'
+      +added(state.indexers)+'<div class="row">'+action('setup-newznab','Add a Usenet indexer')
+      +action('setup-prowlarr','Connect Prowlarr')+action('setup-indexer','Other indexers')+'</div>'
+      +'<p class="help">Use the indexer’s URL and API key, then press <b>Test</b>. Prowlarr is optional if you want to manage several indexers. Torrent sources use Torznab; you can use Usenet without a torrent indexer.</p>'
+      +'<p class="help">Game coverage varies. In <a href="#search">Interactive Search</a>, try one title your source lists before adding a large Wanted list. No results and a failed download need different checks.</p>'
+      +'<p class="help"><a href="#hub">ROM Hub plugins</a> offer other supported sources, including direct downloads. Configure a ROM Hub client and an enabled searchable plugin. Availability and access requirements depend on the source.</p>';
   }else if(active===4){
     content='<h3>Add confidence and more sources</h3><p class="help">Both of these are optional. You can start with your existing files and return later.</p>'
       +'<h4>Verify with DATs</h4><p class="help">A No-Intro or Redump DAT is a checklist of known file hashes. It lets ROMarr verify a dump and compare your collection with a complete set.</p>'
@@ -5236,10 +5478,15 @@ RENDER.setup=async()=>{
   document.querySelectorAll('[data-setup-mode]').forEach(btn=>btn.onclick=()=>{
     SETUP.mode=btn.dataset.setupMode;RENDER.setup();});
   const bind=(id,fn)=>{const button=$('#'+id);if(button)button.onclick=fn;};
-  const saved=()=>RENDER.setup();
+  const saved=()=>{if(current())RENDER.setup();};
   bind('setup-folder',()=>editItem('library',{type:'folder',name:'My ROMs',path:state.library_path,is_default:true},saved));
   bind('setup-library',()=>addItem('library',saved));
   bind('setup-client',()=>addItem('downloadclient',saved));
+  bind('setup-usenet',()=>editItem('downloadclient',{type:'builtin_nzb'},saved));
+  bind('setup-torrent',()=>editItem('downloadclient',{type:'mdm_torrent'},saved));
+  bind('setup-direct',()=>editItem('downloadclient',{type:'mdm_http'},saved));
+  bind('setup-hub-client',()=>editItem('downloadclient',{type:'hub'},saved));
+  bind('setup-newznab',()=>editItem('indexer',{type:'newznab'},saved));
   bind('setup-prowlarr',()=>editItem('indexer',{type:'prowlarr'},saved));
   bind('setup-indexer',()=>addItem('indexer',saved));
   bind('setup-dats',async()=>{
@@ -5324,8 +5571,8 @@ RENDER.getstarted=async()=>{
        'Prowlarr, or Torznab/Newznab indexers added directly under '
        +'<a href="#indexers">Indexers</a>. This is where releases are found.')
     +step(2,'A download client',clientOk,
-       'qBittorrent for torrents, SABnzbd or NZBGet for usenet. Set under '
-       +'<a href="#clients">Download Clients</a>.')
+       'Built-in Usenet, standalone MDM torrents/direct HTTP, ROM Hub, or an external '
+       +'qBittorrent/SABnzbd/NZBGet client. Choose under <a href="#clients">Download Clients</a>.')
     +step(3,'A library',libOk,
        'Where ROMs are filed and what serves them. RomM, Gaseous, Retrom, or '
        +'a plain folder that Batocera, ES-DE, EmuDeck or LaunchBox reads. '

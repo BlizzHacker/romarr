@@ -891,3 +891,8 @@ ROMs survive; if it was inside the container's disk, they do not. Check with
 
 ROMarr never edits your library server's database and never deletes ROMs it
 did not import, so removing it leaves the library exactly as it was.
+
+
+## Unraid: choose the official package
+
+Use the [official ROMarr listing](https://ca.unraid.net/apps/romarr-04jslct0riva81?q=romarr). Check that Repository is `ghcr.io/blizzhacker/romarr:latest` (or an official version tag). ROMarrNG is maintained separately and is not supported here. [Identify your build and read the support policy](OFFICIAL-DISTRIBUTION.md).

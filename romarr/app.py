@@ -35,7 +35,7 @@ import inspect
 import json
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from copy import copy, deepcopy
 import logging
 import os
@@ -47,20 +47,22 @@ from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, unquote_plus, urlparse
+from urllib.parse import parse_qs, unquote_plus, urlparse, urlsplit, urlunsplit
 
 import time
 
 import requests
 
 from .libraries import (
-    LIBRARY_TYPES, RETROBAT_FOLDERS, build_library, build_library_from_config, library_counts,
+    FolderScanError, LIBRARY_TYPES, RETROBAT_FOLDERS, build_library, build_library_from_config, library_counts,
     load_backend_plugins, merge_library_secrets, redact_library, route_library,
 )
 from .clients import QBittorrent, QbitConfig, QbitAuthenticationError, Romm, RommConfig
 from . import hub  # ROM Hub bridge -- the Cartridge plugin layer
-from . import clamav
-from . import nup, mdm
+from . import clamav, scanners, nup, mdm
+from .emulators import EmulatorHub
+from .libretro import CoreHub
+from .emulator_catalog import resource_catalog
 from .dat import DatIndex, parse_dat
 from .decompress import run_batch as run_decompress_batch, scan_compressed
 from .titled import TitleDBIndex, build_index as build_titled_index, validate_switch_rom
@@ -278,6 +280,18 @@ def _read_failure(err: Exception) -> str:
                 f"password or API key on this library.")
     if status:
         return f"HTTP {status} from the library server."
+    if isinstance(err, FolderScanError):
+        failures = err.folder_failures
+        return (f"Library read incomplete: {len(failures)} filesystem errors "
+                f"({', '.join(sorted(set(failures)))}). Readable games remain available. "
+                "Check the mount and read permissions, then retry.")
+    if isinstance(err, BlockingIOError):
+        return ("Storage is temporarily busy after bounded retries. Check the NAS "
+                "mount and Docker file sharing, then retry the library refresh.")
+    if isinstance(err, PermissionError):
+        return "Library access denied. Check the container's mount and read permissions."
+    if isinstance(err, FileNotFoundError):
+        return "Library folder is missing. Check that the NAS is mounted inside the container."
     return err.__class__.__name__
 
 
@@ -718,6 +732,7 @@ class ROMarr:
         # polling it hold the database for minutes at a time -- so a request
         # that waits its turn is a page that never paints. Fetched here,
         # retried until it lands, then served from memory.
+        self._library_scan: dict = {}
         self._library_cache: tuple[list | None, float, str] = (None, 0.0, "")
         self._count_thread = threading.Thread(target=self._refresh_counts, daemon=True)
         self._count_thread.start()
@@ -864,6 +879,9 @@ class ROMarr:
                 self._wait(self.COUNT_TTL)
                 continue
 
+            self._library_scan = {"running": True, "started": time.monotonic(),
+                                  "read": 0, "stage": "counting", "library": "",
+                                  "limit_reached": False}
             ok, total, shelf, failures = True, 0, [], []
             # Accumulated beside the total, because the total on its own is
             # the bug: a library that catalogues streamed entries answers
@@ -909,6 +927,56 @@ class ROMarr:
             multiple = len(self.game_libraries) > 1
             for cfg, backend in self.game_libraries:
                 label = cfg.get("name") or getattr(backend, "name", "library")
+                self._library_scan.update(library=label, stage="counting")
+                streamer = getattr(backend, "iter_games", None)
+                if callable(streamer):
+                    # Folder backends can yield each file once. Counting then
+                    # rewalking for every page is quadratic over a NAS tree.
+                    from itertools import islice
+
+                    self._library_scan["stage"] = "reading"
+                    stream = None
+                    try:
+                        stream = iter(streamer(limit=self.LIBRARY_MAX))
+                        read = 0
+                        while read < self.LIBRARY_MAX:
+                            batch = []
+                            read_error = None
+                            try:
+                                # extend keeps items yielded before an error;
+                                # constructing a list would discard that tail.
+                                batch.extend(islice(stream, min(self.LIBRARY_PAGE,
+                                                                self.LIBRARY_MAX - read)))
+                            except Exception as err:
+                                read_error = err
+                            if batch:
+                                shelf.extend(replace(g, source=label) if multiple else g
+                                             for g in batch)
+                                read += len(batch)
+                                total += len(batch)
+                                if on_disk is not None:
+                                    on_disk += len(batch)
+                                self._library_scan["read"] = len(shelf)
+                                self._count_split = {"total": total, "on_disk": on_disk,
+                                                     "catalogued": catalogued}
+                                self._publish_library(shelf, "", partial=True)
+                            if read_error is not None:
+                                raise read_error
+                            if not batch:
+                                break
+                        if read >= self.LIBRARY_MAX:
+                            self._library_scan["limit_reached"] = True
+                    except Exception as err:
+                        ok = False
+                        failures.append(f"{label}: {err.__class__.__name__}")
+                        reasons[label] = _read_failure(err)
+                        log.warning("library refresh failed for %s: %s",
+                                    label, err.__class__.__name__)
+                    finally:
+                        close = getattr(stream, "close", None)
+                        if callable(close):
+                            close()
+                    continue
                 try:
                     split = library_counts(backend)
                     total += int(split.get("total") or 0)
@@ -943,19 +1011,23 @@ class ROMarr:
                     # the page improves while the fetch runs instead of
                     # showing a spinner for the minutes a big RomM takes.
                     offset = 0
+                    self._library_scan["stage"] = "reading"
                     while offset < self.LIBRARY_MAX:
                         batch = backend.games(
-                            limit=self.LIBRARY_PAGE, offset=offset,
-                            timeout=backend.BACKGROUND_TIMEOUT)
+                            limit=min(self.LIBRARY_PAGE, self.LIBRARY_MAX - offset),
+                            offset=offset, timeout=backend.BACKGROUND_TIMEOUT)
                         if not batch:
                             break
                         shelf.extend(
                             replace(g, source=label) if multiple else g
                             for g in batch)
                         offset += len(batch)
+                        self._library_scan["read"] = len(shelf)
                         self._publish_library(shelf, "", partial=True)
                         if len(batch) < self.LIBRARY_PAGE:
                             break
+                    if offset >= self.LIBRARY_MAX:
+                        self._library_scan["limit_reached"] = True
                 except Exception as err:
                     ok = False
                     failures.append(f"{label}: {err.__class__.__name__}")
@@ -964,12 +1036,14 @@ class ROMarr:
                                 label, err.__class__.__name__)
 
             self._library_reasons = reasons
+            self._library_scan.update(running=False, finished=time.monotonic(),
+                                      stage="complete" if ok else "error")
             if shelf or ok:
                 self._count_cache = (total, time.monotonic())
                 self._count_split = {"total": total, "on_disk": on_disk,
                                      "catalogued": catalogued}
                 self._publish_library(shelf, "; ".join(failures),
-                                      partial=False)
+                                      partial=not ok or self._library_scan["limit_reached"])
                 log.info("library refreshed: %d games across %d librar%s "
                          "(%s on disk, %s catalogued elsewhere)",
                          len(shelf), len(self.game_libraries),
@@ -996,6 +1070,28 @@ class ROMarr:
         self._refresh_now.wait(seconds)
         self._refresh_now.clear()
 
+    def _library_scan_status(self) -> tuple[dict, str]:
+        """Expose scan progress without paths, credentials, or filesystem reads."""
+        state = dict(getattr(self, "_library_scan", {}))
+        if not state:
+            return {}, ""
+        elapsed = max(0, int(state.get("finished", time.monotonic()) - state["started"]))
+        status = {k: state[k] for k in ("running", "read", "stage", "library", "limit_reached")
+                  if k in state}
+        status["elapsed_seconds"] = elapsed
+        label = state.get("library") or "the library"
+        read = int(state.get("read") or 0)
+        if state.get("running"):
+            action = "Getting the library count" if state.get("stage") == "counting" else "Reading games"
+            message = f"{action} from {label}: {read:,} read, {elapsed}s elapsed."
+        elif state.get("stage") == "error":
+            message = f"Library read incomplete: {read:,} games read. Check the library connection or mount."
+        elif state.get("limit_reached"):
+            message = f"Scan limit reached after {read:,} games; more files may remain."
+        else:
+            message = f"Read {read:,} games in {elapsed}s."
+        return status, message
+
     def library_view(self, platform: str = "", q: str = "",
                      offset: int = 0, limit: int = 120, genre: str = "",
                      region: str = "", decade: str = "", origin: str = "",
@@ -1013,12 +1109,14 @@ class ROMarr:
         names = [cfg.get("name") or getattr(b, "name", "library")
                  for cfg, b in self.game_libraries]
         games, at, err = self._library_cache
+        scan, scan_message = self._library_scan_status()
         if games is None:
             where = ", ".join(names) or getattr(self.game_library, "name", "library")
             return {"items": [], "loading": True,
                     "error": err or "",
                     "libraries": names,
-                    "message": f"Reading the library from {where}…"}
+                    "scan": scan, "scan_message": scan_message,
+                    "message": scan_message or f"Reading the library from {where}…"}
 
         rows = games
         wanted = str(platform or "").strip().lower()
@@ -1069,6 +1167,7 @@ class ROMarr:
         return {"items": [asdict(g) for g in page],
                 "loading": False,
                 "partial": getattr(self, "_library_partial", False),
+                "scan": scan, "scan_message": scan_message,
                 "total": len(rows),
                 "grand_total": len(games),
                 "cached_total": len(games),
@@ -1432,6 +1531,23 @@ class ROMarr:
         out["download_clients"] = [redact(c) for c in out.get("download_clients", [])]
         out["indexers"] = [redact_indexer(i) for i in out.get("indexers", [])]
         out["libraries"] = [redact_library(lib) for lib in out.get("libraries", [])]
+        # General Settings shows the configured, enabled qBittorrent clients.
+        # The legacy _qbit_url is only the startup environment value.
+        qbit_urls = []
+        for client in self.clients:
+            if not isinstance(client, QBittorrent):
+                continue
+            url = str(client._config.base_url or "")
+            if not url:
+                continue
+            try:
+                parts = urlsplit(url)
+            except ValueError:
+                continue
+            # A pasted URL can contain embedded credentials; never expose them.
+            netloc = parts.netloc.rsplit("@", 1)[-1]
+            qbit_urls.append(urlunsplit((parts.scheme, netloc, parts.path, "", "")))
+        out["_qbit_urls"] = qbit_urls
         # The two settings that ARE the credential. Removed by name rather
         # than by a leading-underscore rule, because the other underscore keys
         # (`_prowlarr_url`, `_romm_url`, `_stream_url`) are deliberately shown
@@ -2226,7 +2342,8 @@ class ROMarr:
             if not ok:
                 failure_detail = (client.last_error or
                                   "could not select the exact file")
-        elif (supports_torrent_file and callable(local_fetch)
+        elif ((supports_torrent_file or getattr(client, "magnet_only", False))
+                and callable(local_fetch)
                 and local_fetch(pick.download_url)):
             # Prowlarr's authenticated URL is LAN-only and contains its API
             # key. Fetch it here, then upload only the .torrent bytes to the
@@ -2243,15 +2360,19 @@ class ROMarr:
                 # to the client instead of treating it as torrent bytes.
                 if isinstance(torrent, str):
                     ok = client.add(torrent)
-                else:
+                elif supports_torrent_file:
                     ok = client.add_torrent_file(torrent)
-                download_id = client.last_job_id if ok else ""
+                else:
+                    ok = False
+                download_id = (getattr(client, "last_job_id", "") or "") if ok else ""
                 release_fault = False
                 if not ok:
                     client_label = getattr(client, "display_name", getattr(client, "name", "Download client"))
                     failure_detail = (
-                        getattr(client, "last_error", "")
-                        or f"{client_label} did not confirm the uploaded torrent"
+                        f"{client_label} requires a magnet; Prowlarr returned a torrent file"
+                        if not isinstance(torrent, str) and not supports_torrent_file
+                        else (getattr(client, "last_error", "")
+                              or f"{client_label} did not confirm the torrent")
                     )
         else:
             ok, download_id = hand_off_with_id(client, pick.download_url,
@@ -2821,6 +2942,26 @@ class ROMarr:
             )
             self.reload_clients()
             return result
+
+    def scan_installation(self, path: Path) -> None:
+        """Apply enabled malware scanners before publishing an emulator package."""
+        findings, _ = scanners.scan(self.store.settings, self._env, path)
+        if findings:
+            raise ValueError("Emulator package was refused by an enabled malware scanner")
+
+    def security_inspect(self, path: str, engine: str) -> dict:
+        """Send one explicitly chosen shared file to the user's MWM or Arkana lab."""
+        target = Path(path)
+        # Inspection accepts the same paths as Manual Import and never runs samples.
+        if not target.is_file() or target.is_symlink():
+            raise ValueError("Choose a regular file visible to both ROMarr and MWM")
+        commands = {"mwm": "lab_analyze", "arkana": "arkana_analyze"}
+        if engine not in commands:
+            raise ValueError("Choose MWM or Arkana")
+        report = scanners.mwm_call(self.store.settings, self._env, commands[engine],
+                                   {"path": str(target.resolve())})
+        return {"engine": engine, "report": report,
+                "note": "Arkana jobs can be followed in MWM's Malware Lab."}
 
     def ggrequestz(self) -> dict:
         """Whether GG Requestz is reachable, the way Seerr reports Radarr.
@@ -3424,6 +3565,48 @@ class ROMarr:
         except OSError as err:
             log.warning("could not roll back %s: %s", destination, err)
 
+    @contextmanager
+    def _scanned_manual_source(self, source: Path, platform):
+        """Scan private copies of every selected loose disc member before import."""
+        import shutil
+        import tempfile
+        from .library import _PathSource
+        enabled = any(self.store.settings.get(key) for key in (
+            "clamav_enabled", "scanner_defender_enabled", "scanner_mwm_enabled",
+            "scanner_vt_enabled"))
+        if not enabled:
+            yield source, None
+            return
+        with tempfile.TemporaryDirectory(prefix=".manual-scan-", dir=self.store.path.parent) as scratch:
+            stage = Path(scratch) / source.name
+            if source.suffix.lower() in (".cue", ".gdi") and source.is_file():
+                origin = _PathSource(source.parent)
+                chosen = next((group for group in origin.rom_sets(platform)
+                               if group.primary == source.name), None)
+                if chosen is None:
+                    raise ValueError("Could not resolve the selected disc set")
+                stage.mkdir()
+                root = source.parent.resolve()
+                for member in chosen.members:
+                    original = source.parent / member
+                    if not original.resolve().is_relative_to(root) or original.is_symlink():
+                        raise ValueError("Disc member escapes its source directory")
+                    destination = stage / member
+                    if not destination.resolve().is_relative_to(stage.resolve()):
+                        raise ValueError("Disc member escapes its staging directory")
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(original, destination)
+            elif source.is_dir():
+                if source.is_symlink() or any(p.is_symlink() for p in source.rglob("*")):
+                    raise ValueError("Manual scan source cannot contain symbolic links")
+                shutil.copytree(source, stage)
+            else:
+                if source.is_symlink():
+                    raise ValueError("Manual scan source cannot be a symbolic link")
+                shutil.copyfile(source, stage)
+            refusal = self._virus_check(stage, source.name, platform, None)
+            yield stage, refusal
+
     def adopt(self, path: str, platform_slug: str = "", *,
               force: bool = False, require_verified: bool = False) -> dict:
         """Import one file the operator picked out of a manual-import scan.
@@ -3472,7 +3655,6 @@ class ROMarr:
         from .sniff import disagrees_with
 
         mismatch = disagrees_with(source, platform.slug)
-
         target = self.library_for(platform.slug)
         if target is None:
             return {"ok": False,
@@ -3481,14 +3663,24 @@ class ROMarr:
         label = target_cfg.get("name") or getattr(target_lib, "name", "library")
         target_folders = self.platform_folders(target_cfg)
 
-        outcomes = import_rom(source, platform, self.library_root(target_cfg),
-                              dats=self.dats,
-                              require_verified=require_verified,
-                              rename=bool(self.store.settings.get("rename_on_import", True)),
-                prefer_hardlinks=bool(self.store.settings.get("prefer_hardlinks", False)),
-                              layout=self.library_layout(target_cfg),
-                              translation=is_translation(source.name),
-                              platform_folders=target_folders)
+        try:
+            with self._scanned_manual_source(source, platform) as (staged_source, scan_refusal):
+                if scan_refusal is not None:
+                    return {**scan_refusal, "refused": [{
+                        "file": source.name, "reason": scan_refusal["reason"],
+                        "needs_force": False}], "imported": []}
+                outcomes = import_rom(staged_source, platform, self.library_root(target_cfg),
+                                      dats=self.dats,
+                                      require_verified=require_verified,
+                                      rename=bool(self.store.settings.get("rename_on_import", True)),
+                        prefer_hardlinks=staged_source == source and bool(self.store.settings.get("prefer_hardlinks", False)),
+                                      layout=self.library_layout(target_cfg),
+                                      translation=is_translation(source.name),
+                                      platform_folders=target_folders)
+        except (OSError, ValueError) as err:
+            reason = f"could not prepare scanned import: {err}"
+            return {"ok": False, "reason": reason, "imported": [], "refused": [
+                {"file": source.name, "reason": reason, "needs_force": False}]}
 
         imported, refused = [], []
         for outcome in outcomes:
@@ -7019,22 +7211,20 @@ class ROMarr:
         infection marks the row, as the release's fault, so failed download
         handling replaces it.
         """
-        if not self.store.settings.get("clamav_enabled"):
+        enabled = any(self.store.settings.get(key) for key in (
+            "clamav_enabled", "scanner_defender_enabled", "scanner_mwm_enabled",
+            "scanner_vt_enabled"))
+        if not enabled:
             return None
-        address = str(self.store.settings.get("clamav_address") or "").strip()
         try:
-            if not address:
-                raise clamav.ScanUnavailable("ClamAV is enabled but has no address")
-            found, too_large = clamav.scan(address, path)
-        except clamav.ScanUnavailable as err:
+            found, _ = scanners.scan(self.store.settings, self._env, path)
+        except (scanners.ScanUnavailable, OSError) as err:
             log.warning("%s waits for a virus scan: %s", name, err)
-            return {"name": name, "ok": False, "reason": f"waiting for ClamAV: {err}"}
-        for file in too_large:
-            log.warning("ClamAV refused %s as larger than its StreamMaxLength; "
-                        "imported unscanned", file)
+            label = "ClamAV" if self.store.settings.get("clamav_enabled") else "malware scanner"
+            return {"name": name, "ok": False, "reason": f"waiting for {label}: {err}"}
         if not found:
             return None
-        detail = "ClamAV: " + "; ".join(
+        detail = "Malware scan: " + "; ".join(
             f"{f.signature} in {Path(f.path).name}" for f in found)
         self.store.record(Event(kind="failed", game=name, platform=platform.slug,
                                 detail=detail))
@@ -7949,6 +8139,46 @@ def make_handler(service: ROMarr):
                 return self._json(200, {"types": CLIENT_TYPES})
             if route.path == "/api/v1/downloadclient/browser":
                 return self._json(200, service.browser_capability())
+            if route.path == "/api/v1/emulators":
+                try:
+                    result = EmulatorHub(service.store.path.parent).catalog(
+                        (query.get("q") or [""])[0], int((query.get("offset") or ["0"])[0]),
+                        int((query.get("limit") or ["60"])[0]))
+                    return self._json(200, result)
+                except (ValueError, OSError):
+                    return self._json(400, {"error": "Could not load this catalog page"})
+            if route.path == "/api/v1/emulators/resources":
+                try:
+                    return self._json(200, resource_catalog(
+                        (query.get("q") or [""])[0], int((query.get("offset") or ["0"])[0]),
+                        int((query.get("limit") or ["60"])[0])))
+                except (ValueError, OSError):
+                    return self._json(400, {"error": "Could not load this resource page"})
+            if route.path == "/api/v1/emulators/forks":
+                try:
+                    result = EmulatorHub(service.store.path.parent).inventory.forks(
+                        (query.get("id") or [""])[0], int((query.get("page") or ["1"])[0]))
+                    return self._json(200, result)
+                except (ValueError, OSError, requests.RequestException):
+                    return self._json(400, {"error": "Could not load this fork page. Open the source repository to browse forks."})
+            if route.path in ("/api/v1/emulators/cores", "/api/v1/emulators/cores/readiness"):
+                try:
+                    core_hub = CoreHub(service.store.path.parent)
+                    if route.path.endswith("/readiness"):
+                        result = core_hub.readiness((query.get("id") or [""])[0])
+                    else:
+                        result = core_hub.catalog((query.get("q") or [""])[0],
+                            int((query.get("offset") or ["0"])[0]), int((query.get("limit") or ["60"])[0]))
+                    return self._json(200, result)
+                except (ValueError, OSError):
+                    return self._json(400, {"error": "Could not load this core"})
+            if route.path == "/api/v1/emulators/release":
+                try:
+                    result = EmulatorHub(service.store.path.parent).release(
+                        (query.get("id") or [""])[0])
+                    return self._json(200, result)
+                except (ValueError, requests.RequestException):
+                    return self._json(400, {"error": "Could not check this upstream release. Use its downloads page."})
             if route.path == "/api/v1/downloadclient/mdm":
                 return self._json(200, service.mdm_capability())
             if route.path == "/metrics":
@@ -9238,6 +9468,34 @@ def make_handler(service: ROMarr):
                 # filled back in, so Test reflects what Save would store.
                 existing = service.store.get_item("download_clients", body.get("id"))                     if body.get("id") else None
                 return self._json(200, service.test_client(merge_secrets(dict(body), existing)))
+            if route.path in ("/api/v1/emulators/cores/install", "/api/v1/emulators/cores/configure"):
+                try:
+                    core_hub = CoreHub(service.store.path.parent)
+                    result = (core_hub.configure() if route.path.endswith("/configure") else
+                              core_hub.install(str(body.get("id") or ""), scanner=service.scan_installation))
+                    return self._json(200, result)
+                except (ValueError, OSError, requests.RequestException, scanners.ScanUnavailable) as err:
+                    log.warning("Core installation failed: %s", type(err).__name__)
+                    return self._json(400, {"error": str(err) if isinstance(err, (ValueError, scanners.ScanUnavailable))
+                                           else "Could not install this core"})
+            if route.path == "/api/v1/emulators/install":
+                try:
+                    emulator_hub = EmulatorHub(service.store.path.parent)
+                    result = emulator_hub.install(str(body.get("id") or ""),
+                                         str(body.get("asset") or ""),
+                                         str(body.get("sha256") or ""),
+                                         scanner=service.scan_installation)
+                    return self._json(200, result)
+                except (ValueError, OSError, requests.RequestException,
+                        scanners.ScanUnavailable) as err:
+                    log.warning("Emulator installation failed: %s", type(err).__name__)
+                    return self._json(400, {"error": str(err) if isinstance(err, (ValueError, scanners.ScanUnavailable)) else "Emulator installation failed"})
+            if route.path == "/api/v1/security/inspect":
+                try:
+                    return self._json(200, service.security_inspect(
+                        str(body.get("path") or ""), str(body.get("engine") or "")))
+                except (ValueError, OSError, scanners.ScanUnavailable) as err:
+                    return self._json(400, {"error": str(err)})
             if route.path == "/api/v1/downloadclient/mdm/install":
                 try:
                     return self._json(200, service.mdm_install(body.get("version", "")))

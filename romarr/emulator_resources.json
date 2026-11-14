@@ -1,0 +1,817 @@
+{
+ "verified_date": "2026-11-13",
+ "items": [
+  {
+   "id": "resource-d989152efe4b5f68",
+   "name": "Emulation General Wiki",
+   "url": "https://emulation.gametechwiki.com/index.php/Main_Page",
+   "category": "reference",
+   "description": "System-by-system emulator comparisons and setup references. The wiki may require a browser to open.",
+   "sources": [
+    {
+     "source": "https://emulation.gametechwiki.com/index.php/Main_Page",
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
+    }
+   ],
+   "needs_plugin": false
+  },
+  {
+   "id": "resource-5f376f18fdfcfb26",
+   "name": "The Emulator Zone",
+   "url": "https://www.emulator-zone.com/",
+   "category": "reference",
+   "description": "Emulator downloads, system guides and a community forum.",
+   "sources": [
+    {
+     "source": "https://www.emulator-zone.com/",
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
+    }
+   ],
+   "needs_plugin": false
+  },
+  {
+   "id": "resource-9c3d3a7b7bb723fc",
+   "name": "Zophar's Domain",
+   "url": "https://www.zophar.net/",
+   "category": "reference",
+   "description": "Emulation history, utilities, music, cheats and save-state resources.",
+   "sources": [
+    {
+     "source": "https://www.zophar.net/",
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
+    }
+   ],
+   "needs_plugin": false
+  },
+  {
+   "id": "resource-e5b48db8f9d60ec5",
+   "name": "SSega",
+   "url": "https://ssega.com/",
+   "category": "browser",
+   "description": "Browser-based Sega Genesis / Mega Drive play and netplay rooms.",
+   "sources": [
+    {
+     "source": "https://ssega.com/",
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
+    }
+   ],
+   "needs_plugin": false
+  },
+  {
+   "id": "resource-9eba8066ec60047a",
+   "name": "Classic games online",
+   "url": "https://playclassic.games/",
+   "category": "browser",
+   "description": "Browser play for DOS and classic console titles.",
+   "sources": [
+    {
+     "source": "https://playclassic.games/",
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
+    }
+   ],
+   "needs_plugin": false
+  },
+  {
+   "id": "resource-16196c333df103f6",
+   "name": "ClassicReload",
+   "url": "https://classicreload.com/",
+   "category": "browser",
+   "description": "Browser-based preservation of older games and software.",
+   "sources": [
+    {
+     "source": "https://classicreload.com/",
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
+    }
+   ],
+   "needs_plugin": false
+  },
+  {
+   "id": "resource-a409bfdc300380b5",
+   "name": "DOS_deck",
+   "url": "https://dosdeck.com/",
+   "category": "browser",
+   "description": "DOS browser player with controller support. Its project notes explain the Internet Archive-based game offering.",
+   "sources": [
+    {
+     "source": "https://dosdeck.com/about/",
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
+    }
+   ],
+   "needs_plugin": false
+  },
+  {
+   "id": "resource-56ae4496f8a4a452",
+   "name": "EmuOS",
+   "url": "https://emupedia.net/beta/emuos/",
+   "category": "browser",
+   "description": "Emupedia's browser-based desktop environment and game demonstrations.",
+   "sources": [
+    {
+     "source": "https://github.com/Emupedia/EmuOS/blob/main/README.md",
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
+    }
+   ],
+   "needs_plugin": false
+  },
+  {
+   "id": "resource-e355e5cefc5439e0",
+   "name": "Free 80s Arcade",
+   "url": "https://www.free80sarcade.com/",
+   "category": "browser",
+   "description": "Browser arcade and classic-console game portal.",
+   "sources": [
+    {
+     "source": "https://www.free80sarcade.com/",
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
+    }
+   ],
+   "needs_plugin": false
+  },
+  {
+   "id": "resource-3acbf1997c080515",
+   "name": "GBA Online",
+   "url": "https://gba.js.org/",
+   "category": "browser",
+   "description": "Browser-based Game Boy Advance player.",
+   "sources": [
+    {
+     "source": "https://gba.js.org/",
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
+    }
+   ],
+   "needs_plugin": false
+  },
+  {
+   "id": "resource-40c3d2b9ab50bd5b",
+   "name": "My Abandonware",
+   "url": "https://www.myabandonware.com/",
+   "category": "browser",
+   "description": "Older PC and console game listings, including browser-playable titles.",
+   "sources": [
+    {
+     "source": "https://www.myabandonware.com/",
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
+    }
+   ],
+   "needs_plugin": false
+  },
+  {
+   "id": "resource-d1860cca688f4a12",
+   "name": "Play Retro Games Online",
+   "url": "",
+   "category": "browser",
+   "description": "Named browser-play portal; the supplied title does not establish one unique destination. Current URL unverified; retained from your list.",
+   "sources": [
+    {
+     "source": "User-provided Archive of Knowledge list",
+     "discovery": "Named in the user's pasted list; destination not established"
+    }
+   ],
+   "needs_plugin": false
+  },
+  {
+   "id": "resource-4ce434c8dbe60d8c",
+   "name": "RetroGames",
+   "url": "",
+   "category": "browser",
+   "description": "Named browser-play portal; several unrelated sites use this title. Current URL unverified; retained from your list.",
+   "sources": [
+    {
+     "source": "User-provided Archive of Knowledge list",
+     "discovery": "Named in the user's pasted list; destination not established"
+    }
+   ],
+   "needs_plugin": false
+  },
+  {
+   "id": "resource-807d049ac34867b7",
+   "name": "Retro Games",
+   "url": "",
+   "category": "browser",
+   "description": "Second browser-play entry from the supplied list; its destination cannot be distinguished from similarly named sites. Current URL unverified; retained from your list.",
+   "sources": [
+    {
+     "source": "User-provided Archive of Knowledge list",
+     "discovery": "Named in the user's pasted list; destination not established"
+    }
+   ],
+   "needs_plugin": false
+  },
+  {
+   "id": "resource-5844b627a902b4c7",
+   "name": "SEGA Online Emulator",
+   "url": "",
+   "category": "browser",
+   "description": "Named Sega browser-player resource; the supplied title does not establish one unique destination. Current URL unverified; retained from your list.",
+   "sources": [
+    {
+     "source": "User-provided Archive of Knowledge list",
+     "discovery": "Named in the user's pasted list; destination not established"
+    }
+   ],
+   "needs_plugin": false
+  },
+  {
+   "id": "resource-62228242f2006858",
+   "name": "SteamDeckPirates / Alt",
+   "url": "",
+   "category": "reference",
+   "description": "Named Steam Deck community resource; the alternate link was absent from the pasted list. Current URL unverified; retained from your list.",
+   "sources": [
+    {
+     "source": "User-provided Archive of Knowledge list",
+     "discovery": "Named in the user's pasted list; destination not established"
+    }
+   ],
+   "needs_plugin": false
+  },
+  {
+   "id": "resource-96e3994bec1ea851",
+   "name": "Axekin",
+   "url": "https://www.axekin.com/",
+   "category": "source",
+   "description": "External game-source directory. A compatible ROM Hub plugin is needed for automated searches.",
+   "sources": [
+    {
+     "source": "https://champagne.pages.dev/gaming/emulation-roms",
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
+    }
+   ],
+   "needs_plugin": true
+  },
+  {
+   "id": "resource-2a4ed107f335298d",
+   "name": "NXBrew",
+   "url": "",
+   "category": "source",
+   "description": "Named Switch source. Multiple current domains use this name; a canonical destination has not been established. Current URL unverified; retained from your list.",
+   "sources": [
+    {
+     "source": "User-provided Archive of Knowledge list",
+     "discovery": "Named in the user's pasted list; destination not established"
+    }
+   ],
+   "needs_plugin": true
+  },
+  {
+   "id": "resource-8952211bae9a4e83",
+   "name": "Rom Hustler",
+   "url": "https://romhustler.org/",
+   "category": "source",
+   "description": "External console-game directory; account or premium requirements can vary by download.",
+   "sources": [
+    {
+     "source": "https://romhustler.org/",
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
+    }
+   ],
+   "needs_plugin": true
+  },
+  {
+   "id": "resource-71592b6629b825ab",
+   "name": "ROMhacking",
+   "url": "https://www.romhacking.net/",
+   "category": "reference",
+   "description": "ROM-hacking projects, patches and fan-translation reference. Site access and archive availability can vary.",
+   "sources": [
+    {
+     "source": "https://www.romhacking.net/",
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
+    }
+   ],
+   "needs_plugin": false
+  },
+  {
+   "id": "resource-31fd550649832350",
+   "name": "RomUlation",
+   "url": "https://www.romulation.org/",
+   "category": "source",
+   "description": "External console-game directory with account and premium options.",
+   "sources": [
+    {
+     "source": "https://www.romulation.org/",
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
+    }
+   ],
+   "needs_plugin": true
+  },
+  {
+   "id": "resource-ada294ebe267a577",
+   "name": "Best NES Games",
+   "url": "",
+   "category": "source",
+   "description": "Named 180-game collection. The list contained no archive identifier or unique download URL. Current URL unverified; retained from your list.",
+   "sources": [
+    {
+     "source": "User-provided Archive of Knowledge list",
+     "discovery": "Named in the user's pasted list; destination not established"
+    }
+   ],
+   "needs_plugin": true
+  },
+  {
+   "id": "resource-0fea87c4dd31a8e1",
+   "name": "BlueRoms",
+   "url": "",
+   "category": "source",
+   "description": "Named torrent source. Check the configured Prowlarr or ROM Hub provider for its current supported address. Current URL unverified; retained from your list.",
+   "sources": [
+    {
+     "source": "User-provided Archive of Knowledge list",
+     "discovery": "Named in the user's pasted list; destination not established"
+    }
+   ],
+   "needs_plugin": true
+  },
+  {
+   "id": "resource-c4357dd6b704c47a",
+   "name": "ConsoleRoms",
+   "url": "https://www.consoleroms.com/",
+   "category": "source",
+   "description": "External console-game and emulator directory.",
+   "sources": [
+    {
+     "source": "https://www.consoleroms.com/contact-us",
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
+    }
+   ],
+   "needs_plugin": true
+  },
+  {
+   "id": "resource-210ad0a49b44e4fa",
+   "name": "Cylum's Sega Master System ROM Collection",
+   "url": "",
+   "category": "source",
+   "description": "Named curated Sega collection. A specific archive identifier was not provided. Current URL unverified; retained from your list.",
+   "sources": [
+    {
+     "source": "User-provided Archive of Knowledge list",
+     "discovery": "Named in the user's pasted list; destination not established"
+    }
+   ],
+   "needs_plugin": true
+  },
+  {
+   "id": "resource-c7202f5e861d41c9",
+   "name": "Emu-Land",
+   "url": "https://www.emu-land.net/en/",
+   "category": "source",
+   "description": "Emulator news and classic-system game listings.",
+   "sources": [
+    {
+     "source": "https://www.emu-land.net/en/",
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
+    }
+   ],
+   "needs_plugin": true
+  },
+  {
+   "id": "resource-0ee0dc563f7e385b",
+   "name": "Emu Games",
+   "url": "",
+   "category": "source",
+   "description": "Named game-source directory. The supplied name does not establish a unique current destination. Current URL unverified; retained from your list.",
+   "sources": [
+    {
+     "source": "User-provided Archive of Knowledge list",
+     "discovery": "Named in the user's pasted list; destination not established"
+    }
+   ],
+   "needs_plugin": true
+  },
+  {
+   "id": "resource-c5fab953d6faf769",
+   "name": "EpicRoms",
+   "url": "",
+   "category": "source",
+   "description": "Named game-source directory. Its current canonical URL has not been independently established. Current URL unverified; retained from your list.",
+   "sources": [
+    {
+     "source": "User-provided Archive of Knowledge list",
+     "discovery": "Named in the user's pasted list; destination not established"
+    }
+   ],
+   "needs_plugin": true
+  },
+  {
+   "id": "resource-5fecd9cdae4aa39b",
+   "name": "FitGirl Repacks",
+   "url": "",
+   "category": "source",
+   "description": "Named PC-game repack source. The pasted list omitted its URL; no destination is asserted here. Current URL unverified; retained from your list.",
+   "sources": [
+    {
+     "source": "User-provided Archive of Knowledge list",
+     "discovery": "Named in the user's pasted list; destination not established"
+    }
+   ],
+   "needs_plugin": true
+  },
+  {
+   "id": "resource-6ced3e34ed5f073e",
+   "name": "Lategames",
+   "url": "",
+   "category": "source",
+   "description": "Named ROM source. The similarly named browser-game site does not establish that this is the intended resource. Current URL unverified; retained from your list.",
+   "sources": [
+    {
+     "source": "User-provided Archive of Knowledge list",
+     "discovery": "Named in the user's pasted list; destination not established"
+    }
+   ],
+   "needs_plugin": true
+  },
+  {
+   "id": "resource-a39929b175268402",
+   "name": "NswRom",
+   "url": "",
+   "category": "source",
+   "description": "Named Switch source; its current canonical destination has not been established. Current URL unverified; retained from your list.",
+   "sources": [
+    {
+     "source": "User-provided Archive of Knowledge list",
+     "discovery": "Named in the user's pasted list; destination not established"
+    }
+   ],
+   "needs_plugin": true
+  },
+  {
+   "id": "resource-5a797f0d2ee84a55",
+   "name": "r/Roms Megathread / Alt",
+   "url": "https://r-roms.github.io/",
+   "category": "source",
+   "description": "Community source index organized by platform, with archive-access and file-format notes.",
+   "sources": [
+    {
+     "source": "https://r-roms.github.io/",
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
+    }
+   ],
+   "needs_plugin": true
+  },
+  {
+   "id": "resource-a0036a610282b6ca",
+   "name": "Retro Roms \"Best\" Set",
+   "url": "",
+   "category": "source",
+   "description": "Named curated archive set. A current accessible item could not be verified. Current URL unverified; retained from your list.",
+   "sources": [
+    {
+     "source": "User-provided Archive of Knowledge list",
+     "discovery": "Named in the user's pasted list; destination not established"
+    }
+   ],
+   "needs_plugin": true
+  },
+  {
+   "id": "resource-35e036c91141cdc7",
+   "name": "Retrostic",
+   "url": "",
+   "category": "source",
+   "description": "Named ROM directory. Current destination could not be verified during this review. Current URL unverified; retained from your list.",
+   "sources": [
+    {
+     "source": "User-provided Archive of Knowledge list",
+     "discovery": "Named in the user's pasted list; destination not established"
+    }
+   ],
+   "needs_plugin": true
+  },
+  {
+   "id": "resource-d2f0f1a5ca1fea18",
+   "name": "Romheaven",
+   "url": "https://romheaven.com/",
+   "category": "source",
+   "description": "External preservation-oriented game and ROM-hack directory.",
+   "sources": [
+    {
+     "source": "https://romheaven.com/",
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
+    }
+   ],
+   "needs_plugin": true
+  },
+  {
+   "id": "resource-80d5cf06848919c9",
+   "name": "RomsHQ",
+   "url": "https://romshq.com/",
+   "category": "source",
+   "description": "External game-source directory. A listing here does not establish download availability or emulator compatibility.",
+   "sources": [
+    {
+     "source": "https://romshq.com/",
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
+    }
+   ],
+   "needs_plugin": true
+  },
+  {
+   "id": "resource-897269774fd2f953",
+   "name": "ROMSIM",
+   "url": "https://romsim.com/",
+   "category": "source",
+   "description": "External game-source directory; use the site's own access and file information.",
+   "sources": [
+    {
+     "source": "https://romsim.com/contact-us/",
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
+    }
+   ],
+   "needs_plugin": true
+  },
+  {
+   "id": "resource-7325edd266c365df",
+   "name": "Romslab",
+   "url": "https://romslab.com/",
+   "category": "source",
+   "description": "External game-source directory. Source availability and access conditions can change.",
+   "sources": [
+    {
+     "source": "https://romslab.com/faqs/",
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
+    }
+   ],
+   "needs_plugin": true
+  },
+  {
+   "id": "resource-3c0e8c7f5ddd7570",
+   "name": "Romspedia",
+   "url": "",
+   "category": "source",
+   "description": "Named ROM directory. Its current canonical URL was not verified during this review. Current URL unverified; retained from your list.",
+   "sources": [
+    {
+     "source": "User-provided Archive of Knowledge list",
+     "discovery": "Named in the user's pasted list; destination not established"
+    }
+   ],
+   "needs_plugin": true
+  },
+  {
+   "id": "resource-bd33e548dd10b703",
+   "name": "ROMSPURE.CC",
+   "url": "https://romspure.cc/",
+   "category": "source",
+   "description": "External source named with this exact domain in the supplied list. Live availability was not verified.",
+   "sources": [
+    {
+     "source": "User-provided Archive of Knowledge list names ROMSPURE.CC explicitly",
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
+    }
+   ],
+   "needs_plugin": true
+  },
+  {
+   "id": "resource-bef57c03d47abebe",
+   "name": "TAODUNG",
+   "url": "",
+   "category": "source",
+   "description": "Named Switch source. Its current canonical URL was not verified during this review. Current URL unverified; retained from your list.",
+   "sources": [
+    {
+     "source": "User-provided Archive of Knowledge list",
+     "discovery": "Named in the user's pasted list; destination not established"
+    }
+   ],
+   "needs_plugin": true
+  },
+  {
+   "id": "resource-f969d79b441dccac",
+   "name": "TechToRoms",
+   "url": "",
+   "category": "source",
+   "description": "Named ROM directory. Its current canonical URL was not verified during this review. Current URL unverified; retained from your list.",
+   "sources": [
+    {
+     "source": "User-provided Archive of Knowledge list",
+     "discovery": "Named in the user's pasted list; destination not established"
+    }
+   ],
+   "needs_plugin": true
+  },
+  {
+   "id": "resource-5b8577ce6c378093",
+   "name": "Vimm's Lair",
+   "url": "https://vimm.net/",
+   "category": "source",
+   "description": "Classic-system preservation resource. Individual game availability can change.",
+   "sources": [
+    {
+     "source": "https://champagne.pages.dev/gaming/emulation-roms",
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
+    }
+   ],
+   "needs_plugin": true
+  },
+  {
+   "id": "resource-ac89d76e7c21ba33",
+   "name": "Wowroms",
+   "url": "",
+   "category": "source",
+   "description": "Named ROM directory. Its current canonical URL was not verified during this review. Current URL unverified; retained from your list.",
+   "sources": [
+    {
+     "source": "User-provided Archive of Knowledge list",
+     "discovery": "Named in the user's pasted list; destination not established"
+    }
+   ],
+   "needs_plugin": true
+  },
+  {
+   "id": "resource-2fb34748ba67525f",
+   "name": "Ziperto",
+   "url": "",
+   "category": "source",
+   "description": "Named game-source directory. Current canonical access could not be verified during this review. Current URL unverified; retained from your list.",
+   "sources": [
+    {
+     "source": "User-provided Archive of Knowledge list",
+     "discovery": "Named in the user's pasted list; destination not established"
+    }
+   ],
+   "needs_plugin": true
+  },
+  {
+   "id": "resource-5cc67078cb9a6a28",
+   "name": "GameHacking",
+   "url": "https://gamehacking.org/",
+   "category": "reference",
+   "description": "Single-player cheat-code database and game-modification guides.",
+   "sources": [
+    {
+     "source": "https://gamehacking.org/",
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
+    }
+   ],
+   "needs_plugin": false
+  },
+  {
+   "id": "resource-853513976c9b164d",
+   "name": "GameFAQs Saves",
+   "url": "https://gamefaqs.gamespot.com/",
+   "category": "reference",
+   "description": "Game guides and user-contributed saves; open the specific game's save section.",
+   "sources": [
+    {
+     "source": "https://gamefaqs.gamespot.com/",
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
+    }
+   ],
+   "needs_plugin": false
+  },
+  {
+   "id": "resource-8b5aa27841f2bc3b",
+   "name": "Save Game World",
+   "url": "https://www.savegameworld.com/",
+   "category": "reference",
+   "description": "User-provided game saves and save-file help for several platforms.",
+   "sources": [
+    {
+     "source": "https://www.savegameworld.com/",
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
+    }
+   ],
+   "needs_plugin": false
+  },
+  {
+   "id": "resource-d7a0944b03a71e01",
+   "name": "PCSX2 Compatibility List",
+   "url": "https://pcsx2.net/compat/",
+   "category": "reference",
+   "description": "PCSX2's official per-game compatibility reports.",
+   "sources": [
+    {
+     "source": "https://pcsx2.net/compat/",
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
+    }
+   ],
+   "needs_plugin": false
+  },
+  {
+   "id": "resource-1d2168d38ed1fea1",
+   "name": "Dolphin Compatibility List",
+   "url": "https://dolphin-emu.org/compat/",
+   "category": "reference",
+   "description": "Dolphin's official GameCube and Wii compatibility reports.",
+   "sources": [
+    {
+     "source": "https://dolphin-emu.org/compat/",
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
+    }
+   ],
+   "needs_plugin": false
+  },
+  {
+   "id": "resource-500157a90e9224d2",
+   "name": "RPCS3 Compatibility List",
+   "url": "https://rpcs3.net/compatibility",
+   "category": "reference",
+   "description": "RPCS3's official per-game compatibility reference; browser access may be required.",
+   "sources": [
+    {
+     "source": "https://rpcs3.net/compatibility",
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
+    }
+   ],
+   "needs_plugin": false
+  },
+  {
+   "id": "resource-5e80ecf599304a4a",
+   "name": "RetroArch BIOS Pack",
+   "url": "https://docs.libretro.com/library/bios/",
+   "category": "reference",
+   "description": "The supplied BIOS resource is represented by libretro's official firmware documentation, not a bundled BIOS download.",
+   "sources": [
+    {
+     "source": "https://docs.libretro.com/library/bios/",
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
+    }
+   ],
+   "needs_plugin": false
+  },
+  {
+   "id": "resource-c453cd5c9189f68d",
+   "name": "No-Intro",
+   "url": "https://no-intro.org/",
+   "category": "reference",
+   "description": "Cartridge and digital-game preservation metadata and DAT checksum references.",
+   "sources": [
+    {
+     "source": "https://no-intro.org/",
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
+    }
+   ],
+   "needs_plugin": false
+  },
+  {
+   "id": "resource-de1a724f895d29d5",
+   "name": "Redump",
+   "url": "http://redump.org/",
+   "category": "reference",
+   "description": "Optical-disc preservation database and checksum reference; live availability may vary.",
+   "sources": [
+    {
+     "source": "http://redump.org/",
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
+    }
+   ],
+   "needs_plugin": false
+  },
+  {
+   "id": "resource-388dec691f7e58c4",
+   "name": "RetroAchievements",
+   "url": "https://retroachievements.org/",
+   "category": "reference",
+   "description": "Achievement sets and emulator-integration information for supported retro games.",
+   "sources": [
+    {
+     "source": "https://retroachievements.org/",
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
+    }
+   ],
+   "needs_plugin": false
+  },
+  {
+   "id": "resource-58ac3f7a216b5f1f",
+   "name": "All Purpose Torrents",
+   "url": "",
+   "category": "reference",
+   "description": "Named general torrent-guide section. The pasted list did not identify a guide or destination URL. Current URL unverified; retained from your list.",
+   "sources": [
+    {
+     "source": "User-provided Archive of Knowledge list",
+     "discovery": "Named in the user's pasted list; destination not established"
+    }
+   ],
+   "needs_plugin": false
+  },
+  {
+   "id": "resource-a5b412001e4e26e0",
+   "name": "MiNERVA Archive",
+   "url": "https://minerva-archive.org/",
+   "category": "source",
+   "description": "ROM Hub source for searching available archive collections and selecting torrent content.",
+   "sources": [
+    {
+     "source": "https://github.com/BlizzHacker/rom-hub/tree/main/plugins-dev/minerva-archive",
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
+    }
+   ],
+   "needs_plugin": true
+  },
+  {
+   "id": "resource-1a0e1cedc680c901",
+   "name": "Internet Archive",
+   "url": "https://archive.org/",
+   "category": "source",
+   "description": "Archive collection source. Use the ROM Hub Archive.org plugin; some items require an account.",
+   "sources": [
+    {
+     "source": "https://github.com/BlizzHacker/rom-hub/tree/main/plugins-dev/archive-org",
+     "discovery": "User-requested resource; destination identified from the cited source. Availability may vary."
+    }
+   ],
+   "needs_plugin": true
+  }
+ ]
+}

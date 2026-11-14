@@ -149,27 +149,32 @@ def test_stall_timeout_zero_means_no_age_check():
 
 # -- the detached script ------------------------------------------------------
 
-def test_the_script_is_fail_stop_and_ff_only():
+def test_the_script_is_fail_stop_and_ff_only(monkeypatch):
+    """Source updates retain their expected branch and never reset hard."""
+    from pathlib import Path
+
     env = selfupdate.Environment(kind="git", repo="/opt/romarr",
                                  python="/opt/romarr/.venv/bin/python",
-                                 branch="main", commit="abc1234",
+                                 branch="main", commit="a" * 40,
                                  service="romarr")
-    script = selfupdate.build_script(env, "refs/tags/v1.2.0",
-                                     "/opt/romarr/.romarr-selfupdate.log")
+    state = {"repo": Path("/opt/romarr"), "gitdir": Path("/opt/romarr/.git"),
+             "python": env.python, "branch": env.branch, "commit": env.commit,
+             "remote": "https://github.com/BlizzHacker/romarr.git",
+             "service": "romarr.service", "target": "refs/tags/v1.2.0",
+             "health_url": "http://127.0.0.1:6868/api/health"}
+    monkeypatch.setattr(selfupdate.update_safety, "preflight",
+                        lambda e, target: state)
+    script = selfupdate.build_script(
+        env, "refs/tags/v1.2.0", "/opt/romarr/.git/romarr-selfupdate.log")
     assert script.startswith("#!/bin/sh")
-    assert "set -e" in script                 # fail-stop
-    assert "--ff-only" in script              # never create a merge/divergence
-    assert "git fetch --tags origin" in script
-    assert "refs/tags/v1.2.0" in script
-    assert "systemctl restart romarr" in script
-    assert "requirements.txt" in script       # deps move with the code
-    assert "pre-update commit" in script      # the rollback handle
-    # Deps install into the interpreter that RUNS romarr (the venv), and a
-    # failed install rolls the checkout back and stops before restarting --
-    # coming up on new code with missing imports is worse than staying put.
-    assert "/opt/romarr/.venv/bin/python" in script and "-m pip install" in script
-    assert "git reset --hard" in script
-    assert "NOT restarting" in script
+    assert "set -eu" in script
+    assert "git merge --ff-only" in script
+    assert "git reset --hard" not in script
+    assert "git reset --keep" in script
+    assert "git checkout main" not in script
+    assert "systemctl restart" in script
+    assert "RECOVERY REQUIRED" in script
+    assert "consecutive" in script
 
 
 def test_detect_prefers_the_running_interpreter_not_system_python(monkeypatch):
@@ -195,29 +200,29 @@ def test_launch_refuses_a_non_git_install():
     assert out["ok"] is False
 
 
-def test_launch_writes_and_starts_the_script(tmp_path, monkeypatch):
-    repo = tmp_path / "romarr"
-    repo.mkdir()
-    env = selfupdate.Environment(kind="git", repo=str(repo),
+def test_launch_delegates_to_independent_worker(monkeypatch):
+    """The API reports scheduling, not completion of a detached update."""
+    env = selfupdate.Environment(kind="git", repo="/opt/romarr",
                                  python="/usr/bin/python3", branch="main",
-                                 commit="abc1234", service="romarr")
-    started = []
-    monkeypatch.setattr(selfupdate.subprocess, "Popen",
-                        lambda cmd, **kw: started.append(cmd) or object())
+                                 commit="a" * 40, service="romarr")
+    calls = []
+    monkeypatch.setattr(selfupdate.update_safety, "launch",
+                        lambda e, target: calls.append((e, target)) or
+                        {"ok": True, "state": "launched",
+                         "message": "worker launched; health not yet verified"})
     out = selfupdate.launch(env, "refs/tags/v1.2.0")
-    assert out["ok"] is True
-    assert started and started[0][0] == "/bin/sh"
-    script = repo / selfupdate.SCRIPT_NAME
-    assert script.exists() and "ff-only" in script.read_text()
-    assert (repo / selfupdate.LOG_NAME).exists()      # truncated for the UI
+    assert calls == [(env, "refs/tags/v1.2.0")]
+    assert out["state"] == "launched"
+    assert "not yet verified" in out["message"]
 
 
-def test_read_log_returns_the_tail(tmp_path):
-    repo = tmp_path / "romarr"
-    repo.mkdir()
-    (repo / selfupdate.LOG_NAME).write_text(
-        "\n".join(f"line {i}" for i in range(60)))
-    env = selfupdate.Environment(kind="git", repo=str(repo))
+def test_read_log_returns_the_tail(monkeypatch):
+    """Persistent worker logs are read through the guarded helper."""
+    env = selfupdate.Environment(kind="git", repo="/opt/romarr")
+    monkeypatch.setattr(selfupdate.update_safety, "read_log",
+                        lambda e, tail_lines: "\n".join(
+                            f"line {i}" for i in range(60)) if tail_lines == 60
+                        else "\n".join(f"line {i}" for i in range(55, 60)))
     tail = selfupdate.read_log(env, tail_lines=5)
     assert tail.splitlines()[-1] == "line 59"
     assert len(tail.splitlines()) == 5

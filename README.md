@@ -11,6 +11,10 @@ Find games, verify ROMs, and import them into your library.
 
 ![ROMarr interactive search, with scores and reasons beside each result](docs/img/interactive-search-live.png)
 
+Forks and code reuse are welcome; independent projects should use their own branding. [Attribution and branding policy](docs/OFFICIAL-DISTRIBUTION.md#attribution-and-branding).
+
+**Unraid:** install the [official ROMarr listing](https://ca.unraid.net/apps/romarr-04jslct0riva81?q=romarr), using `ghcr.io/blizzhacker/romarr`. **ROMarrNG is a separate fork and is not supported by this project.** [Official builds and support policy](docs/OFFICIAL-DISTRIBUTION.md).
+
 ## What can I use it for?
 
 | I want to… | Start here | What you need |
@@ -112,6 +116,8 @@ Source access, available files, credentials and platform support vary. Check the
 | Need | Read |
 |---|---|
 | First setup and a successful import | [Getting started](docs/GETTING-STARTED.md) |
+| Usenet providers, indexers and failed searches | [Usenet setup and troubleshooting](docs/USENET.md) |
+| Docker Desktop, NAS mounts and slow library scans | [NAS library guide](docs/NAS-LIBRARIES.md) |
 | Safely rename existing library files | [Preview, selection and rollback guide](docs/EXISTING-LIBRARY-RENAME.md) |
 | Installation, Windows, backups, updates and environment variables | [Install guide](docs/INSTALL.md) |
 | Plugin availability and installation | [ROM Hub guide](docs/PLUGINS.md) |
