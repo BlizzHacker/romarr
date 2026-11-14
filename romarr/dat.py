@@ -268,6 +268,8 @@ class Dat:
     name: str = ""
     version: str = ""
     games: dict[str, Game] = field(default_factory=dict)
+    # Duplicate labels make request completeness ambiguous, even when hashes match.
+    _ambiguous_game_names: set[str] = field(default_factory=set)
     _by_crc: dict[tuple[str, int], tuple[str, Rom]] = field(default_factory=dict)
     _by_sha1: dict[str, tuple[str, Rom]] = field(default_factory=dict)
     _by_md5: dict[str, tuple[str, Rom]] = field(default_factory=dict)
@@ -466,6 +468,8 @@ def _parse_clrmamepro(body: str) -> Dat:
                 dat._by_md5.setdefault(rom.md5, (name, rom))
             if rom.size:
                 dat._sizes.setdefault(rom.size, name)
+        if name in dat.games:
+            dat._ambiguous_game_names.add(name)
         dat.games[name] = Game(name=name, roms=tuple(roms), cloneof=clone)
     return dat
 
@@ -535,6 +539,8 @@ def parse_dat(body: str) -> Dat:
         parent = (node.get("cloneof") or "").strip()
         if not parent:
             parent = ids.get((node.get("cloneofid") or "").strip(), "")
+        if name in dat.games:
+            dat._ambiguous_game_names.add(name)
         dat.games[name] = Game(name=name, roms=tuple(roms), cloneof=parent)
     return dat
 
@@ -626,6 +632,11 @@ class DatIndex:
         """
         if (match.status != VERIFIED or match.rom is None
                 or not match.dat or not match.game):
+            return None
+        # A repeated game label can hide members in either DAT parser. Do not
+        # certify a request from the surviving record, regardless of hash hit.
+        if any(dat.name == match.dat and match.game in dat._ambiguous_game_names
+               for dat in self.dats):
             return None
         games = [game for dat in self.dats if dat.name == match.dat
                  if (game := dat.games.get(match.game)) is not None
