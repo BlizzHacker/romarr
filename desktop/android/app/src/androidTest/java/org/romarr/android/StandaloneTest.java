@@ -136,11 +136,21 @@ public class StandaloneTest {
   MainActivity activity=(MainActivity)inst.startActivitySync(new android.content.Intent(c,MainActivity.class).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
   java.lang.reflect.Method local=MainActivity.class.getDeclaredMethod("local"),remote=MainActivity.class.getDeclaredMethod("remote",String.class);
   local.setAccessible(true);remote.setAccessible(true);
+  java.lang.reflect.Field localField=MainActivity.class.getDeclaredField("local"),workerField=MainActivity.class.getDeclaredField("worker");
+  localField.setAccessible(true);workerField.setAccessible(true);
+  long ready=android.os.SystemClock.elapsedRealtime()+30000;
+  while(((String)localField.get(activity)).isEmpty() && android.os.SystemClock.elapsedRealtime()<ready) {inst.waitForIdleSync();Thread.sleep(25);}
+  assertFalse("Startup delivered a usable local listener",((String)localField.get(activity)).isEmpty());
+  java.util.concurrent.ExecutorService worker=(java.util.concurrent.ExecutorService)workerField.get(activity);
+  java.util.concurrent.CountDownLatch block=new java.util.concurrent.CountDownLatch(1),entered=new java.util.concurrent.CountDownLatch(1);
+  java.util.concurrent.Future<?> held=worker.submit(() -> {entered.countDown();try{block.await(10,java.util.concurrent.TimeUnit.SECONDS);}catch(InterruptedException e){Thread.currentThread().interrupt();}});
+  assertTrue(entered.await(5,java.util.concurrent.TimeUnit.SECONDS));
   inst.runOnMainSync(() -> {
    try {local.invoke(activity); remote.invoke(activity,"https://romarr.example.invalid");}
    catch(Exception e) {throw new RuntimeException(e);}
   });
-  Thread.sleep(2000); inst.waitForIdleSync();
+  block.countDown();held.get(10,java.util.concurrent.TimeUnit.SECONDS);
+  worker.submit(() -> {}).get(10,java.util.concurrent.TimeUnit.SECONDS);inst.waitForIdleSync();
   java.lang.reflect.Field field=MainActivity.class.getDeclaredField("origin");field.setAccessible(true);
   assertEquals("https://romarr.example.invalid",field.get(activity));
   inst.runOnMainSync(activity::finish);
@@ -213,7 +223,54 @@ public class StandaloneTest {
   inst.waitForIdleSync();
   assertEquals("https://next-server.example.invalid",origin.get(activity));
   assertTrue(((java.util.Set<?>)approved.get(activity)).isEmpty());
+  proveAutoPostRequiresConsent(inst,activity);
   inst.runOnMainSync(activity::finish);
+ }
+
+ private static void proveAutoPostRequiresConsent(android.app.Instrumentation inst,MainActivity activity) throws Exception {
+  java.lang.reflect.Method remote=MainActivity.class.getDeclaredMethod("remote",String.class);remote.setAccessible(true);
+  java.lang.reflect.Field webField=MainActivity.class.getDeclaredField("web"),promptField=MainActivity.class.getDeclaredField("signInPrompt");
+  webField.setAccessible(true);promptField.setAccessible(true);
+  android.webkit.WebView web=(android.webkit.WebView)webField.get(activity);
+  java.util.concurrent.atomic.AtomicInteger rendered=new java.util.concurrent.atomic.AtomicInteger();
+  String form="<html><body><form method='POST' action='https://form-identity.example.invalid/consume'><input name='fixture' value='harmless'></form><script>document.forms[0].submit()</script></body></html>";
+  inst.runOnMainSync(() -> {
+   try {
+    remote.invoke(activity,"https://form-server.example.invalid");
+    android.webkit.WebViewClient production=web.getWebViewClient();
+    web.setWebViewClient(new android.webkit.WebViewClient() {
+     @Override public boolean shouldOverrideUrlLoading(android.webkit.WebView v,android.webkit.WebResourceRequest r) {return production.shouldOverrideUrlLoading(v,r);}
+     @Override public void onPageStarted(android.webkit.WebView v,String url,android.graphics.Bitmap icon) {production.onPageStarted(v,url,icon);}
+     @Override public android.webkit.WebResourceResponse shouldInterceptRequest(android.webkit.WebView v,android.webkit.WebResourceRequest r) {
+      android.webkit.WebResourceResponse blocked=production.shouldInterceptRequest(v,r);
+      if(blocked!=null) return blocked;
+      if("form-identity.example.invalid".equals(r.getUrl().getHost())) {
+       assertEquals("POST",r.getMethod());rendered.incrementAndGet();
+       return new android.webkit.WebResourceResponse("text/html","UTF-8",new ByteArrayInputStream("<html><title>Approved destination</title><body>approved-destination</body></html>".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+      }
+      return null;
+     }
+    });
+    web.loadDataWithBaseURL("https://form-server.example.invalid",form,"text/html","UTF-8",null);
+   } catch(Exception e){throw new RuntimeException(e);}
+  });
+  java.util.concurrent.atomic.AtomicBoolean consent=new java.util.concurrent.atomic.AtomicBoolean();
+  long deadline=android.os.SystemClock.elapsedRealtime()+30000;
+  while(!consent.get() && android.os.SystemClock.elapsedRealtime()<deadline) {
+   inst.runOnMainSync(() -> {try{android.app.AlertDialog dialog=(android.app.AlertDialog)promptField.get(activity);consent.set(dialog!=null&&dialog.isShowing());}catch(Exception e){throw new RuntimeException(e);}});
+   Thread.sleep(25);
+  }
+  assertTrue("Auto-submitted POST requires native authority consent",consent.get());
+  assertEquals("Destination was not served before consent",0,rendered.get());
+  java.util.concurrent.atomic.AtomicReference<String> title=new java.util.concurrent.atomic.AtomicReference<>("");
+  java.util.concurrent.CountDownLatch probed=new java.util.concurrent.CountDownLatch(1);
+  inst.runOnMainSync(() -> web.evaluateJavascript("document.title",value -> {title.set(value);probed.countDown();}));
+  assertTrue(probed.await(5,java.util.concurrent.TimeUnit.SECONDS));assertNotEquals("\"Approved destination\"",title.get());
+  inst.runOnMainSync(() -> {try{((android.app.AlertDialog)promptField.get(activity)).getButton(android.app.AlertDialog.BUTTON_POSITIVE).performClick();}catch(Exception e){throw new RuntimeException(e);}});
+  inst.waitForIdleSync();
+  inst.runOnMainSync(() -> web.loadDataWithBaseURL("https://form-server.example.invalid",form,"text/html","UTF-8",null));
+  while(rendered.get()==0 && android.os.SystemClock.elapsedRealtime()<deadline) Thread.sleep(25);
+  assertEquals("Explicitly retried approved POST reaches destination",1,rendered.get());
  }
  @Test public void quarantinedAndInternalFilesCannotBeOfferedOrHandedOff() throws Exception {
   android.app.Instrumentation inst=InstrumentationRegistry.getInstrumentation();Context c=inst.getTargetContext();

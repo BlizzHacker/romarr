@@ -18,11 +18,12 @@ import org.json.JSONArray;
 public final class MainActivity extends androidx.activity.ComponentActivity {
  private WebView web;
  private TextView status;
- private String origin = "", local = "";
- private boolean destroyed;
- private boolean wantLocal=true;
- private int navigationGeneration;
- private final java.util.Set<String> signInOrigins=new java.util.HashSet<>();
+ private volatile String origin = "";
+ private String local = "";
+ private volatile boolean destroyed;
+ private volatile boolean wantLocal=true;
+ private volatile int navigationGeneration;
+ private final java.util.Set<String> signInOrigins=java.util.concurrent.ConcurrentHashMap.newKeySet();
  private boolean signingIn;
  private AlertDialog signInPrompt;
  private final java.util.concurrent.ExecutorService worker = java.util.concurrent.Executors.newSingleThreadExecutor();
@@ -43,6 +44,16 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
   web.setWebViewClient(new WebViewClient() {
    @Override public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
     return navigateRequest(r);
+   }
+   @Override public void onPageStarted(WebView v,String url,android.graphics.Bitmap icon) {
+    String authority=httpsOrigin(url);
+    if(!sameOrigin(url,origin) && (wantLocal || authority.isEmpty() || !signInOrigins.contains(authority))) {
+     v.stopLoading();
+     if(!wantLocal && !authority.isEmpty()) promptSignIn(url,authority,false);
+    }
+   }
+   @Override public WebResourceResponse shouldInterceptRequest(WebView v,WebResourceRequest r) {
+    return interceptMainFrame(r);
    }
    @Override public void onReceivedSslError(WebView v, android.webkit.SslErrorHandler h, android.net.http.SslError e) {
     h.cancel(); message("TLS certificate rejected. Use a trusted server certificate.");
@@ -107,17 +118,33 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
   }
   return true;
  }
- private void promptSignIn(String target,String authority) {
+ private WebResourceResponse interceptMainFrame(WebResourceRequest request) {
+  if(!request.isForMainFrame()) return null;
+  String target=request.getUrl().toString(),profile=origin;
+  int generation=navigationGeneration;
+  String authority=httpsOrigin(target);
+  if(sameOrigin(target,profile) || (!wantLocal && !authority.isEmpty() && signInOrigins.contains(authority))) return null;
+  // WebView does not invoke shouldOverrideUrlLoading for form POSTs.
+  // Interception rejects their bytes before networking, on every HTTP verb.
+  if(!destroyed && !wantLocal && !authority.isEmpty()) runOnUiThread(() -> {
+   if(!destroyed && !wantLocal && generation==navigationGeneration && profile.equals(origin))
+    promptSignIn(target,authority,"GET".equalsIgnoreCase(request.getMethod()));
+  });
+  byte[] body="<!doctype html><title>Sign-in approval required</title><p>This request was blocked. Approve the sign-in authority, then retry sign-in from your server.</p>".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+  return new WebResourceResponse("text/html","UTF-8",403,"Sign-in approval required",java.util.Collections.singletonMap("Cache-Control","no-store"),new ByteArrayInputStream(body));
+ }
+ private void promptSignIn(String target,String authority) { promptSignIn(target,authority,true); }
+ private void promptSignIn(String target,String authority,boolean replayGet) {
   if (destroyed || wantLocal) return;
   if(signInPrompt!=null) signInPrompt.dismiss();
   final int generation=navigationGeneration;
   final String profile=origin;
   String host=Uri.parse(authority).getAuthority();
   signInPrompt=new AlertDialog.Builder(this).setTitle("Allow sign-in redirect?")
-   .setMessage("Server " + Uri.parse(profile).getAuthority() + " requests HTTPS sign-in at " + host + ". Allow this authority inside ROMarr for the current server selection?")
+   .setMessage("Server " + Uri.parse(profile).getAuthority() + " requests HTTPS sign-in at " + host + ". Allow this authority inside ROMarr for the current server selection?" + (replayGet ? "" : " This form submission was blocked. Approval returns to your server; retry sign-in there. Form data is not replayed."))
    .setNegativeButton("Cancel",null).setPositiveButton("Allow sign-in",(d,w) -> {
     if (!destroyed && !wantLocal && generation==navigationGeneration && profile.equals(origin)) {
-     signInOrigins.add(authority);signingIn=true;web.loadUrl(target);
+     signInOrigins.add(authority);signingIn=true;web.loadUrl(replayGet ? target : profile);
     }
    }).create();
   signInPrompt.show();

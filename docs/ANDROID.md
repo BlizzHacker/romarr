@@ -22,7 +22,9 @@ including on compatible Android desktop environments; it is not a Linux desktop 
   If the server redirects to another HTTPS authority for single sign-on, ROMarr
   asks permission in a native dialog showing only the server and sign-in authorities.
   Approved sign-in stays in the same WebView so normal first-party cookies can return
-  to the server. Switching profiles/device mode cancels pending consent and resets
+  to the server. Cross-authority form POSTs are blocked before their body is sent
+  until that authority is approved. Approval returns to the server with a GET;
+  retry sign-in there. The blocked form body is never replayed. Switching profiles/device mode cancels pending consent and resets
   that selection's sign-in trust. Regular external links open in the system browser;
   TLS errors are never bypassed. Some identity providers restrict embedded browsers.
 - **Import** uses Android's system document picker to copy an explicitly selected ROM
