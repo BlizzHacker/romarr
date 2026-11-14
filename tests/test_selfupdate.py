@@ -47,8 +47,11 @@ def test_docker_guidance_names_the_host_commands():
     out = selfupdate.docker_guidance()
     assert out["ok"] is False
     joined = " ".join(out["guidance"])
-    assert "docker pull" in joined
-    assert "compose" in joined
+    assert "Compose" in joined
+    assert "image digest" in joined
+    assert "rollback" in joined
+    assert "docker stop" not in joined
+    assert "docker rm" not in joined
 
 
 # -- channel targeting --------------------------------------------------------

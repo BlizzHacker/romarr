@@ -3188,8 +3188,81 @@ RENDER.ecosystem=async()=>{
   paint();
 };
 
+
+/* Present only verified backend identity and check state, never infer a release. */
+const updateVerdict=check=>{
+  const state=check&&typeof check.state==='string'?check.state:'unknown';
+  if(state==='available')return {state,label:'yes',note:'A newer stable release was found by the last successful check.'};
+  if(state==='current')return {state,label:'no',note:'The last successful comparison found this running release current.'};
+  if(state==='error')return {state,label:'error',note:'The latest update check failed. Retained release information may be stale.'};
+  if(state==='never_checked')return {state,label:'not checked',note:'No completed release comparison has been recorded.'};
+  if(state==='unknown'){
+    const note=check&&check.reason==='nightly_revision_not_checked'
+      ?'Nightly source-revision checking is not supported yet.'
+      :'The running build or channel could not be compared reliably.';
+    return {state,label:'unknown',note};
+  }
+  return {state:'unknown',label:'unknown',note:'Update status could not be verified.'};
+};
+const buildIdentityLine=build=>{
+  const type=build&&build.type,ref=build&&build.source_ref;
+  const sha=build&&build.source_revision,repo=build&&build.source_repository;
+  if(!['release','development'].includes(type)
+      ||typeof ref!=='string'||!ref.startsWith('refs/')
+      ||typeof sha!=='string'||!/^[0-9a-f]{40}$/i.test(sha)
+      ||typeof repo!=='string'||!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo))
+    return '<p class="help">Build identity: unverified</p>';
+  return '<p class="help">Build: <b>'+esc(type==='development'?'Development':'Release')
+    +'</b> &middot; <code>'+esc(ref)+'</code> &middot; <code>'
+    +esc(sha.slice(0,8))+'</code></p>';
+};
+const autoApplyDetail=(settings,install)=>{
+  const st=settings||{},kind=(install||{}).kind;
+  if(!st.auto_update)return 'not configured';
+  if(st.auto_update_effective===true)return 'effective for this installation';
+  if(kind==='docker')return 'configured only; this Docker image must be updated by its host';
+  if(st.auto_update_effective===undefined)return 'effective capability not reported';
+  const reasons={
+    update_check_disabled:'scheduled checks are disabled',
+    install_cannot_self_update:'this installation cannot self-update',
+    nightly_revision_check_not_supported:'nightly revision checking is unsupported',
+    running_version_unknown:'running version is unknown',
+    development_build:'development builds cannot auto-apply stable releases'
+  };
+  return 'configured but inactive: '+(reasons[st.auto_update_reason]||'not eligible');
+};
+const statsUpdateMessage=(stats,update)=>{
+  if(!update||update.running_version!==stats.version)
+    return '<div class="card"><h3>Update status unavailable</h3><p class="help">'
+      +'Could not verify update state for this running version. Open System → Update to retry.'
+      +'</p></div>';
+  const verdict=updateVerdict(update.check_status);
+  if(verdict.state==='current')return '';
+  if(verdict.state!=='available')
+    return '<div class="card"><h3>Update status: '+esc(verdict.label)
+      +'</h3><p class="help">'+esc(verdict.note)+'</p></div>';
+  const settings=update.settings||{},kind=(update.install||{}).kind;
+  let action='Use the supported update method for this installation.';
+  if(settings.auto_update_effective===true)
+    action='Automatic application is enabled for a future eligible scheduled check.';
+  else if(kind==='docker')
+    action='Docker cannot apply its own image updates. Update through the Docker host.';
+  else if(settings.update_check===false)
+    action='Scheduled update checks are disabled. Use Check now for a manual check.';
+  else if(settings.auto_update&&settings.auto_update_effective===false)
+    action='Auto-update is configured but currently unavailable for this installation.';
+  return '<div class="card" style="border-color:var(--warn)">'
+    +'<h3>Update available</h3><p class="help">ROMarr '
+    +esc(update.latest_version||'unknown')+' is available; this install is running '
+    +esc(stats.version||'unknown')+'. '+esc(action)+'</p></div>';
+};
+
 RENDER.stats=async()=>{
-  const s=await j('/api/v1/stats');
+  const viewVersion=typeof pageVersion==='number'?pageVersion:null;
+  const [s,up]=await Promise.all([j('/api/v1/stats'),
+    j('/api/v1/update').catch(()=>null)]);
+  if((typeof activePage==='string'&&activePage!=='stats')
+      ||(viewVersion!==null&&pageVersion!==viewVersion))return;
   const hours=Math.floor((s.uptime_seconds||0)/3600);
   const bar=(entries)=>{
     const rows=Object.entries(entries||{});
@@ -3203,13 +3276,9 @@ RENDER.stats=async()=>{
       <b style="width:48px">${v}</b></div>`).join('');
   };
   $('#page').innerHTML=`
-    ${s.update_available?`<div class="card" style="border-color:var(--warn)">
-      <h3>Update available</h3><p class="help">ROMarr ${esc(s.latest_version)} is out;
-      this install is running ${esc(s.version)}. ${SETTINGS.auto_update
-        ?'Auto-update is ON — it applies on the next daily check once nothing is downloading.'
-        :'Turn on auto-update under Settings → General, or update by hand when it suits you.'}</p></div>`:''}
+    ${statsUpdateMessage(s,up)}
     <div class="card"><h3>This install</h3><div class="st">
-      <div><b>${esc(s.version)}</b><span>Version</span></div>
+      <div><b>${esc(s.version||"unknown")}</b><span>Version</span></div>
       <div><b>${num(s.library_on_disk)}</b><span>On disk here</span></div>
       <div><b>${num(s.library_catalogued)}</b><span>Catalogued, streams</span></div>
       <div><b>${num(s.library_games)}</b><span>Total known</span></div>
@@ -3220,6 +3289,7 @@ RENDER.stats=async()=>{
       <div><b>${(s.events||{}).failed||0}</b><span>Failures</span></div>
       <div><b>${s.average_rating??'—'}</b><span>Avg rating (${s.rated||0} rated)</span></div>
     </div>
+    ${buildIdentityLine(up&&up.running_version===s.version?up.build:null)}
     <p class="help" style="margin:10px 0 0">“Total known” is the other two
       added together — every row your library server holds. Only the first
       number is bytes you have; the second is a catalogue of things that
@@ -4494,7 +4564,13 @@ RENDER.general=async()=>{
 
 /* ---------------- system ---------------- */
 RENDER.status=async()=>{
+  const viewVersion=typeof pageVersion==='number'?pageVersion:null;
+  const runId=RENDER._statusRunId=(RENDER._statusRunId||0)+1;
+  const current=()=>runId===RENDER._statusRunId
+    &&(typeof activePage!=='string'||activePage==='status')
+    &&(viewVersion===null||pageVersion===viewVersion);
   const h=await j('/api/v1/system/status');
+  if(!current())return;
   const row=(l,ok,extra='')=>`<tr><td>${l}</td>
     <td><span class="dot ${ok?'up':'down'}"></span>${ok?'OK':'Not available'}</td>
     <td style="color:var(--dim)">${esc(extra)}</td></tr>`;
@@ -4554,13 +4630,13 @@ RENDER.status=async()=>{
     ${playCard(h.play_routes||{})}
     ${moonlightCard(h.moonlight||{})}
     <div class="card"><h3>About</h3><div class="st">
-      <div><b>${esc(h.version)}</b><span>Version</span></div>
+      <div><b>${esc(h.version||"unknown")}</b><span>Version</span></div>
       <div><b>${h.platforms}</b><span>Platforms</span></div>
       <div><b>${h.dats||0}</b><span>DATs loaded</span></div>
       <div><b>${h.dat_games||0}</b><span>Known dumps</span></div>
       <div><b>${h.events}</b><span>History events</span></div>
       <div><b>${esc(h.uptime)}</b><span>Uptime</span></div>
-    </div></div>
+    </div>${buildIdentityLine(h.build)}</div>
 
     <div class="card"><h3>Backup and export</h3>
     <p class="help">A snapshot restores an install: settings, libraries,
@@ -4623,6 +4699,7 @@ RENDER.status=async()=>{
     'romarr-'+$('#ex-what').value+'.'+$('#ex-fmt').value);
 
   const fe=await j('/api/v1/frontend/formats').catch(()=>({formats:[]}));
+  if(!current())return;
   const feRow=$('#fe-row'); if(!feRow) return;   // navigated away mid-fetch
   feRow.innerHTML=(fe.formats||[]).map(f=>
     '<button class="btn ghost fe-btn" data-f="'+esc(f.name||f)+'">'
@@ -6018,9 +6095,12 @@ RENDER.tasks=async()=>{
 
 let LOG_TIMER=null;
 RENDER.update=async()=>{
+  const viewVersion=typeof pageVersion==='number'?pageVersion:null;
   const d=await j('/api/v1/update').catch(()=>null);
+  if((typeof activePage==='string'&&activePage!=='update')
+      ||(viewVersion!==null&&pageVersion!==viewVersion))return;
   if(!d){$('#page').innerHTML='<div class="panel-note panel-warn">Could not read update status.</div>';return;}
-  const inst=d.install||{}, st=d.settings||{};
+  const inst=d.install||{}, st=d.settings||{}, verdict=updateVerdict(d.check_status);
   const kindLabel={git:'git checkout (self-update possible)',
     docker:'container image (updates come from the host)',
     none:'unknown install shape'}[inst.kind]||inst.kind;
@@ -6031,20 +6111,23 @@ RENDER.update=async()=>{
   $('#page').innerHTML=
     '<div class="card"><h3>This install</h3>'
     +'<div class="st">'
-    +'<div><b>'+esc(d.running_version)+'</b><span>Running</span></div>'
-    +'<div><b>'+esc(d.latest_version||'—')+'</b><span>Latest on GitHub</span></div>'
-    +'<div><b>'+(d.update_available?'<span style="color:var(--warn)">yes</span>':'no')+'</b><span>Update available</span></div>'
+    +'<div><b>'+esc(d.running_version||'unknown')+'</b><span>Running</span></div>'
+    +'<div><b>'+esc(d.latest_version||'—')+'</b><span>'+(verdict.state==='available'||verdict.state==='current'?'Latest on GitHub':'Last known release')+'</span></div>'
+    +'<div><b>'+(verdict.state==='available'?'<span style="color:var(--warn)">yes</span>':esc(verdict.label))+'</b><span>Update available</span></div>'
     +'</div>'
     +'<p class="help">Install shape: <b>'+esc(kindLabel)+'</b>'
     +(inst.branch?' — branch <code>'+esc(inst.branch)+'</code> at <code>'+esc(inst.commit||'')+'</code>':'')+'</p>'
+    +buildIdentityLine(d.build)
+    +'<p class="help">Update check: '+esc(verdict.note)+'</p>'
     +'</div>'
     +'<div class="card"><h3>Automatic updates</h3>'
     +'<p class="help">Settings live under Settings → General; this page shows and acts. '
-    +'Auto-update waits until nothing is downloading, then fetches, fast-forwards '
-    +'and restarts. A container install cannot update itself — the host pulls the new image.</p>'
+    +'Check now only checks for updates. Automatic application depends on this installation\'s verified capability; '
+    +'a Docker image must be updated through its host deployment.</p>'
     +'<table><tbody>'
     +'<tr><td>Daily update check</td><td>'+badge(st.update_check)+'</td></tr>'
-    +'<tr><td>Auto-apply ROMarr updates</td><td>'+badge(st.auto_update)+'</td></tr>'
+    +'<tr><td>Auto-apply ROMarr updates</td><td>'+badge(st.auto_update)
+    +' <span class="help">'+esc(autoApplyDetail(st,inst))+'</span></td></tr>'
     +'<tr><td>Channel</td><td>'+esc(st.update_channel||'stable')+'</td></tr>'
     +'<tr><td>Auto-update ROM Hub plugins</td><td>'+badge(st.auto_update_plugins)+'</td></tr>'
     +'</tbody></table>'
@@ -6057,7 +6140,7 @@ RENDER.update=async()=>{
     +'</div>'
     +((d.docker_guidance||[]).length
       ?'<div class="card"><h3>How to update this container</h3><p class="help">'
-       +'ROMarr runs from an image, so the update happens on the host:</p><pre style="font:12px/1.6 ui-monospace,Menlo,monospace;color:var(--dim)">'
+       +'ROMarr runs from an image. Verify the original host deployment before changing it:</p><pre style="font:12px/1.6 ui-monospace,Menlo,monospace;color:var(--dim)">'
        +esc(d.docker_guidance.join('\n'))+'</pre></div>'
       :'')
     +(plugins.length
