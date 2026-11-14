@@ -3223,13 +3223,20 @@ RENDER.ecosystem=async()=>{
 /* Present only verified backend identity and check state, never infer a release. */
 const updateVerdict=check=>{
   const state=check&&typeof check.state==='string'?check.state:'unknown';
-  if(state==='available')return {state,label:'yes',note:'A newer stable release was found by the last successful check.'};
-  if(state==='current')return {state,label:'no',note:'The last successful comparison found this running release current.'};
-  if(state==='error')return {state,label:'error',note:'The latest update check failed. Retained release information may be stale.'};
+  const nightly=check&&check.channel==='nightly';
+  if(state==='available')return {state,label:'yes',note:nightly
+    ?'A newer official Nightly revision was verified against this running build.'
+    :'A newer stable release was found by the last successful check.'};
+  if(state==='current')return {state,label:'no',note:nightly
+    ?'The running Nightly revision matches the last verified official main revision.'
+    :'The last successful comparison found this running release current.'};
+  if(state==='error')return {state,label:'error',note:nightly
+    ?'The Nightly revision check failed. No newer revision was verified.'
+    :'The latest update check failed. Retained release information may be stale.'};
   if(state==='never_checked')return {state,label:'not checked',note:'No completed release comparison has been recorded.'};
   if(state==='unknown'){
-    const note=check&&check.reason==='nightly_revision_not_checked'
-      ?'Nightly source-revision checking is not supported yet.'
+    const note=nightly
+      ?'Could not verify Nightly availability from the running build and official main history.'
       :'The running build or channel could not be compared reliably.';
     return {state,label:'unknown',note};
   }
@@ -3256,7 +3263,8 @@ const autoApplyDetail=(settings,install)=>{
   const reasons={
     update_check_disabled:'scheduled checks are disabled',
     install_cannot_self_update:'this installation cannot self-update',
-    nightly_revision_check_not_supported:'nightly revision checking is unsupported',
+    nightly_revision_check_not_supported:'nightly auto-apply is not enabled',
+    nightly_auto_apply_disabled:'Nightly auto-apply is not enabled',
     running_version_unknown:'running version is unknown',
     development_build:'development builds cannot auto-apply stable releases'
   };
@@ -3282,10 +3290,15 @@ const statsUpdateMessage=(stats,update)=>{
     action='Scheduled update checks are disabled. Use Check now for a manual check.';
   else if(settings.auto_update&&settings.auto_update_effective===false)
     action='Auto-update is configured but currently unavailable for this installation.';
+  const check=update.check_status||{},nightly=check.channel==='nightly';
+  const latest=nightly?((check.latest_revision||'').slice(0,8)||'unknown')
+    :(update.latest_version||'unknown');
+  const running=nightly?((check.running_revision||'').slice(0,8)||'unknown')
+    :(stats.version||'unknown');
   return '<div class="card" style="border-color:var(--warn)">'
     +'<h3>Update available</h3><p class="help">ROMarr '
-    +esc(update.latest_version||'unknown')+' is available; this install is running '
-    +esc(stats.version||'unknown')+'. '+esc(action)+'</p></div>';
+    +esc(latest)+(nightly?' (Nightly revision)':'')+' is available; this install is running '
+    +esc(running)+'. '+esc(action)+'</p></div>';
 };
 
 RENDER.stats=async()=>{
@@ -6241,6 +6254,15 @@ RENDER.update=async()=>{
       ||(viewVersion!==null&&pageVersion!==viewVersion))return;
   if(!d){$('#page').innerHTML='<div class="panel-note panel-warn">Could not read update status.</div>';return;}
   const inst=d.install||{}, st=d.settings||{}, verdict=updateVerdict(d.check_status);
+  const check=d.check_status||{}, nightly=check.channel==='nightly';
+  const validSha=sha=>typeof sha==='string'&&/^[0-9a-f]{40}$/i.test(sha);
+  const runningLabel=nightly&&validSha(check.running_revision)
+    ?'Nightly · '+check.running_revision.slice(0,8):(d.running_version||'unknown');
+  const latestLabel=nightly
+    ?(validSha(check.latest_revision)?check.latest_revision.slice(0,8):'—')
+    :(d.latest_version||'—');
+  const latestTitle=nightly?'Latest Nightly revision'
+    :(verdict.state==='available'||verdict.state==='current'?'Latest on GitHub':'Last known release');
   const kindLabel={git:'git checkout (self-update possible)',
     docker:'container image (updates come from the host)',
     none:'unknown install shape'}[inst.kind]||inst.kind;
@@ -6251,8 +6273,8 @@ RENDER.update=async()=>{
   $('#page').innerHTML=
     '<div class="card"><h3>This install</h3>'
     +'<div class="st">'
-    +'<div><b>'+esc(d.running_version||'unknown')+'</b><span>Running</span></div>'
-    +'<div><b>'+esc(d.latest_version||'—')+'</b><span>'+(verdict.state==='available'||verdict.state==='current'?'Latest on GitHub':'Last known release')+'</span></div>'
+    +'<div><b>'+esc(runningLabel)+'</b><span>Running</span></div>'
+    +'<div><b>'+esc(latestLabel)+'</b><span>'+esc(latestTitle)+'</span></div>'
     +'<div><b>'+(verdict.state==='available'?'<span style="color:var(--warn)">yes</span>':esc(verdict.label))+'</b><span>Update available</span></div>'
     +'</div>'
     +'<p class="help">Install shape: <b>'+esc(kindLabel)+'</b>'

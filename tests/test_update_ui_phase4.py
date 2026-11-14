@@ -315,3 +315,47 @@ const j=url=>new Promise(resolve=>{
 """
     script = setup + ui.JS[start:stop] + exercise
     assert json.loads(_node(script, {"phase": phase}))["ok"]
+
+
+def test_nightly_update_page_shows_verified_revisions_without_stable_tag_fallback():
+    """An official Nightly displays commit revisions instead of the stable tag."""
+    running, latest = "a" * 40, "b" * 40
+    html = _update(_payload(
+        running_version="0.0.0+unknown", latest_version="1.8.1",
+        check_status={"state": "available", "channel": "nightly",
+                      "running_revision": running, "latest_revision": latest},
+        settings={"update_channel": "nightly", "auto_update": True,
+                  "auto_update_effective": False},
+    ))["html"]
+    assert "Nightly · aaaaaaaa" in html
+    assert "Latest Nightly revision" in html
+    assert "<b>bbbbbbbb</b>" in html
+    assert "A newer official Nightly revision was verified" in html
+    assert "<b>1.8.1</b>" not in html
+    assert 'id="up-apply"' not in html
+
+
+def test_nightly_missing_metadata_does_not_make_release_current():
+    """A failed or untrusted Nightly check remains visibly inconclusive."""
+    html = _update(_payload(
+        running_version="0.0.0+unknown", latest_version="1.8.1",
+        check_status={"state": "unknown", "channel": "nightly",
+                      "reason": "nightly_build_unverified"},
+        settings={"update_channel": "nightly", "auto_update": False},
+    ))["html"]
+    assert "Could not verify Nightly availability" in html
+    assert "<b>unknown</b><span>Update available</span>" in html
+    assert "<b>1.8.1</b>" not in html
+
+
+def test_stats_nightly_banner_reports_revisions_not_release_versions():
+    """Stats must not describe a Nightly check as a stable release update."""
+    running, latest = "a" * 40, "b" * 40
+    update = _payload(
+        running_version="0.0.0+unknown", latest_version="1.8.1",
+        check_status={"state": "available", "channel": "nightly",
+                      "running_revision": running, "latest_revision": latest})
+    banner = _stats_banner({"version": "0.0.0+unknown"}, update)
+    assert "Nightly revision" in banner and "bbbbbbbb" in banner
+    assert "aaaaaaaa" in banner
+    assert "1.8.1 is available" not in banner

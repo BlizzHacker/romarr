@@ -18,8 +18,9 @@ pytestmark = pytest.mark.skipif(os.name == "nt", reason="POSIX/systemd-only work
 
 def git(*args, cwd=None):
     """Run Git within disposable pytest repositories."""
+    safe = safety._safe_git_env()
     return subprocess.check_output(["git", *args], cwd=cwd, text=True,
-                                   stderr=subprocess.STDOUT).strip()
+                                   stderr=subprocess.STDOUT, env=safe).strip()
 
 
 @pytest.fixture
@@ -236,7 +237,8 @@ def test_script_has_no_branch_fallback_or_destructive_reset(checkout):
     script = safety.build_script(state, "123", state["gitdir"] / "a.log", state["gitdir"] / "lock")
     assert "checkout main" not in script and "git reset --hard" not in script
     assert "git reset --keep" in script
-    assert "git merge --ff-only" in script
+    assert 'git merge --ff-only --no-overwrite-ignore "$POST"' in script
+    assert "unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE" in script
     assert "git merge-base --is-ancestor" in script
     assert "HEALTH: attempt" in script and "consecutive" in script
     shell = subprocess.run(["sh", "-n"], input=script, text=True, capture_output=True)
@@ -431,3 +433,91 @@ def test_health_false_verdict_fails_even_with_python_optimization(checkout, opti
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_git_path_environment_cannot_redirect_preflight(checkout, monkeypatch):
+    """Read-only Git probes ignore inherited path overrides."""
+    _pub, repo, _origin, env = checkout
+    monkeypatch.setenv("GIT_DIR", str(repo.parent / "untrusted-metadata"))
+    monkeypatch.setenv("GIT_WORK_TREE", str(repo.parent / "untrusted-tree"))
+    monkeypatch.setenv("GIT_INDEX_FILE", str(repo.parent / "untrusted-index"))
+    monkeypatch.setenv("GIT_OBJECT_DIRECTORY", str(repo.parent / "untrusted-objects"))
+    observed = safety._cmd("git", "rev-parse", "--show-toplevel", cwd=repo)
+    assert observed == str(repo)
+    assert safety.preflight(env, "origin/main")["repo"] == repo
+    script = safety.build_script(safety.preflight(env, "origin/main"),
+                                 "git-path-env", repo / ".git" / "a.log",
+                                 repo / ".git" / "claim")
+    assert "unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE" in script
+
+
+@pytest.mark.parametrize("ssh_origin_url", [
+    "git@github.com:BlizzHacker/romarr.git",
+    "deploy@example.invalid:romarr.git",
+    "example.invalid:romarr.git",
+    "ssh://git@github.com/BlizzHacker/romarr.git",
+    "git+ssh://git@github.com/BlizzHacker/romarr.git",
+    "ssh+git://git@github.com/BlizzHacker/romarr.git",
+])
+def test_ssh_remote_is_blocked_before_worker_reservation(
+        checkout, monkeypatch, ssh_origin_url):
+    """Confined worker must reject URL and SCP-form SSH before its claim."""
+    _pub, repo, _origin, env = checkout
+    original_cmd = safety._cmd
+
+    def ssh_origin(*args, **kwargs):
+        """Return an otherwise official SSH remote for the read-only probe."""
+        if len(args) >= 4 and tuple(args[1:4]) == ("remote", "get-url", "origin"):
+            return ssh_origin_url
+        return original_cmd(*args, **kwargs)
+
+    monkeypatch.setattr(safety, "_cmd", ssh_origin)
+    monkeypatch.setenv("ROMARR_UPDATE_REMOTE_URL", ssh_origin_url)
+    with pytest.raises(ValueError, match="SSH Git remote"):
+        safety.preflight(env, "origin/main")
+    assert not (repo / ".git" / safety.LOCK_NAME).exists()
+
+
+def test_empty_host_uses_local_health_fallback(monkeypatch):
+    """An explicitly empty host should behave like an unset host."""
+    monkeypatch.delenv("ROMARR_UPDATE_HEALTH_URL", raising=False)
+    monkeypatch.setenv("ROMARR_HOST", "")
+    monkeypatch.setenv("ROMARR_PORT", "6868")
+    monkeypatch.delenv("ROMARR_SSL_CERT", raising=False)
+    monkeypatch.delenv("ROMARR_SSL_KEY", raising=False)
+    assert safety._health_url() == "http://127.0.0.1:6868/api/health"
+
+
+def test_ignored_operator_file_is_not_overwritten_by_fast_forward(checkout):
+    """The exact worker merge mode refuses an ignored-file/tracked-file collision."""
+    publisher, repo, _origin, _env = checkout
+    with (publisher / ".gitignore").open("a", encoding="utf-8") as handle:
+        handle.write("operator.txt\n")
+    git("add", ".gitignore", cwd=publisher)
+    git("commit", "-qm", "ignore local operator file", cwd=publisher)
+    git("push", "-q", "origin", "main", cwd=publisher)
+    git("fetch", "-q", "origin", cwd=repo)
+    git("merge", "--ff-only", "origin/main", cwd=repo)
+    (repo / "operator.txt").write_text("owner data\n")
+    (publisher / "operator.txt").write_text("upstream data\n")
+    git("add", "-f", "operator.txt", cwd=publisher)
+    git("commit", "-qm", "upstream now tracks formerly ignored path", cwd=publisher)
+    git("push", "-q", "origin", "main", cwd=publisher)
+    git("fetch", "-q", "origin", cwd=repo)
+    before = git("rev-parse", "HEAD", cwd=repo)
+    failed = subprocess.run(["git", "merge", "--ff-only",
+                             "--no-overwrite-ignore", "origin/main"],
+                            cwd=repo, capture_output=True, text=True,
+                            env=safety._safe_git_env())
+    assert failed.returncode != 0
+    assert git("rev-parse", "HEAD", cwd=repo) == before
+    assert (repo / "operator.txt").read_text() == "owner data\n"
+
+
+def test_ssh_remote_detection_preserves_local_and_https_paths():
+    """Explicit relative/absolute origins are not misclassified as SCP remotes."""
+    assert safety._is_ssh_remote("deploy@example.invalid:romarr.git")
+    assert safety._is_ssh_remote("example.invalid:romarr.git")
+    assert not safety._is_ssh_remote("https://github.com/BlizzHacker/romarr.git")
+    assert not safety._is_ssh_remote("/tmp/romarr:local")
+    assert not safety._is_ssh_remote("./repo:local")
