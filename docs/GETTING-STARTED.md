@@ -1,5 +1,7 @@
 # Getting started
 
+Returning to games after a long break? Start with [your first game](FIRST-GAME.md), including what each app does and where to configure controls. No AI or coding experience needed.
+
 The first useful result is one imported ROM in the folder you expected. Start there before adding a large collection or scheduling downloads.
 
 After installing, open ROMarr, set a password and choose **Settings → Setup Guide** (`/#setup`). Choose **I already have ROMs** or **Find and download games**. The existing-ROM path skips download and indexer setup; both paths offer optional DAT/ROM Hub steps. Each step can be skipped, and you can return later.

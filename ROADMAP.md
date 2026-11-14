@@ -1,6 +1,6 @@
 # ROMarr roadmap
 
-This is a working list of priorities, updated **2026-10-25**. Shipped features are separated from proposals so you can tell what an update will actually give you. There are no promised delivery dates; scope and validation can change the order.
+This is a working list of priorities, updated **2026-11-14**. Shipped features are separated from proposals so you can tell what an update will actually give you. There are no promised delivery dates; scope and validation can change the order.
 
 ## Available in v1.7.0
 
@@ -23,6 +23,17 @@ The fixes are in [v1.7.0](https://github.com/BlizzHacker/romarr/releases/tag/v1.
 - **[Existing-library rename preview (#80)](https://github.com/BlizzHacker/romarr/issues/80)**: Stats shows DAT-verified single-file suggestions, old/new paths, collisions and skip reasons. You choose each batch; ROMarr journals the changes and can restore them. Disc sets, ambiguous matches and unknown files stay untouched. Nested files are proposed for the platform folder, and empty folders are kept. [Read the limits and recovery steps](docs/EXISTING-LIBRARY-RENAME.md).
 
 These changes ship in [v1.8.0](https://github.com/BlizzHacker/romarr/releases/tag/v1.8.0). The native ZIP runs independently of Docker; the unsigned MSIX is for Store preparation and still needs the real Partner Center identity and certification.
+
+## Make the first game easier
+
+The [November r/ARR discussion](https://www.reddit.com/r/ARR/comments/1xv2ps9/) highlighted confusion about ROMarr versus RomM, returning retro gamers needing a first-game walkthrough, empty Usenet searches, a Deluge problem and slow NAS reads.
+
+- **Available:** a clearer Setup Guide introduction, a direct link for existing RomM users, and the [first-game walkthrough](docs/FIRST-GAME.md). The guide covers importing, playback and controller setup without requiring a complete download stack.
+- **Available in v1.9.3:** library scan progress and clearer Usenet setup. The reported NAS `BlockingIOError` still needs its traceback and testing on the affected setup; progress reporting alone does not prove that error is fixed.
+- **Next:** distinguish source coverage, filters and source errors when a search returns nothing. The Usenet reporter clarified that results were the sticking point.
+- **Needs reproduction:** the Deluge failure reported by a user whose qBittorrent setup worked. Get versions, failing step and a redacted error before claiming a fix.
+- **Next:** guide users from a confirmed import to their player, with the destination and verification result visible. Finishing setup must not claim that a game has imported or played successfully.
+- **External:** Community Scripts listing depends on their maintainers and eligibility rules. Our upstream LXC installer is available separately; an exception request is not acceptance.
 
 ## Next priorities
 
