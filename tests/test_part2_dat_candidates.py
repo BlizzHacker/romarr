@@ -170,6 +170,51 @@ def test_game_rom_count_rejects_incomplete_two_track_game():
     assert index.game_rom_count(match) == 2
 
 
+
+def _assert_duplicate_game_label_is_ambiguous(catalog_text):
+    """A repeated game name cannot establish complete requested membership."""
+    dat = parse_dat(catalog_text)
+    index = DatIndex()
+    index.add(dat)
+    matches = index.verified_candidates(crc="a1b2c3d4", size=4)
+    assert len(matches) == 1
+    assert (matches[0].game, matches[0].dat) == ("Requested Game", "Duplicate System")
+    assert index.lookup(crc="a1b2c3d4", size=4).status == VERIFIED
+    assert index.game_rom_count(matches[0]) is None
+
+
+def test_logiqx_duplicate_game_name_is_not_request_complete():
+    """The surviving single-ROM record must not erase an earlier second track."""
+    _assert_duplicate_game_label_is_ambiguous("""
+    <datafile><header><name>Duplicate System</name></header>
+      <game name="Requested Game">
+        <rom name="a.bin" size="4" crc="a1b2c3d4"/>
+        <rom name="b.bin" size="4" crc="12345678"/>
+      </game>
+      <game name="Requested Game">
+        <rom name="a.bin" size="4" crc="a1b2c3d4"/>
+      </game>
+    </datafile>""")
+
+
+def test_clrmamepro_duplicate_game_name_is_not_request_complete():
+    """ClrMamePro must enforce the same ambiguity guard as XML."""
+    _assert_duplicate_game_label_is_ambiguous("""
+clrmamepro (
+name "Duplicate System"
+)
+game (
+name "Requested Game"
+rom ( name "a.bin" size 4 crc a1b2c3d4 )
+rom ( name "b.bin" size 4 crc 12345678 )
+)
+game (
+name "Requested Game"
+rom ( name "a.bin" size 4 crc a1b2c3d4 )
+)
+""")
+
+
 def test_game_rom_count_fails_closed_on_ambiguous_catalog_name():
     index = DatIndex()
     index.add(_dat("Duplicate System", "Same Game"))
