@@ -32,8 +32,12 @@ android {
  }
 }
 tasks.register('stageROMarr', Sync) {
- from('../../../romarr') { include '**/*.py', '**/*.json' }
+ from('../../../romarr') { include '**/*.py', '**/*.json'; exclude '_version.py' }
  into(layout.buildDirectory.dir('generated/python/romarr'))
+ inputs.property('romarrAndroidVersion', provider { android.defaultConfig.versionName })
+ doLast {
+  new File(destinationDir, '_version.py').text = "__version__ = '${android.defaultConfig.versionName}'\n"
+ }
 }
 chaquopy {
  defaultConfig {

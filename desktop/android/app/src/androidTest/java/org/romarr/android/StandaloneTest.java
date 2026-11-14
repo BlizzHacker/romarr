@@ -129,4 +129,9 @@ public class StandaloneTest {
   assertEquals("https://romarr.example.invalid",field.get(activity));
   inst.runOnMainSync(activity::finish);
  }
+
+ @Test public void bundledCoreVersionMatchesAndroidPackage() throws Exception {
+  assertEquals(BuildConfig.VERSION_NAME,Python.getInstance().getModule("android_backend").callAttr("core_version").toString());
+  assertEquals("1.10.0-preview",BuildConfig.VERSION_NAME);
+ }
 }

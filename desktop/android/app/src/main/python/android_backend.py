@@ -122,3 +122,9 @@ def _rename_noreplace(source, destination):
     if result != 0:
         code = ctypes.get_errno()
         raise OSError(code, os.strerror(code), str(destination))
+
+
+def core_version():
+    """Expose the packaged server version for native build-identity verification."""
+    from romarr.app import VERSION
+    return VERSION
