@@ -26,7 +26,7 @@ _OFFICIAL_REMOTES = frozenset({
 })
 
 
-def _local_git(repo: Path, *args: str) -> str:
+def _local_git(repo: Path, *args: str) -> str | None:
     """Use a bounded, unredirected Git read without inherited path overrides."""
     git = shutil.which("git")
     if not git:
@@ -38,34 +38,46 @@ def _local_git(repo: Path, *args: str) -> str:
         result = subprocess.run([git, "-C", str(repo), *args],
                                 capture_output=True, text=True, timeout=10,
                                 check=False, env=environment)
-        return result.stdout.strip() if result.returncode == 0 else ""
+        return result.stdout.strip() if result.returncode == 0 else None
     except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def git_checkout_revision(env) -> str:
+    """Read and validate the exact clean official Git HEAD; failures are not clean."""
+    if (env is None or env.kind != "git" or env.branch != "main"
+            or not env.repo):
         return ""
+    try:
+        root = Path(env.repo).resolve(strict=True)
+    except (OSError, RuntimeError):
+        return ""
+    if (_local_git(root, "rev-parse", "--show-toplevel") != str(root)
+            or _local_git(root, "symbolic-ref", "--quiet", "--short", "HEAD") != "main"
+            or _local_git(root, "remote", "get-url", "origin") not in _OFFICIAL_REMOTES):
+        return ""
+    status = _local_git(root, "status", "--porcelain", "--untracked-files=all")
+    if status is None or status:
+        return ""
+    full = _local_git(root, "rev-parse", "--verify", "HEAD")
+    if (not full or not _SHA.fullmatch(full.lower()) or not env.commit
+            or not full.lower().startswith(env.commit.lower())):
+        return ""
+    return full.lower()
 
 
-def running_main_revision(build: dict, env=None) -> str:
-    """Trust a full official build SHA, or a clean verified official Git checkout."""
+def running_main_revision(build: dict, env=None, *, startup_git_revision: str = "") -> str:
+    """Trust image provenance or a Git HEAD still equal to the service startup HEAD."""
     revision = str(build.get("source_revision") or "").lower()
     if (build.get("type") == "development"
             and build.get("source_repository") == OFFICIAL_REPOSITORY
             and build.get("source_ref") == MAIN_REF
             and _SHA.fullmatch(revision)):
         return revision
-
-    if (env is None or env.kind != "git" or env.branch != "main"
-            or not env.repo):
+    if not _SHA.fullmatch(startup_git_revision):
         return ""
-    root = Path(env.repo).resolve()
-    if (_local_git(root, "rev-parse", "--show-toplevel") != str(root)
-            or _local_git(root, "symbolic-ref", "--quiet", "--short", "HEAD") != "main"
-            or _local_git(root, "remote", "get-url", "origin") not in _OFFICIAL_REMOTES
-            or _local_git(root, "status", "--porcelain", "--untracked-files=all")):
-        return ""
-    full = _local_git(root, "rev-parse", "--verify", "HEAD").lower()
-    if (not _SHA.fullmatch(full) or not env.commit
-            or not full.startswith(env.commit.lower())):
-        return ""
-    return full
+    live = git_checkout_revision(env)
+    return live if live == startup_git_revision else ""
 
 
 class NightlyCheckError(Exception):
