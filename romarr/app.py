@@ -5960,11 +5960,23 @@ class ROMarr:
                 return
             for path in files:
                 try:
-                    digest = hash_file(path)
+                    before = path.stat()
+                    if path.suffix.lower() == ".zip":
+                        from .audit_archive import audit_zip
+                        verdict = audit_zip(path, platform, self.dats)
+                        # Hash-index entries identify the physical file at this
+                        # path, which remains the ZIP container.
+                        digest = hash_file(path)
+                    else:
+                        digest = hash_file(path)
+                        verdict = self.dats.lookup(**digest)
+                    after = path.stat()
                 except OSError:
                     continue
+                if (before.st_size, before.st_mtime_ns, before.st_ino) != (
+                        after.st_size, after.st_mtime_ns, after.st_ino):
+                    continue
                 state["scanned"] += 1
-                verdict = self.dats.lookup(**digest)
                 if verdict.status == VERIFIED:
                     state["verified"] += 1
                 elif verdict.status == BAD_DUMP:
@@ -5975,7 +5987,7 @@ class ROMarr:
                             "detail": verdict.detail or ""})
                 else:
                     state["unknown"] += 1
-                sha = digest.get("sha1", "")
+                sha = (digest or {}).get("sha1", "")
                 # Keep the hash. Netplay is decided on bytes, and this walk
                 # is the only place ROMarr ever computes them; discarding
                 # them here is what left an offer with nothing to carry.
