@@ -451,15 +451,22 @@ def test_git_path_environment_cannot_redirect_preflight(checkout, monkeypatch):
     assert "unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE" in script
 
 
-def test_ssh_remote_is_blocked_before_worker_reservation(checkout, monkeypatch):
-    """Confined worker must not assume SSH keys hidden by ProtectHome."""
+@pytest.mark.parametrize("ssh_origin_url", [
+    "git@github.com:BlizzHacker/romarr.git",
+    "deploy@example.invalid:romarr.git",
+    "example.invalid:romarr.git",
+    "ssh://git@github.com/BlizzHacker/romarr.git",
+])
+def test_ssh_remote_is_blocked_before_worker_reservation(
+        checkout, monkeypatch, ssh_origin_url):
+    """Confined worker must reject URL and SCP-form SSH before its claim."""
     _pub, repo, _origin, env = checkout
     original_cmd = safety._cmd
 
     def ssh_origin(*args, **kwargs):
         """Return an otherwise official SSH remote for the read-only probe."""
         if len(args) >= 4 and tuple(args[1:4]) == ("remote", "get-url", "origin"):
-            return "git@github.com:BlizzHacker/romarr.git"
+            return ssh_origin_url
         return original_cmd(*args, **kwargs)
 
     monkeypatch.setattr(safety, "_cmd", ssh_origin)
@@ -502,3 +509,12 @@ def test_ignored_operator_file_is_not_overwritten_by_fast_forward(checkout):
     assert failed.returncode != 0
     assert git("rev-parse", "HEAD", cwd=repo) == before
     assert (repo / "operator.txt").read_text() == "owner data\n"
+
+
+def test_ssh_remote_detection_preserves_local_and_https_paths():
+    """Explicit relative/absolute origins are not misclassified as SCP remotes."""
+    assert safety._is_ssh_remote("deploy@example.invalid:romarr.git")
+    assert safety._is_ssh_remote("example.invalid:romarr.git")
+    assert not safety._is_ssh_remote("https://github.com/BlizzHacker/romarr.git")
+    assert not safety._is_ssh_remote("/tmp/romarr:local")
+    assert not safety._is_ssh_remote("./repo:local")
