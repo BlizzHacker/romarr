@@ -43,7 +43,7 @@ def _safe_git_env() -> dict[str, str]:
 
 def _is_ssh_remote(remote: str) -> bool:
     """Detect URL and Git SCP-style SSH origins without blocking local paths."""
-    if remote.startswith(("ssh://", "git@")):
+    if remote.startswith(("ssh://", "git+ssh://", "ssh+git://", "git@")):
         return True
     # Git recognizes host:path and user@host:path as SSH transport. Absolute
     # and ./relative filesystem paths containing colons are not remote hosts.

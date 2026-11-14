@@ -456,6 +456,8 @@ def test_git_path_environment_cannot_redirect_preflight(checkout, monkeypatch):
     "deploy@example.invalid:romarr.git",
     "example.invalid:romarr.git",
     "ssh://git@github.com/BlizzHacker/romarr.git",
+    "git+ssh://git@github.com/BlizzHacker/romarr.git",
+    "ssh+git://git@github.com/BlizzHacker/romarr.git",
 ])
 def test_ssh_remote_is_blocked_before_worker_reservation(
         checkout, monkeypatch, ssh_origin_url):
@@ -470,6 +472,7 @@ def test_ssh_remote_is_blocked_before_worker_reservation(
         return original_cmd(*args, **kwargs)
 
     monkeypatch.setattr(safety, "_cmd", ssh_origin)
+    monkeypatch.setenv("ROMARR_UPDATE_REMOTE_URL", ssh_origin_url)
     with pytest.raises(ValueError, match="SSH Git remote"):
         safety.preflight(env, "origin/main")
     assert not (repo / ".git" / safety.LOCK_NAME).exists()
