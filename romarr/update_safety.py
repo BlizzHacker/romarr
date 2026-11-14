@@ -41,6 +41,16 @@ def _safe_git_env() -> dict[str, str]:
             if key not in _GIT_LOCATION_OVERRIDES}
 
 
+def _is_ssh_remote(remote: str) -> bool:
+    """Detect URL and Git SCP-style SSH origins without blocking local paths."""
+    if remote.startswith(("ssh://", "git@")):
+        return True
+    # Git recognizes host:path and user@host:path as SSH transport. Absolute
+    # and ./relative filesystem paths containing colons are not remote hosts.
+    return ("://" not in remote and ":" in remote
+            and "/" not in remote.split(":", 1)[0])
+
+
 def _cmd(*args: str, cwd: Path | None = None) -> str:
     """Run one bounded read-only Git/systemd probe without hostile Git paths."""
     proc = subprocess.run(args, cwd=cwd, capture_output=True, text=True,
@@ -144,9 +154,9 @@ def preflight(env, target: str) -> dict:
     if _cmd(git, "status", "--porcelain", "--untracked-files=all", cwd=repo):
         raise ValueError("working tree contains tracked or untracked changes")
     remote = _cmd(git, "remote", "get-url", "origin", cwd=repo)
-    if remote.startswith(("git@", "ssh://")):
+    if _is_ssh_remote(remote):
         # ProtectHome=yes can hide the agent, keys and known_hosts expected
-        # by an SSH remote. Refuse before reserving a detached-worker claim.
+        # by URL and SCP-style SSH origins. Refuse before reservation.
         raise ValueError("SSH Git remote is unsupported by the confined updater; use an explicitly trusted HTTPS origin")
     configured = os.environ.get("ROMARR_UPDATE_REMOTE_URL", "").strip()
     if (remote != configured if configured else remote not in OFFICIAL_REMOTES):
