@@ -366,3 +366,19 @@ def test_zip_audit_crc_failure_is_unknown(tmp_path):
             handle.write(bytes([byte[0] ^ 1]))
     verdict = audit_zip(path, resolve("snes"), DatIndex())
     assert verdict.status == "unknown"
+
+
+def test_zip_container_size_never_causes_bad_dump_verdict(tmp_path):
+    import zipfile
+    from romarr.audit_archive import audit_zip
+    from romarr.dat import DatIndex
+    from romarr.platforms import resolve
+
+    path = tmp_path / "unknown.zip"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("Unknown.smc", b"UNLISTED-ROM")
+    # The ZIP's compressed size is a known DAT ROM size; its member is not.
+    known = b"K" * path.stat().st_size
+    dats = _zip_dat_index([("Known.smc", known)])
+    assert dats.lookup(**__import__("romarr.dat", fromlist=["hash_file"]).hash_file(path)).status == "bad-dump"
+    assert audit_zip(path, resolve("snes"), dats).status == "unknown"
