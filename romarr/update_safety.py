@@ -29,10 +29,32 @@ SAFE_REF = re.compile(r"(?:refs/tags/v[A-Za-z0-9][A-Za-z0-9._+-]*|origin/main)\Z
 SAFE_SERVICE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.@-]*\Z")
 
 
+_GIT_LOCATION_OVERRIDES = frozenset({
+    "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY", "GIT_COMMON_DIR",
+})
+
+
+def _safe_git_env() -> dict[str, str]:
+    """Omit inherited repository-location overrides from Git probes and workers."""
+    return {key: value for key, value in os.environ.items()
+            if key not in _GIT_LOCATION_OVERRIDES}
+
+
+def _is_ssh_remote(remote: str) -> bool:
+    """Detect URL and Git SCP-style SSH origins without blocking local paths."""
+    if remote.startswith(("ssh://", "git+ssh://", "ssh+git://", "git@")):
+        return True
+    # Git recognizes host:path and user@host:path as SSH transport. Absolute
+    # and ./relative filesystem paths containing colons are not remote hosts.
+    return ("://" not in remote and ":" in remote
+            and "/" not in remote.split(":", 1)[0])
+
+
 def _cmd(*args: str, cwd: Path | None = None) -> str:
-    """Run one bounded read-only Git/systemd probe, raising on any failure."""
+    """Run one bounded read-only Git/systemd probe without hostile Git paths."""
     proc = subprocess.run(args, cwd=cwd, capture_output=True, text=True,
-                          timeout=20, check=True)
+                          timeout=20, check=True, env=_safe_git_env())
     return proc.stdout.strip()
 
 
@@ -40,7 +62,7 @@ def _health_url() -> str:
     """Resolve a single explicit or local endpoint without following a proxy."""
     configured = os.environ.get("ROMARR_UPDATE_HEALTH_URL", "")
     if not configured:
-        host = os.environ.get("ROMARR_HOST", "0.0.0.0")
+        host = os.environ.get("ROMARR_HOST") or "0.0.0.0"
         if host not in ("0.0.0.0", "127.0.0.1", "localhost", "::", "::1"):
             host = host.strip("[]")
         if not re.fullmatch(r"[A-Za-z0-9.:-]+", host):
@@ -132,6 +154,10 @@ def preflight(env, target: str) -> dict:
     if _cmd(git, "status", "--porcelain", "--untracked-files=all", cwd=repo):
         raise ValueError("working tree contains tracked or untracked changes")
     remote = _cmd(git, "remote", "get-url", "origin", cwd=repo)
+    if _is_ssh_remote(remote):
+        # ProtectHome=yes can hide the agent, keys and known_hosts expected
+        # by URL and SCP-style SSH origins. Refuse before reservation.
+        raise ValueError("SSH Git remote is unsupported by the confined updater; use an explicitly trusted HTTPS origin")
     configured = os.environ.get("ROMARR_UPDATE_REMOTE_URL", "").strip()
     if (remote != configured if configured else remote not in OFFICIAL_REMOTES):
         raise ValueError("origin URL not explicitly trusted for updates")
@@ -177,6 +203,8 @@ SERVICE={q(state["service"])}
 HEALTH={q(state["health_url"])}
 GITDIR={q(state["gitdir"])}
 cd {q(state["repo"])}
+# Do not inherit caller-selected Git object/index/worktree locations.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_COMMON_DIR
 echo "START: $RUN; target=$TARGET; service=$SERVICE"
 # A worker can only unlock its own claim after a verified successful result.
 finish_success() {{
@@ -230,7 +258,7 @@ if ! git merge-base --is-ancestor "$PRE" "$POST"; then
   echo 'ERROR: target is not a fast-forward descendant; RECOVERY REQUIRED'
   exit 1
 fi
-if ! git merge --ff-only "$POST"; then
+if ! git merge --ff-only --no-overwrite-ignore "$POST"; then
   echo 'ERROR: fast-forward refused; RECOVERY REQUIRED'
   exit 1
 fi
@@ -309,7 +337,8 @@ def launch(env, target: str) -> dict:
              "--property=ProtectHome=yes",
              f"--property=ReadWritePaths={state['repo']}",
              "/bin/sh", str(script)],
-            capture_output=True, text=True, timeout=30, check=False)
+            capture_output=True, text=True, timeout=30, check=False,
+            env=_safe_git_env())
         if proc.returncode:
             raise RuntimeError("systemd-run rejected the independent worker")
         started = True

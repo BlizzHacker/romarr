@@ -125,6 +125,9 @@ def test_nightly_channel_requires_separate_revision_check(tmp_path, monkeypatch)
     svc = _svc(tmp_path)
     monkeypatch.setattr("romarr.app.VERSION", "1.8.1")
     svc.store.settings.update({"update_channel": "nightly", "auto_update": True})
+    monkeypatch.setattr("romarr.app.get_build_info", lambda version: {"type": "unknown"})
+    monkeypatch.setattr(selfupdate, "detect", lambda root=None:
+                        selfupdate.Environment(kind="docker", detail="image"))
     monkeypatch.setattr(requests, "get", lambda *a, **kw: (_ for _ in ()).throw(
         AssertionError("nightly checks must not query stable releases")))
     monkeypatch.setattr(svc, "apply_update", lambda: (_ for _ in ()).throw(
@@ -132,7 +135,7 @@ def test_nightly_channel_requires_separate_revision_check(tmp_path, monkeypatch)
     out = svc.check_update()
     assert out["indeterminate"]
     st = svc.update_status()
-    assert st["check_status"]["reason"] == "nightly_revision_not_checked"
+    assert st["check_status"]["reason"] == "nightly_build_unverified"
     assert st["settings"]["auto_update"] is True
     assert st["settings"]["auto_update_effective"] is False
 
