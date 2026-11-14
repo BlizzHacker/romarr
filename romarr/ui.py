@@ -843,6 +843,7 @@ NAV = [
         ('queue', 'Queue', 'queued'),
         ('history', 'History', None),
         ('blocklist', 'Blocklist', None),
+        ('reports', 'Reports & Help', None),
     ]),
     ('Hub', [
         ('hub', 'Plugins', None),
@@ -1262,7 +1263,7 @@ function go(page){
     blocklist:'Blocklist',connections:'Connections',metadata:'Metadata',
     calendar:'Release Calendar',manualimport:'Manual Import',
     collections:'Collections \u2014 full sets and 1G1R',
-    getstarted:'Get Started',setup:'Setup Guide',
+    getstarted:'Get Started',setup:'Setup Guide',reports:'Reports & Help',
     hub:'ROM Hub — Plugins',emulators:'Emulator Hub',portal:'Library Shell & Device Fleet'};
   $('#top h1').textContent=titles[page]||'ROMarr';
   $('#search').classList.toggle('hide', page !== 'library');
@@ -5499,6 +5500,81 @@ async function requestGame(g){
 // Radarr calls this Manual Import and it exists for the same reason: somebody
 // arrives with a library already on disk, and telling them to re-download
 // everything ROMarr could have adopted is absurd.
+// Reports keep claims separate from scanner evidence and require review before publishing.
+RENDER.reports=async()=>{
+  clearTimeout(RENDER.reports._timer);
+  const version=pageVersion,run=(RENDER.reports._runId||0)+1;RENDER.reports._runId=run;
+  const current=()=>activePage==='reports'&&pageVersion===version&&RENDER.reports._runId===run;
+  let selected='';
+  const data=await j('/api/v1/file-reports').catch(()=>null);
+  if(!current())return;
+  if(!data||data.error){$('#page').innerHTML='<div class="card">Could not read reports. Try again.</div>';return;}
+  const labels={'queued':'Waiting for scan','scanning':'Scanning a private copy','interrupted':'Scan interrupted — report again','antivirus-test-fixture':'Antivirus test signature reported (EICAR)','detection-reported':'Scanner reported a detection','reputation-flagged':'Hash reputation flagged','no-detections':'No detections from completed checks','needs-review':'Needs review / scanner unavailable','review-failed':'Review could not finish'};
+  $('#page').innerHTML='<div class="card"><h3>Report a file</h3><p>Found something suspicious or something that is not a game? Report it here. ROMarr scans a private snapshot; it leaves the original in place until you choose quarantine.</p>'
+    +'<p class="help">A user report is a claim. Scanner evidence is recorded with the file hash. No detections is not a guarantee of safety, and antivirus cannot prove that a file is a playable game. Configure scanners in <a href="#media">Media Management</a>.</p>'
+    +'<div class="field"><label for="report-file">File path inside your library</label><input id="report-file" placeholder="snes/My game.sfc" maxlength="2000"><small>Use a relative path, not a web link or a path to your settings. If antivirus already removed the file, describe the alert in the help form below; do not restore it just to make a report.</small></div>'
+    +'<div class="field"><label for="report-category">What seems wrong?</label><select id="report-category"><option value="malware">Malware or virus concern</option><option value="not-a-game">Not a game</option><option value="unwanted-file">Unwanted or nuisance file</option><option value="false-positive">Possible scanner false positive</option></select></div>'
+    +'<div class="field"><label for="report-notes">What did you notice? (kept locally)</label><textarea id="report-notes" maxlength="2000" placeholder="For example, my scanner showed a warning, or this opened as a document."></textarea></div><button class="btn" id="report-send">Report and scan</button></div>'
+    +'<div class="card" style="margin-top:16px"><h3>Local reports</h3><p class="help">Reports stay on this server. Nothing is posted to GitHub automatically. Quarantine moves a reviewed file out of the library; restore refuses to overwrite an existing file.</p><div id="report-list"></div></div>'
+    +'<div class="card" id="issue-form" style="margin-top:16px"><h3>Ask for help or suggest an improvement</h3><p class="help">Tell us what you expected and where you got stuck. You do not need to diagnose the problem. Review the text and remove passwords, API keys and private paths before publishing.</p>'
+    +'<div class="field"><label for="issue-title">Issue title</label><input id="issue-title" maxlength="180" placeholder="What went wrong, or what would help?"></div><div class="field"><label for="issue-body">Details to share</label><textarea id="issue-body" maxlength="3000" rows="6" placeholder="Your install method, the steps you tried, and the exact error help us reproduce it."></textarea></div>'
+    +'<div class="help" id="issue-evidence"></div><div id="issue-result" role="status"></div><button class="btn ghost" id="issue-review">Review on GitHub</button>'
+    +(data.direct_github?'<div style="margin-top:12px"><label><input type="checkbox" id="issue-confirm"> I reviewed this text and want to publish it to BlizzHacker/romarr.</label><p><button class="btn" id="issue-submit">Submit to GitHub</button></p></div>':'<p class="help">GitHub opens with your draft. Sign in there and press Submit when you are ready. ROMarr does not need your GitHub password.</p>')+'</div>';
+  let items=data.items||[];
+  const paint=rows=>{
+    items=rows;
+    $('#report-list').innerHTML=rows.length?rows.map(r=>'<div style="padding:14px 0;border-top:1px solid var(--line)"><b>'+esc(r.file)+'</b><p>'+esc(labels[r.status]||r.status)+(r.quarantined?' · Quarantined':'')+(r.action_conflict?' · Move conflict — bytes preserved for manual review':'')+'</p>'
+      +'<div class="help">'+esc(r.category)+' · '+esc(r.created)+'<br>File fingerprint (SHA-256): <code style="overflow-wrap:anywhere;white-space:normal">'+esc(r.sha256||'Not computed yet')+'</code></div>'
+      +(r.action_detail?'<p class="help">'+esc(r.action_detail)+'</p>':'')
+      +(r.notes?'<details class="help"><summary>Your notes (kept locally)</summary><p>'+esc(r.notes)+'</p></details>':'')
+      +(r.scanners||[]).map(x=>'<p class="help">'+esc(x.engine)+': '+esc(x.status)+' '+esc((x.signatures||[]).join(', '))+' '+esc(x.detail||'')+'</p>').join('')
+      +'<div class="row" style="flex-wrap:wrap"><button class="btn ghost" data-action="share" data-id="'+r.id+'">Prepare GitHub report</button>'
+      +(r.sha256&&!r.action_conflict&&r.status!=='scanning'&&r.status!=='queued'?'<button class="btn ghost" data-action="'+(r.quarantined?'restore':'quarantine')+'" data-id="'+r.id+'">'+(r.quarantined?'Restore file':'Quarantine file')+'</button>':'')+'</div></div>').join(''):'<p class="help">No reports yet. You can also use the form below for a general issue.</p>';
+  };
+  let refreshId=0;
+  const refresh=async()=>{
+    const attempt=++refreshId;clearTimeout(RENDER.reports._timer);
+    const d=await j('/api/v1/file-reports').catch(()=>null);
+    if(!current()||attempt!==refreshId)return;
+    if(d&&!d.error)paint(d.items||[]);
+    clearTimeout(RENDER.reports._timer);
+    if(items.some(r=>r.status==='queued'||r.status==='scanning'))RENDER.reports._timer=setTimeout(refresh,1500);
+  };
+  paint(items);
+  if(items.some(r=>r.status==='queued'||r.status==='scanning'))RENDER.reports._timer=setTimeout(refresh,1500);
+  $('#report-send').onclick=async()=>{
+    const b=$('#report-send');b.disabled=true;
+    const r=await j('/api/v1/file-reports/submit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({file:$('#report-file').value,category:$('#report-category').value,notes:$('#report-notes').value})}).catch(()=>({error:'Report could not be sent'}));
+    if(!current())return;b.disabled=false;
+    if(r.error)toast(r.error);else{toast('Report saved locally. Review the scanner results below.');refresh();}
+  };
+  $('#report-list').onclick=async e=>{
+    const b=e.target.closest('button[data-action]');if(!b)return;
+    const r=items.find(x=>x.id===b.dataset.id);if(!r)return;
+    if(b.dataset.action==='share'){
+      selected=r.id;$('#issue-title').value='File report: '+r.file.split('/').pop();
+      $('#issue-body').value='Please review this file report. What I noticed: ';
+      $('#issue-evidence').textContent='The selected report will include its file name, SHA-256, category, review status and scanner signatures. Local notes and absolute paths are excluded.';
+      $('#issue-form').scrollIntoView({block:'start'});return;
+    }
+    if(b.dataset.action==='quarantine'&&!confirm('Move '+r.file+' to quarantine? This does not delete it.'))return;
+    b.disabled=true;
+    const x=await j('/api/v1/file-reports/'+b.dataset.action,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:r.id})}).catch(()=>({error:'Action could not finish'}));
+    if(!current())return;
+    if(x.error){toast(x.error);b.disabled=false;}else refresh();
+  };
+  const publish=async direct=>{
+    if(direct&&!$('#issue-confirm').checked){toast('Review and confirm the text first.');return;}
+    const r=await j('/api/v1/support/github',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:$('#issue-title').value,body:$('#issue-body').value,report_id:selected,confirm:direct})}).catch(()=>({error:'Could not prepare the issue'}));
+    if(!current())return;
+    if(r.error){toast(r.error);return;}
+    const a=document.createElement('a');a.href=r.url;a.target='_blank';a.rel='noopener noreferrer';a.className='btn ghost';a.textContent=r.mode==='submitted'?'Open submitted issue':'Open your GitHub draft';$('#issue-result').replaceChildren(a);a.click();
+    toast(r.mode==='submitted'?'Issue submitted. Thank you for helping improve ROMarr.':'Your draft is ready on GitHub. Review it before submitting.');
+  };
+  $('#issue-review').onclick=()=>publish(false);
+  if($('#issue-submit'))$('#issue-submit').onclick=()=>publish(true);
+};
+
 // The optional guide uses the same editors and connection checks as Settings.
 const SETUP={step:0,mode:'organize',initialized:false};
 RENDER.setup=async()=>{

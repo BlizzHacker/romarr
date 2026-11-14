@@ -26,7 +26,14 @@ public class StandaloneTest {
   HttpURLConnection ui=(HttpURLConnection)new URL(base+"/").openConnection();
   assertEquals(200,ui.getResponseCode());
   assertTrue(new String(ui.getInputStream().readAllBytes(),java.nio.charset.StandardCharsets.UTF_8).contains("ROMarr"));
-  android.util.Log.i("ROMarrProof",Python.getInstance().getModule("android_backend").callAttr("runtime_facts").toString());
+  String runtime=Python.getInstance().getModule("android_backend").callAttr("runtime_facts").toString();
+  android.util.Log.i("ROMarrProof",runtime);
+  org.json.JSONObject facts=new org.json.JSONObject(runtime);
+  assertTrue("Process-local automation scheduler is alive",facts.getBoolean("scheduler_alive"));
+  java.util.Set<String> tasks=new java.util.HashSet<>();
+  org.json.JSONArray jobs=facts.getJSONArray("tasks");
+  for(int i=0;i<jobs.length();i++) tasks.add(jobs.getString(i));
+  assertTrue(tasks.containsAll(java.util.Arrays.asList("ImportCompleted","MissingGameSearch","RssSync","FailedDownloads","ListSync")));
   HttpURLConnection denied=(HttpURLConnection)new URL(base+"/api/v1/config").openConnection();
   assertEquals(401,denied.getResponseCode());
   HttpURLConnection setup=(HttpURLConnection)new URL(base+"/api/v1/setup").openConnection();
@@ -133,5 +140,83 @@ public class StandaloneTest {
  @Test public void bundledCoreVersionMatchesAndroidPackage() throws Exception {
   assertEquals(BuildConfig.VERSION_NAME,Python.getInstance().getModule("android_backend").callAttr("core_version").toString());
   assertEquals("1.10.0-preview",BuildConfig.VERSION_NAME);
+ }
+
+ private static android.webkit.WebResourceRequest request(String url,boolean redirect) {
+  return new android.webkit.WebResourceRequest() {
+   public android.net.Uri getUrl(){return android.net.Uri.parse(url);}
+   public boolean isForMainFrame(){return true;}
+   public boolean isRedirect(){return redirect;}
+   public boolean hasGesture(){return !redirect;}
+   public String getMethod(){return "GET";}
+   public java.util.Map<String,String> getRequestHeaders(){return java.util.Collections.emptyMap();}
+  };
+ }
+ @Test public void signInRedirectRequiresAuthorityConsentAndRejectsStaleCallbacks() throws Exception {
+  android.app.Instrumentation inst=InstrumentationRegistry.getInstrumentation();Context c=inst.getTargetContext();
+  MainActivity activity=(MainActivity)inst.startActivitySync(new android.content.Intent(c,MainActivity.class).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
+  java.lang.reflect.Method remote=MainActivity.class.getDeclaredMethod("remote",String.class),nav=MainActivity.class.getDeclaredMethod("navigateRequest",android.webkit.WebResourceRequest.class);
+  remote.setAccessible(true);nav.setAccessible(true);
+  java.lang.reflect.Field prompt=MainActivity.class.getDeclaredField("signInPrompt"),origin=MainActivity.class.getDeclaredField("origin"),approved=MainActivity.class.getDeclaredField("signInOrigins");
+  prompt.setAccessible(true);origin.setAccessible(true);approved.setAccessible(true);
+  inst.runOnMainSync(() -> {
+   try {
+    remote.invoke(activity,"https://server.example.invalid");
+    assertEquals(true,nav.invoke(activity,request("https://identity.example.invalid/login?private=value",true)));
+    android.app.AlertDialog dialog=(android.app.AlertDialog)prompt.get(activity);
+    String message=((android.widget.TextView)dialog.findViewById(android.R.id.message)).getText().toString();
+    assertTrue(message.contains("identity.example.invalid"));assertFalse(message.contains("private"));assertFalse(message.contains("/login"));
+    dialog.getButton(android.app.AlertDialog.BUTTON_POSITIVE).performClick();
+   } catch(Exception e){throw new RuntimeException(e);}
+  });
+  inst.waitForIdleSync();
+  inst.runOnMainSync(() -> {
+   try {
+    assertTrue(((java.util.Set<?>)approved.get(activity)).contains("https://identity.example.invalid"));
+    assertEquals(false,nav.invoke(activity,request("https://identity.example.invalid/next",true)));
+    assertEquals(false,nav.invoke(activity,request("https://server.example.invalid/",true)));
+   } catch(Exception e){throw new RuntimeException(e);}
+  });
+  android.content.IntentFilter externalFilter=new android.content.IntentFilter(android.content.Intent.ACTION_VIEW);externalFilter.addDataScheme("https");
+  android.app.Instrumentation.ActivityMonitor monitor=new android.app.Instrumentation.ActivityMonitor(externalFilter,new android.app.Instrumentation.ActivityResult(0,null),true);
+  inst.addMonitor(monitor);
+  inst.runOnMainSync(() -> {
+   try {assertEquals(true,nav.invoke(activity,request("https://identity.example.invalid/help",false)));}
+   catch(Exception e){throw new RuntimeException(e);}
+  });
+  assertEquals(1,monitor.getHits());inst.removeMonitor(monitor);
+  inst.runOnMainSync(() -> {
+   try {
+    nav.invoke(activity,request("https://other-identity.example.invalid/login?private=another",true));
+    android.app.AlertDialog old=(android.app.AlertDialog)prompt.get(activity);
+    android.widget.Button allow=old.getButton(android.app.AlertDialog.BUTTON_POSITIVE);
+    remote.invoke(activity,"https://next-server.example.invalid");allow.performClick();
+    assertEquals("https://next-server.example.invalid",origin.get(activity));assertTrue(((java.util.Set<?>)approved.get(activity)).isEmpty());
+   } catch(Exception e){throw new RuntimeException(e);}
+  });
+  inst.waitForIdleSync();
+  assertEquals("https://next-server.example.invalid",origin.get(activity));
+  assertTrue(((java.util.Set<?>)approved.get(activity)).isEmpty());
+  inst.runOnMainSync(activity::finish);
+ }
+ @Test public void quarantinedAndInternalFilesCannotBeOfferedOrHandedOff() throws Exception {
+  android.app.Instrumentation inst=InstrumentationRegistry.getInstrumentation();Context c=inst.getTargetContext();
+  File root=new File(c.getFilesDir(),"library"),quarantine=new File(root,".romarr-file-quarantine/test.rom"),internal=new File(root,"nested/.romarr-internal/test.rom");
+  quarantine.getParentFile().mkdirs();internal.getParentFile().mkdirs();
+  try(FileOutputStream out=new FileOutputStream(quarantine)){out.write(1);}
+  try(FileOutputStream out=new FileOutputStream(internal)){out.write(2);}
+  String files=Python.getInstance().getModule("android_backend").callAttr("library_files",c.getFilesDir().getAbsolutePath()).toString();
+  assertFalse(files.contains(".romarr"));
+  MainActivity activity=(MainActivity)inst.startActivitySync(new android.content.Intent(c,MainActivity.class).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
+  java.lang.reflect.Method launch=MainActivity.class.getDeclaredMethod("launch",String.class);launch.setAccessible(true);
+  android.app.Instrumentation.ActivityMonitor monitor=new android.app.Instrumentation.ActivityMonitor(new android.content.IntentFilter(android.content.Intent.ACTION_CHOOSER),new android.app.Instrumentation.ActivityResult(0,null),true);inst.addMonitor(monitor);
+  inst.runOnMainSync(() -> {try{launch.invoke(activity,".romarr-file-quarantine/test.rom");}catch(Exception e){throw new RuntimeException(e);}});
+  assertEquals(0,monitor.getHits());inst.removeMonitor(monitor);inst.runOnMainSync(activity::finish);
+  quarantine.delete();internal.delete();
+ }
+
+ @Test public void reportQuarantineRestoreWorksInAndroidPrivateStorage() {
+  android.content.Context c=InstrumentationRegistry.getInstrumentation().getTargetContext();
+  assertEquals("ok",Python.getInstance().getModule("android_backend").callAttr("smoke_report_quarantine_restore",c.getFilesDir().getAbsolutePath()).toString());
  }
 }

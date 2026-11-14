@@ -1562,6 +1562,15 @@ class ROMarr:
             out.pop(secret, None)
         return out
 
+    def report_manager(self):
+        """Create the bounded local report service lazily for authenticated requests."""
+        from .file_reports import FileReports
+        with self._lock:
+            if not hasattr(self, "_reports_manager"):
+                self._reports_manager = FileReports(lambda: self.library, self.store.path.parent,
+                    lambda: dict(self.store.settings), self._env, version=VERSION)
+            return self._reports_manager
+
     def setup_status(self) -> dict:
         """A quick setup checklist, without probing services or returning secrets."""
         def rows(key):
@@ -8408,6 +8417,8 @@ def make_handler(service: ROMarr):
                     redact_library(lib) for lib in service.store.list_items("libraries")]})
             if route.path == "/api/v1/library/schema":
                 return self._json(200, {"types": LIBRARY_TYPES})
+            if route.path == "/api/v1/file-reports":
+                return self._json(200, service.report_manager().list())
             if route.path == "/api/v1/setup/status":
                 return self._json(200, service.setup_status())
             if route.path == "/api/v1/config":
@@ -9245,6 +9256,26 @@ def make_handler(service: ROMarr):
                                 "platform": platform.slug if platform else "",
                                 "unresolved": platform is None})
                 return self._json(200, {"items": out, "total": len(entries)})
+            if route.path in ("/api/v1/file-reports/submit", "/api/v1/file-reports/quarantine",
+                              "/api/v1/file-reports/restore", "/api/v1/support/github"):
+                if not isinstance(body, dict):
+                    return self._json(400, {"error": "Use a JSON object"})
+                reports = service.report_manager()
+                try:
+                    if route.path == "/api/v1/file-reports/submit":
+                        result = reports.submit(body.get("file"), body.get("category"), body.get("notes", ""))
+                    elif route.path == "/api/v1/file-reports/quarantine":
+                        result = reports.quarantine(body.get("id"))
+                    elif route.path == "/api/v1/file-reports/restore":
+                        result = reports.restore(body.get("id"))
+                    else:
+                        result = reports.github(body.get("title"), body.get("body"),
+                            confirm=body.get("confirm") is True, report_id=body.get("report_id", ""))
+                    return self._json(200, result)
+                except ValueError as exc:
+                    return self._json(400, {"error": str(exc)})
+                except OSError:
+                    return self._json(400, {"error": "File unavailable or operation not permitted; no existing destination was overwritten"})
             if route.path == "/api/v1/setup/complete":
                 return self._json(200, service.finish_setup_guide(
                     str(body.get("mode") or "organize")))

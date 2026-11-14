@@ -19,22 +19,33 @@ including on compatible Android desktop environments; it is not a Linux desktop 
   library. Credentials are entered into each server's normal sign-in page; profile
   URLs reject embedded credentials, paths, queries and fragments. A trusted TLS
   certificate is required. Plain HTTP remote servers are deliberately unavailable.
+  If the server redirects to another HTTPS authority for single sign-on, ROMarr
+  asks permission in a native dialog showing only the server and sign-in authorities.
+  Approved sign-in stays in the same WebView so normal first-party cookies can return
+  to the server. Switching profiles/device mode cancels pending consent and resets
+  that selection's sign-in trust. Regular external links open in the system browser;
+  TLS errors are never bypassed. Some identity providers restrict embedded browsers.
 - **Import** uses Android's system document picker to copy an explicitly selected ROM
   into private `library/Imported`, or a DAT/XML/ZIP into private `dats` and reload
   the checksum catalogue. Scan the imported library folder in ROMarr. A copied ROM
   is not described as verified until the core actually verifies it against a DAT.
-  Existing filenames are preserved by choosing a new destination name.
+  Existing filenames are preserved by atomic non-replacing publication with a new
+  destination name on collision. Imports fail closed on kernels lacking that primitive.
 - **Play file** grants temporary read access to one chosen local ROM through
   FileProvider and Android's ACTION_VIEW chooser. Only installed emulators accepting
   `content:` URIs and this MIME type can handle it. Some emulators need their own
   picker or a different intent contract. BIOS, emulator installation, archive
   extraction and compatibility are separate requirements. No emulator is bundled.
+  Quarantine and all `.romarr*` internal directories are excluded from file listings
+  and rejected again before emulator handoff.
 
 The local server lives in the app process. It may continue briefly after navigating
 away, but **Android can suspend or terminate it**. There is no persistent background
 service or unattended download guarantee. Use remote server mode for always-on work.
 Closing/reopening the UI reuses the in-process server; a new process reloads persisted
-state. Android uninstall / Clear storage removes the private library and profiles.
+state and reconciles integration requests interrupted during dispatch. Scheduled imports,
+Wanted searches, RSS sync, failed-download handling and list sync use the normal
+core scheduler while the process remains alive. Android uninstall / Clear storage removes the private library and profiles.
 
 The shared ROMarr UI and HTTP integrations run locally; native desktop executables,
 ROM Hub subprocess plugins, Playwright/Chromium downloads, self-updates, native
@@ -90,6 +101,9 @@ authenticate the actual WebView without a JavaScript credential bridge, copy a
 user-selected content URI through the native import handler, exercise OpenSSL scrypt/TLS,
 and verify FileProvider exposes library files while refusing state files.
 A device test result does not prove emulator compatibility or every downloader.
+The optional live sign-in test can be enabled with
+`-Pandroid.testInstrumentationRunnerArguments.liveSso=true`; it stops after the
+configured live identity login page renders, with no credentials entered.
 ARM64 physical-device and 16 KB runtime checks remain separate release gates.
 
 ## Google Play preparation

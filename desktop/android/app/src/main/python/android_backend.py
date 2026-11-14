@@ -1,5 +1,6 @@
 """Own a process-scoped ROMarr loopback server in Android private storage."""
 import json
+import logging
 import os
 import threading
 import secrets
@@ -29,6 +30,12 @@ def start(root):
             os.environ["ROMARR_ANDROID"] = "1"
             from romarr.app import ROMarr, make_handler
             service = ROMarr(env)
+            # Match the normal server's recovery after a prior process died.
+            try:
+                service.store.recover_seerr_dispatches()
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "integration recovery skipped (non-fatal)")
             _service = service
             _server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(service))
             threading.Thread(target=_server.serve_forever, daemon=True,
@@ -37,11 +44,21 @@ def start(root):
 
 
 def library_files(root):
-    """List only resolved regular files beneath the private ROM library."""
+    """Offer regular files while pruning quarantine and all ROMarr internal dirs."""
     base = (Path(root) / "library").resolve()
-    return json.dumps([str(p.relative_to(base)) for p in sorted(base.rglob("*"))
-                       if p.is_file() and not p.is_symlink()
-                       and p.resolve().is_relative_to(base)][:2000])
+    found = []
+    for directory, dirs, files in os.walk(base, followlinks=False):
+        dirs[:] = [name for name in dirs if not name.casefold().startswith(".romarr")
+                   and not (Path(directory) / name).is_symlink()]
+        for name in files:
+            path = Path(directory) / name
+            if (not name.casefold().startswith(".romarr") and not path.is_symlink()
+                    and path.is_file() and path.resolve().is_relative_to(base)):
+                found.append(str(path.relative_to(base)))
+                if len(found) >= 2000:
+                    return json.dumps(sorted(found))
+    return json.dumps(sorted(found))
+
 
 def smoke_stdlib():
     """Exercise Android OpenSSL and core auth primitives in the packaged runtime."""
@@ -65,7 +82,11 @@ def runtime_facts():
     import sys
     return json.dumps({"python": platform.python_version(), "platform": sys.platform,
                        "android": os.environ.get("ROMARR_ANDROID") == "1",
-                       "loopback": _server.server_address[0] if _server else None})
+                       "loopback": _server.server_address[0] if _server else None,
+                       "scheduler_alive": bool(_service and _service.scheduler._thread
+                                               and _service.scheduler._thread.is_alive()),
+                       "tasks": [job["name"] for job in _service.scheduler.status()]
+                                if _service else []})
 
 
 def session_cookie():
@@ -128,3 +149,35 @@ def core_version():
     """Expose the packaged server version for native build-identity verification."""
     from romarr.app import VERSION
     return VERSION
+
+
+def smoke_report_quarantine_restore(root):
+    """Verify isolated Android report/quarantine/restore using harmless owned bytes."""
+    import hashlib
+    import tempfile
+    import time
+    from romarr.file_reports import FileReports
+    with tempfile.TemporaryDirectory(prefix="android-report-test-", dir=root) as raw:
+        base = Path(raw)
+        library = base / "library"
+        library.mkdir()
+        fixture = library / "owned-fixture.rom"
+        payload = b"ROMarr harmless Android report fixture"
+        fixture.write_bytes(payload)
+        manager = FileReports(lambda: library, base / "state", lambda: {},
+                              {"ROMARR_ANDROID": "1"}, version=core_version())
+        ident = manager.submit(fixture.name, "unwanted-file")["id"]
+        deadline = time.monotonic() + 10
+        while ident in manager.active and time.monotonic() < deadline:
+            time.sleep(0.05)
+        if ident in manager.active:
+            raise AssertionError("Report review timed out")
+        report = manager.list()["items"][0]
+        assert report["sha256"] == hashlib.sha256(payload).hexdigest()
+        assert report["status"] == "needs-review"
+        manager.quarantine(ident)
+        assert not fixture.exists()
+        assert json.loads(library_files(base)) == []
+        manager.restore(ident)
+        assert fixture.read_bytes() == payload
+    return "ok"

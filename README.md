@@ -24,6 +24,7 @@ Forks and code reuse are welcome; independent projects should use their own bran
 | Import ROMs I already have | **Manual Import** | A destination folder and access to the source files. No indexer or download client needed. |
 | Find and download a particular game | **Add New** or **Interactive Search** | A search source, a matching download client, and a destination folder. |
 | Check what a collection is missing | **Collections** | A No-Intro or Redump DAT and your local library. |
+| Report a suspicious or unwanted file | **Activity → Reports & Help** | A relative library path; available scanners record evidence, quarantine is your choice. [How reporting works](docs/REPORTING.md). |
 | Reclaim space taken by exact duplicates | **Stats → Audit** | A local library; review the preview before moving duplicates to quarantine. Restore is available. |
 | Add another game source | **Hub → Plugins** | ROM Hub, included in the Windows app and amd64/arm64 Docker images. [Details](docs/PLUGINS.md). |
 

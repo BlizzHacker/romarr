@@ -22,6 +22,9 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
  private boolean destroyed;
  private boolean wantLocal=true;
  private int navigationGeneration;
+ private final java.util.Set<String> signInOrigins=new java.util.HashSet<>();
+ private boolean signingIn;
+ private AlertDialog signInPrompt;
  private final java.util.concurrent.ExecutorService worker = java.util.concurrent.Executors.newSingleThreadExecutor();
  @Override public void onCreate(Bundle saved) {
   super.onCreate(saved);
@@ -39,13 +42,7 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
   web.getSettings().setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
   web.setWebViewClient(new WebViewClient() {
    @Override public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
-    Uri u=r.getUrl();
-    if (sameOrigin(u.toString(),origin)) return false;
-    if (r.isForMainFrame() && ("https".equals(u.getScheme()) || "http".equals(u.getScheme()))) {
-     try { startActivity(new Intent(Intent.ACTION_VIEW,u)); }
-     catch (ActivityNotFoundException e) { message("No browser installed."); }
-    }
-    return true;
+    return navigateRequest(r);
    }
    @Override public void onReceivedSslError(WebView v, android.webkit.SslErrorHandler h, android.net.http.SslError e) {
     h.cancel(); message("TLS certificate rejected. Use a trusted server certificate.");
@@ -70,11 +67,56 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
   bar.addView(b,new LinearLayout.LayoutParams(0,-2,1));
  }
  private static boolean sameOrigin(String a,String b) {
-  try { URI x=new URI(a),y=new URI(b); return x.getScheme().equals(y.getScheme()) && x.getHost().equals(y.getHost()) && x.getPort()==y.getPort(); }
+  try { URI x=new URI(a),y=new URI(b); return x.getScheme().equalsIgnoreCase(y.getScheme()) && x.getHost().equalsIgnoreCase(y.getHost()) && effectivePort(x)==effectivePort(y); }
   catch (Exception e) { return false; }
+ }
+ private static int effectivePort(URI uri) { return uri.getPort()>=0 ? uri.getPort() : ("https".equalsIgnoreCase(uri.getScheme()) ? 443 : 80); }
+ private static String httpsOrigin(String url) {
+  try {
+   URI uri=new URI(url);
+   if (!"https".equalsIgnoreCase(uri.getScheme()) || uri.getHost()==null || uri.getRawUserInfo()!=null) return "";
+   return new URI("https",null,uri.getHost().toLowerCase(java.util.Locale.ROOT),effectivePort(uri)==443 ? -1 : uri.getPort(),null,null,null).toString();
+  } catch(Exception e) { return ""; }
+ }
+ private void clearSignIn() {
+  if (signInPrompt!=null) {signInPrompt.dismiss();signInPrompt=null;}
+  signInOrigins.clear(); signingIn=false;
+ }
+ private boolean navigateRequest(WebResourceRequest request) {
+  String target=request.getUrl().toString();
+  if (sameOrigin(target,origin)) {if(request.isForMainFrame()) signingIn=false;return false;}
+  if (!request.isForMainFrame()) return true;
+  String authority=httpsOrigin(target);
+  if (!wantLocal && !authority.isEmpty()) {
+   if (signInOrigins.contains(authority) && (request.isRedirect() || (signingIn && sameOrigin(target,web.getUrl())))) {signingIn=true;return false;}
+   if (request.isRedirect()) {promptSignIn(target,authority);return true;}
+  }
+  if (request.isRedirect() && !wantLocal) {message("Sign-in redirects require HTTPS and a valid authority.");return true;}
+  Uri uri=request.getUrl();
+  if ("https".equals(uri.getScheme()) || "http".equals(uri.getScheme())) {
+   try {startActivity(new Intent(Intent.ACTION_VIEW,uri));}
+   catch(ActivityNotFoundException e) {message("No browser installed.");}
+  }
+  return true;
+ }
+ private void promptSignIn(String target,String authority) {
+  if (destroyed || wantLocal) return;
+  if(signInPrompt!=null) signInPrompt.dismiss();
+  final int generation=navigationGeneration;
+  final String profile=origin;
+  String host=Uri.parse(authority).getAuthority();
+  signInPrompt=new AlertDialog.Builder(this).setTitle("Allow sign-in redirect?")
+   .setMessage("Server " + Uri.parse(profile).getAuthority() + " requests HTTPS sign-in at " + host + ". Allow this authority inside ROMarr for the current server selection?")
+   .setNegativeButton("Cancel",null).setPositiveButton("Allow sign-in",(d,w) -> {
+    if (!destroyed && !wantLocal && generation==navigationGeneration && profile.equals(origin)) {
+     signInOrigins.add(authority);signingIn=true;web.loadUrl(target);
+    }
+   }).create();
+  signInPrompt.show();
  }
  private void open(String url) { origin=url; web.loadUrl(url); status.setText(url.equals(local) ? "This device: active while app process lives" : "Remote server"); }
  private void local() {
+  clearSignIn();
   wantLocal=true;
   final int generation=++navigationGeneration;
   if (local.isEmpty()) return;
@@ -89,7 +131,7 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
    } catch (Exception e) { runOnUiThread(() -> message("Could not authenticate the local session.")); }
   });
  }
- private void remote(String url) { wantLocal=false; navigationGeneration++; open(url); }
+ private void remote(String url) { clearSignIn(); wantLocal=false; navigationGeneration++; open(url); }
  private void profiles() {
   android.content.SharedPreferences prefs=getSharedPreferences("servers",MODE_PRIVATE);
   java.util.ArrayList<String> names=new java.util.ArrayList<>(prefs.getAll().keySet());
@@ -164,8 +206,12 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
  }
  private void launch(String path) {
   try {
+   for (String part:path.split("/")) if (part.toLowerCase(java.util.Locale.ROOT).startsWith(".romarr")) throw new IOException();
    File root=new File(getFilesDir(),"library").getCanonicalFile(), f=new File(root,path).getCanonicalFile();
    if (!f.getPath().startsWith(root.getPath()+File.separator) || !f.isFile()) throw new IOException();
+   for (String part:f.getPath().substring(root.getPath().length()+1).split(java.util.regex.Pattern.quote(File.separator))) {
+    if (part.toLowerCase(java.util.Locale.ROOT).startsWith(".romarr")) throw new IOException();
+   }
    Uri uri=FileProvider.getUriForFile(this,getPackageName()+".files",f);
    Intent i=new Intent(Intent.ACTION_VIEW).setDataAndType(uri,"application/octet-stream");
    i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION); i.setClipData(ClipData.newRawUri("ROMarr file",uri));
@@ -174,5 +220,5 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
   catch (Exception e) { message("Could not share this local file."); }
  }
  private void message(String text) { if (!destroyed) new AlertDialog.Builder(this).setMessage(text).setPositiveButton("OK",null).show(); }
- @Override protected void onDestroy() { destroyed=true; web.stopLoading(); web.destroy(); worker.shutdown(); super.onDestroy(); }
+ @Override protected void onDestroy() { destroyed=true; clearSignIn(); web.stopLoading(); web.destroy(); worker.shutdown(); super.onDestroy(); }
 }

@@ -110,6 +110,8 @@ Example: if qBittorrent and ROMarr share host `/srv/downloads`, mount `/srv/down
 | Import succeeded but library server has no game | The server scans the same directory and its rescan completed |
 | Environment edit had no effect | Connection settings saved after first run are changed in the UI |
 
+For a suspicious file, a bug or an idea, open **Activity → Reports & Help**. You can record a local file report or prepare a GitHub issue without uploading a game. [How reports, scanner evidence and quarantine work](REPORTING.md).
+
 The [install troubleshooting guide](INSTALL.md#troubleshooting) covers startup and permission errors. Include your version, install method, error and relevant log when reporting a problem; remove credentials first.
 
 

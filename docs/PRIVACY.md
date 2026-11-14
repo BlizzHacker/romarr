@@ -20,6 +20,10 @@ Remote ROMarr server operators control their own settings, storage, logging and 
 
 ROMarr does not require an advertising account or include an advertising SDK. You can choose to submit diagnostics or screenshots when asking for support. Remove passwords, keys, private URLs and personal filenames before sharing them publicly.
 
+## File reports and GitHub issues
+
+File reports and scanner evidence remain in the backend data directory. Reviewing a report creates a temporary private file snapshot. Configured antivirus services may receive those bytes for scanning; VirusTotal uses a hash lookup. Nothing is sent to GitHub automatically. An issue draft or explicitly confirmed submission includes only the text you review and selected report evidence; game files and local report notes are not attached by default. Direct API submission requires an operator-configured token and explicit confirmation. See [Reporting](REPORTING.md).
+
 ## Removing data
 
 Delete Chrome extension profiles in its popup or remove the extension to clear its local storage. For desktop browser sessions, clear the relevant browser profile. Remove backend data only after backing up anything you wish to retain. Uninstalling an Android app normally removes its private app storage; exported files and remote server data remain where you saved them.

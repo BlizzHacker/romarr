@@ -20,6 +20,11 @@ VERSION = "3.1.0"
 #: One line per route. Anything served and not described here fails the test,
 #: which is the whole mechanism keeping this honest.
 DESCRIPTIONS: dict[str, tuple[str, str]] = {
+    "/api/v1/file-reports": ("GET", "Local user reports and snapshot scanner evidence; authentication required."),
+    "/api/v1/file-reports/submit": ("POST", "Report a relative library file and queue a bounded snapshot scan."),
+    "/api/v1/file-reports/quarantine": ("POST", "Explicitly quarantine unchanged reviewed bytes; never delete."),
+    "/api/v1/file-reports/restore": ("POST", "Restore quarantined bytes without overwriting an existing destination."),
+    "/api/v1/support/github": ("POST", "Prepare a reviewed GitHub issue or submit with explicit consent and an operator token."),
     "/": ("GET", "The web UI."),
     "/manifest.webmanifest": ("GET", "Constant installable app manifest."),
     "/service-worker.js": ("GET", "Online-only app service worker; no request interception or caching."),

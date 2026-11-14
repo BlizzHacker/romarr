@@ -1,0 +1,38 @@
+{
+  "checked_at": "2026-11-14T20:34:05.149966+00:00",
+  "test_scope": "Report-manager integration with actual ClamAV INSTREAM; synthetic harmless and EICAR controls only",
+  "daemon_version": "ClamAV 1.4.6/28183/Sat Nov 14 06:24:17 2026",
+  "originals_preserved": true,
+  "source_sha256": "6157ebd4b049e4f52a4feba0a9004590703d16353cbd858c9b5c8e9cb5a9982e",
+  "cases": [
+    {
+      "file": "ordinary.rom",
+      "sha256": "64837a28bc7f2edab51c7e2bb60b38cecfc2233af6445fa8edf0174e4ab21e97",
+      "status": "no-detections",
+      "scanners": [
+        {
+          "checked": "2026-11-14T20:34:05+00:00",
+          "engine": "ClamAV",
+          "signatures": [],
+          "status": "no-detections"
+        }
+      ]
+    },
+    {
+      "file": "antivirus-test.rom",
+      "sha256": "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f",
+      "status": "antivirus-test-fixture",
+      "scanners": [
+        {
+          "checked": "2026-11-14T20:34:05+00:00",
+          "engine": "ClamAV",
+          "signatures": [
+            "Eicar-Test-Signature"
+          ],
+          "status": "detected"
+        }
+      ]
+    }
+  ],
+  "limits": "No real malware or game payload was downloaded or executed. No-detections is not a guarantee of safety."
+}

@@ -9,6 +9,7 @@ against the protocol rather than against itself.
 from __future__ import annotations
 
 import socket
+import sys
 import socketserver
 import struct
 import threading
@@ -75,6 +76,7 @@ def test_version_answers(clamd):
     assert clamav.version(clamd).startswith("ClamAV 1.4.3")
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Real antivirus fixture runs on Linux; do not trip host Defender")
 def test_a_download_is_scanned_file_by_file(clamd, tmp_path):
     download = tmp_path / "Release"
     (download / "sub").mkdir(parents=True)
@@ -138,6 +140,7 @@ def test_a_clean_download_is_imported(clamd, tmp_path):
     assert results[0]["ok"] and landed.exists() and row.state == "imported"
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Real antivirus fixture runs on Linux; do not trip host Defender")
 def test_an_infected_download_is_refused_and_blamed_on_the_release(clamd, tmp_path):
     service, row, results, landed = sweep(tmp_path, EICAR,
                                           clamav_enabled=True, clamav_address=clamd)
@@ -162,7 +165,7 @@ def test_enabled_without_an_address_waits_rather_than_importing_unscanned(tmp_pa
 
 
 def test_off_by_default(tmp_path):
-    _, row, _, landed = sweep(tmp_path, EICAR)
+    _, row, _, landed = sweep(tmp_path, b"ordinary scanner-disabled test fixture")
     assert landed.exists() and row.state == "imported"
 
 

@@ -17,6 +17,12 @@ public sealed class MainWindow : Form
     readonly TextBox serverAddress = new() { Width = 280, PlaceholderText = "https://romarr.example.com" };
     readonly Button connect = new() { Text = "Connect to server", AutoSize = true };
     bool remoteConnected;
+    bool remoteSessionActive;
+    bool remoteTrustPending;
+    long remoteSessionVersion;
+    readonly HashSet<string> signInOrigins = new(StringComparer.OrdinalIgnoreCase);
+    string? resumedSignInUrl;
+    TaskCompletionSource? remoteLoadReady;
     string preferredMode = "local";
     string savedServerOrigin = "";
     readonly Button stop = new() { Text = "Stop", AutoSize = true, Enabled = false };
@@ -76,7 +82,7 @@ public sealed class MainWindow : Form
         start.Click += async (_,_) => await StartWithMessage();
         stop.Click += (_,_) => { if (remoteConnected) DisconnectServer(); else StopBackend(); };
         connect.Click += async (_,_) => await ConnectServerWithMessage();
-        FormClosing += (_,_) => { closing = true; StopBackend(); http.Dispose(); };
+        FormClosing += (_,_) => { closing = true; ClearRemoteSignIn(); StopBackend(); http.Dispose(); };
         Shown += async (_,_) =>
         {
             if (smokeRoot is not null) await Smoke();
@@ -144,7 +150,8 @@ public sealed class MainWindow : Form
     async Task StartBackend()
     {
         if (busy || backend is { HasExited: false }) return;
-        if (remoteConnected) DisconnectServer();
+        if (remoteSessionActive || remoteConnected) DisconnectServer();
+        ClearRemoteSignIn();
         preferredMode = "local"; stop.Text = "Stop";
         busy = true; start.Enabled = false; status.Text = "Starting ROMarr...";
         try
@@ -240,11 +247,110 @@ public sealed class MainWindow : Form
                 browserData = selectedBrowserData;
                 browser.CoreWebView2.Settings.AreDevToolsEnabled = false;
                 browser.CoreWebView2.NewWindowRequested += (_, e) => { e.Handled = true; OpenWebLink(e.Uri); };
-                browser.CoreWebView2.NavigationStarting += (_, e) =>
+                var selectedBrowser = browser;
+                browser.CoreWebView2.NavigationStarting += (_, e) => HandleRemoteNavigation(selectedBrowser, e);
+                browser.CoreWebView2.NavigationCompleted += (_, e) =>
                 {
-                    if (e.Uri != "about:blank" && !e.Uri.StartsWith(origin + "/", StringComparison.OrdinalIgnoreCase)) { e.Cancel = true; OpenWebLink(e.Uri); }
+                    if (e.IsSuccess && remoteSessionActive && ReferenceEquals(browser, selectedBrowser)) UpdateRemoteStatus();
                 };
             }
+    }
+
+    /// <summary>Extracts only a credential-free HTTPS authority for trust prompts.</summary>
+    static string? SignInOrigin(string value)
+    {
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var address) || address.Scheme != Uri.UriSchemeHttps
+            || string.IsNullOrEmpty(address.Host) || !string.IsNullOrEmpty(address.UserInfo)) return null;
+        return address.GetLeftPart(UriPartial.Authority);
+    }
+
+    /// <summary>Allows sign-in redirects and their same-origin forms, never ordinary external links.</summary>
+    static bool IsSignInContinuation(bool remote, bool redirected, bool currentSignInOrigin, string? destination)
+        => remote && destination is not null && (redirected || currentSignInOrigin);
+
+    /// <summary>Invalidates outstanding prompts and forgets per-session sign-in approvals.</summary>
+    void ClearRemoteSignIn()
+    {
+        remoteSessionVersion++;
+        remoteSessionActive = false; remoteTrustPending = false;
+        signInOrigins.Clear(); resumedSignInUrl = null;
+        remoteLoadReady?.TrySetCanceled(); remoteLoadReady = null;
+    }
+
+    /// <summary>Rejects callbacks belonging to a closed or previously selected server view.</summary>
+    bool CurrentRemoteSession(long version, string server, WebView2 selectedBrowser)
+        => !closing && remoteSessionActive && version == remoteSessionVersion
+            && origin == server && ReferenceEquals(browser, selectedBrowser);
+
+    /// <summary>Displays only the authority of the page currently visible in the native browser.</summary>
+    void UpdateRemoteStatus()
+    {
+        if (!remoteSessionActive || browser.CoreWebView2 is null) return;
+        if (!Uri.TryCreate(browser.CoreWebView2.Source, UriKind.Absolute, out var current)
+            || (current.Scheme != Uri.UriSchemeHttp && current.Scheme != Uri.UriSchemeHttps)) return;
+        var authority = current.GetLeftPart(UriPartial.Authority);
+        status.Text = authority.Equals(origin, StringComparison.OrdinalIgnoreCase)
+            ? "Connected view: " + authority + ". Files stay on the server."
+            : "Sign-in page: " + authority + ". Selected server: " + origin;
+    }
+
+    /// <summary>Keeps explicitly approved HTTPS SSO redirects inside the selected remote profile.</summary>
+    void HandleRemoteNavigation(WebView2 selectedBrowser, CoreWebView2NavigationStartingEventArgs e)
+    {
+        if (!ReferenceEquals(browser, selectedBrowser)) { e.Cancel = true; return; }
+        if (e.Uri == "about:blank" || e.Uri.StartsWith(origin + "/", StringComparison.OrdinalIgnoreCase)) return;
+        var destination = SignInOrigin(e.Uri);
+        var current = SignInOrigin(selectedBrowser.CoreWebView2.Source);
+        var continuation = IsSignInContinuation(remoteSessionActive, e.IsRedirected,
+            current is not null && signInOrigins.Contains(current) && current.Equals(destination, StringComparison.OrdinalIgnoreCase), destination);
+        if (resumedSignInUrl == e.Uri && remoteSessionActive && destination is not null && signInOrigins.Contains(destination))
+        {
+            resumedSignInUrl = null; return;
+        }
+        if (continuation && destination is not null && signInOrigins.Contains(destination)) return;
+        e.Cancel = true;
+        if (!continuation || destination is null) { OpenWebLink(e.Uri); return; }
+        if (remoteTrustPending) return;
+        remoteTrustPending = true;
+        var version = remoteSessionVersion;
+        var server = origin;
+        var redirectUrl = e.Uri;
+        // A WebView2 event cannot host a modal nested message loop. Defer the native prompt.
+        BeginInvoke((Action)(() =>
+        {
+            if (!CurrentRemoteSession(version, server, selectedBrowser)) return;
+            var approved = MessageBox.Show(this,
+                "This server redirected sign-in to:\n\n" + destination
+                + "\n\nOnly continue if this is your trusted sign-in provider. Allow this HTTPS origin in this server view until disconnect?",
+                "Allow sign-in provider?", MessageBoxButtons.YesNo, MessageBoxIcon.Question,
+                MessageBoxDefaultButton.Button2) == DialogResult.Yes;
+            if (!CurrentRemoteSession(version, server, selectedBrowser)) return;
+            remoteTrustPending = false;
+            if (!approved)
+            {
+                status.Text = "Sign-in provider was not approved: " + destination;
+                remoteLoadReady?.TrySetException(new IOException("The sign-in provider was not approved."));
+                return;
+            }
+            signInOrigins.Add(destination);
+            resumedSignInUrl = redirectUrl;
+            status.Text = "Opening sign-in page: " + destination + ". Selected server: " + server;
+            selectedBrowser.CoreWebView2.Navigate(redirectUrl);
+        }));
+    }
+
+    /// <summary>Checks redirect policy without trusting a real provider or bypassing TLS in CI.</summary>
+    static void ProveRemoteSignInPolicy()
+    {
+        var https = SignInOrigin("https://login.example.test/authorize?secret=fixture");
+        if (https != "https://login.example.test" || SignInOrigin("http://login.example.test/") is not null
+            || SignInOrigin("https://user:password@login.example.test/") is not null
+            || IsSignInContinuation(false, true, false, https)
+            || IsSignInContinuation(true, false, false, https)
+            || IsSignInContinuation(true, true, false, null)
+            || !IsSignInContinuation(true, true, false, https)
+            || !IsSignInContinuation(true, false, true, https))
+            throw new Exception("Remote sign-in trust policy failed.");
     }
 
     /// <summary>Connects to a user-selected server without starting a local backend.</summary>
@@ -260,27 +366,48 @@ public sealed class MainWindow : Form
                 throw new IOException("Extract the whole ROMarr Windows ZIP before connecting.");
             busy = true; connect.Enabled = false; start.Enabled = false;
             transitioned = true; StopBackend(false);
-            origin = target;
+            ClearRemoteSignIn();
+            origin = target; remoteSessionActive = true;
+            var sessionVersion = remoteSessionVersion;
             var profile = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(target)));
             await EnsureBrowser(runtime, Path.Combine(dataPath.Text, "remote-browser-data", profile));
             serverAddress.Text = savedServerOrigin = target;
-            var ready = new TaskCompletionSource();
+            if (!CurrentRemoteSession(sessionVersion, target, browser)) return;
+            var selectedBrowser = browser;
+            var ready = new TaskCompletionSource(); remoteLoadReady = ready;
             void RemoteLoaded(object? sender, CoreWebView2NavigationCompletedEventArgs e)
             {
-                browser.NavigationCompleted -= RemoteLoaded;
-                if (e.IsSuccess) ready.TrySetResult();
+                if (!CurrentRemoteSession(sessionVersion, target, selectedBrowser)) return;
+                if (!e.IsSuccess && e.WebErrorStatus == CoreWebView2WebErrorStatus.OperationCanceled) return;
+                if (e.IsSuccess)
+                {
+                    var displayed = selectedBrowser.CoreWebView2.Source;
+                    var displayedSignIn = SignInOrigin(displayed);
+                    if (displayed.StartsWith(target + "/", StringComparison.OrdinalIgnoreCase)
+                        || (displayedSignIn is not null && signInOrigins.Contains(displayedSignIn))) ready.TrySetResult();
+                }
                 else ready.TrySetException(new IOException("The server page could not load. Check the address and network connection."));
             }
             browser.NavigationCompleted += RemoteLoaded;
             try
             {
                 browser.CoreWebView2.Navigate(target + "/");
-                await ready.Task.WaitAsync(TimeSpan.FromSeconds(30));
+                var remaining = TimeSpan.FromSeconds(30);
+                while (!ready.Task.IsCompleted)
+                {
+                    var prompting = remoteTrustPending;
+                    var elapsed = Stopwatch.StartNew();
+                    await Task.WhenAny(ready.Task, Task.Delay(250));
+                    if (!prompting && !remoteTrustPending) remaining -= elapsed.Elapsed;
+                    if (remaining <= TimeSpan.Zero) throw new IOException("The server page took too long to load.");
+                }
+                await ready.Task;
             }
-            finally { browser.NavigationCompleted -= RemoteLoaded; }
+            finally { selectedBrowser.NavigationCompleted -= RemoteLoaded; if (ReferenceEquals(remoteLoadReady, ready)) remoteLoadReady = null; }
+            if (!CurrentRemoteSession(sessionVersion, target, selectedBrowser)) return;
             remoteConnected = true; preferredMode = "remote";
             stop.Text = "Disconnect"; stop.Enabled = true;
-            status.Text = "Connected view: " + target + ". Sign in with this server’s account. Files stay on the server.";
+            UpdateRemoteStatus();
             SavePreferences();
         }
         catch (Exception ex)
@@ -293,6 +420,7 @@ public sealed class MainWindow : Form
     /// <summary>Closes the remote view without stopping or changing the remote server.</summary>
     void DisconnectServer()
     {
+        ClearRemoteSignIn();
         remoteConnected = false; origin = "";
         browser.CoreWebView2?.Navigate("about:blank");
         stop.Text = "Stop"; stop.Enabled = false;
@@ -383,6 +511,7 @@ public sealed class MainWindow : Form
         Directory.CreateDirectory(smokeRoot!);
         try
         {
+            ProveRemoteSignInPolicy();
             var key = Guid.NewGuid().ToString("N");
             Environment.SetEnvironmentVariable("ROMARR_API_KEY", key);
             port.Value = FreePort();
@@ -420,6 +549,9 @@ public sealed class MainWindow : Form
             var anon = await http.GetAsync(origin + "/api/v1/config");
             if (anon.StatusCode != HttpStatusCode.Unauthorized) throw new Exception("Private API was not protected.");
             http.DefaultRequestHeaders.Add("X-Api-Key", key);
+            var versionInfo = await http.GetFromJsonAsync<JsonElement>(origin + "/api/v1/stats");
+            if (versionInfo.GetProperty("version").GetString() != typeof(MainWindow).Assembly.GetName().Version!.ToString(3))
+                throw new Exception("The packaged backend version does not match the native application.");
             var hub = await http.GetFromJsonAsync<JsonElement>(origin + "/api/v1/hub/catalogue");
             if (hub.GetProperty("items").GetArrayLength() == 0) throw new Exception("Bundled ROM Hub catalogue is unavailable.");
             using (var installer = new HttpClient { Timeout = TimeSpan.FromMinutes(3) })
@@ -446,7 +578,7 @@ public sealed class MainWindow : Form
             await ProveRemoteView();
             File.WriteAllText(Path.Combine(smokeRoot!, "smoke-proof.json"), JsonSerializer.Serialize(new {
                 nativeWindow = true, embeddedInterface = true, bundledPython = true, bundledHub = true, pluginInstall = true,
-                authentication = true, persistence = true, setupGuide = true, remoteView = true, remoteDisconnectKeepsServer = true, port = port.Value
+                authentication = true, persistence = true, setupGuide = true, versionIdentity = true, remoteView = true, remoteDisconnectKeepsServer = true, remoteSignInPolicy = true, port = port.Value
             }, new JsonSerializerOptions { WriteIndented = true }));
             Environment.ExitCode = 0;
         }
