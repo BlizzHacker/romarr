@@ -132,7 +132,7 @@ def test_nightly_channel_requires_separate_revision_check(tmp_path, monkeypatch)
     out = svc.check_update()
     assert out["indeterminate"]
     st = svc.update_status()
-    assert st["check_status"]["reason"] == "nightly_revision_not_checked"
+    assert st["check_status"]["reason"] == "nightly_build_unverified"
     assert st["settings"]["auto_update"] is True
     assert st["settings"]["auto_update_effective"] is False
 
