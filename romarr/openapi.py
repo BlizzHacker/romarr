@@ -372,6 +372,7 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
                                                    "and install the companion "
                                                    "Mister Download Manager "
                                                    "binaries locally."),
+    "/api/v1/game/nfo": ("GET", "Read a bounded same-stem NFO for a cached local folder game; unsupported platforms fail closed."),
     "/api/v1/library": ("GET", "Configured library servers."),
     "/api/v1/library/schema": ("GET", "Library backend types and their fields."),
     "/api/v1/library/config": ("GET", "One library's stored configuration."),

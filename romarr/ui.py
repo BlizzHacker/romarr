@@ -1878,12 +1878,32 @@ function shelfEditor(g, meta){
     <div class="field"><label>Notes</label>
       <textarea data-f="notes" rows="4"
         style="width:100%;resize:vertical">${esc(meta.notes||'')}</textarea></div>
+    <details id="sh-nfo"><summary>Release notes (NFO)</summary>
+      <p class="help" id="sh-nfo-status">Open to read a same-name NFO beside this local game.</p>
+      <pre id="sh-nfo-text" style="white-space:pre;overflow:auto;max-height:360px"></pre></details>
     <div class="foot">
       <button class="btn ghost sp" data-close>Cancel</button>
       <button class="btn" id="sh-save">Save</button>
     </div></div>`;
   document.body.append(m);
   m.onclick=e=>{ if(e.target===m||e.target.dataset.close!==undefined) closeModal(); };
+  m.querySelector('#sh-nfo').ontoggle=async(e)=>{
+    if(!e.target.open||e.target.dataset.loaded)return;
+    e.target.dataset.loaded='1';
+    const status=m.querySelector('#sh-nfo-status');
+    status.textContent='Reading release notes…';
+    try{
+      const nfo=await j('/api/v1/game/nfo?id='+encodeURIComponent(g.id||'')
+        +'&source='+encodeURIComponent(g.source||''));
+      if(!m.isConnected)return;
+      status.textContent=nfo.available
+        ?nfo.filename+(nfo.truncated?' — preview limited to 128 KiB':'')
+        :(nfo.reason||'No same-name NFO is available for this local folder game.');
+      m.querySelector('#sh-nfo-text').textContent=nfo.text||'';
+    }catch(err){
+      if(m.isConnected)status.textContent='Could not read release notes.';
+    }
+  };
   m.querySelector('#sh-save').onclick=async()=>{
     const f=readForm();
     const r=await j('/api/v1/game/meta',{method:'POST',
