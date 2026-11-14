@@ -224,3 +224,42 @@ def test_crc_collision_extras_discard_wrong_sha1():
     assert index.verified_candidates(crc="a1b2c3d4", size=4, sha1="c" * 40) == ()
     assert [m.game for m in index.verified_candidates(
         crc="a1b2c3d4", size=4, sha1="b" * 40)] == ["Two"]
+
+
+def test_matching_sha1_with_conflicting_declared_size_is_not_request_verified():
+    dat = parse_dat("""
+    <datafile><header><name>Size System</name></header>
+      <game name="Game"><rom name="file.bin" size="4"
+        sha1="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"/></game>
+    </datafile>""")
+    index = DatIndex()
+    index.add(dat)
+    query = dict(sha1="a" * 40, size=5)
+    assert index.lookup(**query).status == VERIFIED  # preserve legacy lookup
+    assert index.verified_candidates(**query) == ()
+
+
+def test_matching_md5_with_conflicting_declared_size_is_not_request_verified():
+    dat = parse_dat("""
+    <datafile><header><name>Size System</name></header>
+      <game name="Game"><rom name="file.bin" size="4"
+        md5="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"/></game>
+    </datafile>""")
+    index = DatIndex()
+    index.add(dat)
+    query = dict(md5="b" * 32, size=5)
+    assert index.lookup(**query).status == VERIFIED
+    assert index.verified_candidates(**query) == ()
+
+
+def test_matching_sha1_and_declared_size_remains_request_verified():
+    dat = parse_dat("""
+    <datafile><header><name>Size System</name></header>
+      <game name="Game"><rom name="file.bin" size="4"
+        sha1="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"/></game>
+    </datafile>""")
+    index = DatIndex()
+    index.add(dat)
+    candidates = index.verified_candidates(sha1="a" * 40, size=4)
+    assert len(candidates) == 1
+    assert candidates[0].game == "Game"

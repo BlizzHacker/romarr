@@ -763,6 +763,12 @@ class Store:
         mapping = (validate_dat_catalog_platforms(patch["dat_catalog_platforms"])
                    if "dat_catalog_platforms" in patch else None)
         with self._lock:
+            # No catalog provenance can be trusted without a selected DAT root.
+            # Refuse the whole patch before changing memory or the saved file.
+            if (mapping and not str(
+                    patch.get("dat_path", self.settings.get("dat_path")) or ""
+            ).strip()):
+                raise ValueError("Select a DAT directory before saving catalog mappings")
             if ("dat_path" in patch
                     and str(patch["dat_path"] or "") != str(self.settings.get("dat_path") or "")
                     and (mapping if mapping is not None

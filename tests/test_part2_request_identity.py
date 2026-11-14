@@ -199,5 +199,23 @@ class ReviewedNormalizationTests(unittest.TestCase):
             self.assertEqual(d.code, "REQUEST_TITLE_MISMATCH")
 
 
+    def test_devanagari_vowel_signs_are_distinct(self):
+        decision = decide_request("कि", "nes", [
+            Candidate("verified", "कु", "DAT", "nes")])
+        self.assertEqual((decision.action, decision.code),
+                         ("hold", "REQUEST_TITLE_MISMATCH"))
+
+    def test_devanagari_matching_title_can_be_confirmed(self):
+        decision = decide_request("कि", "nes", [
+            Candidate("verified", "कि", "DAT", "nes")])
+        self.assertEqual((decision.action, decision.code),
+                         ("import", "MATCH_CONFIRMED"))
+
+    def test_arabic_vowel_signs_are_distinct(self):
+        decision = decide_request("قَلْب", "nes", [
+            Candidate("verified", "قُلْب", "DAT", "nes")])
+        self.assertEqual(decision.code, "REQUEST_TITLE_MISMATCH")
+
+
 if __name__ == "__main__":
     unittest.main()

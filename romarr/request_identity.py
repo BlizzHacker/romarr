@@ -80,8 +80,12 @@ def _strict_title_key(value: str) -> str:
                               else match.group(0),
         value,
     )
-    return " ".join("".join(char if char.isalnum() else " "
-                            for char in value.casefold()).split())
+    # Combining marks carry title identity in many non-Latin scripts. NFKC
+    # leaves Devanagari vowel signs separate from their base consonants.
+    return " ".join("".join(
+        char if (char.isalnum() or unicodedata.category(char).startswith("M"))
+        else " " for char in value.casefold()
+    ).split())
 
 
 def decide_request(

@@ -437,6 +437,34 @@ def test_invalid_dat_catalog_mapping_rejected_without_partial_write(tmp_path, ma
     assert path.read_bytes() == previous
 
 
+def test_dat_mappings_require_a_selected_directory_without_partial_save(tmp_path):
+    path = tmp_path / "romarr.json"
+    store = Store(path)
+    store.update_settings({"min_seeders": 3})
+    previous = path.read_bytes()
+    patch = {"dat_catalog_platforms": {"Nintendo - SNES": "snes"},
+             "min_seeders": 99}
+    with pytest.raises(ValueError, match="Select a DAT directory"):
+        store.update_settings(patch)
+    assert store.settings["dat_catalog_platforms"] == {}
+    assert store.settings["min_seeders"] == 3
+    assert path.read_bytes() == previous
+
+
+def test_empty_dat_directory_and_nonempty_mapping_are_rejected_atomically(tmp_path):
+    path = tmp_path / "romarr.json"
+    store = Store(path)
+    store.update_settings({"min_seeders": 3})
+    previous = path.read_bytes()
+    with pytest.raises(ValueError, match="Select a DAT directory"):
+        store.update_settings({"dat_path": "",
+                               "dat_catalog_platforms": {"Nintendo - SNES": "snes"},
+                               "min_seeders": 99})
+    assert store.settings["min_seeders"] == 3
+    assert store.settings["dat_path"] == ""
+    assert path.read_bytes() == previous
+
+
 def test_dat_directory_change_requires_mappings_to_be_cleared(tmp_path):
     """Changing DAT roots cannot silently preserve earlier operator claims."""
     path = tmp_path / "romarr.json"

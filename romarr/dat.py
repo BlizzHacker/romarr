@@ -591,7 +591,8 @@ class DatIndex:
         def hashes_agree(rom: Rom) -> bool:
             # Legacy lookup can fall back to CRC, but requests must not trust
             # a candidate whose stronger declared hashes disagree.
-            return not ((sha1 and rom.sha1 and sha1 != rom.sha1)
+            return not ((size and rom.size and size != rom.size)
+                        or (sha1 and rom.sha1 and sha1 != rom.sha1)
                         or (md5 and rom.md5 and md5 != rom.md5))
 
         for dat, (extra_crc, extra_md5, extra_sha1) in zip(self.dats, self._duplicate_hits):
