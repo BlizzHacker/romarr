@@ -77,12 +77,20 @@ def test_clean_verified_git_checkout_uses_full_sha(monkeypatch, tmp_path):
                "rev-parse --verify HEAD": RUNNING}
     monkeypatch.setattr(nightly, "_local_git",
                         lambda repo, *args: answers[" ".join(args)])
-    assert nightly.running_main_revision({}, env) == RUNNING
+    startup = nightly.git_checkout_revision(env)
+    assert startup == RUNNING
+    assert nightly.running_main_revision({}, env, startup_git_revision=startup) == RUNNING
     answers["status --porcelain --untracked-files=all"] = "?? operator.txt"
-    assert nightly.running_main_revision({}, env) == ""
+    assert nightly.running_main_revision({}, env, startup_git_revision=startup) == ""
+    answers["status --porcelain --untracked-files=all"] = None
+    assert nightly.running_main_revision({}, env, startup_git_revision=startup) == ""
     answers["status --porcelain --untracked-files=all"] = ""
     answers["remote get-url origin"] = "https://github.com/untrusted/romarr"
-    assert nightly.running_main_revision({}, env) == ""
+    assert nightly.running_main_revision({}, env, startup_git_revision=startup) == ""
+    answers["remote get-url origin"] = "https://github.com/BlizzHacker/romarr.git"
+    answers["rev-parse --verify HEAD"] = LATEST
+    env.commit = LATEST[:8]
+    assert nightly.running_main_revision({}, env, startup_git_revision=startup) == ""
 
 
 def test_same_commit_is_current_and_uses_one_request():
@@ -215,3 +223,20 @@ def test_changed_running_build_invalidates_persisted_nightly(service, monkeypatc
     status = service.update_status()
     assert status["check_status"]["state"] == "unknown"
     assert status["check_status"]["reason"] == "nightly_build_changed"
+
+
+def test_service_captures_git_revision_at_construction(tmp_path, monkeypatch):
+    """A Git checkout's running SHA is captured once, before later Git movement."""
+    env = selfupdate.Environment(kind="git", repo=str(tmp_path), branch="main",
+                                 commit=RUNNING[:8])
+    monkeypatch.setattr(selfupdate, "detect", lambda root=None: env)
+    observed = []
+    def capture(value):
+        """Record the startup capture, which must not update after service init."""
+        observed.append(value)
+        return RUNNING
+    monkeypatch.setattr(nightly, "git_checkout_revision", capture)
+    monkeypatch.setattr(Scheduler, "start", lambda self: None)
+    svc = ROMarr(env={"ROMARR_DATA": str(tmp_path / "service.json")})
+    assert svc._nightly_git_start_revision == RUNNING
+    assert observed == [env]
