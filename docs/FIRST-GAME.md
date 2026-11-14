@@ -44,3 +44,5 @@ Some systems require firmware or BIOS files. Follow the emulator’s official in
 Once it opens and your controls work, you have a working starting point. Add another game or system at your own pace. For downloading, verification, plugins and collection comparisons, continue with [Getting started](GETTING-STARTED.md).
 
 If you get stuck, [tell us where you stopped](https://github.com/BlizzHacker/romarr/issues). Your ROMarr version, install method, system and the exact message help us reproduce it. You do not need to diagnose the problem or write code. Remove passwords and API keys from screenshots and logs.
+
+This walkthrough grew out of people sharing their first installations and memories of older systems in [r/ARR](https://www.reddit.com/r/ARR/comments/1xv2ps9/). Thanks to everyone testing, contributing fixes and helping another player get started. A clear report or a friendly answer helps this project just as much as a feature request.

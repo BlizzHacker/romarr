@@ -5628,12 +5628,12 @@ RENDER.getstarted=async()=>{
 
   $('#page').innerHTML=
     '<div class="card"><h3>What ROMarr is</h3><p><a class="btn" href="#setup">Open the Setup Guide</a></p>'
-    +'<p class="help">ROMarr is the acquisition and automation layer: it '
-    +'searches your indexers, grabs the best release, checks it against a '
-    +'No-Intro or Redump DAT, and files it into your library. '
-    +'<b>It is not an emulator and not a game launcher.</b> Something else '
-    +'plays the ROM — ROMarr makes sure the right file is in the right place '
-    +'for it.</p>'
+    +'<p class="help">ROMarr helps you find, check and organize games. '
+    +'Start with files you already have, or connect a search source and a download client. '
+    +'Optional DAT catalogues compare your files with known checksums.</p>'
+    +'<p class="help"><b>Your emulator plays the games.</b> RomM is an optional '
+    +'library frontend with playback for supported systems. You can also use a plain folder. '
+    +'If you use Sonarr or Radarr, the search-and-import workflow will feel familiar.</p>'
     +'<div style="font-family:ui-monospace,monospace;font-size:12.5px;'
     +'background:var(--bg);border:1px solid var(--line);border-radius:6px;'
     +'padding:14px;overflow-x:auto;line-height:1.9">'
