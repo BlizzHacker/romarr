@@ -487,6 +487,13 @@ class ROMarr:
         self._lock = threading.Lock()
         # A manual check and the daily sweep must never overlap or auto-apply twice.
         self._update_check_lock = threading.Lock()
+        # Git HEAD can move without restarting this service. Pin the source
+        # actually running at service construction, not a later checkout HEAD.
+        from . import nightly, selfupdate
+        startup_install = selfupdate.detect()
+        self._nightly_git_start_revision = (
+            nightly.git_checkout_revision(startup_install)
+            if startup_install.kind == "git" else "")
         self._collection_lock = threading.RLock()
         self._probe_lock = threading.Lock()
         self._inflight_probes: dict[int, tuple[object, threading.Event, dict[str, object]]] = {}
@@ -6417,7 +6424,8 @@ class ROMarr:
         if channel == "nightly":
             from . import nightly, selfupdate
             running_revision = nightly.running_main_revision(
-                get_build_info(VERSION), selfupdate.detect())
+                get_build_info(VERSION), selfupdate.detect(),
+                startup_git_revision=self._nightly_git_start_revision)
         if state not in ("never_checked", "available", "current", "unknown", "error"):
             state, reason = "unknown", "invalid_saved_status"
         elif state != "never_checked" and (
@@ -6471,7 +6479,8 @@ class ROMarr:
             if channel == "nightly":
                 from . import nightly, selfupdate
                 running = nightly.running_main_revision(
-                    get_build_info(VERSION), selfupdate.detect())
+                    get_build_info(VERSION), selfupdate.detect(),
+                    startup_git_revision=self._nightly_git_start_revision)
                 if not running:
                     self._record_update_check(
                         "unknown", "nightly_build_unverified",
@@ -6489,7 +6498,8 @@ class ROMarr:
                     active = str(self.store.settings.get("update_channel")
                                  or "stable").lower()
                 if (active != channel or running != nightly.running_main_revision(
-                        get_build_info(VERSION), selfupdate.detect())):
+                        get_build_info(VERSION), selfupdate.detect(),
+                        startup_git_revision=self._nightly_git_start_revision)):
                     self._record_update_check(
                         "unknown", "channel_or_build_changed_during_check",
                         checked_channel=channel, checked_revision=running)
