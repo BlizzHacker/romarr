@@ -115,6 +115,7 @@ from .selection import (Release, best_release, infer_platform, judge, score,
                         collection_content_kind, collection_content_refusal)
 from .store import Event, QueueItem, SeerrRequest, Store
 from .ui import favicon_svg as ui_favicon_svg
+from .ui import web_manifest, service_worker, app_icon
 from .ui import page as ui_page
 from .ui import link_page as ui_link_page
 from .ui import login_page as ui_login_page
@@ -8001,7 +8002,8 @@ def make_handler(service: ROMarr):
                     self.end_headers()
                     return self.wfile.write(body)
             if (path in self.OPEN_PATHS
-                    or path in ("/favicon.ico", "/favicon.svg")
+                    or path in ("/favicon.ico", "/favicon.svg", "/manifest.webmanifest",
+                                "/service-worker.js", "/app-icon-192.png", "/app-icon-512.png")
                     or is_portal_asset(path)
                     or self._authorised()):
                 return self._guard(handler)
@@ -8032,6 +8034,13 @@ def make_handler(service: ROMarr):
             if route.path in ("/favicon.ico", "/favicon.svg"):
                 return self._send(200, ui_favicon_svg().encode("utf-8"),
                                   "image/svg+xml")
+            if route.path == "/manifest.webmanifest":
+                return self._send(200, web_manifest().encode(), "application/manifest+json")
+            if route.path == "/service-worker.js":
+                return self._send(200, service_worker().encode(), "application/javascript")
+            if route.path in ("/app-icon-192.png", "/app-icon-512.png"):
+                size = 192 if route.path == "/app-icon-192.png" else 512
+                return self._send(200, app_icon(size), "image/png")
             if route.path == "/link":
                 # Served before the sign-in check on purpose, and without
                 # consulting anything: the visitor is a stranger holding a
@@ -8143,7 +8152,8 @@ def make_handler(service: ROMarr):
                 try:
                     result = EmulatorHub(service.store.path.parent).catalog(
                         (query.get("q") or [""])[0], int((query.get("offset") or ["0"])[0]),
-                        int((query.get("limit") or ["60"])[0]))
+                        int((query.get("limit") or ["60"])[0]),
+                        host_platform=(query.get("host_platform") or [""])[0])
                     return self._json(200, result)
                 except (ValueError, OSError):
                     return self._json(400, {"error": "Could not load this catalog page"})

@@ -20,6 +20,10 @@ download client and a database.
 """
 
 from html import escape
+import json
+import struct
+import zlib
+from functools import lru_cache
 
 CSS = """
 *{box-sizing:border-box;margin:0;padding:0}
@@ -614,6 +618,32 @@ html:not(.sidebar-ready):has(#fallback-accent-2:checked){--accent:#c084fc;}
 html:not(.sidebar-ready):has(#fallback-accent-3:checked){--accent:#5aa2f0;}
 html:not(.sidebar-ready):has(#fallback-accent-4:checked){--accent:#2dd4bf;}
 html:not(.sidebar-ready):has(#fallback-accent-5:checked){--accent:#7bd88f;}
+"""
+
+
+# Narrow screens keep the full navigation drawer and independently scroll tables.
+CSS += """
+#main,.page,.card,.panels>*{min-width:0}
+@media(max-width:820px){
+  table{display:block;max-width:100%;overflow-x:auto;overscroll-behavior-x:contain}
+  th,td{min-width:90px;overflow-wrap:anywhere}
+  .rowact{flex-wrap:wrap}
+  .card h3{flex-wrap:wrap}
+  .row>*{max-width:100%;min-width:0}
+  input,select,textarea{max-width:100%}
+}
+@media(max-width:700px){
+  #top{flex-wrap:wrap}
+  #top h1{min-width:0;overflow-wrap:anywhere;flex:1}
+  #top #search{flex:1 1 100%;width:100%;margin-left:0}
+  button,.btn,.mini,.tab,.navlinks .nav,.navhead{min-height:44px}
+  input:not([type=checkbox]):not([type=radio]),select{min-height:44px;font-size:16px}
+  #sidebar-close{width:44px;height:44px;top:8px;right:8px}
+  .modal{padding:16px 10px;padding-bottom:max(16px,env(safe-area-inset-bottom))}
+  .modal .box{padding:18px 14px;max-height:calc(100dvh - 32px);overflow:auto}
+  .page{padding-bottom:max(36px,env(safe-area-inset-bottom))}
+  .grid{grid-template-columns:repeat(auto-fill,minmax(130px,1fr))}
+}
 """
 
 
@@ -5043,7 +5073,7 @@ RENDER.connections=async()=>{
 RENDER.emulators=async()=>{
   const version=pageVersion;
   const current=()=>version===pageVersion && activePage==='emulators';
-  let offset=0, query='', mode='projects', request=0, inspection=0;
+  let offset=0, query='', mode='projects', hostPlatform='', request=0, inspection=0;
   $('#page').innerHTML=`<div class="card"><h3>Emulator Hub</h3>
     <p>Find an emulator, check its setup guide, then add your games. Install buttons install on the
     <b>ROMarr host</b>. Use the upstream downloads on a different gaming device.</p>
@@ -5051,6 +5081,7 @@ RENDER.emulators=async()=>{
     Experimental projects and forks can have limited compatibility. A catalog entry is not a gameplay test.</p>
     <div class="row"><select id="emu-mode" aria-label="Catalog"><option value="projects">Emulators and tools</option>
     <option value="cores">RetroArch cores</option><option value="resources">Sources and references</option></select>
+    <select id="emu-host" aria-label="Emulator device"><option value="">All devices</option><option value="android">Android</option><option value="linux">Linux</option><option value="windows">Windows</option><option value="macos">macOS</option></select>
     <input id="emu-search" type="search" placeholder="Search name, system, license or source" aria-label="Search emulators">
     <button class="btn" id="emu-find">Search</button></div>
     <p><a href="https://emulation.gametechwiki.com/index.php/Main_Page" target="_blank" rel="noopener">Emulation General Wiki</a>
@@ -5071,7 +5102,7 @@ RENDER.emulators=async()=>{
     const serial=++request;
     $('#emu-count').textContent='Loading catalog…';
     try{
-      const d=await j('/api/v1/emulators'+(mode==='cores'?'/cores':mode==='resources'?'/resources':'')+'?q='+encodeURIComponent(query)+'&offset='+offset);
+      const d=await j('/api/v1/emulators'+(mode==='cores'?'/cores':mode==='resources'?'/resources':'')+'?q='+encodeURIComponent(query)+'&host_platform='+encodeURIComponent(hostPlatform)+'&offset='+offset);
       if(!current()||serial!==request)return;
       if(d.error)throw new Error(d.error);
       $('#emu-count').textContent=d.total+' matches · '+d.available+' catalog entries · showing '+(d.total?offset+1:0)+'–'+Math.min(offset+d.items.length,d.total)+' · snapshot '+d.verified_date;
@@ -5156,7 +5187,8 @@ RENDER.emulators=async()=>{
   const search=()=>{query=$('#emu-search').value;offset=0;load();};
   $('#emu-find').onclick=search;
   $('#emu-search').onkeydown=e=>{if(e.key==='Enter')search();};
-  $('#emu-mode').onchange=()=>{mode=$('#emu-mode').value;search();};
+  $('#emu-mode').onchange=()=>{mode=$('#emu-mode').value;$('#emu-host').disabled=mode!=='projects';search();};
+  $('#emu-host').onchange=()=>{hostPlatform=$('#emu-host').value;search();};
   $('#emu-prev').onclick=()=>{offset=Math.max(0,offset-60);load();};
   $('#emu-next').onclick=()=>{offset+=60;load();};
   $('#core-config').onclick=async()=>{
@@ -6349,10 +6381,70 @@ def favicon_svg() -> str:
     return FAVICON_SVG
 
 
+
+def web_manifest() -> str:
+    """Return constant install metadata; no user or server settings are exposed."""
+    return json.dumps({"id": "/", "name": "ROMarr", "short_name": "ROMarr",
+                       "description": "Manage your ROMarr server. Requires a connection to your server.",
+                       "start_url": "/", "scope": "/", "display": "standalone",
+                       "background_color": "#12141a", "theme_color": "#12141a",
+                       "icons": [{"src": f"/app-icon-{size}.png", "sizes": f"{size}x{size}",
+                                  "type": "image/png", "purpose": "any"} for size in (192, 512)]})
+
+
+def service_worker() -> str:
+    """Install support only: never intercept requests or persist authenticated data."""
+    return "self.addEventListener('install', () => self.skipWaiting());\nself.addEventListener('activate', event => event.waitUntil(self.clients.claim()));\n"
+
+
+@lru_cache(maxsize=2)
+def app_icon(size: int) -> bytes:
+    """Draw the cartridge brand as a PNG using the standard library."""
+    if size not in (192, 512):
+        raise ValueError("Unsupported app icon size")
+    rows = bytearray()
+    for y in range(size):
+        rows.append(0)
+        for x in range(size):
+            px, py = x * 64 // size, y * 64 // size
+            cartridge = 12 <= px < 52 and 8 <= py < 56
+            label = 18 <= px < 46 and 28 <= py < 44
+            contact = 50 <= py < 56 and any(a <= px < a + 4 for a in (20, 28, 36, 44))
+            color = (242, 163, 60) if label or contact else ((43, 50, 64) if cartridge else (18, 20, 26))
+            rows.extend(color)
+    def chunk(kind, data):
+        """Encode one checksummed PNG chunk."""
+        return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data))
+    return (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', size, size, 8, 2, 0, 0, 0))
+            + chunk(b'IDAT', zlib.compress(bytes(rows))) + chunk(b'IEND', b''))
+
+
+APP_HEAD = ('<link rel="manifest" href="/manifest.webmanifest">'
+            '<meta name="theme-color" content="#12141a">')
+APP_BOOT = """
+if ('serviceWorker' in navigator && window.isSecureContext) {
+  navigator.serviceWorker.register('/service-worker.js', {scope:'/'}).catch(() => {});
+}
+let installPrompt;
+window.addEventListener('beforeinstallprompt', event => {
+  event.preventDefault(); installPrompt=event;
+  document.getElementById('install-app').hidden=false;
+});
+document.getElementById('install-app').addEventListener('click', async () => {
+  if (!installPrompt) return;
+  const prompt=installPrompt; installPrompt=null;
+  document.getElementById('install-app').hidden=true;
+  await prompt.prompt();
+});
+window.addEventListener('appinstalled', () => {
+  installPrompt=null; document.getElementById('install-app').hidden=true;
+});
+"""
+
 def page() -> str:
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <title>ROMarr</title><meta name="viewport" content="width=device-width,initial-scale=1">
-{FAVICON_LINK}<style>{CSS}</style><script>{THEME_BOOT}</script></head><body>
+{FAVICON_LINK}{APP_HEAD}<style>{CSS}</style><script>{THEME_BOOT}</script></head><body>
 <input id="sidebar-native-toggle" type="checkbox" aria-label="Toggle navigation" aria-controls="rail">
 <nav id="rail" aria-label="Main navigation"><div id="brand">ROM<span>arr</span></div>
 <button id="sidebar-close" type="button" aria-label="Close navigation">×</button>
@@ -6363,10 +6455,10 @@ def page() -> str:
 <div id="main">
   <div id="top"><label id="sidebar-menu-native" for="sidebar-native-toggle">☰</label>
   <button id="sidebar-menu" type="button" aria-label="Open navigation"
-    aria-controls="rail" aria-expanded="false">☰</button><h1>Games</h1><input id="search" placeholder="Filter…" autocomplete="off"></div>
+    aria-controls="rail" aria-expanded="false">☰</button><h1>Games</h1><button id="install-app" class="btn ghost" type="button" hidden>Install app</button><input id="search" aria-label="Filter current page" placeholder="Filter…" autocomplete="off"></div>
   <div class="page" id="page"></div>
 </div>
-<script>{JS}</script></body></html>"""
+<script>{JS}</script><script>{APP_BOOT}</script></body></html>"""
 
 
 # ------------------------------------------------------------ the door in --

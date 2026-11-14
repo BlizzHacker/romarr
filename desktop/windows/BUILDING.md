@@ -38,7 +38,7 @@ The default MSIX identity is for development. Supply the exact identity and
 publisher assigned to the app in Partner Center:
 
 ```powershell
-./scripts/build-windows-desktop.ps1 -Version 1.9.3 -StoreVersion 1.9.3.0 `
+./scripts/build-windows-desktop.ps1 -Version 1.10.0 -StoreVersion 1.10.0.0 `
   -StoreIdentityName "YourPartnerCenterIdentity" `
   -StorePublisher "CN=YourPartnerCenterPublisher" `
   -StorePublisherDisplayName "Your publisher name"
@@ -53,3 +53,11 @@ publish the app.
 
 The release workflow attaches the built packages to an already published GitHub
 release. It does not submit to Partner Center.
+
+## Connect to an existing server
+
+Enter the server address in the native window and choose **Connect to server**. Use the server origin, for example https://romarr.example.com, without a page path, password or API key. Sign in on that server’s normal login page. **Disconnect** closes the remote view and leaves the server running. Files managed through this view stay on the server.
+
+The desktop remembers the server address locally. Browser profiles are separated by server origin and from the standalone profile. Use HTTPS for remote connections; HTTP does not encrypt traffic. A cross-origin single-sign-on page opens in the default browser, so servers requiring that flow may be easier to use directly there.
+
+For a movable standalone setup, extract the complete ZIP into a writable folder and select data and library folders on the same drive before starting. Keep those folders together when moving the setup. The default data location remains your Windows user profile.

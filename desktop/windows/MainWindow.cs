@@ -14,6 +14,11 @@ public sealed class MainWindow : Form
     readonly TextBox libraryPath = new() { Width = 280 };
     readonly NumericUpDown port = new() { Minimum = 1024, Maximum = 65535, Value = 6868, Width = 78 };
     readonly Button start = new() { Text = "Start ROMarr", AutoSize = true };
+    readonly TextBox serverAddress = new() { Width = 280, PlaceholderText = "https://romarr.example.com" };
+    readonly Button connect = new() { Text = "Connect to server", AutoSize = true };
+    bool remoteConnected;
+    string preferredMode = "local";
+    string savedServerOrigin = "";
     readonly Button stop = new() { Text = "Stop", AutoSize = true, Enabled = false };
     readonly Label status = new() { Text = "Choose your folders, then start ROMarr.", AutoSize = true, Padding = new Padding(8) };
     WebView2 browser = new() { Dock = DockStyle.Fill };
@@ -30,6 +35,7 @@ public sealed class MainWindow : Form
     string browserData = "";
     readonly List<Button> folderButtons = [];
 
+    /// <summary>Creates the native standalone and server-management window.</summary>
     public MainWindow(string? smokeRoot)
     {
         this.smokeRoot = smokeRoot;
@@ -63,15 +69,22 @@ public sealed class MainWindow : Form
         options.Controls.Add(libraryPath); options.Controls.Add(FolderButton(libraryPath));
         options.Controls.Add(new Label { Text = "Port", AutoSize = true, Padding = new Padding(8,8,0,0) });
         options.Controls.Add(port); options.Controls.Add(start); options.Controls.Add(stop);
+        options.Controls.Add(new Label { Text = "Or server", AutoSize = true, Padding = new Padding(8,8,0,0) });
+        options.Controls.Add(serverAddress); options.Controls.Add(connect);
         options.Controls.Add(status);
         Controls.Add(browser); Controls.Add(options); Controls.Add(menu);
         start.Click += async (_,_) => await StartWithMessage();
-        stop.Click += (_,_) => StopBackend();
+        stop.Click += (_,_) => { if (remoteConnected) DisconnectServer(); else StopBackend(); };
+        connect.Click += async (_,_) => await ConnectServerWithMessage();
         FormClosing += (_,_) => { closing = true; StopBackend(); http.Dispose(); };
         Shown += async (_,_) =>
         {
             if (smokeRoot is not null) await Smoke();
-            else if (File.Exists(preferenceFile)) await StartWithMessage();
+            else if (File.Exists(preferenceFile))
+            {
+                if (preferredMode == "remote") await ConnectServerWithMessage();
+                else await StartWithMessage();
+            }
         };
     }
 
@@ -87,12 +100,19 @@ public sealed class MainWindow : Form
         return button;
     }
 
+    /// <summary>Loads local preferences, accepting only credential-free server origins.</summary>
     void LoadPreferences()
     {
         try
         {
             var value = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(preferenceFile));
             if (value is null) return;
+            if (value.TryGetValue("server", out var server) && !string.IsNullOrWhiteSpace(server))
+            {
+                try { serverAddress.Text = savedServerOrigin = RemoteServerUri.Normalize(server); }
+                catch (ArgumentException) { }
+            }
+            if (value.TryGetValue("mode", out var mode) && mode == "remote") preferredMode = "remote";
             if (value.TryGetValue("data", out var d)) dataPath.Text = d;
             if (value.TryGetValue("library", out var l)) libraryPath.Text = l;
             if (value.TryGetValue("port", out var p) && int.TryParse(p, out var n) && n >= 1024 && n <= 65535) port.Value = n;
@@ -101,12 +121,14 @@ public sealed class MainWindow : Form
         catch (JsonException) { }
     }
 
+    /// <summary>Saves folders and the last validated server origin without credentials.</summary>
     void SavePreferences()
     {
         if (smokeRoot is not null) return;
         Directory.CreateDirectory(Path.GetDirectoryName(preferenceFile)!);
         var temp = preferenceFile + ".tmp";
         File.WriteAllText(temp, JsonSerializer.Serialize(new Dictionary<string, string> {
+            ["server"] = savedServerOrigin, ["mode"] = preferredMode,
             ["data"] = dataPath.Text, ["library"] = libraryPath.Text, ["port"] = port.Value.ToString()
         }));
         File.Move(temp, preferenceFile, true);
@@ -118,9 +140,12 @@ public sealed class MainWindow : Form
         catch (Exception ex) { if (!closing) { status.Text = ex.Message; StopBackend(false); MessageBox.Show(this, ex.Message, "ROMarr could not start", MessageBoxButtons.OK, MessageBoxIcon.Error); } }
     }
 
+    /// <summary>Starts the packaged backend on loopback and opens its isolated interface.</summary>
     async Task StartBackend()
     {
         if (busy || backend is { HasExited: false }) return;
+        if (remoteConnected) DisconnectServer();
+        preferredMode = "local"; stop.Text = "Stop";
         busy = true; start.Enabled = false; status.Text = "Starting ROMarr...";
         try
         {
@@ -179,25 +204,7 @@ public sealed class MainWindow : Form
             }
             if (closing) return;
             var selectedBrowserData = Path.Combine(dataPath.Text, "browser-data");
-            if (browser.CoreWebView2 is not null && browserData != selectedBrowserData)
-            {
-                Controls.Remove(browser); browser.Dispose();
-                browser = new WebView2 { Dock = DockStyle.Fill };
-                Controls.Add(browser); browser.SendToBack();
-            }
-            if (browser.CoreWebView2 is null)
-            {
-                PrepareWindows10Runtime(runtime);
-                var environment = await CoreWebView2Environment.CreateAsync(runtime, selectedBrowserData);
-                await browser.EnsureCoreWebView2Async(environment);
-                browserData = selectedBrowserData;
-                browser.CoreWebView2.Settings.AreDevToolsEnabled = false;
-                browser.CoreWebView2.NewWindowRequested += (_, e) => { e.Handled = true; OpenWebLink(e.Uri); };
-                browser.CoreWebView2.NavigationStarting += (_, e) =>
-                {
-                    if (!e.Uri.StartsWith(origin + "/", StringComparison.OrdinalIgnoreCase)) { e.Cancel = true; OpenWebLink(e.Uri); }
-                };
-            }
+            await EnsureBrowser(runtime, selectedBrowserData);
             var ready = new TaskCompletionSource();
             void Loaded(object? sender, CoreWebView2NavigationCompletedEventArgs e)
             {
@@ -214,6 +221,82 @@ public sealed class MainWindow : Form
             SavePreferences();
         }
         finally { busy = false; if (!closing) start.Enabled = backend is null || backend.HasExited; }
+    }
+
+    /// <summary>Creates an isolated embedded browser profile for the selected server.</summary>
+    async Task EnsureBrowser(string runtime, string selectedBrowserData)
+    {
+            if (browser.CoreWebView2 is not null && browserData != selectedBrowserData)
+            {
+                Controls.Remove(browser); browser.Dispose();
+                browser = new WebView2 { Dock = DockStyle.Fill };
+                Controls.Add(browser); browser.SendToBack();
+            }
+            if (browser.CoreWebView2 is null)
+            {
+                PrepareWindows10Runtime(runtime);
+                var environment = await CoreWebView2Environment.CreateAsync(runtime, selectedBrowserData);
+                await browser.EnsureCoreWebView2Async(environment);
+                browserData = selectedBrowserData;
+                browser.CoreWebView2.Settings.AreDevToolsEnabled = false;
+                browser.CoreWebView2.NewWindowRequested += (_, e) => { e.Handled = true; OpenWebLink(e.Uri); };
+                browser.CoreWebView2.NavigationStarting += (_, e) =>
+                {
+                    if (e.Uri != "about:blank" && !e.Uri.StartsWith(origin + "/", StringComparison.OrdinalIgnoreCase)) { e.Cancel = true; OpenWebLink(e.Uri); }
+                };
+            }
+    }
+
+    /// <summary>Connects to a user-selected server without starting a local backend.</summary>
+    async Task ConnectServerWithMessage()
+    {
+        if (busy) return;
+        var transitioned = false;
+        try
+        {
+            var target = RemoteServerUri.Normalize(serverAddress.Text);
+            var runtime = Path.Combine(AppContext.BaseDirectory, "browser");
+            if (!File.Exists(Path.Combine(runtime, "msedgewebview2.exe")))
+                throw new IOException("Extract the whole ROMarr Windows ZIP before connecting.");
+            busy = true; connect.Enabled = false; start.Enabled = false;
+            transitioned = true; StopBackend(false);
+            origin = target;
+            var profile = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(target)));
+            await EnsureBrowser(runtime, Path.Combine(dataPath.Text, "remote-browser-data", profile));
+            serverAddress.Text = savedServerOrigin = target;
+            var ready = new TaskCompletionSource();
+            void RemoteLoaded(object? sender, CoreWebView2NavigationCompletedEventArgs e)
+            {
+                browser.NavigationCompleted -= RemoteLoaded;
+                if (e.IsSuccess) ready.TrySetResult();
+                else ready.TrySetException(new IOException("The server page could not load. Check the address and network connection."));
+            }
+            browser.NavigationCompleted += RemoteLoaded;
+            try
+            {
+                browser.CoreWebView2.Navigate(target + "/");
+                await ready.Task.WaitAsync(TimeSpan.FromSeconds(30));
+            }
+            finally { browser.NavigationCompleted -= RemoteLoaded; }
+            remoteConnected = true; preferredMode = "remote";
+            stop.Text = "Disconnect"; stop.Enabled = true;
+            status.Text = "Connected view: " + target + ". Sign in with this server’s account. Files stay on the server.";
+            SavePreferences();
+        }
+        catch (Exception ex)
+        {
+            if (!closing) { if (transitioned) DisconnectServer(); MessageBox.Show(this, ex.Message, "Could not connect to ROMarr", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+        }
+        finally { busy = false; if (!closing) { connect.Enabled = true; start.Enabled = backend is null || backend.HasExited; } }
+    }
+
+    /// <summary>Closes the remote view without stopping or changing the remote server.</summary>
+    void DisconnectServer()
+    {
+        remoteConnected = false; origin = "";
+        browser.CoreWebView2?.Navigate("about:blank");
+        stop.Text = "Stop"; stop.Enabled = false;
+        status.Text = "Disconnected. Your server is still running.";
     }
 
     void WriteLog(string? line)
@@ -256,6 +339,45 @@ public sealed class MainWindow : Form
     static void OpenExternal(string value) => Process.Start(new ProcessStartInfo(value) { UseShellExecute = true });
     static void OpenWebLink(string value) { if (Uri.TryCreate(value, UriKind.Absolute, out var u) && (u.Scheme == "https" || u.Scheme == "http")) OpenExternal(value); }
 
+    /// <summary>Proves server mode without a local backend, then checks disconnect leaves it running.</summary>
+    async Task ProveRemoteView()
+    {
+        var remoteOrigin = "http://127.0.0.1:" + FreePort();
+        using var listener = new HttpListener();
+        listener.Prefixes.Add(remoteOrigin + "/"); listener.Start();
+        var worker = Task.Run(async () =>
+        {
+            while (listener.IsListening)
+            {
+                try
+                {
+                    var context = await listener.GetContextAsync();
+                    var bytes = System.Text.Encoding.UTF8.GetBytes("<!doctype html><title>ROMarr remote fixture</title><p>Remote server is running</p>");
+                    context.Response.ContentType = "text/html";
+                    context.Response.ContentLength64 = bytes.Length;
+                    await context.Response.OutputStream.WriteAsync(bytes);
+                    context.Response.Close();
+                }
+                catch (HttpListenerException) { break; }
+                catch (ObjectDisposedException) { break; }
+            }
+        });
+        try
+        {
+            serverAddress.Text = remoteOrigin;
+            await ConnectServerWithMessage();
+            if (!remoteConnected || backend is not null) throw new Exception("Server mode started a local backend or failed to connect.");
+            var rendered = await browser.ExecuteScriptAsync("document.body.innerText.includes('Remote server is running')");
+            if (rendered != "true") throw new Exception("The native remote view did not display the selected server.");
+            DisconnectServer();
+            if (!(await http.GetStringAsync(remoteOrigin + "/")).Contains("Remote server is running"))
+                throw new Exception("Disconnect stopped the remote fixture.");
+        }
+        finally { listener.Stop(); await worker.WaitAsync(TimeSpan.FromSeconds(5)); }
+        await StartBackend();
+    }
+
+    /// <summary>Exercises the actual packaged window, backend, browser and server modes.</summary>
     async Task Smoke()
     {
         Directory.CreateDirectory(smokeRoot!);
@@ -321,9 +443,10 @@ public sealed class MainWindow : Form
             await StartBackend();
             var config = await http.GetFromJsonAsync<JsonElement>(origin + "/api/v1/config");
             if (config.GetProperty("preferred_regions")[0].GetString() != "EUR") throw new Exception("Settings did not survive restart.");
+            await ProveRemoteView();
             File.WriteAllText(Path.Combine(smokeRoot!, "smoke-proof.json"), JsonSerializer.Serialize(new {
                 nativeWindow = true, embeddedInterface = true, bundledPython = true, bundledHub = true, pluginInstall = true,
-                authentication = true, persistence = true, setupGuide = true, port = port.Value
+                authentication = true, persistence = true, setupGuide = true, remoteView = true, remoteDisconnectKeepsServer = true, port = port.Value
             }, new JsonSerializerOptions { WriteIndented = true }));
             Environment.ExitCode = 0;
         }
