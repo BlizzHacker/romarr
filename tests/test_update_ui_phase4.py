@@ -262,3 +262,56 @@ def test_stats_and_status_use_same_verified_build_presentation():
     for marker in ("RENDER.stats=async()=>", "RENDER.status=async()=>",
                    "RENDER.update=async()=>", "RENDER.queue=async()=>"):
         assert marker in source
+
+@pytest.mark.parametrize("phase", ["health", "formats"])
+def test_status_overlapping_refreshes_keep_newest_result(phase):
+    """Overlapping Status renders must not let an earlier response win."""
+    start = ui.JS.index("RENDER.status=async()=>")
+    stop = ui.JS.index("\n};\n", start) + 4
+    setup = r"""
+const data=JSON.parse(process.argv[1]);
+const root={innerHTML:''},controls={},RENDER={};
+let activePage='status',pageVersion=1;
+const $=selector=>selector==='#page'?root:(controls[selector]??={
+  innerHTML:'',textContent:'',style:{},value:'',querySelectorAll:()=>[]
+});
+const esc=s=>String(s??'');
+const buildIdentityLine=()=>'',ggrequestzCard=()=>'';
+const playCard=()=>'',moonlightCard=()=>'';
+const wireGGRequestz=()=>{},wireMoonlight=()=>{};
+const health=[],formats=[];
+const j=url=>new Promise(resolve=>{
+  if(url==='/api/v1/system/status')health.push(resolve);
+  else if(url==='/api/v1/frontend/formats')formats.push(resolve);
+  else throw Error('unexpected request '+url);
+});
+"""
+    exercise = r"""
+(async()=>{
+  const oldRender=RENDER.status();
+  let latestRender;
+  if(data.phase==='health'){
+    latestRender=RENDER.status();
+    health[1]({version:'CURRENT-VERSION'});await Promise.resolve();
+    health[0]({version:'STALE-VERSION'});await Promise.resolve();
+    const ok=root.innerHTML.includes('CURRENT-VERSION')
+      &&!root.innerHTML.includes('STALE-VERSION');
+    for(const finish of formats)finish({formats:[]});
+    await Promise.all([oldRender,latestRender]);
+    return ok;
+  }
+  health[0]({version:'STALE-VERSION'});await Promise.resolve();
+  latestRender=RENDER.status();
+  health[1]({version:'CURRENT-VERSION'});await Promise.resolve();
+  formats[1]({formats:[{name:'current',label:'CURRENT-FORMAT'}]});
+  await Promise.resolve();
+  formats[0]({formats:[{name:'stale',label:'STALE-FORMAT'}]});
+  await Promise.resolve();
+  await Promise.all([oldRender,latestRender]);
+  return controls['#fe-row'].innerHTML.includes('CURRENT-FORMAT')
+    &&!controls['#fe-row'].innerHTML.includes('STALE-FORMAT');
+})().then(ok=>console.log(JSON.stringify({ok})))
+  .catch(e=>{console.error(String(e));process.exitCode=1;});
+"""
+    script = setup + ui.JS[start:stop] + exercise
+    assert json.loads(_node(script, {"phase": phase}))["ok"]
