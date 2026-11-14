@@ -120,6 +120,7 @@ from .ui import page as ui_page
 from .ui import link_page as ui_link_page
 from .ui import login_page as ui_login_page
 from .version import compare_key, derive_version, is_unknown
+from .sidecars import read_nfo
 from .build_info import get_build_info
 
 log = logging.getLogger(__name__)
@@ -1324,6 +1325,22 @@ class ROMarr:
             if candidate.get("id") == cfg.get("id"):
                 return candidate, backend
         return None
+
+    def game_nfo(self, game_id: str, source: str = "") -> dict:
+        """Read an NFO only for a cached game from a configured folder backend."""
+        from .libraries import FolderLibrary
+        games, _, _ = self._library_cache
+        candidates = [g for g in games if str(g.id) == game_id and g.source == source
+                      and (g.origin or "local") == "local"]
+        if len(candidates) != 1:
+            return {"available": False}
+        for cfg, backend in self.game_libraries:
+            if isinstance(backend, FolderLibrary):
+                # The path must be inside this backend's actual scanned root.
+                result = read_nfo(backend._root, str(candidates[0].id))
+                if result.get("available") or result.get("reason"):
+                    return result
+        return {"available": False}
 
     def library_root(self, cfg: dict) -> Path:
         """Where ROMs are filed for one library, falling back to the default."""
@@ -8517,6 +8534,10 @@ def make_handler(service: ROMarr):
                 if pick is None:
                     return self._json(404, {"error": f"nothing on the shelf as {raw}"})
                 return self._json(200, pick)
+            if route.path == "/api/v1/game/nfo":
+                return self._json(200, service.game_nfo(
+                    (query.get("id") or [""])[0],
+                    (query.get("source") or [""])[0]))
             if route.path == "/api/v1/game/meta":
                 platform = (query.get("platform") or [""])[0]
                 game = (query.get("game") or [""])[0]
