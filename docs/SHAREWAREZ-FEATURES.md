@@ -15,8 +15,9 @@ The authenticated `GET /api/v1/game/nfo?id=...&source=...` endpoint accepts a
 cached game's identity, not arbitrary paths. Reads are anchored to configured
 folder backends, with symlinks and nonregular files rejected. No recursive
 search, archive extraction, write, import, or scan of unrelated NFOs occurs.
-Remote library-server IDs are not filesystem paths. Systems lacking secure
-descriptor-relative no-follow opens (including Windows) return an explicit
+Remote library-server IDs are not filesystem paths. Reads reuse the file-report filesystem pins: POSIX descriptor-relative
+no-follow opens and Windows native handles that reject reparse points and deny
+parent replacement. Other systems lacking secure opens return an explicit
 unavailable message. Missing notes return `{"available": false}`.
 
 No upstream source was copied. The inspected upstream commit has no tracked

@@ -1,6 +1,7 @@
 """Sidecar boundary tests and proof through the authenticated HTTP handler."""
 import json
 import os
+import sys
 import threading
 from http.server import ThreadingHTTPServer
 from urllib.error import HTTPError
@@ -13,7 +14,7 @@ from romarr.app import ROMarr, make_handler
 from romarr.libraries import FolderConfig, FolderLibrary, Game
 from romarr.sidecars import MAX_BYTES, read_nfo
 
-pytestmark = pytest.mark.skipif(os.open not in os.supports_dir_fd, reason="secure dirfd reading unavailable")
+pytestmark = pytest.mark.skipif(sys.platform != "win32" and os.open not in os.supports_dir_fd, reason="secure filesystem reading unavailable")
 
 
 def fixture_game(tmp_path):
@@ -59,6 +60,8 @@ def test_no_arbitrary_neighbour_fallback_or_stale_game(tmp_path):
 @pytest.mark.parametrize("attack", ["file", "parent", "root", "traversal", "fifo"])
 def test_escape_and_special_files_fail_closed(tmp_path, attack):
     """Symlinks, parent traversal and blocking special files cannot be read."""
+    if sys.platform == "win32" and attack in {"file", "parent", "root", "fifo"}:
+        pytest.skip("POSIX link/FIFO fixtures; Windows reparse coverage is in file-report path tests")
     root, game = fixture_game(tmp_path)
     secret = tmp_path / "private.nfo"
     secret.write_text("private")
@@ -111,6 +114,7 @@ def test_live_http_auth_cache_boundary_and_preview(tmp_path):
         thread.join(timeout=5)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX descriptor race fixture")
 def test_parent_replacement_cannot_redirect_pinned_read(tmp_path, monkeypatch):
     """A directory swapped after its open cannot redirect the NFO lookup."""
     root, game = fixture_game(tmp_path)
@@ -135,10 +139,11 @@ def test_parent_replacement_cannot_redirect_pinned_read(tmp_path, monkeypatch):
     # The platform capability check must still recognize the wrapped opener.
     monkeypatch.setattr(os, "supports_dir_fd", os.supports_dir_fd | {raced_open})
     monkeypatch.setattr(os, "open", raced_open)
-    assert read_nfo(root, str(game))["text"] == "public"
+    assert read_nfo(root, str(game)) == {"available": False}
     assert swapped
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows uses secure native handles")
 def test_unsupported_platform_is_explicit(tmp_path, monkeypatch):
     """Lack of secure opens never silently falls back to a racy path read."""
     root, game = fixture_game(tmp_path)
@@ -147,3 +152,18 @@ def test_unsupported_platform_is_explicit(tmp_path, monkeypatch):
     result = read_nfo(root, str(game))
     assert not result["available"]
     assert "unavailable" in result["reason"]
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows native handle proof")
+def test_windows_parent_handle_blocks_replacement(tmp_path):
+    """Windows pins deny parent renames while a sidecar's native handle is open."""
+    from romarr.file_reports import _PinnedLibrary
+    root, game = fixture_game(tmp_path)
+    notes = game.with_suffix(".nfo")
+    notes.write_text("Windows notes")
+    with _PinnedLibrary(root) as pins:
+        with pins.open(pins.parent(notes.name)) as stream:
+            with pytest.raises(OSError):
+                root.rename(tmp_path / "replacement")
+            assert stream.read() == b"Windows notes"
+    assert read_nfo(root, str(game))["text"] == "Windows notes"
