@@ -429,6 +429,7 @@ def test_invalid_dat_catalog_mapping_rejected_without_partial_write(tmp_path, ma
     """Bad provenance must not change unrelated settings or the saved file."""
     path = tmp_path / "romarr.json"
     store = Store(path)
+    store.update_settings({"dat_path": "/dats"})
     store.update_settings({"min_seeders": 3})
     previous = path.read_bytes()
     with pytest.raises(ValueError):
