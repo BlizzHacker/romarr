@@ -277,3 +277,108 @@ def test_audit_keeps_library_root_snapshot_if_library_changes_mid_audit(tmp_path
     assert state["verified"] == 2
     assert state["bad"] == 1
     assert len(state["duplicates"]) == 1
+
+
+def _zip_dat_index(entries):
+    import hashlib
+    import zlib
+    from romarr.dat import DatIndex, parse_dat
+    rows = []
+    for name, body in entries:
+        rows.append(
+            f'<game name="{name}"><rom name="{name}" size="{len(body)}" '
+            f'crc="{zlib.crc32(body) & 0xFFFFFFFF:08x}" '
+            f'md5="{hashlib.md5(body).hexdigest()}" '
+            f'sha1="{hashlib.sha1(body).hexdigest()}"/></game>')
+    index = DatIndex()
+    index.add(parse_dat('<datafile><header><name>zip test</name></header>'
+                        + ''.join(rows) + '</datafile>'))
+    return index
+
+
+def _run_zip_audit(tmp_path, members, dat_entries, filename="game.zip", platform_slug="snes"):
+    import zipfile
+    svc = _svc(tmp_path)
+    svc.dats = _zip_dat_index(dat_entries)
+    shelf = tmp_path / "lib" / platform_slug
+    shelf.mkdir(parents=True)
+    with zipfile.ZipFile(shelf / filename, "w") as archive:
+        for name, data in members:
+            archive.writestr(name, data)
+    out = svc.audit_library(platform_slug)
+    assert "error" not in out
+    return _wait_done(svc)
+
+
+def test_zip_audit_hashes_rom_member_with_member_suffix(tmp_path):
+    body = b"A" * 16 + b"ROM-CONTENT"
+    state = _run_zip_audit(tmp_path, [("Game.nes", body)],
+                           [("Game.nes", body[16:])], platform_slug="nes")
+    assert (state["scanned"], state["verified"], state["bad"], state["unknown"]) == (1, 1, 0, 0)
+    # The old behavior hashed the ZIP container and did not match the ROM DAT.
+    import zipfile
+    archive_path = tmp_path / "lib" / "nes" / "game.zip"
+    from romarr.dat import hash_file
+    assert _zip_dat_index([("Game.nes", body[16:])]).lookup(**hash_file(archive_path)).status == "unknown"
+
+
+def test_zip_audit_does_not_call_mixed_rom_bundle_verified(tmp_path):
+    good, unknown = b"GOOD-ONE", b"UNLISTED-LONGER"
+    state = _run_zip_audit(tmp_path, [("One.smc", good), ("Two.smc", unknown)],
+                           [("One.smc", good)])
+    assert (state["verified"], state["bad"], state["unknown"]) == (0, 0, 1)
+
+
+def test_zip_audit_requires_disc_tracks_named_by_cue(tmp_path):
+    cue = b'FILE "missing.bin" BINARY\nTRACK 01 MODE2/2352\nINDEX 01 00:00:00\n'
+    state = _run_zip_audit(tmp_path, [("Game.cue", cue)], [("Game.cue", cue)])
+    assert state["verified"] == state["bad"] == 0
+    assert state["unknown"] == 1
+
+
+def test_zip_audit_unsafe_member_is_unknown_even_when_its_size_matches_dat(tmp_path):
+    body = b"ROM-DATA"
+    state = _run_zip_audit(tmp_path, [("../Game.smc", body)],
+                           [("Game.smc", body)])
+    assert state["verified"] == state["bad"] == 0
+    assert state["unknown"] == 1
+
+
+def test_zip_audit_crc_failure_is_unknown(tmp_path):
+    import struct
+    import zipfile
+    from romarr.audit_archive import audit_zip
+    from romarr.dat import DatIndex
+    from romarr.platforms import resolve
+
+    path = tmp_path / "broken.zip"
+    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_STORED) as archive:
+        archive.writestr("Game.smc", b"ROM-DATA-CONTENT")
+    with zipfile.ZipFile(path) as archive:
+        info = archive.getinfo("Game.smc")
+        offset = info.header_offset
+        with path.open("r+b") as handle:
+            handle.seek(offset + 26)
+            name_len, extra_len = struct.unpack("<HH", handle.read(4))
+            handle.seek(offset + 30 + name_len + extra_len)
+            byte = handle.read(1)
+            handle.seek(-1, 1)
+            handle.write(bytes([byte[0] ^ 1]))
+    verdict = audit_zip(path, resolve("snes"), DatIndex())
+    assert verdict.status == "unknown"
+
+
+def test_zip_container_size_never_causes_bad_dump_verdict(tmp_path):
+    import zipfile
+    from romarr.audit_archive import audit_zip
+    from romarr.dat import DatIndex
+    from romarr.platforms import resolve
+
+    path = tmp_path / "unknown.zip"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("Unknown.smc", b"UNLISTED-ROM")
+    # The ZIP's compressed size is a known DAT ROM size; its member is not.
+    known = b"K" * path.stat().st_size
+    dats = _zip_dat_index([("Known.smc", known)])
+    assert dats.lookup(**__import__("romarr.dat", fromlist=["hash_file"]).hash_file(path)).status == "bad-dump"
+    assert audit_zip(path, resolve("snes"), dats).status == "unknown"
