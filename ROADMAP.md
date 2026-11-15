@@ -1,64 +1,69 @@
 # ROMarr roadmap
 
-This is a working list of priorities, updated **2026-11-14**. Shipped features are separated from proposals so you can tell what an update will actually give you. There are no promised delivery dates; scope and validation can change the order.
+This is a working list of priorities and delivery milestones, updated **2026-11-15**. Shipped features are separated from proposals so you can tell what an update will actually give you.
 
-## Available in v1.7.0
+---
 
-| Request | What is available | Limits |
+## Available in v1.10.x & Latest Releases
+
+| Milestone | What is available | Details |
 |---|---|---|
-| Reclaim duplicate space | **Stats → Audit** previews byte-identical duplicates, keepers and recoverable bytes, then offers quarantine and restore. | Review first. Quarantine is not permanent deletion and does not merge similar titles. [Issue #73](https://github.com/BlizzHacker/romarr/issues/73). |
-| Fetch missing entries from a set torrent in batches | **Collections** can preview and stage selected files from an existing qBittorrent torrent within a configured budget, verify imports, and restore file priorities. | Original torrent data remains; the staging limit is not a total cap on all source storage. [Issue #72](https://github.com/BlizzHacker/romarr/issues/72). |
-| Reliable DAT loading | XML/Logiqx detection, duplicate DAT selection and concurrent reload handling were corrected. | Your DAT still needs to cover the files/platform you are checking. [Issue #74](https://github.com/BlizzHacker/romarr/issues/74). |
-| Completion matching and useful notification errors | URL-added qBittorrent jobs carry per-job tags; unmatched jobs are logged. Webhook tests expose useful HTTP error details. | An upstream 403 still needs the appropriate access/credentials. [Issues #75](https://github.com/BlizzHacker/romarr/issues/75) and [#33](https://github.com/BlizzHacker/romarr/issues/33). |
-| Modern-console file support | Search/import recognition for PS4, PS5 and PS Vita formats. | No console installer or new browser emulator. [Support limits](docs/MODERN-CONSOLES.md). |
+| **Android Companion & Handheld App** | `org.romarr.android` packaged with embedded core or remote connection, available via Google Play Internal Beta. | Handheld support for Odin 2, Retroid Pocket 4/5, Ayaneo, and AYN with Turnip/Adreno driver awareness. [Google Play Beta](https://play.google.com/apps/internaltest/4700888732790045566). |
+| **macOS, Linux & SteamOS Standalone** | `scripts/start-desktop.sh` launcher mirrors Windows standalone experience without requiring Docker or manual Python setup. | Auto-detects SteamOS / Steam Deck, defaults to EmuDeck MicroSD storage (`/run/media/mmcblk0p1/Emulation/roms`), and connects to desktop browsers. |
+| **Supportive Library Shell & Device Fleet** | Device Fleet (`/api/v1/hub/fleet`) syncs verified 1G1R sets and `gamelist.xml` across LAN/SMB/SSH. | Out-of-the-box profiles for ES-DE, RetroPie / Arcade Punks images, Batocera 40+, Argosy Launcher, Grout (muOS/NextUI), Steam Deck, and RetroArch WebDAV. |
+| **Emulator Hub (1,214+ Catalog Entries)** | Searchable catalog of 1,214 emulators, forks, and tools with 350 RetroArch cores. | Includes missing firmware checks, source discovery, and safe inspection. |
+| **Standalone Download Stack** | Built-in Mister Download Manager (MDM) for HTTP/BitTorrent and native NNTP/NZB engine. | Avoids requiring five external services while preserving qBittorrent, Prowlarr, and SABnzbd support. |
+| **Unraid Community Applications** | Official Unraid CA template in `BlizzHacker/cartridge-unraid`. | Live in Unraid CA (`ca.unraid.net/apps/romarr-04jslct0riva81`). |
+| **Windows Desktop & Store Package** | Native Windows desktop app with embedded WebView2 and MSIX packaging. | Ready for Microsoft Store distribution (`9PN1VX549NSW`). |
 
-The fixes are in [v1.7.0](https://github.com/BlizzHacker/romarr/releases/tag/v1.7.0). See the release's checks and evidence for that build rather than assuming every integration has been tested on your hardware.
+---
+
+## Available in v1.9.x
+
+- **Library Scan Progress**: Live scanning metrics showing games read and elapsed time to prevent silent pauses on large NAS mounts.
+- **Usenet & Newznab Clarity**: Explicit separation of indexer search results, provider status, and download client routing.
+- **qBittorrent & Deluge Polish**: Hardened selective grabbing from multi-file torrents and improved base game/DLC matching.
+- **Proxmox LXC Automation**: Standalone helper in `/proxmox/ct/romarr.sh` with verified architecture templates.
+
+---
 
 ## Available in v1.8.0
 
-- **[Setup Guide (#77)](https://github.com/BlizzHacker/romarr/issues/77)**: a skippable sequence for library, downloads, sources, DATs and plugins, with links back to existing configuration forms.
-- **[Clearer documentation and plugin discovery (#81)](https://github.com/BlizzHacker/romarr/issues/81)**: a short README, an existing-ROM path that does not require Prowlarr, and a separate plugin guide.
-- **[Windows app (#78)](https://github.com/BlizzHacker/romarr/issues/78)**: a native WinForms `ROMarr.exe` in a portable Windows x64 ZIP, with a bundled backend/runtime and ROM Hub. No user Python, PowerShell or .NET installation is needed. The native window controls the server and contains the full interface in its own embedded WebView2 window. Windows runtime/package checks must pass before publication; service/auto-start packaging is separate future work.
-- **[Canonical names on import (#79)](https://github.com/BlizzHacker/romarr/issues/79)**: verified single-file imports can use the DAT ROM filename when Rename on import is enabled. Source files are preserved; unknown filenames are retained.
-- **[Existing-library rename preview (#80)](https://github.com/BlizzHacker/romarr/issues/80)**: Stats shows DAT-verified single-file suggestions, old/new paths, collisions and skip reasons. You choose each batch; ROMarr journals the changes and can restore them. Disc sets, ambiguous matches and unknown files stay untouched. Nested files are proposed for the platform folder, and empty folders are kept. [Read the limits and recovery steps](docs/EXISTING-LIBRARY-RENAME.md).
+- **[Setup Guide (#77)](https://github.com/BlizzHacker/romarr/issues/77)**: A skippable first-run sequence for library, downloads, sources, DATs and plugins.
+- **[Windows Portable App (#78)](https://github.com/BlizzHacker/romarr/issues/78)**: A portable Windows x64 ZIP with bundled Python, MinGit, fixed WebView2, and ROM Hub.
+- **[Canonical Names on Import (#79)](https://github.com/BlizzHacker/romarr/issues/79)**: Verified single-file imports use DAT ROM filenames with source preservation.
+- **[Existing-Library Rename Preview (#80)](https://github.com/BlizzHacker/romarr/issues/80)**: Stats shows DAT-verified single-file rename proposals with journaled rollback.
 
-These changes ship in [v1.8.0](https://github.com/BlizzHacker/romarr/releases/tag/v1.8.0). The native ZIP runs independently of Docker; the unsigned MSIX is for Store preparation and still needs the real Partner Center identity and certification.
+---
 
-## Make the first game easier
+## Available in v1.7.0
 
-The [November r/ARR discussion](https://www.reddit.com/r/ARR/comments/1xv2ps9/) highlighted confusion about ROMarr versus RomM, returning retro gamers needing a first-game walkthrough, empty Usenet searches, a Deluge problem and slow NAS reads.
+- **Duplicate Space Reclamation (#73)**: Previews byte-identical duplicates with quarantine and restore.
+- **Set Torrent Batch Fetching (#72)**: Staged selective downloads from large torrents within configured size limits.
+- **Reliable DAT Loading (#74)**: Full Logiqx/XML detection and concurrent reload fixes.
+- **Modern Console Detection**: Import recognition for PS4, PS5, and PS Vita formats.
 
-- **Available:** a clearer Setup Guide introduction, a direct link for existing RomM users, and the [first-game walkthrough](docs/FIRST-GAME.md). The guide covers importing, playback and controller setup without requiring a complete download stack.
-- **Available in v1.9.3:** library scan progress and clearer Usenet setup. The reported NAS `BlockingIOError` still needs its traceback and testing on the affected setup; progress reporting alone does not prove that error is fixed.
-- **Next:** distinguish source coverage, filters and source errors when a search returns nothing. The Usenet reporter clarified that results were the sticking point.
-- **Needs reproduction:** the Deluge failure reported by a user whose qBittorrent setup worked. Get versions, failing step and a redacted error before claiming a fix.
-- **Next:** guide users from a confirmed import to their player, with the destination and verification result visible. Finishing setup must not claim that a game has imported or played successfully.
-- **External:** Community Scripts listing depends on their maintainers and eligibility rules. Our upstream LXC installer is available separately; an exception request is not acceptance.
+---
 
-## Next priorities
+## Next Priorities (Road to 2.0)
 
-| Priority | Work | What completion needs to mean |
+| Priority | Focus Area | Completion Criteria |
 |---|---|---|
-| 1 | Better platform-folder guidance for ES-DE and similar frontends | Show the output layout for the selected destination, explain frontend mappings, and make a missing-files comparison easy to find. |
-| 1 | Windows installation experience | Field-test the native package with real collections and archive tools, document permissions and upgrades, then assess installer/service packaging. |
-| 2 | Integration field reports | Expand live validation for library backends, download clients, Home Assistant packaging and smaller hardware. Record test conditions and remaining gaps. |
-| 2 | Plugin setup and source diagnostics | Make host-versus-plugin availability, credentials, searchable capability and source failures easier to understand without reading logs. |
+| **1** | **Ecosystem Package Distribution** | Community-submitted packages across Flathub, TrueNAS SCALE, CasaOS, Umbrel, Winget, and Homebrew. Tracked in `docs/SUBMISSIONS.md`. |
+| **1** | **Google Play Production Graduation** | Complete 12-tester closed beta track for `org.romarr.android` and graduate to public Google Play listing. |
+| **2** | **Full 2.0 Stability & Hardening** | 100% test coverage across all download clients, zero regressions on NAS/SMB storage, and hardened multi-platform fleet synchronization. |
+| **2** | **Direct Device Transfer Protocols** | Expand direct LAN transfer workflows for handheld consoles, micro-consoles, and network-attached emulation frontends. |
 
-## Research and proposals
+---
 
-- **Transfer to Xbox Series X or another device:** establish a real destination protocol, app requirements and safe transfer flow before promising a button. [Cartridge for Xbox](https://github.com/BlizzHacker/RommForXbox) is a separate project; linking to it is not a ROMarr transfer implementation.
-- **Broader playback integration:** report what configured players can actually run, including format, core and firmware requirements. A reachable streaming host does not prove a particular game will play.
+## Where the Priorities Came From
 
-## Where the priorities came from
+The [r/ARR community thread](https://www.reddit.com/r/ARR/comments/1xv2ps9/) and GitHub feedback continue to drive concrete improvements:
 
-The [r/ARR community thread](https://www.reddit.com/r/ARR/comments/1x9abzl/) raised concrete gaps in the experience:
+- **Setup, platform folders, ES-DE and missing games** → Setup Guide, folder/path explanations and the missing-collection walkthrough.
+- **Reorganizing and renaming existing files without Prowlarr** → Preview-first single-file rename workflow and rollback journal.
+- **Non-Server & Handheld Use** → Native Windows portable ZIP, macOS/Linux/SteamOS `start-desktop.sh`, and Android Play Store preview.
+- **Ecosystem Fleet Integration** → Device Fleet manager supporting Batocera, RetroPie, Arcade Punks images, muOS, and EmuDeck.
+- **Deduplication & Safety** → 1G1R Igir integrations and safe quarantine workflows.
 
-- [Setup, platform folders, ES-DE and missing games](https://www.reddit.com/r/ARR/comments/1x9abzl/comment/phqpinw/) → Setup Guide, folder/path explanations and the missing-collection walkthrough.
-- [Reorganizing and renaming existing files without Prowlarr](https://www.reddit.com/r/ARR/comments/1x9abzl/comment/19rjgioltvemd/) - the preview-first single-file rename workflow is in v1.8.0; disc sets and ambiguous files are deliberately skipped.
-- [Native Windows use](https://www.reddit.com/r/ARR/comments/1x9abzl/comment/19rjhvwh3yg1s/) → native portable app and Windows CI, with installer/service work still open.
-- [Roadmap and deduplication](https://www.reddit.com/r/ARR/comments/1x9abzl/comment/phlnak1/) → this page and the shipped duplicate quarantine workflow.
-- [Where plugins are](https://www.reddit.com/r/ARR/comments/1x9abzl/comment/phmlahe/) and [LXC installation](https://www.reddit.com/r/ARR/comments/1x9abzl/comment/phlgsc8/) → verified catalogue links, architecture limits and correct-environment install commands.
-- [Large-set downloads](https://www.reddit.com/r/ARR/comments/1x9abzl/comment/phleeke/) → the staged qBittorrent workflow shipped in v1.7.0.
-- [Xbox transfers](https://www.reddit.com/r/ARR/comments/1x9abzl/comment/php6c7v/) → research, with no transfer support claimed yet.
-
-To suggest a change, [open an issue](https://github.com/BlizzHacker/romarr/issues/new) describing the task you are trying to finish, your setup, and what the current flow prevents. For bugs, include your version and a redacted error/log so the fix can be reproduced and checked.
+To suggest a change or report an issue, [open an issue on GitHub](https://github.com/BlizzHacker/romarr/issues/new).
