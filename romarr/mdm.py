@@ -107,6 +107,10 @@ def asset_spec(
         tag = f"v{tag}"
     ver = tag.lstrip("v")
     plat = (sys_platform or sys.platform).lower()
+    if plat == "android" or (sys_platform is None and os.environ.get("ROMARR_ANDROID") == "1"):
+        return {"tag": tag, "version": ver, "platform": "android", "installable": False,
+                "kind": "", "asset": "",
+                "reason": "Desktop MDM binaries cannot run inside the Android app. Use a remote download client or a ROMarr server."}
     raw_arch = (machine or platform.machine() or "").lower()
     arch = "x86_64" if raw_arch in ("x86_64", "amd64") else (
         "arm64" if raw_arch in ("arm64", "aarch64") else (raw_arch or "unknown")

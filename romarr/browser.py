@@ -119,6 +119,8 @@ def _playwright():
     megabytes of node, and an install that only ever fetches plain URLs should
     pay neither.
     """
+    if os.environ.get("ROMARR_ANDROID") == "1":
+        raise Unavailable("Headless Browser is not bundled with the Android app. Connect to a ROMarr server with browser support.")
     try:
         from playwright.sync_api import sync_playwright
     except ImportError as err:

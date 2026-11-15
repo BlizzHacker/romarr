@@ -68,6 +68,9 @@ def _import():
 
 
 def available() -> bool:
+    """Report whether this runtime can use the separately installed plugin host."""
+    if os.environ.get("ROMARR_ANDROID") == "1":
+        return False
     try:
         _import()
         return True
@@ -237,6 +240,8 @@ def _run_cli(*args, timeout=180):
     # The Hub ships a `rom-hub` console script next to the interpreter; it has no
     # `python -m rom_hub` entry point. Prefer the script; fall back to the CLI
     # module's main() if the script isn't on PATH.
+    if os.environ.get("ROMARR_ANDROID") == "1" or sys.platform == "android":
+        return {"ok": False, "out": "", "err": "ROM Hub subprocess plugins are not bundled with Android. Connect to a ROMarr server for plugin sources.", "code": -1}
     script = Path(sys.executable).with_name("rom-hub")
     if script.exists():
         cmd = [str(script), *args]

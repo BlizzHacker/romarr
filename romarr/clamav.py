@@ -78,6 +78,11 @@ def _command(address: str, command: bytes, send=None, timeout: float = TIMEOUT) 
             reply = b""
             while chunk := sock.recv(4096):
                 reply += chunk
+                # z-commands return one NUL-terminated frame. Waiting for EOF
+                # can discard a valid reply when Windows resets a closed stream.
+                if b"\0" in reply:
+                    reply = reply.split(b"\0", 1)[0]
+                    break
     except (OSError, ValueError) as err:
         raise ScanUnavailable(f"ClamAV at {address} is unreachable: {err}") from err
     text = reply.rstrip(b"\0").decode("utf-8", "replace").strip()

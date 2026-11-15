@@ -17,8 +17,16 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      CI_EVIDENCE_PR: ${{ github.event.pull_request.number || '' }}
+      CI_EVIDENCE_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
 
       - uses: actions/setup-python@v6
         with:
@@ -28,18 +36,68 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt pytest
-          pip install "rom-hub @ https://github.com/BlizzHacker/rom-hub/archive/02e9a1dbc7ebca5191b4a977233a4d6d0466ed4b.tar.gz"
+          pip install "rom-hub @ https://github.com/BlizzHacker/rom-hub/archive/b0c7885c057730c42608c5570359166128bbe3eb.tar.gz"
 
       - uses: actions/checkout@v5
         with:
           repository: BlizzHacker/rom-hub-archive-org
           ref: v0.4.1
           path: .archive-org-proof
+          persist-credentials: false
 
-      - name: Test
+      - name: Prepare private test evidence
+        run: |
+          mv .archive-org-proof "$RUNNER_TEMP/archive-org-proof"
+          cp scripts/ci_evidence.py "$RUNNER_TEMP/romarr-ci-evidence.py"
+
+      - name: Pin source before tests
+        id: source_pin
         env:
-          ROMARR_ARCHIVE_ORG_PLUGIN_SOURCE: ${{ github.workspace }}/.archive-org-proof
-        run: python -m pytest tests/ -q
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python -I "$RUNNER_TEMP/romarr-ci-evidence.py" pin
+          --root "$GITHUB_WORKSPACE" --private "$RUNNER_TEMP/romarr-evidence-private"
+          --public "$RUNNER_TEMP/romarr-evidence-public"
+
+      - name: Test without credentials
+        id: source_tests
+        env:
+          ROMARR_ARCHIVE_ORG_PLUGIN_SOURCE: ${{ runner.temp }}/archive-org-proof
+        run: >-
+          python -I "$RUNNER_TEMP/romarr-ci-evidence.py" run
+          --root "$GITHUB_WORKSPACE" --private "$RUNNER_TEMP/romarr-evidence-private"
+          --public "$RUNNER_TEMP/romarr-evidence-public"
+
+      - name: Verify source and reconcile test counts
+        id: source_finalize
+        if: ${{ always() && steps.source_pin.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python -I "$RUNNER_TEMP/romarr-ci-evidence.py" finalize
+          --root "$GITHUB_WORKSPACE" --private "$RUNNER_TEMP/romarr-evidence-private"
+          --public "$RUNNER_TEMP/romarr-evidence-public"
+
+      - name: Upload anonymous test evidence
+        id: evidence_upload
+        if: ${{ always() && steps.source_finalize.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: verified-source-evidence
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/romarr-evidence-public/summary.json
+            ${{ runner.temp }}/romarr-evidence-public/cases.json
+            ${{ runner.temp }}/romarr-evidence-public/manifest.json
+
+      - name: Require passing evidence and successful upload
+        if: ${{ always() && steps.source_pin.outcome == 'success' }}
+        env:
+          ARTIFACT_STATUS: ${{ steps.evidence_upload.outcome }}
+        run: >-
+          python -I "$RUNNER_TEMP/romarr-ci-evidence.py" gate
+          --root "$GITHUB_WORKSPACE" --private "$RUNNER_TEMP/romarr-evidence-private"
+          --public "$RUNNER_TEMP/romarr-evidence-public"
 
   image:
     needs: test

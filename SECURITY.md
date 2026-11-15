@@ -88,7 +88,11 @@ install; the only way off is explicit.
   launched. A file that is merely *unparseable* still falls back to defaults,
   because nothing in it can be handed back.
 
-Exactly twelve routes answer without a credential, and no others (this count is
+Constant public assets (`/favicon.ico`, `/favicon.svg`, `/manifest.webmanifest`,
+`/service-worker.js`, `/app-icon-192.png`, `/app-icon-512.png`) contain no user
+data. The service worker does not intercept requests or cache responses.
+
+Exactly twelve routes answer without a credential, apart from constant static assets (this count is
 asserted against the code, not maintained by hand):
 
 | Route | Why |

@@ -20,6 +20,10 @@ download client and a database.
 """
 
 from html import escape
+import json
+import struct
+import zlib
+from functools import lru_cache
 
 CSS = """
 *{box-sizing:border-box;margin:0;padding:0}
@@ -617,6 +621,32 @@ html:not(.sidebar-ready):has(#fallback-accent-5:checked){--accent:#7bd88f;}
 """
 
 
+# Narrow screens keep the full navigation drawer and independently scroll tables.
+CSS += """
+#main,.page,.card,.panels>*{min-width:0}
+@media(max-width:820px){
+  table,#page>table{display:block;max-width:100%;overflow-x:auto;overscroll-behavior-x:contain}
+  th,td{min-width:90px;overflow-wrap:anywhere}
+  .rowact{flex-wrap:wrap}
+  .card h3{flex-wrap:wrap}
+  .row>*{max-width:100%;min-width:0}
+  input,select,textarea{max-width:100%}
+}
+@media(max-width:700px){
+  #top{flex-wrap:wrap}
+  #top h1{min-width:0;overflow-wrap:anywhere;flex:1}
+  #top #search{flex:1 1 100%;width:100%;margin-left:0}
+  button,.btn,.mini,.tab,.navlinks .nav,.navhead{min-height:44px}
+  input:not([type=checkbox]):not([type=radio]),select{min-height:44px;font-size:16px}
+  #sidebar-close{width:44px;height:44px;top:8px;right:8px}
+  .modal{padding:16px 10px;padding-bottom:max(16px,env(safe-area-inset-bottom))}
+  .modal .box{padding:18px 14px;max-height:calc(100dvh - 32px);overflow:auto}
+  .page{padding-bottom:max(36px,env(safe-area-inset-bottom))}
+  .grid{grid-template-columns:repeat(auto-fill,minmax(130px,1fr))}
+}
+"""
+
+
 # The accents offered as one click. Stated once, in Python, so the swatch row
 # and the boot script's fallback cannot disagree about what "Amber" is.
 ACCENTS = [
@@ -813,6 +843,7 @@ NAV = [
         ('queue', 'Queue', 'queued'),
         ('history', 'History', None),
         ('blocklist', 'Blocklist', None),
+        ('reports', 'Reports & Help', None),
     ]),
     ('Hub', [
         ('hub', 'Plugins', None),
@@ -1232,7 +1263,7 @@ function go(page){
     blocklist:'Blocklist',connections:'Connections',metadata:'Metadata',
     calendar:'Release Calendar',manualimport:'Manual Import',
     collections:'Collections \u2014 full sets and 1G1R',
-    getstarted:'Get Started',setup:'Setup Guide',
+    getstarted:'Get Started',setup:'Setup Guide',reports:'Reports & Help',
     hub:'ROM Hub — Plugins',emulators:'Emulator Hub',portal:'Library Shell & Device Fleet'};
   $('#top h1').textContent=titles[page]||'ROMarr';
   $('#search').classList.toggle('hide', page !== 'library');
@@ -1847,12 +1878,32 @@ function shelfEditor(g, meta){
     <div class="field"><label>Notes</label>
       <textarea data-f="notes" rows="4"
         style="width:100%;resize:vertical">${esc(meta.notes||'')}</textarea></div>
+    <details id="sh-nfo"><summary>Release notes (NFO)</summary>
+      <p class="help" id="sh-nfo-status">Open to read a same-name NFO beside this local game.</p>
+      <pre id="sh-nfo-text" style="white-space:pre;overflow:auto;max-height:360px"></pre></details>
     <div class="foot">
       <button class="btn ghost sp" data-close>Cancel</button>
       <button class="btn" id="sh-save">Save</button>
     </div></div>`;
   document.body.append(m);
   m.onclick=e=>{ if(e.target===m||e.target.dataset.close!==undefined) closeModal(); };
+  m.querySelector('#sh-nfo').ontoggle=async(e)=>{
+    if(!e.target.open||e.target.dataset.loaded)return;
+    e.target.dataset.loaded='1';
+    const status=m.querySelector('#sh-nfo-status');
+    status.textContent='Reading release notes…';
+    try{
+      const nfo=await j('/api/v1/game/nfo?id='+encodeURIComponent(g.id||'')
+        +'&source='+encodeURIComponent(g.source||''));
+      if(!m.isConnected)return;
+      status.textContent=nfo.available
+        ?nfo.filename+(nfo.truncated?' — preview limited to 128 KiB':'')
+        :(nfo.reason||'No same-name NFO is available for this local folder game.');
+      m.querySelector('#sh-nfo-text').textContent=nfo.text||'';
+    }catch(err){
+      if(m.isConnected)status.textContent='Could not read release notes.';
+    }
+  };
   m.querySelector('#sh-save').onclick=async()=>{
     const f=readForm();
     const r=await j('/api/v1/game/meta',{method:'POST',
@@ -5056,7 +5107,7 @@ RENDER.connections=async()=>{
 RENDER.emulators=async()=>{
   const version=pageVersion;
   const current=()=>version===pageVersion && activePage==='emulators';
-  let offset=0, query='', mode='projects', request=0, inspection=0;
+  let offset=0, query='', mode='projects', hostPlatform='', request=0, inspection=0;
   $('#page').innerHTML=`<div class="card"><h3>Emulator Hub</h3>
     <p>Find an emulator, check its setup guide, then add your games. Install buttons install on the
     <b>ROMarr host</b>. Use the upstream downloads on a different gaming device.</p>
@@ -5064,6 +5115,7 @@ RENDER.emulators=async()=>{
     Experimental projects and forks can have limited compatibility. A catalog entry is not a gameplay test.</p>
     <div class="row"><select id="emu-mode" aria-label="Catalog"><option value="projects">Emulators and tools</option>
     <option value="cores">RetroArch cores</option><option value="resources">Sources and references</option></select>
+    <select id="emu-host" aria-label="Emulator device"><option value="">All devices</option><option value="android">Android</option><option value="linux">Linux</option><option value="windows">Windows</option><option value="macos">macOS</option></select>
     <input id="emu-search" type="search" placeholder="Search name, system, license or source" aria-label="Search emulators">
     <button class="btn" id="emu-find">Search</button></div>
     <p><a href="https://emulation.gametechwiki.com/index.php/Main_Page" target="_blank" rel="noopener">Emulation General Wiki</a>
@@ -5084,7 +5136,7 @@ RENDER.emulators=async()=>{
     const serial=++request;
     $('#emu-count').textContent='Loading catalog…';
     try{
-      const d=await j('/api/v1/emulators'+(mode==='cores'?'/cores':mode==='resources'?'/resources':'')+'?q='+encodeURIComponent(query)+'&offset='+offset);
+      const d=await j('/api/v1/emulators'+(mode==='cores'?'/cores':mode==='resources'?'/resources':'')+'?q='+encodeURIComponent(query)+'&host_platform='+encodeURIComponent(hostPlatform)+'&offset='+offset);
       if(!current()||serial!==request)return;
       if(d.error)throw new Error(d.error);
       $('#emu-count').textContent=d.total+' matches · '+d.available+' catalog entries · showing '+(d.total?offset+1:0)+'–'+Math.min(offset+d.items.length,d.total)+' · snapshot '+d.verified_date;
@@ -5169,7 +5221,8 @@ RENDER.emulators=async()=>{
   const search=()=>{query=$('#emu-search').value;offset=0;load();};
   $('#emu-find').onclick=search;
   $('#emu-search').onkeydown=e=>{if(e.key==='Enter')search();};
-  $('#emu-mode').onchange=()=>{mode=$('#emu-mode').value;search();};
+  $('#emu-mode').onchange=()=>{mode=$('#emu-mode').value;$('#emu-host').disabled=mode!=='projects';search();};
+  $('#emu-host').onchange=()=>{hostPlatform=$('#emu-host').value;search();};
   $('#emu-prev').onclick=()=>{offset=Math.max(0,offset-60);load();};
   $('#emu-next').onclick=()=>{offset+=60;load();};
   $('#core-config').onclick=async()=>{
@@ -5480,6 +5533,92 @@ async function requestGame(g){
 // Radarr calls this Manual Import and it exists for the same reason: somebody
 // arrives with a library already on disk, and telling them to re-download
 // everything ROMarr could have adopted is absurd.
+// Reports keep claims separate from scanner evidence and require review before publishing.
+RENDER.reports=async()=>{
+  clearTimeout(RENDER.reports._timer);
+  const version=pageVersion,run=(RENDER.reports._runId||0)+1;RENDER.reports._runId=run;
+  const current=()=>activePage==='reports'&&pageVersion===version&&RENDER.reports._runId===run;
+  let selected='';
+  const data=await j('/api/v1/file-reports').catch(()=>null);
+  if(!current())return;
+  if(!data||data.error){$('#page').innerHTML='<div class="card">Could not read reports. Try again.</div>';return;}
+  const labels={'queued':'Waiting for scan','scanning':'Scanning a private copy','interrupted':'Scan interrupted — report again','antivirus-test-fixture':'Antivirus test signature reported (EICAR)','detection-reported':'Scanner reported a detection','reputation-flagged':'Hash reputation flagged','no-detections':'No detections from completed checks','needs-review':'Needs review / scanner unavailable','review-failed':'Review could not finish'};
+  $('#page').innerHTML='<div class="card"><h3>Report a file</h3><p>Found something suspicious or something that is not a game? Report it here. ROMarr scans a private snapshot; it leaves the original in place until you choose quarantine.</p>'
+    +'<p class="help">A user report is a claim. Scanner evidence is recorded with the file hash. No detections is not a guarantee of safety, and antivirus cannot prove that a file is a playable game. Configure scanners in <a href="#media">Media Management</a>.</p>'
+    +'<div class="field"><label for="report-file">File path inside your library</label><input id="report-file" placeholder="snes/My game.sfc" maxlength="2000"><small>Use a relative path, not a web link or a path to your settings. If antivirus already removed the file, describe the alert in the help form below; do not restore it just to make a report.</small></div>'
+    +'<div class="field"><label for="report-category">What seems wrong?</label><select id="report-category"><option value="malware">Malware or virus concern</option><option value="not-a-game">Not a game</option><option value="unwanted-file">Unwanted or nuisance file</option><option value="false-positive">Possible scanner false positive</option></select></div>'
+    +'<div class="field"><label for="report-notes">What did you notice? (kept locally)</label><textarea id="report-notes" maxlength="2000" placeholder="For example, my scanner showed a warning, or this opened as a document."></textarea></div><button class="btn" id="report-send">Report and scan</button></div>'
+    +'<div class="card" style="margin-top:16px"><h3>Local reports</h3><p class="help">Reports stay on this server. Nothing is posted to GitHub automatically. Quarantine moves a reviewed file out of the library; restore refuses to overwrite an existing file.</p><div id="report-list"></div></div>'
+    +'<div class="card" id="issue-form" style="margin-top:16px"><h3>Ask for help or suggest an improvement</h3><p class="help">Tell us what you expected and where you got stuck. You do not need to diagnose the problem. Review the text and remove passwords, API keys and private paths before publishing.</p>'
+    +'<div class="field"><label for="issue-title">Issue title</label><input id="issue-title" maxlength="180" placeholder="What went wrong, or what would help?"></div><div class="field"><label for="issue-body">Details to share</label><textarea id="issue-body" maxlength="3000" rows="6" placeholder="Your install method, the steps you tried, and the exact error help us reproduce it."></textarea></div>'
+    +'<div class="help" id="issue-evidence"></div><div id="issue-result" role="status"></div><button class="btn ghost" id="issue-review">Review on GitHub</button>'
+    +(data.direct_github?'<div style="margin-top:12px"><label><input type="checkbox" id="issue-confirm"> I reviewed this text and want to publish it to BlizzHacker/romarr.</label><p><button class="btn" id="issue-submit">Submit to GitHub</button></p></div>':'<p class="help">GitHub opens with your draft. Sign in there and press Submit when you are ready. ROMarr does not need your GitHub password.</p>')+'</div>';
+  let items=data.items||[],lastReportRows=null;
+  const paint=rows=>{
+    items=rows;
+    const serialized=JSON.stringify(rows);
+    if(serialized===lastReportRows)return;
+    lastReportRows=serialized;
+    const focused=document.activeElement?.closest('#report-list button[data-action]');
+    const focus=focused?{id:focused.dataset.id,action:focused.dataset.action}:null;
+    $('#report-list').innerHTML=rows.length?rows.map(r=>'<div style="padding:14px 0;border-top:1px solid var(--line)"><b>'+esc(r.file)+'</b><p>'+esc(labels[r.status]||r.status)+(r.quarantined?' · Quarantined':'')+(r.action_conflict?' · Move conflict — bytes preserved for manual review':'')+'</p>'
+      +'<div class="help">'+esc(r.category)+' · '+esc(r.created)+'<br>File fingerprint (SHA-256): <code style="overflow-wrap:anywhere;white-space:normal">'+esc(r.sha256||'Not computed yet')+'</code></div>'
+      +(r.action_detail?'<p class="help">'+esc(r.action_detail)+'</p>':'')
+      +(r.notes?'<details class="help"><summary>Your notes (kept locally)</summary><p>'+esc(r.notes)+'</p></details>':'')
+      +(r.scanners||[]).map(x=>'<p class="help">'+esc(x.engine)+': '+esc(x.status)+' '+esc((x.signatures||[]).join(', '))+' '+esc(x.detail||'')+'</p>').join('')
+      +'<div class="row" style="flex-wrap:wrap"><button class="btn ghost" data-action="share" data-id="'+r.id+'">Prepare GitHub report</button>'
+      +(r.sha256&&!r.action_conflict&&r.status!=='scanning'&&r.status!=='queued'?'<button class="btn ghost" data-action="'+(r.quarantined?'restore':'quarantine')+'" data-id="'+r.id+'">'+(r.quarantined?'Restore file':'Quarantine file')+'</button>':'')+'</div></div>').join(''):'<p class="help">No reports yet. You can also use the form below for a general issue.</p>';
+    if(focus){
+      const buttons=Array.from($('#report-list').querySelectorAll('button[data-action]'));
+      const target=buttons.find(b=>b.dataset.id===focus.id&&b.dataset.action===focus.action)||buttons.find(b=>b.dataset.id===focus.id);
+      if(target)target.focus({preventScroll:true});
+      else{$('#report-list').tabIndex=-1;$('#report-list').focus({preventScroll:true});}
+    }
+  };
+  let refreshId=0;
+  const refresh=async()=>{
+    const attempt=++refreshId;clearTimeout(RENDER.reports._timer);
+    const d=await j('/api/v1/file-reports').catch(()=>null);
+    if(!current()||attempt!==refreshId)return;
+    if(d&&!d.error)paint(d.items||[]);
+    clearTimeout(RENDER.reports._timer);
+    if(items.some(r=>r.status==='queued'||r.status==='scanning'))RENDER.reports._timer=setTimeout(refresh,1500);
+  };
+  paint(items);
+  if(items.some(r=>r.status==='queued'||r.status==='scanning'))RENDER.reports._timer=setTimeout(refresh,1500);
+  $('#report-send').onclick=async()=>{
+    const b=$('#report-send');b.disabled=true;
+    const r=await j('/api/v1/file-reports/submit',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({file:$('#report-file').value,category:$('#report-category').value,notes:$('#report-notes').value})}).catch(()=>({error:'Report could not be sent'}));
+    if(!current())return;b.disabled=false;
+    if(r.error)toast(r.error);else{toast('Report saved locally. Review the scanner results below.');refresh();}
+  };
+  $('#report-list').onclick=async e=>{
+    const b=e.target.closest('button[data-action]');if(!b)return;
+    const r=items.find(x=>x.id===b.dataset.id);if(!r)return;
+    if(b.dataset.action==='share'){
+      selected=r.id;$('#issue-title').value='File report: '+r.file.split('/').pop();
+      $('#issue-body').value='Please review this file report. What I noticed: ';
+      $('#issue-evidence').textContent='The selected report will include its file name, SHA-256, category, review status and scanner signatures. Local notes and absolute paths are excluded.';
+      $('#issue-form').scrollIntoView({block:'start'});return;
+    }
+    if(b.dataset.action==='quarantine'&&!confirm('Move '+r.file+' to quarantine? This does not delete it.'))return;
+    b.disabled=true;
+    const x=await j('/api/v1/file-reports/'+b.dataset.action,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:r.id})}).catch(()=>({error:'Action could not finish'}));
+    if(!current())return;
+    if(x.error){toast(x.error);b.disabled=false;}else refresh();
+  };
+  const publish=async direct=>{
+    if(direct&&!$('#issue-confirm').checked){toast('Review and confirm the text first.');return;}
+    const r=await j('/api/v1/support/github',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:$('#issue-title').value,body:$('#issue-body').value,report_id:selected,confirm:direct})}).catch(()=>({error:'Could not prepare the issue'}));
+    if(!current())return;
+    if(r.error){toast(r.error);return;}
+    const a=document.createElement('a');a.href=r.url;a.target='_blank';a.rel='noopener noreferrer';a.className='btn ghost';a.textContent=r.mode==='submitted'?'Open submitted issue':'Open your GitHub draft';$('#issue-result').replaceChildren(a);a.click();
+    toast(r.mode==='submitted'?'Issue submitted. Thank you for helping improve ROMarr.':'Your draft is ready on GitHub. Review it before submitting.');
+  };
+  $('#issue-review').onclick=()=>publish(false);
+  if($('#issue-submit'))$('#issue-submit').onclick=()=>publish(true);
+};
+
 // The optional guide uses the same editors and connection checks as Settings.
 const SETUP={step:0,mode:'organize',initialized:false};
 RENDER.setup=async()=>{
@@ -6371,10 +6510,70 @@ def favicon_svg() -> str:
     return FAVICON_SVG
 
 
+
+def web_manifest() -> str:
+    """Return constant install metadata; no user or server settings are exposed."""
+    return json.dumps({"id": "/", "name": "ROMarr", "short_name": "ROMarr",
+                       "description": "Manage your ROMarr server. Requires a connection to your server.",
+                       "start_url": "/", "scope": "/", "display": "standalone",
+                       "background_color": "#12141a", "theme_color": "#12141a",
+                       "icons": [{"src": f"/app-icon-{size}.png", "sizes": f"{size}x{size}",
+                                  "type": "image/png", "purpose": "any"} for size in (192, 512)]})
+
+
+def service_worker() -> str:
+    """Install support only: never intercept requests or persist authenticated data."""
+    return "self.addEventListener('install', () => self.skipWaiting());\nself.addEventListener('activate', event => event.waitUntil(self.clients.claim()));\n"
+
+
+@lru_cache(maxsize=2)
+def app_icon(size: int) -> bytes:
+    """Draw the cartridge brand as a PNG using the standard library."""
+    if size not in (192, 512):
+        raise ValueError("Unsupported app icon size")
+    rows = bytearray()
+    for y in range(size):
+        rows.append(0)
+        for x in range(size):
+            px, py = x * 64 // size, y * 64 // size
+            cartridge = 12 <= px < 52 and 8 <= py < 56
+            label = 18 <= px < 46 and 28 <= py < 44
+            contact = 50 <= py < 56 and any(a <= px < a + 4 for a in (20, 28, 36, 44))
+            color = (242, 163, 60) if label or contact else ((43, 50, 64) if cartridge else (18, 20, 26))
+            rows.extend(color)
+    def chunk(kind, data):
+        """Encode one checksummed PNG chunk."""
+        return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data))
+    return (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', size, size, 8, 2, 0, 0, 0))
+            + chunk(b'IDAT', zlib.compress(bytes(rows))) + chunk(b'IEND', b''))
+
+
+APP_HEAD = ('<link rel="manifest" href="/manifest.webmanifest">'
+            '<meta name="theme-color" content="#12141a">')
+APP_BOOT = """
+if ('serviceWorker' in navigator && window.isSecureContext) {
+  navigator.serviceWorker.register('/service-worker.js', {scope:'/'}).catch(() => {});
+}
+let installPrompt;
+window.addEventListener('beforeinstallprompt', event => {
+  event.preventDefault(); installPrompt=event;
+  document.getElementById('install-app').hidden=false;
+});
+document.getElementById('install-app').addEventListener('click', async () => {
+  if (!installPrompt) return;
+  const prompt=installPrompt; installPrompt=null;
+  document.getElementById('install-app').hidden=true;
+  await prompt.prompt();
+});
+window.addEventListener('appinstalled', () => {
+  installPrompt=null; document.getElementById('install-app').hidden=true;
+});
+"""
+
 def page() -> str:
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <title>ROMarr</title><meta name="viewport" content="width=device-width,initial-scale=1">
-{FAVICON_LINK}<style>{CSS}</style><script>{THEME_BOOT}</script></head><body>
+{FAVICON_LINK}{APP_HEAD}<style>{CSS}</style><script>{THEME_BOOT}</script></head><body>
 <input id="sidebar-native-toggle" type="checkbox" aria-label="Toggle navigation" aria-controls="rail">
 <nav id="rail" aria-label="Main navigation"><div id="brand">ROM<span>arr</span></div>
 <button id="sidebar-close" type="button" aria-label="Close navigation">×</button>
@@ -6385,10 +6584,10 @@ def page() -> str:
 <div id="main">
   <div id="top"><label id="sidebar-menu-native" for="sidebar-native-toggle">☰</label>
   <button id="sidebar-menu" type="button" aria-label="Open navigation"
-    aria-controls="rail" aria-expanded="false">☰</button><h1>Games</h1><input id="search" placeholder="Filter…" autocomplete="off"></div>
+    aria-controls="rail" aria-expanded="false">☰</button><h1>Games</h1><button id="install-app" class="btn ghost" type="button" hidden>Install app</button><input id="search" aria-label="Filter current page" placeholder="Filter…" autocomplete="off"></div>
   <div class="page" id="page"></div>
 </div>
-<script>{JS}</script></body></html>"""
+<script>{JS}</script><script>{APP_BOOT}</script></body></html>"""
 
 
 # ------------------------------------------------------------ the door in --

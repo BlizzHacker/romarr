@@ -70,7 +70,7 @@ from .downloaders import (
     Blackhole, CLIENT_TYPES, DebridClient, HubDownloader, NZBGet, NzbgetConfig, SABnzbd, SabConfig, SiteDownloader, build_client,
     hand_off_with_id, match_queue_item, merge_secrets, pick_client, redact,
 )
-from .indexers import INDEXER_TYPES, build_indexer, merge_indexer_secrets, redact_indexer
+from .indexers import INDEXER_TYPES, build_indexer, indexer_timeout, merge_indexer_secrets, redact_indexer
 from .indexers import Prowlarr, ProwlarrConfig, ProwlarrDownloadError
 from .library import _custom_platform_folder, import_rom, map_remote_path, platform_dir
 from .selective_import import selected_import_path
@@ -115,10 +115,12 @@ from .selection import (Release, best_release, infer_platform, judge, score,
                         collection_content_kind, collection_content_refusal)
 from .store import Event, QueueItem, SeerrRequest, Store
 from .ui import favicon_svg as ui_favicon_svg
+from .ui import web_manifest, service_worker, app_icon
 from .ui import page as ui_page
 from .ui import link_page as ui_link_page
 from .ui import login_page as ui_login_page
 from .version import compare_key, derive_version, is_unknown
+from .sidecars import read_nfo
 from .build_info import get_build_info
 
 log = logging.getLogger(__name__)
@@ -1331,6 +1333,22 @@ class ROMarr:
                 return candidate, backend
         return None
 
+    def game_nfo(self, game_id: str, source: str = "") -> dict:
+        """Read an NFO only for a cached game from a configured folder backend."""
+        from .libraries import FolderLibrary
+        games, _, _ = self._library_cache
+        candidates = [g for g in (games or []) if str(g.id) == game_id and g.source == source
+                      and (g.origin or "local") == "local"]
+        if len(candidates) != 1:
+            return {"available": False}
+        for cfg, backend in self.game_libraries:
+            if isinstance(backend, FolderLibrary):
+                # The path must be inside this backend's actual scanned root.
+                result = read_nfo(backend._root, str(candidates[0].id))
+                if result.get("available") or result.get("reason"):
+                    return result
+        return {"available": False}
+
     def library_root(self, cfg: dict) -> Path:
         """Where ROMs are filed for one library, falling back to the default."""
         return Path(cfg.get("path") or self.library)
@@ -1508,8 +1526,14 @@ class ROMarr:
             # The first enabled Prowlarr entry drives search.
             for cfg in self.store.list_items("indexers"):
                 if cfg.get("type") == "prowlarr" and cfg.get("enable", True):
+                    try:
+                        timeout = indexer_timeout(cfg)
+                    except ValueError:
+                        log.warning("Skipping stored Prowlarr entry with invalid timeout")
+                        continue
                     self.prowlarr = Prowlarr(ProwlarrConfig(
-                        base_url=cfg.get("url", ""), api_key=cfg.get("api_key", "")))
+                        base_url=cfg.get("url", ""), api_key=cfg.get("api_key", ""),
+                        timeout=timeout))
                     self.store.settings["_prowlarr_url"] = cfg.get("url", "")
                     break
 
@@ -1520,7 +1544,11 @@ class ROMarr:
             for cfg in self.store.list_items("indexers"):
                 if not cfg.get("enable", True):
                     continue
-                indexer = build_indexer(cfg)
+                try:
+                    indexer = build_indexer(cfg)
+                except ValueError:
+                    log.warning("Skipping stored indexer with invalid configuration")
+                    continue
                 if indexer is not None:
                     direct.append(indexer)
             self.indexers = direct
@@ -1567,6 +1595,15 @@ class ROMarr:
                        "_oidc_client_secret"):
             out.pop(secret, None)
         return out
+
+    def report_manager(self):
+        """Create the bounded local report service lazily for authenticated requests."""
+        from .file_reports import FileReports
+        with self._lock:
+            if not hasattr(self, "_reports_manager"):
+                self._reports_manager = FileReports(lambda: self.library, self.store.path.parent,
+                    lambda: dict(self.store.settings), self._env, version=VERSION)
+            return self._reports_manager
 
     def setup_status(self) -> dict:
         """A quick setup checklist, without probing services or returning secrets."""
@@ -1722,7 +1759,8 @@ class ROMarr:
                                "placeholder -- type the real key"}
         try:
             if kind == "prowlarr":
-                probe = Prowlarr(ProwlarrConfig(base_url=url, api_key=key))
+                probe = Prowlarr(ProwlarrConfig(
+                    base_url=url, api_key=key, timeout=indexer_timeout(cfg)))
                 indexers = probe.indexers()
                 private = sum(1 for i in indexers if i.get("privacy") == "private")
                 return {"ok": True,
@@ -5966,11 +6004,23 @@ class ROMarr:
                 return
             for path in files:
                 try:
-                    digest = hash_file(path)
+                    before = path.stat()
+                    if path.suffix.lower() == ".zip" and not platform.archive_is_the_rom:
+                        from .audit_archive import audit_zip
+                        verdict = audit_zip(path, platform, self.dats)
+                        # Hash-index entries identify the physical file at this
+                        # path, which remains the ZIP container.
+                        digest = hash_file(path)
+                    else:
+                        digest = hash_file(path)
+                        verdict = self.dats.lookup(**digest)
+                    after = path.stat()
                 except OSError:
                     continue
+                if (before.st_size, before.st_mtime_ns, before.st_ino) != (
+                        after.st_size, after.st_mtime_ns, after.st_ino):
+                    continue
                 state["scanned"] += 1
-                verdict = self.dats.lookup(**digest)
                 if verdict.status == VERIFIED:
                     state["verified"] += 1
                 elif verdict.status == BAD_DUMP:
@@ -5981,7 +6031,7 @@ class ROMarr:
                             "detail": verdict.detail or ""})
                 else:
                     state["unknown"] += 1
-                sha = digest.get("sha1", "")
+                sha = (digest or {}).get("sha1", "")
                 # Keep the hash. Netplay is decided on bytes, and this walk
                 # is the only place ROMarr ever computes them; discarding
                 # them here is what left an offer with nothing to carry.
@@ -8065,7 +8115,8 @@ def make_handler(service: ROMarr):
                     self.end_headers()
                     return self.wfile.write(body)
             if (path in self.OPEN_PATHS
-                    or path in ("/favicon.ico", "/favicon.svg")
+                    or path in ("/favicon.ico", "/favicon.svg", "/manifest.webmanifest",
+                                "/service-worker.js", "/app-icon-192.png", "/app-icon-512.png")
                     or is_portal_asset(path)
                     or self._authorised()):
                 return self._guard(handler)
@@ -8096,6 +8147,13 @@ def make_handler(service: ROMarr):
             if route.path in ("/favicon.ico", "/favicon.svg"):
                 return self._send(200, ui_favicon_svg().encode("utf-8"),
                                   "image/svg+xml")
+            if route.path == "/manifest.webmanifest":
+                return self._send(200, web_manifest().encode(), "application/manifest+json")
+            if route.path == "/service-worker.js":
+                return self._send(200, service_worker().encode(), "application/javascript")
+            if route.path in ("/app-icon-192.png", "/app-icon-512.png"):
+                size = 192 if route.path == "/app-icon-192.png" else 512
+                return self._send(200, app_icon(size), "image/png")
             if route.path == "/link":
                 # Served before the sign-in check on purpose, and without
                 # consulting anything: the visitor is a stranger holding a
@@ -8207,7 +8265,8 @@ def make_handler(service: ROMarr):
                 try:
                     result = EmulatorHub(service.store.path.parent).catalog(
                         (query.get("q") or [""])[0], int((query.get("offset") or ["0"])[0]),
-                        int((query.get("limit") or ["60"])[0]))
+                        int((query.get("limit") or ["60"])[0]),
+                        host_platform=(query.get("host_platform") or [""])[0])
                     return self._json(200, result)
                 except (ValueError, OSError):
                     return self._json(400, {"error": "Could not load this catalog page"})
@@ -8462,6 +8521,8 @@ def make_handler(service: ROMarr):
                     redact_library(lib) for lib in service.store.list_items("libraries")]})
             if route.path == "/api/v1/library/schema":
                 return self._json(200, {"types": LIBRARY_TYPES})
+            if route.path == "/api/v1/file-reports":
+                return self._json(200, service.report_manager().list())
             if route.path == "/api/v1/setup/status":
                 return self._json(200, service.setup_status())
             if route.path == "/api/v1/config":
@@ -8560,6 +8621,10 @@ def make_handler(service: ROMarr):
                 if pick is None:
                     return self._json(404, {"error": f"nothing on the shelf as {raw}"})
                 return self._json(200, pick)
+            if route.path == "/api/v1/game/nfo":
+                return self._json(200, service.game_nfo(
+                    (query.get("id") or [""])[0],
+                    (query.get("source") or [""])[0]))
             if route.path == "/api/v1/game/meta":
                 platform = (query.get("platform") or [""])[0]
                 game = (query.get("game") or [""])[0]
@@ -9299,6 +9364,26 @@ def make_handler(service: ROMarr):
                                 "platform": platform.slug if platform else "",
                                 "unresolved": platform is None})
                 return self._json(200, {"items": out, "total": len(entries)})
+            if route.path in ("/api/v1/file-reports/submit", "/api/v1/file-reports/quarantine",
+                              "/api/v1/file-reports/restore", "/api/v1/support/github"):
+                if not isinstance(body, dict):
+                    return self._json(400, {"error": "Use a JSON object"})
+                reports = service.report_manager()
+                try:
+                    if route.path == "/api/v1/file-reports/submit":
+                        result = reports.submit(body.get("file"), body.get("category"), body.get("notes", ""))
+                    elif route.path == "/api/v1/file-reports/quarantine":
+                        result = reports.quarantine(body.get("id"))
+                    elif route.path == "/api/v1/file-reports/restore":
+                        result = reports.restore(body.get("id"))
+                    else:
+                        result = reports.github(body.get("title"), body.get("body"),
+                            confirm=body.get("confirm") is True, report_id=body.get("report_id", ""))
+                    return self._json(200, result)
+                except ValueError as exc:
+                    return self._json(400, {"error": str(exc)})
+                except OSError:
+                    return self._json(400, {"error": "File unavailable or operation not permitted; no existing destination was overwritten"})
             if route.path == "/api/v1/setup/complete":
                 return self._json(200, service.finish_setup_guide(
                     str(body.get("mode") or "organize")))
@@ -9500,6 +9585,11 @@ def make_handler(service: ROMarr):
                     merged = (merge_indexer_secrets(dict(body), existing)
                               if is_indexer
                               else merge_secrets(dict(body), existing))
+                    if is_indexer:
+                        try:
+                            merged["timeout"] = indexer_timeout(merged)
+                        except ValueError as err:
+                            return self._json(400, {"error": str(err)})
                     saved = service.store.put_item(key, merged)
                     service.reload_clients()
                 return self._json(200, redact_indexer(saved) if is_indexer

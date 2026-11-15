@@ -349,6 +349,7 @@ def test_scheduled_check_waits_for_manual_check_and_applies_once(
     fetched, release, lock_attempted, finished = (
         threading.Event(), threading.Event(), threading.Event(), threading.Event())
     requests_seen, applied, errors, answers = [], [], [], []
+    observed_threads = set()
 
     real_lock = svc._update_check_lock
 
@@ -373,6 +374,8 @@ def test_scheduled_check_waits_for_manual_check_and_applies_once(
 
     def controlled_get(*args, **kwargs):
         """Hold only the first (manual) GitHub request during overlap."""
+        if threading.current_thread() not in observed_threads:
+            return Release()
         requests_seen.append(True)
         if len(requests_seen) == 1:
             fetched.set()
@@ -402,9 +405,15 @@ def test_scheduled_check_waits_for_manual_check_and_applies_once(
                         or {"ok": True, "message": "started"})
     first = threading.Thread(target=manual)
     second = threading.Thread(target=scheduled)
+    observed_threads.update((first, second))
     first.start()
     try:
         assert fetched.wait(5)
+        # Other service workers may still be alive from earlier integration
+        # cases. Their requests must not count as this service's checks.
+        foreign = threading.Thread(target=lambda: requests.get("https://example.test/background"))
+        foreign.start(); foreign.join(2)
+        assert not foreign.is_alive()
         second.start()
         assert lock_attempted.wait(5), "scheduled check never reached the mutex"
         assert not finished.is_set(), "scheduled check bypassed the held mutex"

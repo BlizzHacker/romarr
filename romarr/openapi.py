@@ -20,7 +20,16 @@ VERSION = "3.1.0"
 #: One line per route. Anything served and not described here fails the test,
 #: which is the whole mechanism keeping this honest.
 DESCRIPTIONS: dict[str, tuple[str, str]] = {
+    "/api/v1/file-reports": ("GET", "Local user reports and snapshot scanner evidence; authentication required."),
+    "/api/v1/file-reports/submit": ("POST", "Report a relative library file and queue a bounded snapshot scan."),
+    "/api/v1/file-reports/quarantine": ("POST", "Explicitly quarantine unchanged reviewed bytes; never delete."),
+    "/api/v1/file-reports/restore": ("POST", "Restore quarantined bytes without overwriting an existing destination."),
+    "/api/v1/support/github": ("POST", "Prepare a reviewed GitHub issue or submit with explicit consent and an operator token."),
     "/": ("GET", "The web UI."),
+    "/manifest.webmanifest": ("GET", "Constant installable app manifest."),
+    "/service-worker.js": ("GET", "Online-only app service worker; no request interception or caching."),
+    "/app-icon-192.png": ("GET", "Constant 192 pixel app icon."),
+    "/app-icon-512.png": ("GET", "Constant 512 pixel app icon."),
     "/favicon.ico": ("GET", "The retro cartridge SVG favicon."),
     "/favicon.svg": ("GET", "The retro cartridge SVG favicon."),
     "/api/health": ("GET", "Liveness. Returns {ok} unauthenticated, the full "
@@ -363,6 +372,7 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
                                                    "and install the companion "
                                                    "Mister Download Manager "
                                                    "binaries locally."),
+    "/api/v1/game/nfo": ("GET", "Read a bounded same-stem NFO for a cached local folder game; unsupported platforms fail closed."),
     "/api/v1/library": ("GET", "Configured library servers."),
     "/api/v1/library/schema": ("GET", "Library backend types and their fields."),
     "/api/v1/library/config": ("GET", "One library's stored configuration."),

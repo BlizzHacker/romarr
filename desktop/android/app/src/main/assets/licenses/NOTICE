@@ -1,0 +1,23 @@
+ROMarr is maintained by BlizzHacker / MOVE WEIGHT.
+
+Forks, code reuse and contributions are welcome. Independently maintained
+projects should use their own name, logo and visual identity.
+
+Official source: https://github.com/BlizzHacker/romarr
+Official website: https://romarr.app
+Official Unraid listing:
+https://ca.unraid.net/apps/romarr-04jslct0riva81?q=romarr
+Official container: ghcr.io/blizzhacker/romarr
+
+ROMarrNG is an independently maintained third-party fork. It is not an
+official ROMarr release and is not affiliated with, endorsed by, or
+supported by the ROMarr maintainers.
+
+The MIT license remains in effect. Preserve its copyright and license
+notices when redistributing the code. Do not present a third-party build
+as an official ROMarr release or remove the original project's attribution.
+ROMarr branding is not authorized as the product identity of a separate
+project or distribution. Crediting and linking to ROMarr as upstream is welcome.
+
+See docs/OFFICIAL-DISTRIBUTION.md for supported sources and the branding
+and support policy.
