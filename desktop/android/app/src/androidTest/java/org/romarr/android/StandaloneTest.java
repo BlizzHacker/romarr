@@ -14,6 +14,11 @@ import java.net.*;
 /** Device tests exercise the packaged interpreter, server and scoped sharing. */
 @RunWith(AndroidJUnit4.class)
 public class StandaloneTest {
+ private static byte[] readFully(InputStream in) throws IOException {
+  ByteArrayOutputStream out=new ByteArrayOutputStream();byte[] buffer=new byte[4096];int n;
+  while((n=in.read(buffer))!=-1) out.write(buffer,0,n);
+  return out.toByteArray();
+ }
  @Test public void bundledServerAndStdlibWorkWithoutExternalPython() throws Exception {
   Context c=InstrumentationRegistry.getInstrumentation().getTargetContext();
   String base=Python.getInstance().getModule("android_backend").callAttr("start",c.getFilesDir().getAbsolutePath()).toString();
@@ -21,11 +26,11 @@ public class StandaloneTest {
   HttpURLConnection health=(HttpURLConnection)new URL(base+"/api/health").openConnection();
   health.setConnectTimeout(10000); health.setReadTimeout(10000);
   assertEquals(200,health.getResponseCode());
-  String text=new String(health.getInputStream().readAllBytes(),java.nio.charset.StandardCharsets.UTF_8);
+  String text=new String(readFully(health.getInputStream()),java.nio.charset.StandardCharsets.UTF_8);
   assertTrue(text.contains("true"));
   HttpURLConnection ui=(HttpURLConnection)new URL(base+"/").openConnection();
   assertEquals(200,ui.getResponseCode());
-  assertTrue(new String(ui.getInputStream().readAllBytes(),java.nio.charset.StandardCharsets.UTF_8).contains("ROMarr"));
+  assertTrue(new String(readFully(ui.getInputStream()),java.nio.charset.StandardCharsets.UTF_8).contains("ROMarr"));
   String runtime=Python.getInstance().getModule("android_backend").callAttr("runtime_facts").toString();
   android.util.Log.i("ROMarrProof",runtime);
   org.json.JSONObject facts=new org.json.JSONObject(runtime);
@@ -52,7 +57,7 @@ public class StandaloneTest {
   File fixture=new File(library,"device-test.rom");
   try(FileOutputStream out=new FileOutputStream(fixture)) {out.write(new byte[]{1,2,3});}
   android.net.Uri uri=FileProvider.getUriForFile(c,c.getPackageName()+".files",fixture);
-  try(InputStream in=c.getContentResolver().openInputStream(uri)) {assertArrayEquals(new byte[]{1,2,3},in.readAllBytes());}
+  try(InputStream in=c.getContentResolver().openInputStream(uri)) {assertArrayEquals(new byte[]{1,2,3},readFully(in));}
   try {
    FileProvider.getUriForFile(c,c.getPackageName()+".files",new File(c.getFilesDir(),"romarr.json"));
    fail("Private state must not be exported");
@@ -68,7 +73,7 @@ public class StandaloneTest {
   normalize.setAccessible(true);
   assertEquals("import.rom",normalize.invoke(null,(Object)null));
   assertEquals("bad_name__.rom",normalize.invoke(null,"bad/name\\\n.rom"));
-  String longName="界".repeat(100)+".rom";
+  String longName=new String(new char[100]).replace("\0","界")+".rom";
   String shortened=(String)normalize.invoke(null,longName);
   assertTrue(shortened.endsWith(".rom"));
   assertTrue(shortened.getBytes(java.nio.charset.StandardCharsets.UTF_8).length<=240);
@@ -82,7 +87,7 @@ public class StandaloneTest {
   long deadline=android.os.SystemClock.elapsedRealtime()+30000;
   while(!result.exists() && android.os.SystemClock.elapsedRealtime()<deadline) Thread.sleep(100);
   assertTrue("Native copy completed",result.isFile());
-  try(InputStream in=new FileInputStream(result)) {assertArrayEquals(fixture,in.readAllBytes());}
+  try(InputStream in=new FileInputStream(result)) {assertArrayEquals(fixture,readFully(in));}
   source.delete(); result.delete(); inst.runOnMainSync(activity::finish);
  }
 
@@ -126,8 +131,8 @@ public class StandaloneTest {
   try(FileOutputStream out=new FileOutputStream(staged)) {out.write(new byte[]{4,5,6});}
   String result=Python.getInstance().getModule("android_backend").callAttr("publish_import",c.getFilesDir().getAbsolutePath(),staged.getAbsolutePath(),original.getName(),false).toString();
   assertNotEquals(original.getAbsolutePath(),result);
-  try(InputStream in=new FileInputStream(original)) {assertArrayEquals(new byte[]{1,2,3},in.readAllBytes());}
-  try(InputStream in=new FileInputStream(result)) {assertArrayEquals(new byte[]{4,5,6},in.readAllBytes());}
+  try(InputStream in=new FileInputStream(original)) {assertArrayEquals(new byte[]{1,2,3},readFully(in));}
+  try(InputStream in=new FileInputStream(result)) {assertArrayEquals(new byte[]{4,5,6},readFully(in));}
   assertFalse(staged.exists()); original.delete(); new File(result).delete();
  }
 
@@ -233,11 +238,13 @@ public class StandaloneTest {
   webField.setAccessible(true);promptField.setAccessible(true);
   android.webkit.WebView web=(android.webkit.WebView)webField.get(activity);
   java.util.concurrent.atomic.AtomicInteger rendered=new java.util.concurrent.atomic.AtomicInteger();
+  java.util.concurrent.atomic.AtomicReference<String> destinationMethod=new java.util.concurrent.atomic.AtomicReference<>("");
   String form="<html><body><form method='POST' action='https://form-identity.example.invalid/consume'><input name='fixture' value='harmless'></form><script>document.forms[0].submit()</script></body></html>";
   inst.runOnMainSync(() -> {
    try {
     remote.invoke(activity,"https://form-server.example.invalid");
-    android.webkit.WebViewClient production=web.getWebViewClient();
+    java.lang.reflect.Field clientField=MainActivity.class.getDeclaredField("navigationClient");clientField.setAccessible(true);
+    android.webkit.WebViewClient production=(android.webkit.WebViewClient)clientField.get(activity);
     web.setWebViewClient(new android.webkit.WebViewClient() {
      @Override public boolean shouldOverrideUrlLoading(android.webkit.WebView v,android.webkit.WebResourceRequest r) {return production.shouldOverrideUrlLoading(v,r);}
      @Override public void onPageStarted(android.webkit.WebView v,String url,android.graphics.Bitmap icon) {production.onPageStarted(v,url,icon);}
@@ -245,7 +252,8 @@ public class StandaloneTest {
       android.webkit.WebResourceResponse blocked=production.shouldInterceptRequest(v,r);
       if(blocked!=null) return blocked;
       if("form-identity.example.invalid".equals(r.getUrl().getHost())) {
-       assertEquals("POST",r.getMethod());rendered.incrementAndGet();
+       if(!r.isForMainFrame()) return new android.webkit.WebResourceResponse("text/plain","UTF-8",new ByteArrayInputStream(new byte[0]));
+       destinationMethod.set(r.getMethod());rendered.incrementAndGet();
        return new android.webkit.WebResourceResponse("text/html","UTF-8",new ByteArrayInputStream("<html><title>Approved destination</title><body>approved-destination</body></html>".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
       }
       return null;
@@ -271,6 +279,7 @@ public class StandaloneTest {
   inst.runOnMainSync(() -> web.loadDataWithBaseURL("https://form-server.example.invalid",form,"text/html","UTF-8",null));
   while(rendered.get()==0 && android.os.SystemClock.elapsedRealtime()<deadline) Thread.sleep(25);
   assertEquals("Explicitly retried approved POST reaches destination",1,rendered.get());
+  assertEquals("POST",destinationMethod.get());
  }
  @Test public void quarantinedAndInternalFilesCannotBeOfferedOrHandedOff() throws Exception {
   android.app.Instrumentation inst=InstrumentationRegistry.getInstrumentation();Context c=inst.getTargetContext();

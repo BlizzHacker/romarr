@@ -253,3 +253,14 @@ def test_unsaved_prowlarr_test_honors_submitted_timeout(tmp_path, monkeypatch):
     result = service.test_indexer({"type": "prowlarr", "url": "https://host", "timeout": 120})
     assert result["ok"]
     assert observed == [120]
+
+
+def test_corrupt_saved_timeouts_do_not_block_startup_or_other_indexers(tmp_path):
+    service = ROMarr(env={"ROMARR_DATA": str(tmp_path / "s.json"), "ROMARR_AUTH": "disabled"})
+    for kind in ("prowlarr", "torznab"):
+        service.store.put_item("indexers", {"type":kind,"url":"https://host.invalid","timeout":None})
+    service.store.put_item("indexers", {"type":"torznab","url":"https://valid.invalid","timeout":17})
+    service.reload_clients()
+    assert len(service.indexers) == 1
+    restarted = ROMarr(env={"ROMARR_DATA": str(tmp_path / "s.json"), "ROMARR_AUTH": "disabled"})
+    assert len(restarted.indexers) == 1

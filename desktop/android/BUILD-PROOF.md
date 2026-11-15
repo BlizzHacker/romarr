@@ -5,15 +5,16 @@ were downloaded to Windows C:.
 
 - Build: JDK 17.0.21, Gradle 8.13, AGP 8.13.0, Chaquopy 17.2.0,
   bundled Python 3.13.16, target/compile API 36, ARM64 + x86_64.
-- Latest instrumentation run: 2026-11-14 17:33 UTC, with opt-in live SSO enabled.
-  Final combined signed build/lint is rerun after latest core integration.
-- API 36 / Android 16 KVM x86_64 emulator: **7 tests, 0 failures, 0 errors**.
+- Latest completed instrumentation: 2026-11-14, with opt-in live SSO enabled.
+  Final signed packages are rebuilt from the committed source with a private source/artifact receipt.
+- API 36 / Android 16 KVM x86_64 emulator: **11 tests, 0 failures, 0 errors, 0 skipped**.
   They exercise packaged core health/UI/OpenSSL; protected API 401 / setup 409 /
   native session 200; FileProvider state denial; native import byte preservation;
   actual WebView authenticated fetch and HttpOnly secrecy; collision preservation;
   stale local callback isolation from a remote selection; baked core/package version
   equality; quarantine/internal file handoff denial; HTTPS sign-in consent, normal
-  external links and stale redirect isolation; and the active Authentik login page
+  external links and stale redirect isolation; real auto-submitting cross-authority form consent; report scan/quarantine/restore
+  in private Android storage; running scheduled jobs; and the active Authentik login page
   rendered in the same WebView without credentials entered.
 - Private library fixture persisted unchanged across force-stop/relaunch
   (separate debug-device proof; synthetic fixture removed afterward).

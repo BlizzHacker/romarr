@@ -220,3 +220,24 @@ def test_authenticated_report_and_browser_issue_draft(report_api):
     code, draft = call_api(base, "/api/v1/support/github", {"title": "Example concern", "body": "Please review", "report_id": row["id"]}, True)
     assert code == 200 and draft["mode"] == "browser"
     assert draft["url"].startswith("https://github.com/BlizzHacker/romarr/issues/new?")
+
+
+def test_digest_refuses_oversized_replacement_without_reading(tmp_path, monkeypatch):
+    from io import BytesIO
+    monkeypatch.setattr(reports, "MAX_BYTES", 8)
+    monkeypatch.setattr(reports, "_fd_identity", lambda source: (1, 1, 9, 1, 1))
+    class NeverRead(BytesIO):
+        def read(self, *args):
+            raise AssertionError("oversized replacement was read")
+    with pytest.raises(ValueError, match="size limit"):
+        reports._digest(NeverRead(b"fixture"))
+
+
+def test_digest_stops_a_growing_stream_at_budget(monkeypatch):
+    from io import BytesIO
+    monkeypatch.setattr(reports, "MAX_BYTES", 8)
+    monkeypatch.setattr(reports, "_fd_identity", lambda source: (1, 1, 1, 1, 1))
+    source = BytesIO(b"x" * 100)
+    with pytest.raises(ValueError, match="size limit"):
+        reports._digest(source)
+    assert source.tell() == 9

@@ -382,3 +382,47 @@ def test_zip_container_size_never_causes_bad_dump_verdict(tmp_path):
     dats = _zip_dat_index([("Known.smc", known)])
     assert dats.lookup(**__import__("romarr.dat", fromlist=["hash_file"]).hash_file(path)).status == "bad-dump"
     assert audit_zip(path, resolve("snes"), dats).status == "unknown"
+
+
+def test_archive_rom_platform_audits_container_not_members(tmp_path):
+    import zipfile
+    svc = _svc(tmp_path)
+    shelf = tmp_path / "lib/arcade"; shelf.mkdir(parents=True)
+    path = shelf / "set.zip"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("chip.bin", b"chip fixture")
+    svc.dats = _zip_dat_index([("set.zip", path.read_bytes())])
+    svc.audit_library("arcade")
+    assert _wait_done(svc)["verified"] == 1
+
+
+def test_zip_directory_budget_checked_before_member_index(tmp_path, monkeypatch):
+    import struct
+    from romarr import audit_archive
+    path = tmp_path / "huge.zip"
+    path.write_bytes(struct.pack("<4s4H2LH", b"PK\x05\x06", 0, 0, 10001, 10001, 0, 0, 0))
+    def forbidden(*args):
+        raise AssertionError("ZipFile constructed before metadata budget check")
+    monkeypatch.setattr(audit_archive.zipfile, "ZipFile", forbidden)
+    assert audit_archive.audit_zip(path, None, None).status == "unknown"
+
+
+def test_zip_repeated_name_cannot_hide_unverified_member(tmp_path):
+    import pytest
+    with pytest.warns(UserWarning, match="Duplicate name"):
+        state = _run_zip_audit(tmp_path, [("Game.smc", b"bad"), ("Game.smc", b"good")], [("Game.smc", b"good")])
+    assert state["unknown"] == 1 and state["verified"] == 0
+
+
+def test_zip_large_sheet_stays_unknown_with_bounded_read(tmp_path, monkeypatch):
+    from romarr import audit_archive
+    monkeypatch.setattr(audit_archive, "MAX_SHEET_BYTES", 32)
+    cue = b'FILE "track.bin" BINARY\n' + b" " * 100
+    state = _run_zip_audit(tmp_path, [("Game.cue", cue), ("track.bin", b"track")], [("Game.cue", cue), ("track.bin", b"track")], platform_slug="psx")
+    assert state["unknown"] == 1
+
+
+def test_zip_sheet_reference_requires_exact_relative_member(tmp_path):
+    cue = b'FILE "missing/track.bin" BINARY\nTRACK 01 MODE2/2352\nINDEX 01 00:00:00\n'
+    state = _run_zip_audit(tmp_path, [("Game.cue", cue), ("track.bin", b"track")], [("Game.cue", cue), ("track.bin", b"track")], platform_slug="psx")
+    assert state["unknown"] == 1 and state["verified"] == 0

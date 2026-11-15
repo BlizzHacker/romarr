@@ -3,6 +3,7 @@ import json
 import os
 import sys
 import threading
+from pathlib import Path
 from http.server import ThreadingHTTPServer
 from urllib.error import HTTPError
 from urllib.parse import urlencode
@@ -32,7 +33,7 @@ def test_utf8_nfo_and_uppercase_extension(tmp_path):
     game.with_suffix(".NFO").write_bytes(b"\xef\xbb\xbfRelease <script>alert(1)</script>\n")
     result = read_nfo(root, str(game))
     assert result["text"] == "Release <script>alert(1)</script>\n"
-    assert result["filename"] == "Example.NFO"
+    assert result["filename"].lower() == "example.nfo"
     assert not result["truncated"]
 
 
@@ -167,3 +168,24 @@ def test_windows_parent_handle_blocks_replacement(tmp_path):
                 root.rename(tmp_path / "replacement")
             assert stream.read() == b"Windows notes"
     assert read_nfo(root, str(game))["text"] == "Windows notes"
+
+
+def test_relative_library_and_cached_game_id(tmp_path, monkeypatch):
+    root, game = fixture_game(tmp_path)
+    game.with_suffix(".nfo").write_text("Relative library notes")
+    monkeypatch.chdir(tmp_path)
+    assert read_nfo(Path("library"), "library/Example.zip")["text"] == "Relative library notes"
+
+
+def test_utf8_character_split_at_preview_limit(tmp_path):
+    root, game = fixture_game(tmp_path)
+    game.with_suffix(".nfo").write_bytes(("é" * 65535 + "€").encode("utf-8"))
+    result = read_nfo(root, str(game))
+    assert result["encoding"] == "utf-8" and result["truncated"]
+    assert result["text"] == "é" * 65535
+
+
+def test_nfo_during_initial_library_load_is_unavailable():
+    service = ROMarr.__new__(ROMarr)
+    service._library_cache = (None, 0, 0)
+    assert service.game_nfo("missing") == {"available": False}

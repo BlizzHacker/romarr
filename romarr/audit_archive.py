@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import stat
+import struct
+import posixpath
 import zipfile
 from pathlib import Path, PurePosixPath
 
@@ -12,6 +14,29 @@ from .selection import (_cue_and_gdi_names, _names_in_sheet, _playlist_names,
 MAX_ARCHIVE_MEMBERS = 10_000
 MAX_MEMBER_BYTES = 2 * 1024 * 1024 * 1024
 MAX_ARCHIVE_BYTES = 8 * 1024 * 1024 * 1024
+MAX_CENTRAL_BYTES = 4 * 1024 * 1024
+MAX_SHEET_BYTES = 1024 * 1024
+
+
+def _bounded_directory(path):
+    """Inspect bounded EOCD metadata before zipfile allocates its member index.
+
+    ZIP64 and split archives stay unknown rather than allocating unbounded metadata.
+    """
+    with path.open("rb") as source:
+        source.seek(0, 2)
+        size = source.tell()
+        source.seek(max(0, size - 65557))
+        tail = source.read(65557)
+    at = tail.rfind(b"PK\x05\x06")
+    if at < 0 or len(tail) - at < 22:
+        return False
+    _, disk, start, local_count, count, central_size, offset, comment = struct.unpack_from("<4s4H2LH", tail, at)
+    return (disk == start == 0 and local_count == count and count <= MAX_ARCHIVE_MEMBERS
+            and central_size <= MAX_CENTRAL_BYTES and offset != 0xffffffff
+            and at + 22 + comment == len(tail)
+            and offset + central_size <= size - len(tail) + at)
+
 
 
 def _safe_member(name: str) -> bool:
@@ -26,25 +51,37 @@ def audit_zip(path: Path, platform, dats):
     Member reads reach EOF so zipfile checks CRC, and hash_stream keeps RAM bounded.
     """
     try:
+        if not _bounded_directory(path):
+            return Match(UNKNOWN, detail="archive directory limit or unsupported ZIP layout")
         with zipfile.ZipFile(path) as archive:
-            infos = [info for info in archive.infolist() if not info.is_dir()]
-            if len(infos) > MAX_ARCHIVE_MEMBERS:
+            all_infos = archive.infolist()
+            infos = [info for info in all_infos if not info.is_dir()]
+            if len(all_infos) > MAX_ARCHIVE_MEMBERS:
                 return Match(UNKNOWN, detail="archive member limit exceeded")
-            total, by_name = 0, {}
+            total, by_name, seen = 0, {}, set()
             for info in infos:
                 mode = info.external_attr >> 16
                 if (not _safe_member(info.filename) or stat.S_ISLNK(mode)
-                        or info.filename.casefold() in by_name
+                        or info.filename.replace(chr(92), "/").casefold() in seen
                         or info.file_size < 0 or info.file_size > MAX_MEMBER_BYTES):
                     return Match(UNKNOWN, detail="unsafe or ambiguous archive member")
                 total += info.file_size
                 if total > MAX_ARCHIVE_BYTES:
                     return Match(UNKNOWN, detail="archive size limit exceeded")
                 by_name[info.filename] = info
+                seen.add(info.filename.replace(chr(92), "/").casefold())
 
-            from .library import _ZipSource
-            reader = _ZipSource(path)
-            sets = pick_all_rom_sets(list(by_name), platform, read=reader.read)
+            def read_sheet(name):
+                """Bound decompressed sheet reads before selection or reference parsing."""
+                info = by_name.get(name)
+                if info is None or info.file_size > MAX_SHEET_BYTES:
+                    raise ValueError("archive sheet size limit exceeded")
+                with archive.open(info) as stream:
+                    data = stream.read(MAX_SHEET_BYTES + 1)
+                if len(data) > MAX_SHEET_BYTES:
+                    raise ValueError("archive sheet size limit exceeded")
+                return data
+            sets = pick_all_rom_sets(list(by_name), platform, read=read_sheet)
             if not sets:
                 return Match(UNKNOWN)
             outcomes = []
@@ -54,13 +91,17 @@ def audit_zip(path: Path, platform, dats):
                     parser = (_playlist_names if suffix == ".m3u" else
                               _cue_and_gdi_names if suffix in (".cue", ".gdi") else None)
                     if parser:
-                        referenced = _names_in_sheet(sheet, reader.read, parser)
+                        referenced = _names_in_sheet(sheet, read_sheet, parser)
                         parent = PurePosixPath(sheet).parent
-                        nearby = {(PurePosixPath(n).parent,
-                                   PurePosixPath(n).name.casefold()) for n in by_name}
-                        if referenced is None or any(
-                                (parent, PurePosixPath(name.replace(chr(92), "/")).name.casefold())
-                                not in nearby for name in referenced):
+                        selected = {n.replace(chr(92), "/").casefold() for n in rom_set.members}
+                        def exact_reference(name):
+                            """Keep sheet-relative directories instead of matching just basenames."""
+                            name = name.replace(chr(92), "/")
+                            if name.startswith("/"):
+                                return ""
+                            normalized = posixpath.normpath(str(parent / name))
+                            return "" if normalized.startswith("../") else normalized.casefold()
+                        if referenced is None or any(exact_reference(name) not in selected for name in referenced):
                             return Match(UNKNOWN, detail="incomplete archive set")
                 verdicts = []
                 for member in rom_set.members:

@@ -1337,7 +1337,7 @@ class ROMarr:
         """Read an NFO only for a cached game from a configured folder backend."""
         from .libraries import FolderLibrary
         games, _, _ = self._library_cache
-        candidates = [g for g in games if str(g.id) == game_id and g.source == source
+        candidates = [g for g in (games or []) if str(g.id) == game_id and g.source == source
                       and (g.origin or "local") == "local"]
         if len(candidates) != 1:
             return {"available": False}
@@ -1526,9 +1526,14 @@ class ROMarr:
             # The first enabled Prowlarr entry drives search.
             for cfg in self.store.list_items("indexers"):
                 if cfg.get("type") == "prowlarr" and cfg.get("enable", True):
+                    try:
+                        timeout = indexer_timeout(cfg)
+                    except ValueError:
+                        log.warning("Skipping stored Prowlarr entry with invalid timeout")
+                        continue
                     self.prowlarr = Prowlarr(ProwlarrConfig(
                         base_url=cfg.get("url", ""), api_key=cfg.get("api_key", ""),
-                        timeout=indexer_timeout(cfg)))
+                        timeout=timeout))
                     self.store.settings["_prowlarr_url"] = cfg.get("url", "")
                     break
 
@@ -1539,7 +1544,11 @@ class ROMarr:
             for cfg in self.store.list_items("indexers"):
                 if not cfg.get("enable", True):
                     continue
-                indexer = build_indexer(cfg)
+                try:
+                    indexer = build_indexer(cfg)
+                except ValueError:
+                    log.warning("Skipping stored indexer with invalid configuration")
+                    continue
                 if indexer is not None:
                     direct.append(indexer)
             self.indexers = direct
@@ -5996,7 +6005,7 @@ class ROMarr:
             for path in files:
                 try:
                     before = path.stat()
-                    if path.suffix.lower() == ".zip":
+                    if path.suffix.lower() == ".zip" and not platform.archive_is_the_rom:
                         from .audit_archive import audit_zip
                         verdict = audit_zip(path, platform, self.dats)
                         # Hash-index entries identify the physical file at this

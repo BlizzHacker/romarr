@@ -409,8 +409,14 @@ def _open_source(root, relative, root_id=None):
 def _digest(source):
     """Hash an opened regular file and refuse content changes during hashing."""
     before = _fd_identity(source)
+    if before[2] > MAX_BYTES:
+        raise ValueError("The opened file exceeds the review size limit")
     h = hashlib.sha256()
-    for chunk in iter(lambda: source.read(1024 * 1024), b""):
+    remaining = MAX_BYTES + 1
+    for chunk in iter(lambda: source.read(min(1024 * 1024, remaining)), b""):
+        remaining -= len(chunk)
+        if remaining <= 0:
+            raise ValueError("The opened file exceeds the review size limit")
         h.update(chunk)
     if _fd_identity(source) != before:
         raise ValueError("The opened file changed")

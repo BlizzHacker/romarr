@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import codecs
 import sys
 from pathlib import Path
 
@@ -16,7 +17,7 @@ def read_nfo(root: Path, game_path: str) -> dict:
         return {"available": False, "reason": "Secure sidecar reading is unavailable on this platform."}
     try:
         root = Path(root).absolute()
-        relative = Path(game_path).relative_to(root)
+        relative = Path(game_path).absolute().relative_to(root)
         if not relative.parts or any(x in ("", ".", "..") for x in relative.parts):
             return {"available": False}
         with _PinnedLibrary(root) as pins:
@@ -35,7 +36,7 @@ def read_nfo(root: Path, game_path: str) -> dict:
                 truncated = len(raw) > MAX_BYTES
                 raw = raw[:MAX_BYTES]
                 try:
-                    text = raw.decode("utf-8-sig")
+                    text = codecs.getincrementaldecoder("utf-8-sig")().decode(raw, final=not truncated)
                     encoding = "utf-8"
                 except UnicodeDecodeError:
                     text = raw.decode("cp437")

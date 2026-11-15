@@ -5553,9 +5553,14 @@ RENDER.reports=async()=>{
     +'<div class="field"><label for="issue-title">Issue title</label><input id="issue-title" maxlength="180" placeholder="What went wrong, or what would help?"></div><div class="field"><label for="issue-body">Details to share</label><textarea id="issue-body" maxlength="3000" rows="6" placeholder="Your install method, the steps you tried, and the exact error help us reproduce it."></textarea></div>'
     +'<div class="help" id="issue-evidence"></div><div id="issue-result" role="status"></div><button class="btn ghost" id="issue-review">Review on GitHub</button>'
     +(data.direct_github?'<div style="margin-top:12px"><label><input type="checkbox" id="issue-confirm"> I reviewed this text and want to publish it to BlizzHacker/romarr.</label><p><button class="btn" id="issue-submit">Submit to GitHub</button></p></div>':'<p class="help">GitHub opens with your draft. Sign in there and press Submit when you are ready. ROMarr does not need your GitHub password.</p>')+'</div>';
-  let items=data.items||[];
+  let items=data.items||[],lastReportRows=null;
   const paint=rows=>{
     items=rows;
+    const serialized=JSON.stringify(rows);
+    if(serialized===lastReportRows)return;
+    lastReportRows=serialized;
+    const focused=document.activeElement?.closest('#report-list button[data-action]');
+    const focus=focused?{id:focused.dataset.id,action:focused.dataset.action}:null;
     $('#report-list').innerHTML=rows.length?rows.map(r=>'<div style="padding:14px 0;border-top:1px solid var(--line)"><b>'+esc(r.file)+'</b><p>'+esc(labels[r.status]||r.status)+(r.quarantined?' · Quarantined':'')+(r.action_conflict?' · Move conflict — bytes preserved for manual review':'')+'</p>'
       +'<div class="help">'+esc(r.category)+' · '+esc(r.created)+'<br>File fingerprint (SHA-256): <code style="overflow-wrap:anywhere;white-space:normal">'+esc(r.sha256||'Not computed yet')+'</code></div>'
       +(r.action_detail?'<p class="help">'+esc(r.action_detail)+'</p>':'')
@@ -5563,6 +5568,12 @@ RENDER.reports=async()=>{
       +(r.scanners||[]).map(x=>'<p class="help">'+esc(x.engine)+': '+esc(x.status)+' '+esc((x.signatures||[]).join(', '))+' '+esc(x.detail||'')+'</p>').join('')
       +'<div class="row" style="flex-wrap:wrap"><button class="btn ghost" data-action="share" data-id="'+r.id+'">Prepare GitHub report</button>'
       +(r.sha256&&!r.action_conflict&&r.status!=='scanning'&&r.status!=='queued'?'<button class="btn ghost" data-action="'+(r.quarantined?'restore':'quarantine')+'" data-id="'+r.id+'">'+(r.quarantined?'Restore file':'Quarantine file')+'</button>':'')+'</div></div>').join(''):'<p class="help">No reports yet. You can also use the form below for a general issue.</p>';
+    if(focus){
+      const buttons=Array.from($('#report-list').querySelectorAll('button[data-action]'));
+      const target=buttons.find(b=>b.dataset.id===focus.id&&b.dataset.action===focus.action)||buttons.find(b=>b.dataset.id===focus.id);
+      if(target)target.focus({preventScroll:true});
+      else{$('#report-list').tabIndex=-1;$('#report-list').focus({preventScroll:true});}
+    }
   };
   let refreshId=0;
   const refresh=async()=>{

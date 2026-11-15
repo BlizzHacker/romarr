@@ -17,6 +17,7 @@ import org.json.JSONArray;
 /** Native host for the private bundled server and remote HTTPS profiles. */
 public final class MainActivity extends androidx.activity.ComponentActivity {
  private WebView web;
+ private WebViewClient navigationClient;
  private TextView status;
  private volatile String origin = "";
  private String local = "";
@@ -41,7 +42,7 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
   web.getSettings().setJavaScriptEnabled(true); web.getSettings().setDomStorageEnabled(true);
   web.getSettings().setAllowFileAccess(false); web.getSettings().setAllowContentAccess(false);
   web.getSettings().setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
-  web.setWebViewClient(new WebViewClient() {
+  web.setWebViewClient(navigationClient = new WebViewClient() {
    @Override public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
     return navigateRequest(r);
    }
