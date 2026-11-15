@@ -13,7 +13,7 @@ Find games, verify ROMs, and import them into your library.
 [![Microsoft Store](https://img.shields.io/badge/Microsoft_Store-Windows_App-0078D4?logo=windows&logoColor=white)](https://github.com/BlizzHacker/romarr/releases)
 [![Submit Package](https://img.shields.io/badge/Package_Submissions-Submit_ROMarr-purple?logo=github&logoColor=white)](docs/SUBMISSIONS.md)
 
-**[Install](#install)** · **[First setup](docs/GETTING-STARTED.md)** · **[Android Beta](https://play.google.com/apps/internaltest/4700888732790045566)** · **[Plugins](docs/PLUGINS.md)** · **[Roadmap](ROADMAP.md)** · **[Releases](https://github.com/BlizzHacker/romarr/releases)** · **[Privacy](docs/PRIVACY.md)**
+**[Install](#install)** · **[First setup](docs/GETTING-STARTED.md)** · **[Android Beta](https://play.google.com/apps/internaltest/4700888732790045566)** · **[Unraid App](https://ca.unraid.net/apps/romarr-04jslct0riva81?q=romarr)** · **[Plugins](docs/PLUGINS.md)** · **[Roadmap](ROADMAP.md)** · **[Releases](https://github.com/BlizzHacker/romarr/releases)** · **[Submit Package](docs/SUBMISSIONS.md)** · **[Privacy](docs/PRIVACY.md)**
 
 > [!TIP]
 > **Android Beta Testers Wanted!**  
