@@ -65,6 +65,8 @@ Secrets stay in the server environment. Restart ROMarr after changing environmen
 
 Windows Security can also act independently of ROMarr. If it quarantines a source file, check its Protection History before retrying. ROMarr cannot import a file that is no longer present.
 
+![Windows Security Protection History - Threat Quarantined](img/windows-security-quarantine-proof.png)
+
 ## MWM and Arkana inspection
 
 The Emulator Hub also has an inspection form for files you want to examine more closely.
