@@ -1,0 +1,177 @@
+{
+  "date": "2026-11-15",
+  "chrome": {
+    "first_connect_used_actual_action_popup": true,
+    "grant": true,
+    "action_popup_closed_after_first_connect": true,
+    "worker_recorded_tab_after_popup_close": true,
+    "four_routes_existing_tab_authenticated": true,
+    "signed_in_once": true,
+    "new_tab_after_grant_sends_existing_strict_cookie": true,
+    "sso_tab_focused_without_navigation_or_duplicate": true,
+    "four_routes_after_sso_authenticated": true,
+    "actual_action_route_worker_survives_popup_close": true,
+    "version": "156.0.8078.79",
+    "permission_approved_via_native_ui": true,
+    "package_runtime_matches_current_sources": true,
+    "package_version": "1.0.1",
+    "package_sha256": "5d3fed90d1f67b7c6318c23b5b0289d67d5b70aece9142a93705d597ab64688b",
+    "test_context": "Real Chromium toolbar popup and native permission UI; local Strict-cookie and cross-origin sign-in fixture"
+  },
+  "mobile_library": {
+    "browser": "156.0.8078.79",
+    "ui_sha256": "f712156eb4abd63d481a75696cef942a2350262ce883bd35914a09c2e4615bbd",
+    "platform_count": 73,
+    "long_titles": true,
+    "results": [
+      {
+        "viewport": [
+          360,
+          800
+        ],
+        "width": 360,
+        "scroll": 360,
+        "columns": 2,
+        "options": 74,
+        "filtersOpen": false,
+        "selected_platform": 73,
+        "genre_persisted": true,
+        "details_keyboard_opened": true,
+        "filtered_document_scroll": 360
+      },
+      {
+        "viewport": [
+          390,
+          844
+        ],
+        "width": 390,
+        "scroll": 390,
+        "columns": 2,
+        "options": 74,
+        "filtersOpen": false,
+        "selected_platform": 73,
+        "genre_persisted": true,
+        "details_keyboard_opened": true,
+        "filtered_document_scroll": 390
+      },
+      {
+        "viewport": [
+          844,
+          390
+        ],
+        "width": 844,
+        "scroll": 844,
+        "columns": 3,
+        "options": 74,
+        "filtersOpen": true,
+        "selected_platform": 73,
+        "genre_persisted": true,
+        "details_keyboard_opened": true,
+        "filtered_document_scroll": 844
+      }
+    ],
+    "page_errors": []
+  },
+  "update_page": {
+    "browser": "156.0.8078.79",
+    "viewport": [
+      390,
+      844
+    ],
+    "five_channels": true,
+    "saved_beta": true,
+    "releases_render": true,
+    "pr_selection_exact_source": true,
+    "typed_acknowledgement_sent": true,
+    "immutable_apply_hidden": true,
+    "horizontal_overflow": false,
+    "page_errors": [],
+    "ui_sha256": "f712156eb4abd63d481a75696cef942a2350262ce883bd35914a09c2e4615bbd"
+  },
+  "mcp": {
+    "transport_tests": "Official MCP Python SDK 1.30.0 HTTP and standalone copied-file stdio tests",
+    "scope": "Automated local authenticated server fixtures; actual public deployment checked separately"
+  },
+  "windows": {
+    "scope": "Windows 11 native framework-dependent .NET9 candidate using installed browser and real signed-in server; release .NET10 executable is gated separately",
+    "compact_native_bounds": [
+      {
+        "connectionButton": "429,60,113,37",
+        "window": "20,20,640,780",
+        "web": "28,106,624,686",
+        "width": 640
+      },
+      {
+        "connectionButton": "639,60,113,37",
+        "window": "20,20,850,780",
+        "web": "28,106,834,686",
+        "width": 850
+      },
+      {
+        "connectionButton": "1069,60,113,37",
+        "window": "20,20,1280,780",
+        "web": "28,106,1264,686",
+        "width": 1280
+      }
+    ],
+    "expanded_and_folded_keyboard_proof": [
+      {
+        "width": 640,
+        "folded_web": {
+          "Name": "Or server",
+          "Type": "ControlType.Pane",
+          "X": 28.0,
+          "Y": 106.0,
+          "Width": 624.0,
+          "Height": 686.0
+        },
+        "expanded_web": {
+          "Name": "",
+          "Type": "ControlType.Pane",
+          "X": 28.0,
+          "Y": 318.0,
+          "Width": 624.0,
+          "Height": 474.0
+        }
+      },
+      {
+        "width": 850,
+        "folded_web": {
+          "Name": "Or server",
+          "Type": "ControlType.Pane",
+          "X": 28.0,
+          "Y": 106.0,
+          "Width": 834.0,
+          "Height": 686.0
+        },
+        "expanded_web": {
+          "Name": "",
+          "Type": "ControlType.Pane",
+          "X": 28.0,
+          "Y": 271.0,
+          "Width": 834.0,
+          "Height": 521.0
+        }
+      },
+      {
+        "width": 1280,
+        "folded_web": {
+          "Name": "Or server",
+          "Type": "ControlType.Pane",
+          "X": 28.0,
+          "Y": 106.0,
+          "Width": 1264.0,
+          "Height": 686.0
+        },
+        "expanded_web": {
+          "Name": "",
+          "Type": "ControlType.Pane",
+          "X": 28.0,
+          "Y": 224.0,
+          "Width": 1264.0,
+          "Height": 568.0
+        }
+      }
+    ]
+  }
+}

@@ -1,7 +1,8 @@
 "use strict";
 const profilesElement=document.getElementById('profiles'), status=document.getElementById('status');
 const form=document.getElementById('add'), retry=document.getElementById('retry');
-let profiles=[], ready=false, busy=false;
+let profiles=[], ready=false, busy=false, launcherTabs={};
+const opening=new Set();
 function controls() {
   form.querySelectorAll('input,button').forEach(element=>{element.disabled=!ready||busy;});
   profilesElement.querySelectorAll('button').forEach(button=>{button.disabled=!ready||busy;});
@@ -20,17 +21,35 @@ async function mutate(nextProfiles, message) {
     return false;
   } finally {busy=false;controls();}
 }
+async function openServer(profile, hash='library') {
+  if(!ready||busy||opening.has(profile.url))return;
+  opening.add(profile.url);
+  try {
+    const response=await chrome.runtime.sendMessage({type:'openServer',profile,hash});
+    if(response.error)throw new Error(response.error);
+    if(response.denied){status.textContent='Server access was not granted. Allow this server to reuse its signed-in tab.';return;}
+    launcherTabs[profile.url]=response.tabId;
+    render();
+    status.textContent=response.held?'Existing tab is on another site. Finish sign-in there, or close it to reopen this server.'
+      :'Server tab opened. Sign in there once if needed; the section buttons reuse this tab.';
+  } catch {
+    status.textContent='Could not open the server tab. Try Open / Connect again.';
+  } finally {opening.delete(profile.url);}
+}
+
 function render() {
   profilesElement.replaceChildren();
   profiles.forEach(profile=>{
     const article=document.createElement('article'), name=document.createElement('strong'), address=document.createElement('span'), actions=document.createElement('div');
     name.textContent=profile.name; address.textContent=profile.url; actions.className='actions';
+    const connect=document.createElement('button');connect.textContent='Open / Connect server';
+    connect.onclick=()=>openServer(profile);actions.append(connect);
     for(const [title,hash] of [['Library','library'],['Queue','queue'],['Emulators','emulators'],['Settings','general']]) {
-      const link=document.createElement('a'); link.textContent=title; link.href=serverURL(profile.url)+'#'+hash; link.target='_blank'; link.rel='noopener noreferrer'; actions.append(link);
+      const link=document.createElement('button'); link.textContent=title; link.onclick=()=>openServer(profile,hash); actions.append(link);
     }
     const remove=document.createElement('button'); remove.textContent='Remove'; remove.setAttribute('aria-label','Remove '+profile.name);
     remove.onclick=()=>mutate(()=>profiles.filter(value=>value.url!==profile.url),'Server removed.');
-    actions.append(remove); article.append(name,address,actions); profilesElement.append(article);
+    actions.append(remove); const connection=document.createElement('p');connection.textContent=Number.isInteger(launcherTabs[profile.url])?'Server tab linked; section buttons reuse it.':'Open / Connect, then sign in on your server.'; article.append(name,address,connection,actions); profilesElement.append(article);
   });
   if(!profiles.length) profilesElement.textContent='No saved servers yet.';
   controls();
@@ -52,6 +71,8 @@ async function initialize() {
   try {
     await chrome.storage.local.setAccessLevel({accessLevel:'TRUSTED_CONTEXTS'});
     const stored=await chrome.storage.local.get('profiles');
+    const session=await chrome.storage.session.get('launcherTabs');
+    launcherTabs=session.launcherTabs&&typeof session.launcherTabs==='object'?session.launcherTabs:{};
     profiles=(Array.isArray(stored.profiles)?stored.profiles:[]).slice(0,20).flatMap(value=>{try{return [serverProfile(value)];}catch{return [];}});
     ready=true;render();status.textContent='';
   } catch{status.textContent='Could not read local server profiles. Retry before changing servers.';retry.hidden=false;}

@@ -1,6 +1,6 @@
 # ROMarr privacy
 
-Updated November 14, 2026.
+Updated November 15, 2026.
 
 ROMarr manages your game library on your device or a server you choose. This page covers the official ROMarr application, its desktop clients and the companion Chrome extension. The websites, sources, plugins, emulators and servers you connect have their own policies.
 
@@ -8,7 +8,7 @@ ROMarr manages your game library on your device or a server you choose. This pag
 
 The ROMarr backend stores settings, library records, download state and logs in its configured data directory. Connections can require passwords, API keys or tokens. Treat the data directory and backups as private. Browser sessions remain in browser storage or the desktop app’s browser profile.
 
-The Chrome extension stores the server shortcut names and addresses you enter in local extension storage. It does not request access to browsing history, read your server’s cookies, or make background API requests. Opening a shortcut navigates your browser to that server, where you sign in normally.
+The Chrome extension stores the server shortcut names and addresses you enter in local extension storage. It does not request access to browsing history, read your server’s cookies, or make background API requests. When you connect, it requests optional access to the chosen hostname so it can inspect matching tab URLs and reuse your server tab. Tab IDs stay in session storage. A local worker finishes only actions you requested; it does not run background server API checks. Sign in on the server normally.
 
 The Windows client stores desktop preferences locally and isolates browser profiles by server origin. Server addresses do not include embedded credentials or API keys. The Android client’s storage and permissions are documented in the Android guide for that build; selected files may be copied into app storage for local imports or shared with an emulator you choose.
 

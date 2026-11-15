@@ -98,4 +98,6 @@ def test_portal_fleet_and_mcp_routes_are_wired():
     assert "igir" in plan["igir_command"]
     assert "rsync" in plan["network_sync_command"]
     mcp = hub.mcp_manifest()
-    assert "open-eyes" in mcp["mcp_client_config"]["mcpServers"]
+    assert "romarr" in mcp["mcp_client_config"]["mcpServers"]
+    assert mcp["transport"] == "streamable-http"
+    assert mcp["optional_desktop_control"]["required"] is False

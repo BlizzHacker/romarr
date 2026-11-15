@@ -161,9 +161,97 @@ public class StandaloneTest {
   inst.runOnMainSync(activity::finish);
  }
 
+ @Test public void compactToolbarAndWebViewFitTheUsableWindowAndKeyboard() throws Exception {
+  android.app.Instrumentation inst=InstrumentationRegistry.getInstrumentation();Context context=inst.getTargetContext();
+  MainActivity activity=(MainActivity)inst.startActivitySync(new android.content.Intent(context,MainActivity.class).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK));
+  java.lang.reflect.Field browserField=MainActivity.class.getDeclaredField("web"),barField=MainActivity.class.getDeclaredField("toolbar"),actionsField=MainActivity.class.getDeclaredField("actions"),statusField=MainActivity.class.getDeclaredField("status"),localField=MainActivity.class.getDeclaredField("local"),originField=MainActivity.class.getDeclaredField("origin");
+  for(java.lang.reflect.Field field:new java.lang.reflect.Field[]{browserField,barField,actionsField,statusField,localField,originField}) field.setAccessible(true);
+  android.webkit.WebView browser=(android.webkit.WebView)browserField.get(activity);
+  android.view.View bar=(android.view.View)barField.get(activity),actions=(android.view.View)actionsField.get(activity);
+  android.widget.TextView status=(android.widget.TextView)statusField.get(activity);
+  long ready=android.os.SystemClock.elapsedRealtime()+30000;
+  while((localField.get(activity).toString().isEmpty() || !localField.get(activity).equals(originField.get(activity))) && android.os.SystemClock.elapsedRealtime()<ready) {Thread.sleep(25);inst.waitForIdleSync();}
+  assertFalse("Local server is ready",localField.get(activity).toString().isEmpty());
+  inst.runOnMainSync(() -> assertNativeBounds(activity,bar,actions,status,browser));
+  captureToolbarProof(inst,context,"local");
+  java.lang.reflect.Method remote=MainActivity.class.getDeclaredMethod("remote",String.class);remote.setAccessible(true);
+  String address="https://a-very-long-server-name-for-mobile-layout.example.invalid";
+  inst.runOnMainSync(() -> {try{remote.invoke(activity,address);}catch(Exception e){throw new RuntimeException(e);}});
+  inst.waitForIdleSync();
+  inst.runOnMainSync(() -> {
+   assertTrue(status.getContentDescription().toString().contains(address));
+   assertEquals(1,status.getLineCount());assertNativeBounds(activity,bar,actions,status,browser);
+   if(status.getPaint().measureText(status.getText().toString())>status.getWidth()) assertTrue("Long server name ellipsizes instead of clipping controls",status.getLayout().getEllipsisCount(0)>0);
+  });
+  captureToolbarProof(inst,context,"remote");
+  java.lang.reflect.Method local=MainActivity.class.getDeclaredMethod("local");local.setAccessible(true);
+  inst.runOnMainSync(() -> {try{local.invoke(activity);}catch(Exception e){throw new RuntimeException(e);}});
+  while(!localField.get(activity).equals(originField.get(activity)) && android.os.SystemClock.elapsedRealtime()<ready) {Thread.sleep(25);inst.waitForIdleSync();}
+  String base=localField.get(activity).toString();
+  inst.runOnMainSync(() -> browser.loadDataWithBaseURL(base,"<meta name='viewport' content='width=device-width,initial-scale=1'><body style='margin:0'><input id='proof' style='width:95%;height:48px;font-size:18px' aria-label='Keyboard proof'></body>","text/html","UTF-8",null));
+  java.util.concurrent.atomic.AtomicBoolean inputReady=new java.util.concurrent.atomic.AtomicBoolean();
+  long deadline=android.os.SystemClock.elapsedRealtime()+10000;
+  while(!inputReady.get() && android.os.SystemClock.elapsedRealtime()<deadline) {
+   java.util.concurrent.CountDownLatch checked=new java.util.concurrent.CountDownLatch(1);
+   inst.runOnMainSync(() -> browser.evaluateJavascript("!!document.getElementById('proof')",value -> {inputReady.set("true".equals(value));checked.countDown();}));
+   assertTrue(checked.await(5,java.util.concurrent.TimeUnit.SECONDS));Thread.sleep(25);
+  }
+  assertTrue("WebView input fixture loaded",inputReady.get());
+  int[] point=new int[2];inst.runOnMainSync(() -> browser.getLocationOnScreen(point));
+  float density=context.getResources().getDisplayMetrics().density;
+  long touch=android.os.SystemClock.uptimeMillis();
+  android.view.MotionEvent down=android.view.MotionEvent.obtain(touch,touch,android.view.MotionEvent.ACTION_DOWN,point[0]+24*density,point[1]+24*density,0);
+  android.view.MotionEvent up=android.view.MotionEvent.obtain(touch,touch+30,android.view.MotionEvent.ACTION_UP,point[0]+24*density,point[1]+24*density,0);
+  inst.sendPointerSync(down);inst.sendPointerSync(up);down.recycle();up.recycle();
+  java.util.concurrent.CountDownLatch focused=new java.util.concurrent.CountDownLatch(1);
+  java.util.concurrent.atomic.AtomicBoolean fieldFocused=new java.util.concurrent.atomic.AtomicBoolean();
+  inst.runOnMainSync(() -> {
+   browser.requestFocus();
+   browser.evaluateJavascript("(function(){const field=document.getElementById('proof');field.focus();return document.activeElement===field;})()",value -> {fieldFocused.set("true".equals(value));focused.countDown();});
+  });
+  assertTrue(focused.await(5,java.util.concurrent.TimeUnit.SECONDS));assertTrue("WebView text input owns focus",fieldFocused.get());
+  java.util.concurrent.atomic.AtomicBoolean editorReady=new java.util.concurrent.atomic.AtomicBoolean();
+  deadline=android.os.SystemClock.elapsedRealtime()+10000;
+  while(!editorReady.get() && android.os.SystemClock.elapsedRealtime()<deadline) {
+   inst.runOnMainSync(() -> editorReady.set(browser.hasFocus()&&browser.onCheckIsTextEditor()));Thread.sleep(25);
+  }
+  assertTrue("Native WebView input connection is ready",editorReady.get());
+  inst.runOnMainSync(() -> {android.view.inputmethod.InputMethodManager manager=(android.view.inputmethod.InputMethodManager)activity.getSystemService(Context.INPUT_METHOD_SERVICE);manager.showSoftInput(browser,android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT);});
+  deadline=android.os.SystemClock.elapsedRealtime()+10000;
+  java.util.concurrent.atomic.AtomicBoolean keyboard=new java.util.concurrent.atomic.AtomicBoolean();
+  while(!keyboard.get() && android.os.SystemClock.elapsedRealtime()<deadline) {
+   inst.runOnMainSync(() -> {androidx.core.view.WindowInsetsCompat insets=androidx.core.view.ViewCompat.getRootWindowInsets(browser);keyboard.set(insets!=null&&insets.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime()));});Thread.sleep(25);
+  }
+  assertTrue("Real WebView focus opens the keyboard",keyboard.get());
+  inst.getUiAutomation().waitForIdle(300,5000);inst.waitForIdleSync();inst.runOnMainSync(() -> assertNativeBounds(activity,bar,actions,status,browser));
+  captureToolbarProof(inst,context,"keyboard");
+  inst.runOnMainSync(() -> {((android.view.inputmethod.InputMethodManager)activity.getSystemService(Context.INPUT_METHOD_SERVICE)).hideSoftInputFromWindow(browser.getWindowToken(),0);activity.finish();});
+ }
+ private static void captureToolbarProof(android.app.Instrumentation inst,Context context,String mode) throws IOException {
+  if(!"true".equals(InstrumentationRegistry.getArguments().getString("toolbarProof","false"))) return;
+  android.graphics.Bitmap screenshot=inst.getUiAutomation().takeScreenshot();assertNotNull(screenshot);
+  try(FileOutputStream out=new FileOutputStream(new File(context.getCacheDir(),"toolbar-"+mode+".jpg"))) {assertTrue(screenshot.compress(android.graphics.Bitmap.CompressFormat.JPEG,85,out));}
+  screenshot.recycle();
+ }
+ private static void assertNativeBounds(MainActivity activity,android.view.View bar,android.view.View actions,android.widget.TextView status,android.view.View browser) {
+  android.graphics.Rect usable=new android.graphics.Rect(),toolbarBounds=new android.graphics.Rect(),menuBounds=new android.graphics.Rect(),webBounds=new android.graphics.Rect();
+  activity.getWindow().getDecorView().getWindowVisibleDisplayFrame(usable);
+  assertTrue(bar.getGlobalVisibleRect(toolbarBounds));assertTrue(actions.getGlobalVisibleRect(menuBounds));assertTrue(browser.getGlobalVisibleRect(webBounds));
+  assertTrue("Toolbar stays inside system/keyboard insets",usable.contains(toolbarBounds));
+  assertTrue("Menu remains fully visible",usable.contains(menuBounds));
+  assertEquals(actions.getWidth(),menuBounds.width());assertEquals(actions.getHeight(),menuBounds.height());
+  assertTrue("WebView sits below the native toolbar",webBounds.top>=toolbarBounds.bottom);
+  assertTrue("WebView ends above system/keyboard insets",webBounds.bottom<=usable.bottom);
+  assertEquals("WebView is resized, not clipped behind keyboard",browser.getHeight(),webBounds.height());
+  assertTrue("WebView retains useful space",browser.getHeight()>activity.getResources().getDisplayMetrics().density*24);
+  assertTrue("Menu touch target remains at least48dp",actions.getWidth()>=activity.getResources().getDisplayMetrics().density*48-1);
+  assertEquals("ROMarr menu",actions.getContentDescription().toString());
+  assertTrue("Server label has measured space",status.getWidth()>0);
+ }
+
  @Test public void bundledCoreVersionMatchesAndroidPackage() throws Exception {
   assertEquals(BuildConfig.VERSION_NAME,Python.getInstance().getModule("android_backend").callAttr("core_version").toString());
-  assertEquals("1.10.0-preview",BuildConfig.VERSION_NAME);
+  assertEquals("1.10.1-preview",BuildConfig.VERSION_NAME);
  }
 
  private static android.webkit.WebResourceRequest request(String url,boolean redirect) {

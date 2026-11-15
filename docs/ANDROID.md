@@ -12,6 +12,12 @@ including on compatible Android desktop environments; it is not a Linux desktop 
 
 ## Use
 
+The dark native toolbar keeps the active device or server visible above the app.
+Open **ROMarr menu** (⋮) for **This device**, **Servers**, **Import ROM or DAT**,
+**Play a local file**, and **Connection details**. Long server names shorten on
+small screens; Connection details shows the complete address. The toolbar and
+WebView respect system bars, display cutouts and the on-screen keyboard.
+
 - **This device** opens the bundled server. The native host preclaims this listener with an ephemeral secret and supplies
   a private HttpOnly session cookie before loading the UI. Other local apps cannot
   claim setup or use protected APIs without that session. Configure library platforms, indexers and download clients through its UI.
@@ -87,7 +93,7 @@ private Java properties file containing storeFile, storePassword, keyAlias and
 keyPassword. Signed APK output is `apk/release/app-release.apk`. Never put that
 file, keystore, or password inside the checkout.
 
-The public 1.10.0 preview uses a persistent owner-controlled preview certificate
+The 1.10.x previews use a persistent owner-controlled preview certificate
 with SHA-256 fingerprint
 `76ade6d94d71536eeacc5d87c4db4d05a877d7c0410d3a94b8c307d9fe69868c`.
 Its PKCS12 key, password and signing properties are private mode-0600 files under
@@ -96,6 +102,11 @@ The owner must arrange an encrypted private backup of the key and password befor
 relying on update continuity; losing it prevents updates to that signed install.
 This is a preview distribution identity, not proof of a verified Play publisher.
 A future different Play signing identity may require uninstall/reinstall.
+
+The 12-test API 36 instrumentation suite includes native toolbar/WebView bounds,
+long server names and actual keyboard resize checks. The layout case also runs
+at 360 dp width, font scale 1.3, and 640 × 360 dp landscape. Screenshots and private
+exact-source receipts accompany the server build; see [build proof](../desktop/android/BUILD-PROOF.md).
 
 The instrumentation tests run the packaged Python interpreter, start the actual
 loopback server, fetch health and UI responses, reject anonymous protected API/setup requests,

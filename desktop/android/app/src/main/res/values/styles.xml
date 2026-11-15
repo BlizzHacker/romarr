@@ -1,0 +1,10 @@
+<resources>
+ <style name="Theme.ROMarr" parent="android:style/Theme.Material.NoActionBar">
+  <item name="android:fontFamily">sans</item>
+  <item name="android:colorAccent">#56D9BB</item>
+  <item name="android:windowBackground">#12141A</item>
+  <item name="android:statusBarColor">#1A1D25</item>
+  <item name="android:navigationBarColor">#12141A</item>
+  <item name="android:windowLightStatusBar">false</item>
+ </style>
+</resources>

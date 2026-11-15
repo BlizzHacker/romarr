@@ -1,0 +1,84 @@
+{
+  "schema": 1,
+  "version": "1.10.1-preview",
+  "version_code": 2,
+  "device": {
+    "api": 36,
+    "android": "16",
+    "abi": "x86_64",
+    "page_size": 4096,
+    "physical_pixels": [
+      720,
+      1280
+    ],
+    "density_dpi": 320
+  },
+  "instrumentation": {
+    "tests": 12,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "debug_lint": "PASS",
+  "native_inputs_sha256": {
+    "desktop/android/app/build.gradle": "0774dc92e1c8c9de778e396fba35499e1feb463bfb1ddf659ae8a6d4e30fbf0e",
+    "desktop/android/app/src/main/AndroidManifest.xml": "15897f34234a067fe9de9a19c9901a11f69a9beddbd35ebb2fa907fee564d937",
+    "desktop/android/app/src/main/java/org/romarr/android/MainActivity.java": "0c540eda94dedf92dc246ee17f40c60b2035abe1eb3aa6c702d156afb992c066",
+    "desktop/android/app/src/main/res/values/styles.xml": "61cfb9365080e9627e3f60b3a2b0a93f364510add9d4d13cdbae9e0e6f1677cd",
+    "desktop/android/app/src/main/res/drawable/ic_more.xml": "94f439ed308ab7c730ec191ee59d7a1b3901bee6c4924e1e31def4c881a7306c",
+    "desktop/android/app/src/androidTest/java/org/romarr/android/StandaloneTest.java": "86a2bd567d545aaddd9aae3fd74ecef446a9b2d8098c433511e9b72e32bb6dda"
+  },
+  "layout_matrix": [
+    {
+      "case": "portrait-font100",
+      "viewport_dp": [
+        360,
+        640
+      ],
+      "font_scale": 1.0,
+      "actual_bounds_and_keyboard": "PASS",
+      "log_sha256": "225261c3f3501bf76bae926fe252199e92eb3cddbf9dbc331a63b9ed127915cd",
+      "screenshots": {
+        "local.jpg": "e30bbfe85ed84e7115c965c1d4e67fb629f1b717f213ab7d79340a36ed3728b5",
+        "remote.jpg": "e30bbfe85ed84e7115c965c1d4e67fb629f1b717f213ab7d79340a36ed3728b5",
+        "keyboard.jpg": "1ce384d905ad367d9ee1edc6e8c30613322ce4ba3d425c219d1cbd43ba809c92"
+      }
+    },
+    {
+      "case": "portrait-font130",
+      "viewport_dp": [
+        360,
+        640
+      ],
+      "font_scale": 1.3,
+      "actual_bounds_and_keyboard": "PASS",
+      "log_sha256": "dca7c56349c77720756e673e153feb14ce70eab3d35f130737784c045f50e5e9",
+      "screenshots": {
+        "local.jpg": "6dcfd319a629845323d10579c368838c6196746328f5e4306e6c9710a51b240a",
+        "remote.jpg": "cdd451ba97dbd13ae6cf552269d47fd9d43a72caadf986dc020294b22e3dc24e",
+        "keyboard.jpg": "9de524bd5005341ba363f7e25cb933e301b89269268eb0891824480afc9ed400"
+      }
+    },
+    {
+      "case": "landscape-font130",
+      "viewport_dp": [
+        640,
+        360
+      ],
+      "font_scale": 1.3,
+      "actual_bounds_and_keyboard": "PASS",
+      "log_sha256": "7535b5cd940f3d7eb5dfd8aea300eb9e59a7dbaf9f4f545f183044e1c20ed2c8",
+      "screenshots": {
+        "local.jpg": "6be403d3cabf0511a53340a18d1066d4951d378b2a112fdbb4843fc05698a075",
+        "remote.jpg": "6be403d3cabf0511a53340a18d1066d4951d378b2a112fdbb4843fc05698a075",
+        "keyboard.jpg": "dad5141ca5bc1e318c2ea1d730827f9e8da11dbe2b75b9eb256ae17208754817"
+      }
+    }
+  ],
+  "limits": [
+    "No ARM64 physical-device or 16 KB runtime proof",
+    "No oldest-supported-Android or real gameplay proof",
+    "Initial SPA raster issue also reproduces in unchanged 1.10.0 on the tested software emulator; normal scroll repaints content",
+    "Final artifact provenance, signatures and source audit are recorded after the committed-source build"
+  ]
+}

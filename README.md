@@ -25,6 +25,7 @@ Forks and code reuse are welcome; independent projects should use their own bran
 | Find and download a particular game | **Add New** or **Interactive Search** | A search source, a matching download client, and a destination folder. |
 | Check what a collection is missing | **Collections** | A No-Intro or Redump DAT and your local library. |
 | Report a suspicious or unwanted file | **Activity → Reports & Help** | A relative library path; available scanners record evidence, quarantine is your choice. [How reporting works](docs/REPORTING.md). |
+| Connect an AI assistant | **Hub → Library Shell → AI agents (MCP)** | Your server URL and API key. [Claude, Codex, Hermes and Antigravity setup](docs/MCP.md). |
 | Reclaim space taken by exact duplicates | **Stats → Audit** | A local library; review the preview before moving duplicates to quarantine. Restore is available. |
 | Add another game source | **Hub → Plugins** | ROM Hub, included in the Windows app and amd64/arm64 Docker images. [Details](docs/PLUGINS.md). |
 

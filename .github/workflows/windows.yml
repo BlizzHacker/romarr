@@ -204,7 +204,7 @@ jobs:
             $evidence = Join-Path $proof 'smoke-proof.json'
             if (-not (Test-Path -LiteralPath $evidence)) { throw 'The real EXE did not produce smoke proof.' }
             $result = Get-Content -LiteralPath $evidence -Raw | ConvertFrom-Json
-            foreach ($property in @('nativeWindow','embeddedInterface','bundledPython','bundledHub','pluginInstall','setupGuide','authentication','persistence','remoteView','remoteDisconnectKeepsServer','versionIdentity','remoteSignInPolicy')) {
+            foreach ($property in @('nativeWindow','shellLayout','embeddedInterface','bundledPython','bundledHub','pluginInstall','setupGuide','authentication','persistence','remoteView','remoteDisconnectKeepsServer','versionIdentity','remoteSignInPolicy')) {
               if ($result.$property -ne $true) { throw "Native proof is missing: $property" }
             }
           } finally {

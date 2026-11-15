@@ -35,7 +35,7 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pytest
+          pip install -r requirements.txt pytest "mcp==1.30.0"
           pip install "rom-hub @ https://github.com/BlizzHacker/rom-hub/archive/b0c7885c057730c42608c5570359166128bbe3eb.tar.gz"
 
       - uses: actions/checkout@v5
@@ -124,6 +124,8 @@ jobs:
           # Lowercase literal: GHCR rejects uppercase, and the repository owner
           # is spelled with capitals.
           images: ghcr.io/blizzhacker/romarr
+          flavor: |
+            latest=false
           # These are passed to the build as `labels:` below, which means they
           # are applied *after* the Dockerfile's own LABEL and win. Left to its
           # defaults this action titles the image `romarr` from the repository
@@ -134,10 +136,15 @@ jobs:
             org.opencontainers.image.title=ROMarr
             org.opencontainers.image.description=The *arr for games: request a ROM, ROMarr finds it via Prowlarr, grabs it, and files it into your game library
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=nightly,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-') }}
+            type=raw,value=stable,enable=${{ startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-') }}
+            type=raw,value=alpha,enable=${{ startsWith(github.ref, 'refs/tags/') && contains(github.ref_name, '-alpha.') }}
+            type=raw,value=beta,enable=${{ startsWith(github.ref, 'refs/tags/') && contains(github.ref_name, '-beta.') }}
+            type=raw,value=rc,enable=${{ startsWith(github.ref, 'refs/tags/') && contains(github.ref_name, '-rc.') }}
             type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-') }}
+            type=semver,pattern={{major}},enable=${{ startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-') }}
             type=sha,format=short
 
       # The suite gates the code; nothing gated the image. A broken entrypoint,
@@ -281,9 +288,14 @@ jobs:
           flavor: |
             latest=false
           tags: |
-            type=raw,value=browser,enable={{is_default_branch}}
-            type=semver,pattern={{version}}-browser
-            type=semver,pattern={{major}}.{{minor}}-browser
+            type=raw,value=nightly-browser,enable={{is_default_branch}}
+            type=raw,value=browser,enable=${{ startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-') }}
+            type=raw,value=stable-browser,enable=${{ startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-') }}
+            type=raw,value=alpha-browser,enable=${{ startsWith(github.ref, 'refs/tags/') && contains(github.ref_name, '-alpha.') }}
+            type=raw,value=beta-browser,enable=${{ startsWith(github.ref, 'refs/tags/') && contains(github.ref_name, '-beta.') }}
+            type=raw,value=rc-browser,enable=${{ startsWith(github.ref, 'refs/tags/') && contains(github.ref_name, '-rc.') }}
+            type=match,pattern=^v(\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\.\d+)?)$,group=1,suffix=-browser
+            type=semver,pattern={{major}}.{{minor}}-browser,enable=${{ startsWith(github.ref, 'refs/tags/') && !contains(github.ref_name, '-') }}
 
       - name: Build the amd64 leg and prove the client is importable
         uses: docker/build-push-action@v6

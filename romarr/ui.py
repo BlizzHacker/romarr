@@ -624,6 +624,24 @@ html:not(.sidebar-ready):has(#fallback-accent-5:checked){--accent:#7bd88f;}
 # Narrow screens keep the full navigation drawer and independently scroll tables.
 CSS += """
 #main,.page,.card,.panels>*{min-width:0}
+.library-platform-choice select{min-height:40px;max-width:100%;margin-bottom:8px}
+.library-platforms{max-width:100%}
+.library-filters{margin-bottom:10px}
+.library-filters>summary,.library-count-explainer>summary{cursor:pointer;min-height:36px;display:flex;align-items:center;gap:8px;color:var(--dim)}
+.library-filters>summary::before,.library-count-explainer>summary::before{content:'▸'}
+.library-filters[open]>summary::before,.library-count-explainer[open]>summary::before{content:'▾'}
+@media(max-width:700px){
+ .library-platform-choice select{width:100%;font-size:16px}
+ .library-platforms{flex-wrap:nowrap!important;overflow-x:auto;padding-bottom:8px;scrollbar-width:thin;overscroll-behavior-x:contain}
+ .library-platforms>button{flex:0 0 auto;white-space:nowrap}
+ .library-filters>summary{min-height:44px}
+ .library-filter-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr))}
+ .library-filter-fields select{width:100%;min-width:0}
+ .library-filter-fields>.help{grid-column:1/-1}
+ #lib-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+ #lib-grid .nm{white-space:normal;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+}
+
 @media(max-width:820px){
   table,#page>table{display:block;max-width:100%;overflow-x:auto;overscroll-behavior-x:contain}
   th,td{min-width:90px;overflow-wrap:anywhere}
@@ -1643,7 +1661,7 @@ RENDER.hub=async()=>{
 };
 
 let LIB={platform:'',genre:'',region:'',decade:'',origin:'',source:'',sort:'',
-         offset:0,limit:120};
+         offset:0,limit:120,filtersOpen:null};
 // What each catalogue is called on screen. Spelled out rather than shown as
 // the raw key, because "archive" and "flashpoint" mean nothing to somebody
 // who did not set the indexers up, and "cloud" has to say plainly that
@@ -1724,7 +1742,7 @@ RENDER.library=async()=>{
   // 8,112" looking like the same claim, when not one of those 94,415 is a
   // file on this disk. A chip whose contents are wholly or partly catalogued
   // now shows the split and says which is which on hover.
-  const chips=(d.platforms||[]).map(x=>{
+  const chips=(d.platforms||[]).filter((x,i)=>i<12||x.platform===LIB.platform).map(x=>{
     const part=x.cached!==undefined&&x.cached<x.count;
     const cat=x.catalogued||0, disk=x.on_disk||0;
     const mixed=cat>0;
@@ -1740,7 +1758,7 @@ RENDER.library=async()=>{
   const f=d.facets||{};
   const sel=(key,label,list,fmt)=>{
     if(!list||!list.length) return '';
-    return `<select data-lf="${key}" style="padding:4px 8px;font-size:12px">
+    return `<select data-lf="${key}" aria-label="${esc(label)}" style="padding:4px 8px;font-size:12px">
       <option value="">${label}</option>
       ${list.map(x=>`<option value="${esc(x.value)}"${LIB[key]===x.value?' selected':''}
         >${esc(fmt?fmt(x.value):x.value)} (${x.count})</option>`).join('')}
@@ -1760,12 +1778,12 @@ RENDER.library=async()=>{
       <div><b>${num(T.catalogued)}</b><span>Catalogued, streams</span></div>
       <div><b>${num(T.total)}</b><span>Total known</span></div>
     </div>
-    ${srcRows.length?`<p class="help" style="margin:8px 0 0">
+    ${srcRows.length?`<details class="library-count-explainer"><summary>About these counts</summary><p class="help" style="margin:8px 0 0">
       Catalogued entries by source:
       ${srcRows.map(x=>`<b>${num(x.count)}</b> ${esc(SOURCE_LABEL[x.value]||x.value)}`)
         .join(' · ')}. Source is read from the filename each indexer writes,
       so anything ROMarr cannot place stays “source unknown” rather than
-      being filed under a guess.</p>`:''}
+      being filed under a guess.</p></details>`:''}
     ${T.counted_from==='cached rows'
       ?`<p class="help" style="margin:6px 0 0">Counted from the ${num(d.cached_total)}
         rows read so far — this library server does not report the split
@@ -1774,11 +1792,15 @@ RENDER.library=async()=>{
         ?`<p class="help" style="margin:6px 0 0">${num(d.cached_total)} of those
           are loaded and browsable here${scanRunning?' — still reading':d.partial?' — scan incomplete':''}.</p>`:'')}
   </div>`;
-  const head=libraryScanHelp(d)+banner+`<div class="row" style="flex-wrap:wrap;gap:6px;margin-bottom:10px">
+  const filterCount=[LIB.genre,LIB.region,LIB.decade,LIB.origin,LIB.source,LIB.sort].filter(Boolean).length;
+  const filtersOpen=LIB.filtersOpen===null?(typeof matchMedia!=='function'||!matchMedia('(max-width:700px)').matches):LIB.filtersOpen;
+  const head=libraryScanHelp(d)+banner+`<div class="library-platform-choice">${sel('platform','All platforms',(d.platforms||[]).map(x=>({value:x.platform,count:x.count})))}</div>
+    <div class="row library-platforms" aria-label="Popular platforms" style="flex-wrap:wrap;gap:6px;margin-bottom:10px">
       <button class="btn ${LIB.platform?'ghost':''}" data-plat=""
         style="padding:4px 10px;font-size:12px">All
         <span style="opacity:.7">${d.grand_total}</span></button>${chips}</div>
-    <div class="row" style="flex-wrap:wrap;gap:6px;margin-bottom:10px;align-items:center">
+    <details class="library-filters"${filtersOpen?' open':''}><summary>Filters and sort${filterCount?' · '+filterCount+' active':''}</summary>
+    <div class="row library-filter-fields" style="flex-wrap:wrap;gap:6px;margin:8px 0 10px;align-items:center">
       ${sel('genre','Any genre',f.genres)}
       ${sel('region','Any region',f.regions)}
       ${sel('decade','Any decade',f.decades)}
@@ -1797,7 +1819,7 @@ RENDER.library=async()=>{
       ${(f.genres||[]).length?`<span class="help" style="margin:0;font-size:11.5px">
         genre/year known for ${f.identified} of ${d.grand_total} (${coverage}%) —
         run a metadata scan in your library server to raise it</span>`:''}
-    </div>
+    </div></details>
     <p class="help" style="margin-bottom:10px">
       Showing ${d.total?LIB.offset+1:0}–${Math.min(LIB.offset+items.length,d.total)}
       of ${d.total}${LIB.platform?` on ${esc(LIB.platform)}`:''}${q?` matching “${esc(q)}”`:''}
@@ -1825,7 +1847,7 @@ RENDER.library=async()=>{
     return bits.length?`<div style="margin-top:2px">${bits.join(' ')}</div>`:'';
   };
   const grid=`<div class="grid" id="lib-grid">${items.map((g,i)=>`<div class="tile"
-      data-shelf="${i}" style="cursor:pointer" title="Click to set status, rating, notes">
+      data-shelf="${i}" role="button" tabindex="0" aria-label="${esc(g.name)} · ${esc(g.platform||'')}" style="cursor:pointer" title="Open game details and notes">
     <div class="art" style="background-image:url('${esc(g.cover||'')}')"></div>
     <div class="nm">${esc(g.name)}</div>
     <div class="pf">${esc(g.platform||'')}</div>${mark(g)}</div>`).join('')}</div>`;
@@ -1837,13 +1859,17 @@ RENDER.library=async()=>{
   bindLibraryChips(p);
   const moreBtn=p.querySelector('#lib-more');
   if(moreBtn) moreBtn.onclick=()=>{LIB.limit+=240;go('library');};
-  document.querySelectorAll('[data-shelf]').forEach(t=>t.onclick=()=>
-    shelfEditor(items[Number(t.dataset.shelf)],
+  document.querySelectorAll('[data-shelf]').forEach(t=>{
+    const open=()=>shelfEditor(items[Number(t.dataset.shelf)],
       shelf[`${items[Number(t.dataset.shelf)].platform||''}/`
-        +`${(items[Number(t.dataset.shelf)].name||'').toLowerCase()}`]||{}));
+        +`${(items[Number(t.dataset.shelf)].name||'').toLowerCase()}`]||{});
+    t.onclick=open;t.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();open();}};
+  });
 };
 
 function bindLibraryChips(p){
+  const filters=p.querySelector('.library-filters');
+  if(filters)filters.ontoggle=()=>{LIB.filtersOpen=filters.open;};
   p.querySelectorAll('[data-plat]').forEach(b=>b.onclick=()=>{
     LIB.platform=b.dataset.plat; LIB.offset=0; LIB.limit=120;
     go('library');
@@ -2990,7 +3016,7 @@ RENDER.portal=async()=>{
     const tabBar=`<div class="cat-bar" style="margin-bottom:14px">
       <span class="chip${tab==='shell'?' on':''}" data-ptab="shell">Supportive Library Shell (RomM / Retrom / Gaseous)</span>
       <span class="chip${tab==='fleet'?' on':''}" data-ptab="fleet">Device & Network Fleet (ES-DE / RetroPie / ArcadePunks / Argosy / Grout)</span>
-      <span class="chip${tab==='mcp'?' on':''}" data-ptab="mcp">Open-Eyes & MCP Desktop Bridge</span>
+      <span class="chip${tab==='mcp'?' on':''}" data-ptab="mcp">AI agents (MCP)</span>
     </div>`;
 
     if(tab==='shell'){
@@ -3126,30 +3152,32 @@ RENDER.portal=async()=>{
         </div>`;
       };
     } else if(tab==='mcp'){
-      const cfgJson=JSON.stringify(mcp.mcp_client_config||{}, null, 2);
-      const tools=(mcp.tools||[]).map(t=>`<div class="pcard">
-        <h4><code>${esc(t.name)}</code></h4>
-        <div class="meta"><span class="pill">${esc(t.method)}</span> <code>${esc(t.path)}</code></div>
-        <div class="desc">${esc(t.description)}</div>
-      </div>`).join('');
-      $('#page').innerHTML=`<div class="card">
-        <h3>Open-Eyes Desktop Control & ROMarr MCP Bridge</h3>
-        <p class="help">Connect <a href="https://github.com/BlizzHacker/open-eyes" target="_blank" rel="noopener">BlizzHacker/open-eyes</a> (desktop vision & input control) alongside ROMarr's MCP tool surface in your local MCP host (Claude Desktop, Cursor, Windsurf, Cline, or Gemini CLI).</p>
-        ${tabBar}
-        <div class="panel-note" style="margin-bottom:12px">
-          <b>Why local MCP host config is needed:</b> Browser chat tabs run in an isolated cloud container and cannot attach directly to local <code>stdio</code> processes on your PC. Adding the JSON below to your local MCP client config gives your local AI agent full desktop control via <b>open-eyes</b> plus direct API control over <b>ROMarr</b>.
-        </div>
-        <pre style="background:var(--bg);padding:12px;border-radius:var(--r-sm);border:1px solid var(--line);overflow-x:auto;font-size:12px">${esc(cfgJson)}</pre>
-        <div class="row" style="margin-top:10px">
-          <button class="btn" id="mcp-copy">Copy mcpServers Config JSON</button>
-          <a class="btn ghost" href="https://github.com/BlizzHacker/open-eyes" target="_blank" rel="noopener">Open-Eyes Repository</a>
-        </div>
-      </div>
-      <div class="card"><h3>Exposed ROMarr MCP Endpoints (<code>/api/v1/mcp</code>)</h3><div class="pgrid">${tools}</div></div>`;
-      $('#mcp-copy').onclick=async()=>{
-        try{ await navigator.clipboard.writeText(cfgJson); toast('Copied Open-Eyes + ROMarr MCP config!'); }
-        catch{ toast('Copy failed'); }
+      const endpoint=location.origin+'/api/v1/mcp';
+      const configs={
+        claude:JSON.stringify({mcpServers:{romarr:{type:'http',url:endpoint,headers:{'X-Api-Key':'<YOUR_ROMARR_API_KEY>'}}}},null,2),
+        codex:'[mcp_servers.romarr]\nurl = '+JSON.stringify(endpoint)+'\nbearer_token_env_var = "ROMARR_API_KEY"\n',
+        hermes:'mcp_servers:\n  romarr:\n    url: '+JSON.stringify(endpoint)+'\n    headers:\n      X-Api-Key: "<YOUR_ROMARR_API_KEY>"\n',
+        antigravity:JSON.stringify({mcpServers:{romarr:{serverUrl:endpoint,headers:{'X-Api-Key':'<YOUR_ROMARR_API_KEY>'}}}},null,2),
+        stdio:JSON.stringify({mcpServers:{romarr:{command:'<PYTHON_WITH_ROMARR>',args:['<ABSOLUTE_PATH_TO_ROMARR_MCP_PY>'],env:{ROMARR_URL:location.origin,ROMARR_API_KEY:'<YOUR_ROMARR_API_KEY>'}}}},null,2)
       };
+      const toolCards=(mcp.tools||[]).map(t=>`<div class="pcard"><h4><code>${esc(t.name)}</code></h4><div class="desc">${esc(t.description)}</div></div>`).join('');
+      $('#page').innerHTML=`<div class="card"><h3>Connect an AI agent to your ROMarr</h3>
+        <p class="help">Use your own server address and API key with Claude, Codex, Hermes, Antigravity, or another MCP client. Read-only tools show cached library, activity, history, platforms and counts.</p>
+        ${tabBar}
+        <p><b>Your MCP endpoint:</b> <code>${esc(endpoint)}</code></p>
+        <p class="help">Replace the key placeholder in your client settings. Your key is never included in this example. Use HTTPS for connections outside this device, or an SSH tunnel.</p>
+        <label>Client <select id="mcp-client"><option value="claude">Claude Code</option><option value="codex">Codex</option><option value="hermes">Hermes</option><option value="antigravity">Antigravity</option><option value="stdio">Other clients using stdio</option></select></label>
+        <pre id="mcp-config" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>
+        <button class="btn" id="mcp-copy">Copy connection example</button>
+        <p class="help">Codex reads ROMARR_API_KEY from its environment. Stdio needs Python with ROMarr's requests dependency and a local ROMarr checkout, or the standalone bridge file. See the <a href="https://github.com/BlizzHacker/romarr/blob/main/docs/MCP.md" target="_blank" rel="noopener">connection guide</a> for setup and supported transports.</p>
+        <p class="help">Writes are disabled by default. A server owner may explicitly allow adding Wanted entries and requesting a background library refresh. This connector does not run shell commands, browse files, control your desktop, or forward arbitrary API calls.</p>
+      </div><div class="card"><h3>Available read tools</h3><div class="pgrid">${toolCards}</div></div>
+      <div class="card"><h3>Optional desktop control</h3><p class="help"><a href="https://github.com/BlizzHacker/open-eyes" target="_blank" rel="noopener">Open-Eyes</a> is a separate desktop-control integration. It is optional and is not needed to connect to ROMarr.</p></div>`;
+      const config=()=>configs[$('#mcp-client').value];
+      $('#mcp-client').onchange=()=>{$('#mcp-config').textContent=config();};
+      $('#mcp-client').onchange();
+      $('#mcp-copy').onclick=async()=>{try{await navigator.clipboard.writeText(config());toast('Copied connection example');}catch{toast('Copy failed');}};
+
     }
 
     document.querySelectorAll('[data-ptab]').forEach(c=>c.onclick=()=>{
@@ -3284,6 +3312,7 @@ const autoApplyDetail=(settings,install)=>{
     update_check_disabled:'scheduled checks are disabled',
     install_cannot_self_update:'this installation cannot self-update',
     nightly_revision_check_not_supported:'nightly auto-apply is not enabled',
+    preview_channel_manual_apply:'preview channels require manual application',
     nightly_auto_apply_disabled:'Nightly auto-apply is not enabled',
     running_version_unknown:'running version is unknown',
     development_build:'development builds cannot auto-apply stable releases'
@@ -4575,12 +4604,11 @@ RENDER.general=async()=>{
   +chk('auto_update','Apply updates automatically (git installs only; waits until nothing is downloading, then restarts ROMarr)',
        SETTINGS.auto_update)
   +sel('update_channel','Update channel',
-     [['stable','Stable — latest GitHub release tag'],
+     [['stable','Stable — published releases'], ['rc','RC — release candidates'],
+      ['beta','Beta — testing builds'], ['alpha','Alpha — early previews'],
       ['nightly','Nightly — latest commit on main']],
      SETTINGS.update_channel||'stable',
-     'Stable follows tagged releases. Nightly follows the main branch and '
-     +'restarts on any new commit — useful for a dev install, too eager for '
-     +'a living-room one.')
+     'Stable follows published releases. RC, Beta and Alpha include more stable releases too and require manual application. Nightly follows main by exact revision. PR previews are separate, explicit choices under System → Updates.')
   +chk('auto_update_plugins','Update ROM Hub plugins daily from their sources',
        SETTINGS.auto_update_plugins)
   +`<h3 style="margin-top:18px">Security</h3>
@@ -6331,6 +6359,11 @@ RENDER.update=async()=>{
     +'</div>'
     +'<div id="up-msg" style="margin-top:10px"></div>'
     +'</div>'
+    +'<div class="card"><h3>Choose a release channel</h3><p class="help">Stable is the regular release. RC is the last testing stage before release; Beta is for wider testing; Alpha is the earliest preview. Each also includes more stable releases. Nightly follows main. Alpha, Beta, RC and PR previews require a deliberate update.</p>'
+    +'<div class="row" style="flex-wrap:wrap"><label for="up-channel">Channel</label><select id="up-channel">'+[['stable','Stable'],['rc','Release candidate'],['beta','Beta'],['alpha','Alpha'],['nightly','Nightly']].map(([value,label])=>'<option value="'+value+'"'+(value===(st.update_channel||'stable')?' selected':'')+'>'+label+'</option>').join('')+'</select><button class="btn ghost" id="up-channel-save">Save and check</button><button class="btn ghost" id="up-releases">Browse releases</button></div><div id="up-release-list" class="help"></div></div>'
+    +'<div class="card"><h3>Try a pull request</h3><p class="help">This runs a contributor’s code on your own installation. Review the author, diff and checks first. A clean source install can apply a passing PR that fast-forwards its current build; divergent branches need a separate preview build. Docker and bundled apps use separately built packages.</p>'
+    +'<div class="row" style="flex-wrap:wrap"><button class="btn ghost" id="up-pr-list">Find open PRs</button><select id="up-pr-choices" aria-label="Open pull requests" style="max-width:100%"><option value="">Choose a PR</option></select><label for="up-pr-number">PR number</label><input id="up-pr-number" type="number" min="1" max="999999" style="max-width:130px"><button class="btn ghost" id="up-pr-inspect">Inspect PR</button></div><div id="up-pr-result" style="overflow-wrap:anywhere"></div>'
+    +(d.preview?'<div class="panel-note"><b>Active preview: PR #'+esc(String(d.preview.number))+'</b> · '+esc(d.preview.head.slice(0,12))+'<p>Automatic updates are disabled. Your private configuration backup is retained separately; restoring code does not erase current settings.</p><button class="btn ghost" id="up-pr-restore">Restore previous code</button></div>':'')+'</div>'
     +((d.docker_guidance||[]).length
       ?'<div class="card"><h3>How to update this container</h3><p class="help">'
        +'ROMarr runs from an image. Verify the original host deployment before changing it:</p><pre style="font:12px/1.6 ui-monospace,Menlo,monospace;color:var(--dim)">'
@@ -6371,6 +6404,63 @@ RENDER.update=async()=>{
     await run('ApplyUpdate',()=>cmd('ApplyUpdate'))(e);
   };
   if($('#up-plugins'))$('#up-plugins').onclick=run('PluginUpdate',()=>cmd('PluginUpdate'));
+  const currentUpdate=()=>activePage==='update'&&(viewVersion===null||pageVersion===viewVersion);
+  $('#up-channel-save').onclick=async e=>{
+    e.target.disabled=true;const channel=$('#up-channel').value;
+    try{
+      const saved=await j('/api/v1/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({update_channel:channel})});
+      if(saved.error)throw Error(saved.error);
+      const result=await cmd('UpdateCheck');if(!currentUpdate())return;
+      say(result.message||result.error||'Channel saved',!!result.error);go('update');
+    }catch(error){if(currentUpdate()){say(error.message,true);e.target.disabled=false;}}
+  };
+  $('#up-releases').onclick=async e=>{
+    const channel=$('#up-channel').value;if(channel==='nightly'){say('Nightly follows main by commit, rather than release tags. Use Check now.');return;}
+    e.target.disabled=true;
+    try{
+      const result=await j('/api/v1/update/releases?channel='+encodeURIComponent(channel));if(!currentUpdate())return;
+      if(result.error)throw Error(result.error);
+      $('#up-release-list').innerHTML=(result.items||[]).map(r=>'<p><a href="'+esc(r.url)+'" target="_blank" rel="noopener">'+esc(r.tag)+'</a> · '+esc(r.stage)+'</p>').join('')||'No recent releases in this channel.';
+    }catch(error){if(currentUpdate())say(error.message,true);}finally{if(currentUpdate())e.target.disabled=false;}
+  };
+  $('#up-pr-list').onclick=async e=>{
+    e.target.disabled=true;
+    try{
+      const result=await j('/api/v1/update/prs');if(!currentUpdate())return;if(result.error)throw Error(result.error);
+      const choices=$('#up-pr-choices');choices.replaceChildren(new Option('Choose a PR',''));
+      for(const pr of result.items||[])choices.add(new Option('#'+pr.number+' · '+pr.title,String(pr.number)));
+      if(!(result.items||[]).length)say('There are no open PRs. You can still inspect a specific open PR number.');
+    }catch(error){if(currentUpdate())say(error.message,true);}finally{if(currentUpdate())e.target.disabled=false;}
+  };
+  $('#up-pr-choices').onchange=e=>{$('#up-pr-number').value=e.target.value;};
+  const previewPost=(path,payload)=>j('/api/v1/update/pr'+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  $('#up-pr-inspect').onclick=async e=>{
+    const number=Number($('#up-pr-number').value);if(!Number.isInteger(number)||number<1||number>999999){say('Enter a valid PR number.',true);return;}
+    e.target.disabled=true;
+    try{
+      const pr=await previewPost('',{number});if(!currentUpdate())return;if(pr.error)throw Error(pr.error);
+      $('#up-pr-result').innerHTML='<h4><a href="'+esc(pr.url)+'" target="_blank" rel="noopener">#'+pr.number+' '+esc(pr.title)+'</a></h4><p>Author: '+esc(pr.author)+' · '+(pr.draft?'Draft':pr.checks_passed?'Checks passed':'Checks not ready')+'</p><p>Exact head: <code>'+esc(pr.head)+'</code><br>Base: <code>'+esc(pr.base)+'</code></p>'
+        +(pr.checks||[]).map(c=>'<p class="help">'+esc(c.name)+': '+esc(c.conclusion||c.status)+'</p>').join('')
+        +'<p class="help">'+esc(pr.build_guidance)+'</p>'
+        +(inst.can_apply&&pr.checks_passed&&!pr.draft?'<label for="up-pr-ack">Type APPLY PR #'+pr.number+' to confirm running this code:</label><input id="up-pr-ack" autocomplete="off" style="max-width:100%;margin:8px 0"><button class="btn" id="up-pr-apply">Back up settings and apply this revision</button>':'<p class="help">In-app application is unavailable for this install or these checks. Use an isolated build or a verified native package.</p>');
+      if($('#up-pr-apply'))$('#up-pr-apply').onclick=async event=>{
+        event.target.disabled=true;
+        try{
+          const result=await previewPost('/apply',{number:pr.number,head:pr.head,base:pr.base,confirm:true,acknowledgement:$('#up-pr-ack').value});
+          if(!currentUpdate())return;
+          say(result.message||result.error||(result.ok?'Preview worker launched. Wait for restart and health checks.':'Preview not applied'),!result.ok);
+          if(result.ok)setTimeout(()=>{if(currentUpdate())go('update');},3000);
+        }catch(error){if(currentUpdate())say(error.message,true);}finally{if(currentUpdate())event.target.disabled=false;}
+      };
+    }catch(error){if(currentUpdate())say(error.message,true);}finally{if(currentUpdate())e.target.disabled=false;}
+  };
+  if($('#up-pr-restore'))$('#up-pr-restore').onclick=async e=>{
+    if(!confirm('Restore the previous code? Current settings are kept. The private configuration backup remains available.'))return;
+    e.target.disabled=true;
+    try{const result=await previewPost('/restore',{confirm:true,backup_id:d.preview.backup_id});if(currentUpdate())say(result.message||result.error||'Restore worker launched',!result.ok);}
+    catch(error){if(currentUpdate())say(error.message,true);}finally{if(currentUpdate())e.target.disabled=false;}
+  };
+
 };
 
 RENDER.logs=async()=>{

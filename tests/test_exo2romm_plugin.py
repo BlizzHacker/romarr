@@ -267,7 +267,10 @@ def test_http_endpoints_and_openapi_and_mcp_manifest(tmp_path):
     props = post_op["requestBody"]["content"]["application/json"]["schema"]["properties"]
     assert "input_paths" in props and "dry_run" in props and "overwrite" in props
     tool_names = {t["name"] for t in hub.mcp_manifest()["tools"]}
-    assert "romarr_exo2romm_repackage" in tool_names
+    # Repackaging remains an authenticated REST operation, not an advertised
+    # MCP tool that the transport does not actually implement.
+    assert "romarr_exo2romm_repackage" not in tool_names
+    assert "romarr_library" in tool_names
 
     service = ROMarr({"ROMARR_DATA": str(tmp_path / "romarr.json"), "ROMARR_API_KEY": "secret-key"})
     handler_cls = make_handler(service)

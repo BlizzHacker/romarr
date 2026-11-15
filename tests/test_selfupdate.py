@@ -173,7 +173,8 @@ def test_the_script_is_fail_stop_and_ff_only(monkeypatch):
     assert "set -eu" in script
     assert "git merge --ff-only" in script
     assert "git reset --hard" not in script
-    assert "git reset --keep" in script
+    assert "git checkout --detach --no-overwrite-ignore" in script
+    assert 'git update-ref "refs/heads/$BRANCH" "$PRE" "$POST"' in script
     assert "git checkout main" not in script
     assert "systemctl restart" in script
     assert "RECOVERY REQUIRED" in script

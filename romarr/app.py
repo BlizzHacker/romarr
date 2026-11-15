@@ -42,6 +42,7 @@ import os
 import pathlib
 import re
 import threading
+import subprocess
 import uuid
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
@@ -104,6 +105,7 @@ from .playability import (
     WOLF, MoonlightHost, PlayerPolicy, RetroArchNCI, StreamServer,
     StreamSources, routes_for, routes_for_file)
 from .lists import LIST_TYPES
+from . import release_controls
 
 #: List-source fields that are credentials: masked on the way out, kept on
 #: edit when the form returns the placeholder.
@@ -3721,7 +3723,8 @@ class ROMarr:
                         prefer_hardlinks=staged_source == source and bool(self.store.settings.get("prefer_hardlinks", False)),
                                       layout=self.library_layout(target_cfg),
                                       translation=is_translation(source.name),
-                                      platform_folders=target_folders)
+                                      platform_folders=target_folders,
+                                      **self._import_hash_options())
         except (OSError, ValueError) as err:
             reason = f"could not prepare scanned import: {err}"
             return {"ok": False, "reason": reason, "imported": [], "refused": [
@@ -3762,7 +3765,7 @@ class ROMarr:
 
             forced = force and status == BAD_DUMP
             self._index_hash(verdict, platform.slug, source.stem,
-                             outcome.destination)
+                             outcome.destination, sha1=outcome.sha1)
             self.store.record(Event(
                 kind="imported", game=source.stem, platform=platform.slug,
                 release=source.name, library=label,
@@ -5342,8 +5345,17 @@ class ROMarr:
     # secret is stored as `token` on both sides, so no second exchange is
     # needed to talk back.
 
+    def _import_hash_options(self) -> dict:
+        """Check imported payloads against retained copies across all configured roots."""
+        index = getattr(self, "hashes", None)
+        if index is None or not self.store.settings.get("hash_index", True):
+            return {}
+        roots = [self.library]
+        roots.extend(self.library_root(cfg) for cfg, _ in self.game_libraries)
+        return {"hash_index": index, "duplicate_roots": tuple(dict.fromkeys(roots))}
+
     def _index_hash(self, verdict, platform: str, fallback: str,
-                    destination=None) -> None:
+                    destination=None, *, sha1: str = "") -> None:
         """Record an imported file's hash, if verification produced one.
 
         Import is where new ROMs arrive, so without this the index only ever
@@ -5351,7 +5363,7 @@ class ROMarr:
         acquisition pipeline did its job.
         """
         rom = getattr(verdict, "rom", None)
-        sha1 = str(getattr(rom, "sha1", "") or "")
+        sha1 = str(sha1 or getattr(rom, "sha1", "") or "")
         if not sha1:
             return
         from .dat import VERIFIED
@@ -6486,7 +6498,8 @@ class ROMarr:
                 not running_revision
                 or settings.get("_update_checked_revision") != running_revision):
             state, reason = "unknown", "nightly_build_changed"
-        elif state in ("available", "current") and not _comparable_version(VERSION) and channel != "nightly":
+        elif state in ("available", "current") and channel != "nightly" and not (
+                release_controls.version_key(VERSION) if channel in ("alpha", "beta", "rc") else _comparable_version(VERSION)):
             state, reason = "unknown", "running_version_unknown"
         elif state in ("available", "current") and channel != "nightly" and (
                 get_build_info(VERSION).get("type") == "development"):
@@ -6571,6 +6584,8 @@ class ROMarr:
                         "latest_revision": verdict.get("latest_revision", ""),
                         "update_available": state == "available",
                         "message": message}
+            if channel in ("alpha", "beta", "rc"):
+                return release_controls.check_channel(self, channel, VERSION)
             if channel != "stable":
                 self._record_update_check("unknown", "unsupported_update_channel",
                                           checked_channel=channel)
@@ -6617,7 +6632,7 @@ class ROMarr:
                 return failed("invalid_response", "github.com returned invalid release data")
             latest = str(body.get("tag_name") or "").lstrip("vV")
             url = str(body.get("html_url") or "")
-            if not _comparable_version(latest):
+            if not _comparable_version(latest) or release_controls.stage(latest) != "stable":
                 return failed("invalid_release",
                               "github.com answered without a valid release tag")
 
@@ -6704,7 +6719,7 @@ class ROMarr:
         with self._lock:
             channel = str(self.store.settings.get("update_channel")
                           or "stable").lower()
-            if channel not in ("stable", "nightly"):
+            if channel not in release_controls.CHANNELS:
                 return {"ok": False, "error": f"unknown update channel {channel!r}"}
             if expected_channel and (
                     channel != expected_channel
@@ -6723,6 +6738,10 @@ class ROMarr:
                 return {"ok": False, "deferred": True,
                         "error": "downloads or imports are in flight; the update "
                                  "will apply on the next daily check"}
+            if channel in ("alpha", "beta", "rc") and (
+                    self.store.settings.get("_update_checked_channel") != channel
+                    or self.store.settings.get("_update_state") != "available"):
+                return {"ok": False, "error": "Check the selected preview channel before applying it"}
             latest = (expected_release if expected_channel else
                       str(self.store.settings.get("_latest_version") or ""))
             if channel == "nightly":
@@ -6759,6 +6778,8 @@ class ROMarr:
             capability_reason = "update_check_disabled"
         elif not env.can_apply:
             capability_reason = "install_cannot_self_update"
+        elif check["channel"] in ("alpha", "beta", "rc"):
+            capability_reason = "preview_channel_manual_apply"
         elif check["channel"] != "stable":
             capability_reason = "nightly_revision_check_not_supported"
         elif not _comparable_version(VERSION):
@@ -6769,6 +6790,8 @@ class ROMarr:
             capability_reason = "enabled"
         return {
             "running_version": VERSION,
+            "preview": release_controls.active_preview(env),
+            "channels": list(release_controls.CHANNELS),
             "build": get_build_info(VERSION),
             "latest_version": check["latest_version"],
             "update_available": check["update_available"],
@@ -7649,6 +7672,7 @@ class ROMarr:
                 layout=self.library_layout(target_cfg),
                 translation=is_translation(name),
                 platform_folders=target_folders,
+                **self._import_hash_options(),
                 **({"selected_primaries": selected_primaries} if selected_primaries is not None else {}),
                 **({"bundle_routes": bundle_routes} if bundle_routes is not None else {}))
             game_title = (queue_item.game if queue_item and getattr(queue_item, "game", "") else name)
@@ -7671,6 +7695,9 @@ class ROMarr:
             fulfils_base = not (queue_item and queue_item.import_intent.get("existing_game"))
             for outcome in outcomes:
                 if outcome.ok:
+                    if outcome.sha1:
+                        self._index_hash(outcome.verification, platform.slug, game_title,
+                                         outcome.destination, sha1=outcome.sha1)
                     self.store.record(Event(kind="imported", game=game_title,
                                             platform=platform.slug, release=name,
                                             library=label,
@@ -8132,6 +8159,10 @@ def make_handler(service: ROMarr):
             return self._gate(self._get)
 
         def do_POST(self):
+            if urlparse(self.path).path == "/api/v1/mcp":
+                from . import mcp
+                # MCP always checks an explicit API header, even with REST auth disabled.
+                return self._guard(lambda: mcp.http(self, service))
             return self._gate(self._post)
 
         def do_PUT(self):
@@ -8396,6 +8427,13 @@ def make_handler(service: ROMarr):
             if route.path == "/api/v1/tag":
                 return self._json(200, {
                     "tags": service.store.settings.get("_tags") or {}})
+            if route.path in ("/api/v1/update/prs", "/api/v1/update/releases"):
+                try:
+                    items = (release_controls.list_prs() if route.path.endswith("/prs") else
+                             release_controls.releases((query.get("channel") or ["stable"])[0]))
+                    return self._json(200, {"items": items})
+                except (ValueError, requests.RequestException) as exc:
+                    return self._json(400, {"error": str(exc)})
             if route.path == "/api/v1/update":
                 return self._json(200, service.update_status())
             if route.path == "/api/v1/asset":
@@ -8778,6 +8816,9 @@ def make_handler(service: ROMarr):
             if route.path == "/api/v1/hub/fleet":
                 return self._json(200, hub.fleet_profiles())
             if route.path == "/api/v1/mcp":
+                from . import mcp
+                if "text/event-stream" in self.headers.get("Accept", ""):
+                    return mcp.http(self, service)
                 return self._json(200, hub.mcp_manifest())
             if route.path == "/api/v1/moonlight":
                 return self._json(200, service.moonlight_status())
@@ -8886,6 +8927,19 @@ def make_handler(service: ROMarr):
             except json.JSONDecodeError:
                 return self._json(400, {"error": "invalid json"})
 
+            if route.path in ("/api/v1/update/pr", "/api/v1/update/pr/apply", "/api/v1/update/pr/restore"):
+                try:
+                    if not isinstance(body, dict):
+                        raise ValueError("Expected an object")
+                    if route.path.endswith("/apply"):
+                        result = release_controls.apply_pr(service, body)
+                    elif route.path.endswith("/restore"):
+                        result = release_controls.restore_preview(service, body)
+                    else:
+                        result = release_controls.inspect_pr(body.get("number"))
+                    return self._json(200, result)
+                except (ValueError, OSError, subprocess.SubprocessError, requests.RequestException) as exc:
+                    return self._json(400, {"error": str(exc)})
             if route.path == "/api/v1/capture":
                 # Catalogue rows the operator's own browser saw, from a site no
                 # HTTP client can read. Authenticated by the same gate as every

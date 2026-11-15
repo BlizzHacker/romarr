@@ -7,7 +7,7 @@ import zipfile
 def package(destination: Path) -> None:
     """Write only runtime extension files, with fixed order and timestamps."""
     source = Path(__file__).resolve().parent
-    files = [source / name for name in ("manifest.json", "popup.html", "popup.css", "popup.js", "validation.js")]
+    files = [source / name for name in ("manifest.json", "popup.html", "popup.css", "popup.js", "validation.js", "navigation.js")]
     files += sorted((source / "icons").glob("*.png"))
     destination.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED) as archive:
