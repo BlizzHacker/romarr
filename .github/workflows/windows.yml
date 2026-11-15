@@ -137,7 +137,7 @@ jobs:
           $python = Join-Path $env:RUNNER_TEMP 'ROMarr native smoke/python environment/Scripts/python.exe'
           & $python -m pip install pytest
           if ($LASTEXITCODE -ne 0) { throw 'Report test dependency installation failed' }
-          & $python -m pytest tests/test_file_reports.py tests/test_file_report_paths.py tests/test_clamav.py -q
+          & $python -m pytest tests/test_file_reports.py tests/test_file_report_paths.py tests/test_clamav.py tests/test_sidecars.py -q
           if ($LASTEXITCODE -ne 0) { throw 'Windows report/path checks failed' }
 
   desktop:
