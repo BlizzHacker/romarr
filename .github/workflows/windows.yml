@@ -203,7 +203,6 @@ jobs:
             if ($process.ExitCode -ne 0) { throw "The native EXE failed with exit code $($process.ExitCode)." }
             $evidence = Join-Path $proof 'smoke-proof.json'
             if (-not (Test-Path -LiteralPath $evidence)) { throw 'The real EXE did not produce smoke proof.' }
-            Get-Content -LiteralPath $evidence
             $result = Get-Content -LiteralPath $evidence -Raw | ConvertFrom-Json
             foreach ($property in @('nativeWindow','shellLayout','embeddedInterface','bundledPython','bundledHub','pluginInstall','setupGuide','authentication','persistence','remoteView','remoteDisconnectKeepsServer','versionIdentity','remoteSignInPolicy')) {
               if ($result.$property -ne $true) { throw "Native proof is missing: $property" }
@@ -211,7 +210,6 @@ jobs:
           } finally {
             $env:PATH = $previousPath
             if ($process -and -not $process.HasExited) { $process.Kill($true) }
-            Get-ChildItem -LiteralPath $proof -Filter '*error*' -File -Recurse | ForEach-Object { Get-Content -LiteralPath $_.FullName }
           }
       - name: Upload native proof and logs
         if: always()
@@ -219,7 +217,10 @@ jobs:
         with:
           name: ROMarr-Windows-native-proof
           path: |
-            ${{ runner.temp }}/romarr-desktop-proof/**
+            ${{ runner.temp }}/romarr-desktop-proof/smoke-proof.json
+            ${{ runner.temp }}/romarr-desktop-proof/smoke-ui.png
+            ${{ runner.temp }}/romarr-desktop-proof/smoke-error.txt
+            ${{ runner.temp }}/romarr-desktop-proof/config/desktop.log
             ${{ runner.temp }}/romarr-desktop-package/ROMarr-*/BUILD-INFO.json
           if-no-files-found: warn
           retention-days: 14
