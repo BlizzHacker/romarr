@@ -83,7 +83,7 @@ def test_extension_rejects_unsafe_profiles_and_packages_reproducibly(tmp_path):
     assert.throws(()=>serverProfile({name:' ',url:'https://host/'}));
     assert.equal(serverProfile({name:' Home ',url:'https://host/'}).name,'Home');
     """
-    subprocess.run([node, "-e", script], cwd=ROOT, check=True)
+    subprocess.run([node, "-"], input=script.encode("utf-8"), cwd=ROOT, check=True)
     manifest = json.loads((ROOT / "desktop/chrome/manifest.json").read_text())
     assert manifest["manifest_version"] == 3
     assert manifest["permissions"] == ["storage"]
