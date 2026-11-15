@@ -13,6 +13,8 @@ ROMarr can import files you already have with only a destination folder. Searchi
 - [Home Assistant](#home-assistant)
 - [From source](#from-source)
 - [Windows app](#windows-app)
+- [macOS, Linux & SteamOS Standalone Launcher (Non-Server Users)](#macos-linux--steamos-standalone-launcher-non-server-users)
+- [Raspberry Pi, Retro Punks Arcade & Handheld Setups](#raspberry-pi-retro-punks-arcade--handheld-setups)
 - [Windows source install](#windows-source-install)
 - [First run: claiming the install](#first-run-claiming-the-install)
 - [The rule that catches everyone](#the-rule-that-catches-everyone)
@@ -339,6 +341,47 @@ To update, close ROMarr, extract the new release into a fresh application folder
 Windows checks build the actual app and run it with external Python and Git removed from `PATH`. They check the native window, embedded sign-in/setup guide, API protection, bundled plugin installation and settings after restart. Check the release's linked run and proof for its exact results; real hardware and every external integration need their own field reports.
 
 The **unsigned MSIX** is for development and Store preparation. It is not a certified Microsoft Store release or a normal unsigned installation option. [Build and Store submission details](../desktop/windows/BUILDING.md).
+
+## macOS, Linux & SteamOS Standalone Launcher (Non-Server Users)
+
+For desktop users who want to run ROMarr on their Mac, Linux PC, or Steam Deck without managing Docker containers or manual virtual environments:
+
+The standalone launcher (`scripts/start-desktop.sh`) automatically bootstraps an isolated virtual environment, configures loopback listeners, sets up your platform's native ROM directories, launches the backend, and opens your browser.
+
+```bash
+git clone https://github.com/BlizzHacker/romarr.git
+cd romarr
+chmod +x ./scripts/start-desktop.sh
+./scripts/start-desktop.sh
+```
+
+### SteamOS / Steam Deck
+- On Steam Deck (Desktop Mode), open Konsole and run `./scripts/start-desktop.sh`.
+- It detects SteamOS automatically and maps default storage to `/run/media/mmcblk0p1/Emulation/roms` (MicroSD EmuDeck location) or `~/Emulation/roms` (internal storage).
+- You can add ROMarr as a Non-Steam Game in Steam to launch it directly from Gaming Mode!
+
+### macOS (Apple Silicon / Intel)
+- Defaults configuration to `~/Library/Application Support/ROMarr` and ROMs to `~/Games/ROMs`.
+- Uses system `open` to display the UI immediately.
+
+---
+
+## Raspberry Pi, Retro Punks Arcade & Handheld Setups
+
+ROMarr connects directly to dedicated living room cabinets, Raspberry Pi micro-consoles, and mobile handhelds through the **Supportive Library Shell & Device Fleet** (`/api/v1/hub/fleet`):
+
+| Platform / Setup | Typical ROM Path | Protocol / Sync Method |
+|---|---|---|
+| **SteamOS / Steam Deck** | `~/Emulation/roms/{platform}` | Local loopback / EmuDeck ES-DE gamelist.xml |
+| **Arcade Punks / Batocera (x86 & Pi)** | `/userdata/roms/{platform}` | Network SMB (`\\batocera\share\roms`) / SSH rsync |
+| **Raspberry Pi RetroPie** | `/home/pi/RetroPie/roms/{platform}` | SMB (`\\retropie\roms`) / SSH |
+| **Snapdragon / Adreno Handhelds** (Odin 2, Retroid Pocket 4/5, Ayaneo) | `/storage/emulated/0/ROMs/{platform}` | Android MTP / MicroSD / RomM Argosy companion |
+| **muOS / NextUI Handhelds** (Anbernic, Miyoo, TrimUI) | `/mnt/mmc/ROMS/{platform}` | Grout sync protocol / SSH |
+| **Cross-Platform Handhelds** | Cloud / WebDAV | RetroArch WebDAV cloud saves & states |
+
+In ROMarr, navigate to **Library Shell & Device Fleet** -> **Device Fleet** to audit existing scraped images, run Igir 1G1R deduplication against verified No-Intro/Redump DATs, and push updated `gamelist.xml` files.
+
+---
 
 ## Windows source install
 

@@ -981,6 +981,36 @@ DEVICE_PROFILES: list[dict] = [
         "igir_token": "{romm}",
         "description": "Direct over-the-air package feeds for Switch (.nsp/.xci), PS Vita/PSP/PS3/PS4/PS5, and Nintendo DS.",
     },
+    {
+        "id": "steamos-deck",
+        "name": "SteamOS / Steam Deck (EmuDeck & Non-Steam Standalone)",
+        "category": "Handheld / Console Mode",
+        "protocol": "Local Standalone / SSH / SMB",
+        "default_path": "~/Emulation/roms/{platform}",
+        "gamelist_format": "esde",
+        "igir_token": "{es}",
+        "description": "Native standalone launcher and EmuDeck library manager for Steam Deck & SteamOS handhelds. Syncs gamelist.xml and launches on loopback without Docker.",
+    },
+    {
+        "id": "rpi-batocera-arcadepunks",
+        "name": "Raspberry Pi & Arcade Punks Custom Images (Batocera / RetroPie)",
+        "category": "SBC & Dedicated Arcade Setups",
+        "protocol": "SMB Share (\\\\batocera\\share\\roms) / SSH rsync",
+        "default_path": "/userdata/roms/{platform}",
+        "gamelist_format": "esde",
+        "igir_token": "{batocera}",
+        "description": "Full support for Arcade Punks pre-configured image packs, Batocera 40+, and RetroPie 4.8. Audits scraped gamelists and ROM sets against clean DATs.",
+    },
+    {
+        "id": "adreno-android-handhelds",
+        "name": "Snapdragon / Adreno Handhelds (Odin 2, Retroid Pocket 4/5, AYN, Ayaneo)",
+        "category": "Android Emulation Handhelds",
+        "protocol": "MTP / MicroSD / SSH (Termux) / RomM Argosy",
+        "default_path": "/storage/emulated/0/ROMs/{platform}",
+        "gamelist_format": "esde",
+        "igir_token": "{romm}",
+        "description": "Tailored for high-performance Snapdragon/Adreno chipsets running ES-DE Android, Daijisho, Beacon, or Argosy. Maps turnip driver configs and high-tier Switch/PS2 ROM structures.",
+    },
 ]
 
 

@@ -9,8 +9,11 @@ Find games, verify ROMs, and import them into your library.
 [![Tests and images](https://github.com/BlizzHacker/romarr/actions/workflows/docker.yml/badge.svg)](https://github.com/BlizzHacker/romarr/actions/workflows/docker.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Android Beta](https://img.shields.io/badge/Google_Play-Android_Beta-brightgreen?logo=googleplay&logoColor=white)](https://play.google.com/apps/internaltest/4700888732790045566)
+[![Unraid Community Apps](https://img.shields.io/badge/Unraid-Community_Apps-orange?logo=unraid&logoColor=white)](https://ca.unraid.net/apps/romarr-04jslct0riva81?q=romarr)
+[![Microsoft Store](https://img.shields.io/badge/Microsoft_Store-Windows_App-0078D4?logo=windows&logoColor=white)](https://github.com/BlizzHacker/romarr/releases)
+[![Submit Package](https://img.shields.io/badge/Package_Submissions-Submit_ROMarr-purple?logo=github&logoColor=white)](docs/SUBMISSIONS.md)
 
-**[Install](#install)** · **[First setup](docs/GETTING-STARTED.md)** · **[Android Beta](https://play.google.com/apps/internaltest/4700888732790045566)** · **[Plugins](docs/PLUGINS.md)** · **[Roadmap](ROADMAP.md)** · **[Releases](https://github.com/BlizzHacker/romarr/releases)** · **[Privacy](docs/PRIVACY.md)**
+**[Install](#install)** · **[First setup](docs/GETTING-STARTED.md)** · **[Android Beta](https://play.google.com/apps/internaltest/4700888732790045566)** · **[Unraid App](https://ca.unraid.net/apps/romarr-04jslct0riva81?q=romarr)** · **[Plugins](docs/PLUGINS.md)** · **[Roadmap](ROADMAP.md)** · **[Releases](https://github.com/BlizzHacker/romarr/releases)** · **[Submit Package](docs/SUBMISSIONS.md)** · **[Privacy](docs/PRIVACY.md)**
 
 > [!TIP]
 > **Android Beta Testers Wanted!**  
@@ -45,13 +48,16 @@ Imports can be checked against DAT checksums. The result is **verified**, **bad 
 
 | Method | Best fit | Guide |
 |---|---|---|
+| **Unraid** | Unraid NAS & server arrays | [Install from Unraid Community Applications](https://ca.unraid.net/apps/romarr-04jslct0riva81?q=romarr) |
 | **Docker Compose** | Most servers, NAS hosts, or Docker Desktop | [Quick start below](#docker-compose-quick-start) |
-| **Proxmox LXC** | A Proxmox host | [LXC installer](docs/INSTALL.md#proxmox-lxc) |
 | **Windows app** | Windows 10/11 on x64 | [Download the Windows ZIP](docs/INSTALL.md#windows-app), extract it and double-click **ROMarr.exe**. No Python, PowerShell or .NET installation required. |
-| **Android preview** | Android 7+ on ARM64 or x86_64; local core or an HTTPS server | [Join the Google Play Beta](https://play.google.com/apps/internaltest/4700888732790045566) or read [Android setup and limits](docs/ANDROID.md). Native file import and compatible emulator handoff. |
+| **macOS, Linux & SteamOS** | Desktop PCs, MacBooks, Steam Deck & Handhelds (Non-Server) | [Standalone Desktop Launcher](docs/INSTALL.md#macos-linux--steamos-standalone-launcher-non-server-users): run `./scripts/start-desktop.sh` |
+| **Android preview** | Android 7+ phones, tablets, Odin/Retroid handhelds | [Join the Google Play Beta](https://play.google.com/apps/internaltest/4700888732790045566) or read [Android setup and limits](docs/ANDROID.md). Native file import and compatible emulator handoff. |
+| **Proxmox LXC** | A Proxmox host | [LXC installer](docs/INSTALL.md#proxmox-lxc) |
 | **Chrome / ChromeOS** | A running ROMarr server | [Install the web app or server-launcher extension](docs/CHROME.md). Online connection required. |
 | **Linux/macOS source checkout** | Development or an existing Python host | [Source instructions](docs/INSTALL.md#from-source) |
 | **Home Assistant add-on** | A Home Assistant installation | [Add-on instructions](docs/INSTALL.md#home-assistant); this packaging needs more field testing. |
+| **Package Submissions** | Community Catalogs (TrueNAS, CasaOS, Flathub) | [Submission Directory & Registry Guides](docs/SUBMISSIONS.md) |
 
 For Docker, have Docker Engine or Docker Desktop with Compose installed. Reserve port **6868** and choose where settings, downloads, and ROMs will live. ROMs and download space are usually much larger than the app itself.
 
