@@ -88,6 +88,9 @@ def test_extension_rejects_unsafe_profiles_and_packages_reproducibly(tmp_path):
     assert manifest["manifest_version"] == 3
     assert manifest["permissions"] == ["storage"]
     assert not manifest.get("host_permissions")
+    assert manifest["version"] == "1.0.1"
+    assert manifest["optional_host_permissions"] == ["http://*/*", "https://*/*"]
+    assert manifest["background"] == {"service_worker": "navigation.js"}
     import importlib.util
     spec = importlib.util.spec_from_file_location("chrome_package", ROOT / "desktop/chrome/package.py")
     module = importlib.util.module_from_spec(spec)
@@ -99,6 +102,7 @@ def test_extension_rejects_unsafe_profiles_and_packages_reproducibly(tmp_path):
     import zipfile
     with zipfile.ZipFile(first) as archive:
         assert "manifest.json" in archive.namelist()
+        assert "navigation.js" in archive.namelist()
         assert "package.py" not in archive.namelist()
 
 
@@ -127,19 +131,36 @@ const tick=()=>new Promise(resolve=>setImmediate(resolve));
 function setup(){
   const elements=Object.fromEntries(['profiles','status','add','name','url','retry'].map(id=>[id,new Element()]));
   elements.name.tag=elements.url.tag='input';elements.add.append(elements.name,elements.url,new Element('button'));
-  const reads=[],writes=[];
+  const reads=[],writes=[],tabs=new Map(),calls={permissions:[],query:[],create:[],update:[],focus:[],session:[]};
+  let nextId=100,allow=true,durable=[],sessionData={},messageHandler;
   const storage={
     setAccessLevel:async()=>{},
-    get:()=>{const wait=deferred();reads.push(wait);return wait.promise;},
-    set:value=>{const wait=deferred();writes.push({wait,value:structuredClone(value)});return wait.promise;}
+    get:()=>{const wait=deferred();reads.push(wait);return wait.promise.then(value=>{durable=structuredClone(value.profiles||[]);return value;});},
+    set:value=>{const wait=deferred();writes.push({wait,value:structuredClone(value)});return wait.promise.then(()=>{durable=structuredClone(value.profiles);});}
   };
-  const context=vm.createContext({URL,chrome:{storage:{local:storage}},document:{getElementById:id=>elements[id],createElement:tag=>new Element(tag)}});
+  const chrome={
+    storage:{local:storage,session:{get:async()=>structuredClone(sessionData),set:async value=>{calls.session.push(structuredClone(value));Object.assign(sessionData,value);}}},
+    runtime:{id:'proof-extension',onMessage:{addListener:handler=>{messageHandler=handler;}},sendMessage:message=>new Promise((resolve,reject)=>{if(!messageHandler(message,{id:'proof-extension'},resolve))reject(Error('Unhandled message'));})},
+    permissions:{request:async value=>{calls.permissions.push(structuredClone(value));return allow;},contains:async()=>allow},
+    tabs:{
+      get:async id=>{if(!tabs.has(id))throw Error('closed');return {...tabs.get(id)};},
+      query:async value=>{calls.query.push(value);return [...tabs.values()].filter(t=>t.url&&t.url.startsWith(value.url.slice(0,-1)));},
+      create:async value=>{const tab={id:nextId++,windowId:9,...value};tabs.set(tab.id,tab);calls.create.push(value);return {...tab};},
+      update:async(id,value)=>{calls.update.push({id,...value});Object.assign(tabs.get(id),value);return {...tabs.get(id)};}
+    },
+    windows:{update:async(id,value)=>calls.focus.push({id,...value})}
+  };
+  const workerChrome={...chrome,storage:{...chrome.storage,local:{...storage,get:async()=>({profiles:structuredClone(durable)})}}};
+  const worker=vm.createContext({URL,chrome:workerChrome});
+  worker.importScripts=path=>vm.runInContext(fs.readFileSync('desktop/chrome/'+path,'utf8'),worker);
+  vm.runInContext(fs.readFileSync('desktop/chrome/navigation.js','utf8'),worker);
+  const context=vm.createContext({URL,chrome,document:{getElementById:id=>elements[id],createElement:tag=>new Element(tag)}});
   vm.runInContext(fs.readFileSync('desktop/chrome/validation.js','utf8'),context);
   vm.runInContext(fs.readFileSync('desktop/chrome/popup.js','utf8'),context);
   const submit=()=>elements.add.onsubmit({preventDefault(){},target:elements.add});
   const setInput=(name,url)=>{elements.name.value=name;elements.url.value=url;};
   const names=()=>elements.profiles.children.map(article=>article.children[0].textContent);
-  return {elements,reads,writes,submit,setInput,names,buttons:()=>elements.profiles.querySelectorAll('button')};
+  return {elements,reads,writes,submit,setInput,names,calls,tabs,send:chrome.runtime.sendMessage,grant:value=>{allow=value;},buttons:()=>elements.profiles.querySelectorAll('button').filter(b=>b.textContent==='Remove'),action:title=>elements.profiles.querySelectorAll('button').find(b=>b.textContent===title)};
 }
 const fixtures=['A','B','C'].map(name=>({name,url:'https://'+name.toLowerCase()+'.example/'}));
 const watchdog=setTimeout(()=>{console.error('popup harness timed out');process.exit(1);},5000);
@@ -176,6 +197,37 @@ const watchdog=setTimeout(()=>{console.error('popup harness timed out');process.
   full.reads[0].resolve({profiles:Array.from({length:20},(_,i)=>({name:'S'+i,url:'https://s'+i+'.example/'}))});await tick();
   full.setInput('Extra','https://extra.example/');await full.submit();
   assert.equal(full.writes.length,0);assert.match(full.elements.status.textContent,/20 maximum/);
+  const launch=setup();await tick();launch.reads[0].resolve({profiles:fixtures});await tick();
+  launch.grant(false);await launch.action('Open / Connect server').onclick();
+  assert.equal(launch.calls.create.length,0);assert.match(launch.elements.status.textContent,/not granted/);
+  launch.grant(true);launch.tabs.set(7,{id:7,windowId:8,url:'https://a.example/#library'});
+  for(const title of ['Open / Connect server','Library','Queue','Emulators','Settings'])await launch.action(title).onclick();
+  assert.equal(launch.calls.create.length,0);assert.equal(launch.tabs.size,1);
+  assert.ok(launch.calls.update.every(value=>value.id===7));
+  assert.equal(launch.tabs.get(7).url,'https://a.example/#general');
+  assert.ok(launch.calls.permissions.every(value=>JSON.stringify(value.origins)==='["https://a.example/*"]'));
+  // A known tab on an unapproved identity-provider origin has no readable URL.
+  launch.tabs.set(7,{id:7,windowId:8});const updates=launch.calls.update.length;
+  await launch.action('Queue').onclick();
+  assert.equal(launch.calls.update.slice(updates).filter(value=>value.url).length,0);
+  assert.match(launch.elements.status.textContent,/Finish sign-in/);
+  launch.tabs.delete(7);await launch.action('Library').onclick();
+  assert.equal(launch.calls.create.length,1);assert.equal(launch.calls.create[0].active,false);
+  assert.equal(launch.calls.session.at(-1).launcherTabs['https://a.example/'],100);
+  assert.equal(launch.tabs.get(100).url,'https://a.example/#library');
+  // The worker serializes different profiles without dropping session mappings.
+  const pair=await Promise.all([
+    launch.send({type:'openServer',profile:fixtures[0],hash:'queue'}),
+    launch.send({type:'openServer',profile:fixtures[1],hash:'library'})
+  ]);
+  assert.ok(pair.every(value=>Number.isInteger(value.tabId)));
+  assert.equal(launch.calls.session.at(-1).launcherTabs['https://a.example/'],100);
+  assert.equal(launch.calls.session.at(-1).launcherTabs['https://b.example/'],101);
+  // Worker rejects unsaved profiles and unapproved route names.
+  assert.ok((await launch.send({type:'openServer',profile:fixtures[0],hash:'unsafe'})).error);
+  assert.ok((await launch.send({type:'openServer',profile:{name:'Unsaved',url:'https://unsaved.example/'},hash:'library'})).error);
+  launch.grant(false);
+  assert.ok((await launch.send({type:'openServer',profile:fixtures[0],hash:'library'})).denied);
   console.log('popup deferred initialization, retry, double-remove, overlapping add/remove, rollback, and 20-profile limit passed');
 })().then(()=>clearTimeout(watchdog)).catch(error=>{clearTimeout(watchdog);console.error(error);process.exitCode=1;});
 """

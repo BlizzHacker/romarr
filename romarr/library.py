@@ -13,6 +13,8 @@ details it does handle are the ones that silently corrupt a library:
 
 from __future__ import annotations
 
+from .import_duplicates import duplicate_reason, stream_sha1
+
 import json
 import logging
 import errno
@@ -264,6 +266,7 @@ class ImportResult:
     info: dict = field(default_factory=dict)
     import_method: str = ""
     fallback_reason: str = ""
+    sha1: str = ""
 
 
 def is_safe_name(name: str, root: Path) -> bool:
@@ -1225,7 +1228,8 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
                layout: str = "flat", translation: bool = False,
                rename: bool = False,
                platform_folders=None, prefer_hardlinks: bool = False, selected_primaries=None, bundle_routes=None,
-               requested_game: str | None = None, catalog_platforms=None) -> list[ImportResult]:
+               requested_game: str | None = None, catalog_platforms=None,
+               hash_index=None, duplicate_roots=()) -> list[ImportResult]:
     """Place every ROM from a finished download into the library.
 
     A cartridge zip may hold several games (a 3-in-1 collection, a bundle)
@@ -1272,7 +1276,8 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
             layout=layout, translation=translation, rename=rename,
             platform_folders=platform_folders, prefer_hardlinks=prefer_hardlinks,
             selected_primaries=selected_primaries, bundle_routes=bundle_routes,
-            requested_game=requested_game, catalog_platforms=catalog_platforms)
+            requested_game=requested_game, catalog_platforms=catalog_platforms,
+            hash_index=hash_index, duplicate_roots=duplicate_roots)
     finally:
         source.close()
 
@@ -1283,7 +1288,8 @@ def _import_rom_from_source(source, candidates, chosen_sets, download, platform,
                             translation=False, rename=False,
                             platform_folders=None, prefer_hardlinks=False,
                             selected_primaries=None, bundle_routes=None,
-                            requested_game=None, catalog_platforms=None):
+                            requested_game=None, catalog_platforms=None,
+                            hash_index=None, duplicate_roots=()):
     """Finish import while the validated source and its scratch ZIPs remain open."""
     if selected_primaries is not None:
         selected = set(selected_primaries)
@@ -1318,6 +1324,7 @@ def _import_rom_from_source(source, candidates, chosen_sets, download, platform,
                 False, None, f"request identity {decision.code}: {decision.message}")]
 
     results: list[ImportResult] = []
+    published_hashes = {}
     planned = []
     destinations = {}
     file_destinations = {}
@@ -1337,6 +1344,19 @@ def _import_rom_from_source(source, candidates, chosen_sets, download, platform,
                 f"refused: {verdict.detail or verdict}",
                 verification=verdict))
             continue
+
+        if hash_index is not None and len(hash_index) and not chosen.is_multi_file:
+            try:
+                hashes = source.hash(chosen.primary, suffix="")
+                reason = duplicate_reason(hash_index, (hashes or {}).get("sha1", ""),
+                                          duplicate_roots or (library_root,),
+                                          suffix=Path(chosen.primary).suffix, published=published_hashes)
+            except (OSError, ValueError, zipfile.BadZipFile, RuntimeError, subprocess.SubprocessError) as exc:
+                results.append(ImportResult(False, None, f"duplicate check failed: {exc}", verification=verdict))
+                continue
+            if reason:
+                results.append(ImportResult(False, None, reason, verification=verdict))
+                continue
 
         target_dir = platform_dir(library_root, platform,
                                   layout=layout, translation=translation,
@@ -1414,13 +1434,28 @@ def _import_rom_from_source(source, candidates, chosen_sets, download, platform,
                         if (staged_evidence.decision.action != "import"
                                 or staged_evidence.verification != verdict):
                             raise ValueError("request identity changed during staging; nothing published")
+                    imported_sha1 = ""
+                    if hash_index is not None:
+                        with staged.open("rb") as copied:
+                            imported_sha1 = stream_sha1(copied)
+                        reason = duplicate_reason(hash_index, imported_sha1,
+                                                  duplicate_roots or (library_root,),
+                                                  suffix=staged.suffix, published=published_hashes)
+                        if reason:
+                            results.append(ImportResult(False, destination, reason, verification=verdict))
+                            continue
                     _publish_staged(staged, destination, overwrite)
             except (OSError, ValueError, zipfile.BadZipFile, RuntimeError, subprocess.SubprocessError) as exc:
                 results.append(ImportResult(False, destination, f"copy/extraction or publication failed: {exc}"))
                 continue
+            if imported_sha1:
+                from .hashes import Entry
+                published_hashes[imported_sha1] = Entry(imported_sha1, destination.stem,
+                                                       platform.slug, path=str(destination))
             log.info("imported %s -> %s", chosen.primary, destination)
             results.append(ImportResult(True, destination,
-                                        verification=verdict, **_transfer_summary(source)))
+                                        verification=verdict, sha1=imported_sha1,
+                                        **_transfer_summary(source)))
             continue
 
         if destination.exists() and any(destination.iterdir()) and not overwrite:

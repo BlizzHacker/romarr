@@ -20,6 +20,10 @@ _FIELDS = (
 
 def _generated() -> dict[str, str]:
     """Read optional build-generated identity fields without guessing defaults."""
+    from .release_controls import preview_provenance
+    preview = preview_provenance()
+    if preview:
+        return preview
     try:
         from . import _build_info
     except ImportError:

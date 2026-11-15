@@ -177,11 +177,13 @@ def resolve_target(env: Environment, channel: str, latest_tag: str) -> tuple[str
     """
     if channel == "nightly":
         return "origin/main", "nightly channel: fast-forward to origin/main"
+    if channel not in ("stable", "alpha", "beta", "rc"):
+        return "", "unknown update channel"
     if not latest_tag:
         return "", "stable channel but no release tag is known yet -- " \
                    "run UpdateCheck first"
     tag = latest_tag if latest_tag.startswith("v") else f"v{latest_tag}"
-    return f"refs/tags/{tag}", f"stable channel: fast-forward to {tag}"
+    return f"refs/tags/{tag}", f"{channel} channel: fast-forward to {tag}"
 
 
 def build_script(env: Environment, target: str, log_path: str) -> str:

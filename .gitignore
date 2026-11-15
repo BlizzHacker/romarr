@@ -27,3 +27,6 @@ testinstall.py
 scripts/launchbox_proof/bin/
 scripts/launchbox_proof/obj/
 .claude/
+
+# Native desktop build intermediates
+desktop/windows/obj/

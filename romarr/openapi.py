@@ -20,6 +20,11 @@ VERSION = "3.1.0"
 #: One line per route. Anything served and not described here fails the test,
 #: which is the whole mechanism keeping this honest.
 DESCRIPTIONS: dict[str, tuple[str, str]] = {
+    "/api/v1/update/prs": ("GET", "List official open ROMarr pull requests for optional owner-reviewed previews."),
+    "/api/v1/update/releases": ("GET", "Published release catalogue filtered by stable, RC, beta or alpha eligibility."),
+    "/api/v1/update/pr": ("POST", "Inspect an official PR author, exact head/base and completed check results without applying code."),
+    "/api/v1/update/pr/apply": ("POST", "Explicitly approve a pinned fast-forward PR on an idle clean source installation after a private configuration backup."),
+    "/api/v1/update/pr/restore": ("POST", "Restore the recorded prior code only if the preview source and worktree remain unchanged; preserve configuration backups."),
     "/api/v1/file-reports": ("GET", "Local user reports and snapshot scanner evidence; authentication required."),
     "/api/v1/file-reports/submit": ("POST", "Report a relative library file and queue a bounded snapshot scan."),
     "/api/v1/file-reports/quarantine": ("POST", "Explicitly quarantine unchanged reviewed bytes; never delete."),

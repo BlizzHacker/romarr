@@ -19,6 +19,8 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
  private WebView web;
  private WebViewClient navigationClient;
  private TextView status;
+ private LinearLayout toolbar;
+ private ImageButton actions;
  private volatile String origin = "";
  private String local = "";
  private volatile boolean destroyed;
@@ -30,14 +32,43 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
  private final java.util.concurrent.ExecutorService worker = java.util.concurrent.Executors.newSingleThreadExecutor();
  @Override public void onCreate(Bundle saved) {
   super.onCreate(saved);
+  androidx.core.view.WindowCompat.setDecorFitsSystemWindows(getWindow(),false);
   LinearLayout layout = new LinearLayout(this); layout.setOrientation(LinearLayout.VERTICAL);
-  LinearLayout bar = new LinearLayout(this);
-  button(bar,"This device",this::local); button(bar,"Servers",this::profiles);
-  button(bar,"Import",this::importFile); button(bar,"Play file",this::chooseFile);
-  layout.setOnApplyWindowInsetsListener((v,insets) -> { v.setPadding(insets.getSystemWindowInsetLeft(),insets.getSystemWindowInsetTop(),insets.getSystemWindowInsetRight(),insets.getSystemWindowInsetBottom()); return insets; });
-  layout.addView(bar);
-  status = new TextView(this); status.setText("Starting private ROMarr server..."); layout.addView(status);
+  layout.setBackgroundColor(android.graphics.Color.rgb(18,20,26));
+  androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(layout,(v,insets) -> {
+   androidx.core.graphics.Insets bars=insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars() | androidx.core.view.WindowInsetsCompat.Type.displayCutout());
+   androidx.core.graphics.Insets keyboard=insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.ime());
+   v.setPadding(bars.left,bars.top,bars.right,Math.max(bars.bottom,keyboard.bottom));
+   return insets;
+  });
+  toolbar=new LinearLayout(this); toolbar.setGravity(android.view.Gravity.CENTER_VERTICAL);
+  toolbar.setPadding(dp(14),dp(6),dp(6),dp(6)); toolbar.setMinimumHeight(dp(60));
+  toolbar.setBackgroundColor(android.graphics.Color.rgb(26,29,37));
+  ImageView mark=new ImageView(this);mark.setImageResource(R.drawable.ic_launcher);
+  mark.setImportantForAccessibility(android.view.View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+  toolbar.addView(mark,new LinearLayout.LayoutParams(dp(32),dp(32)));
+  LinearLayout identity=new LinearLayout(this);identity.setOrientation(LinearLayout.VERTICAL);
+  identity.setGravity(android.view.Gravity.CENTER_VERTICAL);
+  LinearLayout.LayoutParams identitySize=new LinearLayout.LayoutParams(0,-2,1);identitySize.setMargins(dp(10),0,dp(8),0);
+  TextView brand=new TextView(this);brand.setText("ROMarr");brand.setTextSize(18);
+  brand.setTextColor(android.graphics.Color.rgb(241,245,249));brand.setTypeface(null,android.graphics.Typeface.BOLD);
+  brand.setSingleLine(true);identity.addView(brand);
+  status=new TextView(this);status.setText("Starting on this device…");status.setTextSize(12);
+  status.setTextColor(android.graphics.Color.rgb(169,183,198));status.setSingleLine(true);
+  status.setEllipsize(android.text.TextUtils.TruncateAt.END);identity.addView(status);
+  toolbar.addView(identity,identitySize);
+  actions=new ImageButton(this);actions.setImageResource(R.drawable.ic_more);
+  actions.setContentDescription("ROMarr menu");actions.setPadding(dp(12),dp(12),dp(12),dp(12));
+  android.util.TypedValue ripple=new android.util.TypedValue();getTheme().resolveAttribute(android.R.attr.selectableItemBackgroundBorderless,ripple,true);
+  if(ripple.resourceId!=0) actions.setBackgroundResource(ripple.resourceId);
+  actions.setOnClickListener(v -> showActions());toolbar.addView(actions,new LinearLayout.LayoutParams(dp(48),dp(48)));
+  layout.addView(toolbar,new LinearLayout.LayoutParams(-1,-2));
   web = new WebView(this);
+  web.setFocusable(true); web.setFocusableInTouchMode(true);
+  web.setOnTouchListener((view,event) -> {
+   if(event.getActionMasked()==android.view.MotionEvent.ACTION_DOWN && !view.hasFocus()) view.requestFocus();
+   return false;
+  });web.setBackgroundColor(android.graphics.Color.rgb(18,20,26));
   if (BuildConfig.DEBUG) WebView.setWebContentsDebuggingEnabled(true);
   web.getSettings().setJavaScriptEnabled(true); web.getSettings().setDomStorageEnabled(true);
   web.getSettings().setAllowFileAccess(false); web.getSettings().setAllowContentAccess(false);
@@ -61,6 +92,9 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
    }
   });
   layout.addView(web,new LinearLayout.LayoutParams(-1,0,1)); setContentView(layout);
+  androidx.core.view.WindowInsetsControllerCompat systemBars=new androidx.core.view.WindowInsetsControllerCompat(getWindow(),layout);
+  systemBars.setAppearanceLightStatusBars(false);systemBars.setAppearanceLightNavigationBars(false);
+  androidx.core.view.ViewCompat.requestApplyInsets(layout);
   getOnBackPressedDispatcher().addCallback(this, new androidx.activity.OnBackPressedCallback(true) {
    @Override public void handleOnBackPressed() { if (web.canGoBack()) web.goBack(); else finish(); }
   });
@@ -69,14 +103,33 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
     String url=Python.getInstance().getModule("android_backend").callAttr("start",getFilesDir().getAbsolutePath()).toString();
     runOnUiThread(() -> { if (!destroyed) { local=url; if (wantLocal) local(); } });
    } catch (Exception e) {
-    runOnUiThread(() -> { if (!destroyed) status.setText("Local server failed. Remote profiles remain available."); });
+    runOnUiThread(() -> { if (!destroyed && wantLocal) {status.setText("This device unavailable");status.setContentDescription("Local server unavailable. Servers remain available from the ROMarr menu.");} });
     android.util.Log.e("ROMarr","Local startup failed",e);
    }
   });
  }
- private void button(LinearLayout bar,String text,Runnable action) {
-  Button b=new Button(this); b.setText(text); b.setOnClickListener(v -> action.run());
-  bar.addView(b,new LinearLayout.LayoutParams(0,-2,1));
+ private int dp(int size) { return Math.round(size*getResources().getDisplayMetrics().density); }
+ private void showActions() {
+  PopupMenu menu=new PopupMenu(this,actions);
+  menu.getMenu().add(0,1,0,"This device").setCheckable(true).setChecked(wantLocal);
+  menu.getMenu().add(0,2,1,"Servers…");
+  menu.getMenu().add(0,3,2,"Import ROM or DAT…");
+  menu.getMenu().add(0,4,3,"Play a local file…");
+  menu.getMenu().add(0,5,4,"Connection details");
+  menu.setOnMenuItemClickListener(item -> {
+   switch(item.getItemId()) {
+    case 1: local();break;
+    case 2: profiles();break;
+    case 3: importFile();break;
+    case 4: chooseFile();break;
+    case 5: new AlertDialog.Builder(this).setTitle(wantLocal ? "This device" : "Server connection")
+     .setMessage(wantLocal ? "Your private local library is available while ROMarr is running. Use Servers for an always-on library." : origin)
+     .setPositiveButton("Done",null).show();break;
+    default:return false;
+   }
+   return true;
+  });
+  menu.show();
  }
  private static boolean sameOrigin(String a,String b) {
   try { URI x=new URI(a),y=new URI(b); return x.getScheme().equalsIgnoreCase(y.getScheme()) && x.getHost().equalsIgnoreCase(y.getHost()) && effectivePort(x)==effectivePort(y); }
@@ -150,7 +203,11 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
    }).create();
   signInPrompt.show();
  }
- private void open(String url) { origin=url; web.loadUrl(url); status.setText(url.equals(local) ? "This device: active while app process lives" : "Remote server"); }
+ private void open(String url) {
+  origin=url;web.loadUrl(url);
+  status.setText(url.equals(local) ? "This device" : "Server · " + Uri.parse(url).getAuthority());
+  status.setContentDescription(url.equals(local) ? "This device. Private local library." : "Connected server " + url + ". Full address in Connection details.");
+ }
  private void local() {
   clearSignIn();
   wantLocal=true;

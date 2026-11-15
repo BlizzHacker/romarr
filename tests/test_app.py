@@ -172,9 +172,13 @@ def test_every_verb_is_guarded_so_a_crash_is_a_500_not_a_dead_socket():
     import pathlib
     src = _io.open(pathlib.Path(__file__).resolve().parents[1] / "romarr" / "app.py",
                    encoding="utf-8").read()
-    for verb, inner in (("do_GET", "_get"), ("do_POST", "_post"),
+    for verb, inner in (("do_GET", "_get"),
                         ("do_PUT", "_put"), ("do_DELETE", "_delete")):
         assert f"def {verb}(self):\n            return self._gate(self.{inner})" in src, verb
+    post = src.split("def do_POST(self):", 1)[1].split("def do_PUT", 1)[0]
+    assert 'if urlparse(self.path).path == "/api/v1/mcp":' in post
+    assert "return self._guard(lambda: mcp.http(self, service))" in post
+    assert "return self._gate(self._post)" in post
     assert "def _guard(self, handler):" in src
     assert "return self._guard(handler)" in src, "_gate must still guard"
 

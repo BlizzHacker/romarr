@@ -3,6 +3,9 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Net.Sockets;
 using System.Text.Json;
+using System.Runtime.InteropServices;
+using System.Reflection;
+using System.Text.RegularExpressions;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
 
@@ -10,6 +13,11 @@ namespace ROMarr.Desktop;
 
 public sealed class MainWindow : Form
 {
+    readonly TableLayoutPanel shell = new() { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 3, Margin = Padding.Empty, Padding = Padding.Empty };
+    readonly Panel browserHost = new() { Dock = DockStyle.Fill, Margin = Padding.Empty, BackColor = Color.FromArgb(15, 17, 24) };
+    readonly FlowLayoutPanel connectionOptions = new() { Dock = DockStyle.Fill, AutoSize = true, AutoScroll = true, Padding = new Padding(12), Margin = Padding.Empty, WrapContents = true, BackColor = Color.FromArgb(26, 29, 39) };
+    readonly Button connectionToggle = new() { Text = "Connections", AutoSize = true, AccessibleName = "Show connection settings" };
+    readonly ToolTip tips = new();
     readonly TextBox dataPath = new() { Width = 280 };
     readonly TextBox libraryPath = new() { Width = 280 };
     readonly NumericUpDown port = new() { Minimum = 1024, Maximum = 65535, Value = 6868, Width = 78 };
@@ -26,7 +34,7 @@ public sealed class MainWindow : Form
     string preferredMode = "local";
     string savedServerOrigin = "";
     readonly Button stop = new() { Text = "Stop", AutoSize = true, Enabled = false };
-    readonly Label status = new() { Text = "Choose your folders, then start ROMarr.", AutoSize = true, Padding = new Padding(8) };
+    readonly Label status = new() { Text = "Choose a connection to get started", Dock = DockStyle.Fill, AutoSize = false, AutoEllipsis = true, TextAlign = ContentAlignment.MiddleLeft, Margin = new Padding(12, 0, 12, 0), AccessibleName = "Current ROMarr connection" };
     WebView2 browser = new() { Dock = DockStyle.Fill };
     readonly HttpClient http = new() { Timeout = TimeSpan.FromSeconds(4) };
     readonly string? smokeRoot;
@@ -45,7 +53,10 @@ public sealed class MainWindow : Form
     public MainWindow(string? smokeRoot)
     {
         this.smokeRoot = smokeRoot;
-        Text = "ROMarr"; Width = 1280; Height = 880; MinimumSize = new Size(850, 600);
+        Text = "ROMarr"; Width = 1280; Height = 880; MinimumSize = new Size(640, 480);
+        AutoScaleMode = AutoScaleMode.Dpi; AutoScaleDimensions = new SizeF(96, 96);
+        BackColor = Color.FromArgb(15, 17, 24); ForeColor = Color.FromArgb(225, 228, 238);
+        Font = new Font("Segoe UI", 10f);
         StartPosition = FormStartPosition.CenterScreen;
         var appData = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "ROMarr");
         preferenceFile = Path.Combine(appData, "desktop.json");
@@ -53,7 +64,8 @@ public sealed class MainWindow : Form
         libraryPath.Text = smokeRoot is null ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Games", "ROMs") : Path.Combine(smokeRoot, "roms");
         if (smokeRoot is null) LoadPreferences();
 
-        var menu = new MenuStrip();
+        var menu = new ContextMenuStrip { BackColor = Color.FromArgb(26, 29, 39), ForeColor = ForeColor, ShowImageMargin = false };
+        menu.Renderer = new ToolStripProfessionalRenderer(new ShellMenuColors());
         var file = new ToolStripMenuItem("ROMarr");
         file.DropDownItems.Add("Open data folder", null, (_,_) => OpenFolder(dataPath.Text));
         file.DropDownItems.Add("View desktop log", null, (_,_) => { if (File.Exists(logPath)) OpenExternal(logPath); });
@@ -66,9 +78,20 @@ public sealed class MainWindow : Form
         help.DropDownItems.Add("ROM Hub plugins", null, (_,_) => OpenHubPage());
         help.DropDownItems.Add("Roadmap", null, (_,_) => OpenExternal("https://github.com/BlizzHacker/romarr/blob/main/ROADMAP.md"));
         menu.Items.AddRange([file, companion, help]);
-        MainMenuStrip = menu;
-
-        var options = new FlowLayoutPanel { Dock = DockStyle.Top, AutoSize = true, Padding = new Padding(10), WrapContents = true };
+        menu.Items.Add("Reload server view", null, (_,_) => { if (browser.CoreWebView2 is not null) browser.Reload(); });
+        var menuButton = new Button { Text = "Menu ▾", AutoSize = true, AccessibleName = "ROMarr app menu" };
+        menuButton.Click += (_,_) => menu.Show(menuButton, new Point(0, menuButton.Height));
+        connectionToggle.Click += (_,_) => SetConnectionOptionsVisible(!connectionOptions.Visible);
+        var header = new TableLayoutPanel { Dock = DockStyle.Fill, AutoSize = true, ColumnCount = 4, RowCount = 1, Padding = new Padding(12, 6, 12, 6), Margin = Padding.Empty, MinimumSize = new Size(0, 50), BackColor = BackColor };
+        header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        header.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        header.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        var brand = new Label { Text = "ROMarr", AutoSize = true, Anchor = AnchorStyles.Left, ForeColor = Color.FromArgb(242, 163, 60), Font = new Font("Segoe UI", 13, FontStyle.Bold), Margin = Padding.Empty };
+        header.Controls.Add(brand, 0, 0); header.Controls.Add(status, 1, 0); header.Controls.Add(connectionToggle, 2, 0); header.Controls.Add(menuButton, 3, 0);
+        StyleShellButton(connectionToggle); StyleShellButton(menuButton);
+        status.TextChanged += (_,_) => { tips.SetToolTip(status, status.Text); status.AccessibleDescription = status.Text; };
+        var options = connectionOptions;
         options.Controls.Add(new Label { Text = "Data", AutoSize = true, Padding = new Padding(0,8,0,0) });
         options.Controls.Add(dataPath); options.Controls.Add(FolderButton(dataPath));
         options.Controls.Add(new Label { Text = "ROM library", AutoSize = true, Padding = new Padding(8,8,0,0) });
@@ -77,8 +100,22 @@ public sealed class MainWindow : Form
         options.Controls.Add(port); options.Controls.Add(start); options.Controls.Add(stop);
         options.Controls.Add(new Label { Text = "Or server", AutoSize = true, Padding = new Padding(8,8,0,0) });
         options.Controls.Add(serverAddress); options.Controls.Add(connect);
-        options.Controls.Add(status);
-        Controls.Add(browser); Controls.Add(options); Controls.Add(menu);
+        foreach (Control control in options.Controls)
+        {
+            control.Margin = new Padding(4, 5, 4, 5);
+            if (control is Button button) StyleShellButton(button);
+            else if (control is TextBox text) { text.BackColor = Color.FromArgb(17, 20, 28); text.ForeColor = ForeColor; text.BorderStyle = BorderStyle.FixedSingle; }
+            else if (control is NumericUpDown number) { number.BackColor = Color.FromArgb(17, 20, 28); number.ForeColor = ForeColor; }
+            else control.ForeColor = ForeColor;
+        }
+        shell.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        shell.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        shell.RowStyles.Add(new RowStyle(SizeType.Percent, 100));
+        browserHost.Controls.Add(browser);
+        shell.Controls.Add(header, 0, 0); shell.Controls.Add(options, 0, 1); shell.Controls.Add(browserHost, 0, 2);
+        Controls.Add(shell);
+        Resize += (_,_) => { connectionOptions.MaximumSize = new Size(Math.Max(320, ClientSize.Width), Math.Max(120, ClientSize.Height / 2)); };
+        SetConnectionOptionsVisible(!File.Exists(preferenceFile));
         start.Click += async (_,_) => await StartWithMessage();
         stop.Click += (_,_) => { if (remoteConnected) DisconnectServer(); else StopBackend(); };
         connect.Click += async (_,_) => await ConnectServerWithMessage();
@@ -92,6 +129,47 @@ public sealed class MainWindow : Form
                 else await StartWithMessage();
             }
         };
+    }
+
+    [DllImport("dwmapi.dll", EntryPoint = "DwmSetWindowAttribute")]
+    static extern int SetWindowTheme(IntPtr window, int attribute, ref int value, int size);
+
+    protected override void OnHandleCreated(EventArgs e)
+    {
+        base.OnHandleCreated(e);
+        try { var dark = 1; SetWindowTheme(Handle, 20, ref dark, sizeof(int)); }
+        catch (DllNotFoundException) { }
+        catch (EntryPointNotFoundException) { }
+    }
+
+    /// <summary>Keeps connection details out of the server viewport until requested.</summary>
+    void SetConnectionOptionsVisible(bool visible)
+    {
+        connectionOptions.Visible = visible;
+        connectionToggle.Text = visible ? "Hide connections" : "Connections";
+        connectionToggle.AccessibleName = visible ? "Hide connection settings" : "Show connection settings";
+        shell.PerformLayout(); browserHost.PerformLayout();
+    }
+
+    static void StyleShellButton(Button button)
+    {
+        button.FlatStyle = FlatStyle.Flat;
+        button.BackColor = Color.FromArgb(32, 37, 49); button.ForeColor = Color.FromArgb(225, 228, 238);
+        button.FlatAppearance.BorderColor = Color.FromArgb(65, 73, 92);
+        button.FlatAppearance.MouseOverBackColor = Color.FromArgb(49, 57, 74);
+        button.Padding = new Padding(8, 3, 8, 3); button.MinimumSize = new Size(0, 34);
+        button.Cursor = Cursors.Hand;
+    }
+
+    sealed class ShellMenuColors : ProfessionalColorTable
+    {
+        public override Color ToolStripDropDownBackground => Color.FromArgb(26, 29, 39);
+        public override Color ImageMarginGradientBegin => ToolStripDropDownBackground;
+        public override Color ImageMarginGradientMiddle => ToolStripDropDownBackground;
+        public override Color ImageMarginGradientEnd => ToolStripDropDownBackground;
+        public override Color MenuItemSelected => Color.FromArgb(49, 57, 74);
+        public override Color MenuItemBorder => Color.FromArgb(65, 73, 92);
+        public override Color MenuBorder => Color.FromArgb(65, 73, 92);
     }
 
     Button FolderButton(TextBox field)
@@ -224,7 +302,8 @@ public sealed class MainWindow : Form
             await browserReady.WaitAsync(TimeSpan.FromSeconds(30));
             dataPath.Enabled = false; libraryPath.Enabled = false; port.Enabled = false;
             foreach (var button in folderButtons) button.Enabled = false;
-            stop.Enabled = true; status.Text = "Running locally. Your library stays on this PC.";
+            stop.Enabled = true; status.Text = "This PC · library stored locally";
+            SetConnectionOptionsVisible(false);
             SavePreferences();
         }
         finally { busy = false; if (!closing) start.Enabled = backend is null || backend.HasExited; }
@@ -235,9 +314,9 @@ public sealed class MainWindow : Form
     {
             if (browser.CoreWebView2 is not null && browserData != selectedBrowserData)
             {
-                Controls.Remove(browser); browser.Dispose();
+                browserHost.Controls.Remove(browser); browser.Dispose();
                 browser = new WebView2 { Dock = DockStyle.Fill };
-                Controls.Add(browser); browser.SendToBack();
+                browserHost.Controls.Add(browser);
             }
             if (browser.CoreWebView2 is null)
             {
@@ -290,8 +369,8 @@ public sealed class MainWindow : Form
             || (current.Scheme != Uri.UriSchemeHttp && current.Scheme != Uri.UriSchemeHttps)) return;
         var authority = current.GetLeftPart(UriPartial.Authority);
         status.Text = authority.Equals(origin, StringComparison.OrdinalIgnoreCase)
-            ? "Connected view: " + authority + ". Files stay on the server."
-            : "Sign-in page: " + authority + ". Selected server: " + origin;
+            ? current.Authority + " · Connected"
+            : current.Authority + " · Sign in to your server";
     }
 
     /// <summary>Keeps explicitly approved HTTPS SSO redirects inside the selected remote profile.</summary>
@@ -441,6 +520,7 @@ public sealed class MainWindow : Form
             remoteConnected = true; preferredMode = "remote";
             stop.Text = "Disconnect"; stop.Enabled = true;
             UpdateRemoteStatus();
+            SetConnectionOptionsVisible(false);
             SavePreferences();
         }
         catch (Exception ex)
@@ -457,7 +537,8 @@ public sealed class MainWindow : Form
         remoteConnected = false; origin = "";
         browser.CoreWebView2?.Navigate("about:blank");
         stop.Text = "Stop"; stop.Enabled = false;
-        status.Text = "Disconnected. Your server is still running.";
+        status.Text = "Disconnected · your server is still running";
+        SetConnectionOptionsVisible(true);
     }
 
     void WriteLog(string? line)
@@ -545,8 +626,14 @@ public sealed class MainWindow : Form
     }
 
     /// <summary>Compares numeric package identities, treating an omitted revision as zero.</summary>
-    static bool SameVersionIdentity(string? backendVersion, Version? nativeVersion)
+    static bool SameVersionIdentity(string? backendVersion, Version? nativeVersion, string? nativeRelease = null)
     {
+        if (backendVersion?.Contains('-') == true)
+        {
+            if (!Regex.IsMatch(backendVersion, @"^\d+\.\d+\.\d+-(alpha|beta|rc)\.\d+$")
+                || nativeRelease?.Split('+')[0] != backendVersion) return false;
+            backendVersion = backendVersion.Split('-')[0];
+        }
         if (!Version.TryParse(backendVersion, out var backendVersionNumber) || nativeVersion is null
             || backendVersionNumber.Build < 0 || nativeVersion.Build < 0) return false;
         return backendVersionNumber.Major == nativeVersion.Major
@@ -608,13 +695,15 @@ public sealed class MainWindow : Form
                 await Task.Delay(250);
             }
             if (!guideReady) throw new Exception("The embedded setup guide did not render.");
+            await ProveShellLayout();
             using (var screenshot = File.Create(Path.Combine(smokeRoot!, "smoke-ui.png")))
                 await browser.CoreWebView2.CapturePreviewAsync(CoreWebView2CapturePreviewImageFormat.Png, screenshot);
             var anon = await http.GetAsync(origin + "/api/v1/config");
             if (anon.StatusCode != HttpStatusCode.Unauthorized) throw new Exception("Private API was not protected.");
             http.DefaultRequestHeaders.Add("X-Api-Key", key);
             var versionInfo = await http.GetFromJsonAsync<JsonElement>(origin + "/api/v1/stats");
-            if (!SameVersionIdentity(versionInfo.GetProperty("version").GetString(), typeof(MainWindow).Assembly.GetName().Version))
+            if (!SameVersionIdentity(versionInfo.GetProperty("version").GetString(), typeof(MainWindow).Assembly.GetName().Version,
+                typeof(MainWindow).Assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion))
                 throw new Exception("The packaged backend version does not match the native application.");
             var hub = await http.GetFromJsonAsync<JsonElement>(origin + "/api/v1/hub/catalogue");
             if (hub.GetProperty("items").GetArrayLength() == 0) throw new Exception("Bundled ROM Hub catalogue is unavailable.");
@@ -641,13 +730,43 @@ public sealed class MainWindow : Form
             if (config.GetProperty("preferred_regions")[0].GetString() != "EUR") throw new Exception("Settings did not survive restart.");
             await ProveRemoteView();
             File.WriteAllText(Path.Combine(smokeRoot!, "smoke-proof.json"), JsonSerializer.Serialize(new {
-                nativeWindow = true, embeddedInterface = true, bundledPython = true, bundledHub = true, pluginInstall = true,
+                nativeWindow = true, shellLayout = true, embeddedInterface = true, bundledPython = true, bundledHub = true, pluginInstall = true,
                 authentication = true, persistence = true, setupGuide = true, versionIdentity = true, remoteView = true, remoteDisconnectKeepsServer = true, remoteSignInPolicy = true, port = port.Value
             }, new JsonSerializerOptions { WriteIndented = true }));
             Environment.ExitCode = 0;
         }
         catch (Exception ex) { File.WriteAllText(Path.Combine(smokeRoot!, "smoke-error.txt"), ex.ToString()); Environment.ExitCode = 1; }
         finally { Close(); }
+    }
+
+    /// <summary>Checks the real browser never sits underneath the native toolbar or settings.</summary>
+    async Task ProveShellLayout()
+    {
+        if (!SameVersionIdentity("1.11.0-beta.2", new Version(1,11,0,0), "1.11.0-beta.2+fixture")
+            || SameVersionIdentity("1.11.0-beta.2", new Version(1,11,0,0), "1.11.0-beta.3"))
+            throw new Exception("Preview package release identity did not match its backend.");
+        var original = ClientSize;
+        try
+        {
+            foreach (var size in new[] { new Size(640, 480), new Size(850, 600), new Size(1280, 800) })
+            foreach (var expanded in new[] { false, true })
+            {
+                ClientSize = size;
+                connectionOptions.MaximumSize = new Size(ClientSize.Width, ClientSize.Height / 2);
+                SetConnectionOptionsVisible(expanded);
+                PerformLayout(); shell.PerformLayout(); browserHost.PerformLayout();
+                await Task.Delay(100);
+                var header = shell.GetControlFromPosition(0, 0)!;
+                var lowerEdge = expanded ? connectionOptions.Bottom : header.Bottom;
+                if (browserHost.Top < lowerEdge || browserHost.Bottom > shell.ClientSize.Height + 1
+                    || browserHost.Height < 80 || browser.Bounds != browserHost.ClientRectangle)
+                    throw new Exception("Native controls overlap or clip the embedded server view.");
+                var dimensions = JsonSerializer.Deserialize<JsonElement>(await browser.ExecuteScriptAsync("({height:innerHeight,dpr:devicePixelRatio})"));
+                if (Math.Abs(dimensions.GetProperty("height").GetDouble() * dimensions.GetProperty("dpr").GetDouble() - browser.ClientSize.Height) > 3)
+                    throw new Exception("Web content viewport does not match the visible browser area.");
+            }
+        }
+        finally { ClientSize = original; SetConnectionOptionsVisible(false); }
     }
 
     static int FreePort() { var listener = new TcpListener(IPAddress.Loopback, 0); listener.Start(); var n = ((IPEndPoint)listener.LocalEndpoint).Port; listener.Stop(); return n; }
