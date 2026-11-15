@@ -841,7 +841,15 @@ def _theme_control_html() -> str:
         '<label class="sw pick" title="Any colour you like">'
         f'<input type="color" id="accent-pick" value="{ACCENTS[0][0]}" '
         'aria-label="Custom accent colour"></label>'
-        '</div></div></details></div>'
+        '</div></div></details>'
+        '<a id="android-beta-link" href="https://play.google.com/apps/internaltest/4700888732790045566" '
+        'target="_blank" rel="noopener noreferrer" class="nav" '
+        'style="margin:8px 10px 4px;padding:7px 10px;font-size:12px;font-weight:600;'
+        'color:var(--accent-text,#3ea6ff);background:var(--accent-soft,rgba(62,166,255,0.1));'
+        'border:1px solid var(--border,#333);border-radius:6px;display:flex;align-items:center;gap:7px;">'
+        '<span aria-hidden="true">📲</span><span>Android Beta</span>'
+        '<span style="margin-left:auto;font-size:10px;opacity:.7">Play ↗</span></a>'
+        '</div>'
     )
 
 # The nav, in *arr order. `count` names a stat the badge reads.
@@ -5711,6 +5719,8 @@ RENDER.setup=async()=>{
         :'<p><a class="btn" href="#search">Preview a game search</a></p><p class="help">Interactive Search shows the available releases before you choose one. Follow its progress in <a href="#queue">Queue</a>. If you prefer to start with files you already have, use <a href="#manualimport">Manual Import</a>.</p>')
       +'<h4 style="margin-top:22px">Want a dedicated player?</h4><p class="help">Cartridge is an optional companion for a RomM library. Choose the version for your device; ROMarr works without it.</p>'
       +'<div class="row" style="flex-wrap:wrap"><a class="btn ghost" href="https://github.com/BlizzHacker/romarr/releases/download/v1.8.0/Cartridge-Windows-Portable-0.2.0-x64.exe" target="_blank" rel="noopener">Cartridge for Windows</a><a class="btn ghost" href="https://apps.microsoft.com/detail/9MXC51W17LH4" target="_blank" rel="noopener">Cartridge for Xbox</a></div>'
+      +'<h4 style="margin-top:22px">Mobile App Beta</h4><p class="help">We are looking for 12 testers for the official ROMarr Android release on Google Play.</p>'
+      +'<div class="row" style="flex-wrap:wrap"><a class="btn ghost" href="https://play.google.com/apps/internaltest/4700888732790045566" target="_blank" rel="noopener">📲 Join Android Beta on Google Play</a></div>'
       +'<p class="help">Stuck? You do not need to know the technical terms. Tell us the last step you reached. <a href="https://github.com/BlizzHacker/romarr/issues" target="_blank" rel="noopener">Open a GitHub issue</a> with your ROMarr version, what you expected, and the relevant error. Remove passwords and API keys from logs.</p>';
   }
   $('#page').innerHTML='<div class="card" style="max-width:900px"><div class="row" style="justify-content:space-between"><span class="help">Setup Guide</span><button class="btn ghost" id="setup-dismiss">Set up later</button></div>'

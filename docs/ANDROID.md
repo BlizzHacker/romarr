@@ -10,6 +10,14 @@ Minimum Android version: Android 7.0 (API 24). Target/compile API: 36.
 Packaged architectures: ARM64 and x86_64. This is an installable Android application,
 including on compatible Android desktop environments; it is not a Linux desktop binary.
 
+## Google Play Beta / Internal Test Track
+
+We need 12 testers to test and verify ROMarr on real Android hardware:
+
+👉 **[Join the Android Beta on Google Play](https://play.google.com/apps/internaltest/4700888732790045566)**
+
+Once opted in through the link above, you can install and update ROMarr directly from Google Play on your Android devices.
+
 ## Use
 
 The dark native toolbar keeps the active device or server visible above the app.

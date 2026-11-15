@@ -30,3 +30,4 @@ scripts/launchbox_proof/obj/
 
 # Native desktop build intermediates
 desktop/windows/obj/
+romarr-browser-extension/
