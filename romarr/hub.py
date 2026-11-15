@@ -1033,44 +1033,22 @@ def build_fleet_sync_plan(spec: dict | None = None) -> dict:
     }
 
 
-def mcp_manifest(base_url: str = "http://localhost:6868") -> dict:
-    """Expose ROMarr's capabilities and Open-Eyes desktop pairing metadata for MCP hosts."""
-    return {
-        "name": "romarr-mcp",
-        "version": "1.0.0",
-        "open_eyes_repo": "https://github.com/BlizzHacker/open-eyes",
-        "base_url": base_url,
-        "tools": [
-            {"name": "romarr_library_status", "method": "GET", "path": "/api/v1/library",
-             "description": "List connected library servers (RomM, Retrom, Gaseous, Gameyfin) and their health."},
-            {"name": "romarr_igir_1g1r", "method": "POST", "path": "/api/v1/hub/igir",
-             "description": "Preview or run Igir v5.8.0 1G1R verification and {romm} sorting."},
-            {"name": "romarr_exo2romm_repackage", "method": "POST", "path": "/api/v1/hub/exo2romm",
-             "description": "Preview or repackage eXoDOS game zips for standalone RomM playback (crediting derkommutator/eXo2romm)."},
-            {"name": "romarr_fleet_sync_plan", "method": "POST", "path": "/api/v1/hub/fleet",
-             "description": "Build a 1G1R + gamelist.xml sync plan for ES-DE, RetroPie/ArcadePunks, Batocera, Argosy, Grout, or Steam Deck."},
-            {"name": "romarr_search_releases", "method": "GET", "path": "/api/v1/release",
-             "description": "Interactive search across Prowlarr indexers and sandboxed ROM Hub plugins."},
-            {"name": "romarr_trigger_command", "method": "POST", "path": "/api/v1/command",
-             "description": "Run a ROMarr background command (refresh, search, import)."},
-        ],
-        "mcp_client_config": {
-            "mcpServers": {
-                "open-eyes": {
-                    "command": "npx",
-                    "args": ["-y", "github:BlizzHacker/open-eyes"]
-                },
-                "romarr": {
-                    "command": "npx",
-                    "args": ["-y", "mcp-remote", f"{base_url}/api/v1/mcp"],
-                    "env": {
-                        "ROMARR_URL": base_url,
-                        "ROMARR_API_KEY": "<YOUR_ROMARR_API_KEY>"
-                    }
-                }
-            }
-        }
-    }
+def mcp_manifest(base_url: str = "<YOUR_ROMARR_URL>") -> dict:
+    """Describe the real MCP endpoint with placeholder-only owner connection examples."""
+    from . import mcp
+    endpoint = base_url.rstrip("/") + mcp.PATH
+    return {"name": "romarr-mcp", "version": "1.0.0", "base_url": base_url,
+            "endpoint": endpoint, "transport": "streamable-http", "stateless": True,
+            "protocol_versions": list(mcp.VERSIONS), "tools": mcp.tools(),
+            "writes": "Disabled unless ROMARR_MCP_WRITE=1; never enabled on Android",
+            "mcp_client_config": {"mcpServers": {"romarr": {
+                "type": "http", "url": endpoint,
+                "headers": {"X-Api-Key": "<YOUR_ROMARR_API_KEY>"}}}},
+            "stdio_config": {"mcpServers": {"romarr": {
+                "command": "python", "args": ["-m", "romarr.mcp"],
+                "env": {"ROMARR_URL": base_url, "ROMARR_API_KEY": "<YOUR_ROMARR_API_KEY>"}}}},
+            "optional_desktop_control": {"name": "Open-Eyes", "required": False,
+                "repository": "https://github.com/BlizzHacker/open-eyes"}}
 
 
 # ---------------------------------------------- eXo2romm (eXoDOS -> RomM) --

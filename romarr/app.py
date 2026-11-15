@@ -8132,6 +8132,10 @@ def make_handler(service: ROMarr):
             return self._gate(self._get)
 
         def do_POST(self):
+            if urlparse(self.path).path == "/api/v1/mcp":
+                from . import mcp
+                # MCP always checks an explicit API header, even with REST auth disabled.
+                return self._guard(lambda: mcp.http(self, service))
             return self._gate(self._post)
 
         def do_PUT(self):
@@ -8778,6 +8782,9 @@ def make_handler(service: ROMarr):
             if route.path == "/api/v1/hub/fleet":
                 return self._json(200, hub.fleet_profiles())
             if route.path == "/api/v1/mcp":
+                from . import mcp
+                if "text/event-stream" in self.headers.get("Accept", ""):
+                    return mcp.http(self, service)
                 return self._json(200, hub.mcp_manifest())
             if route.path == "/api/v1/moonlight":
                 return self._json(200, service.moonlight_status())

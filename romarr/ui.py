@@ -2990,7 +2990,7 @@ RENDER.portal=async()=>{
     const tabBar=`<div class="cat-bar" style="margin-bottom:14px">
       <span class="chip${tab==='shell'?' on':''}" data-ptab="shell">Supportive Library Shell (RomM / Retrom / Gaseous)</span>
       <span class="chip${tab==='fleet'?' on':''}" data-ptab="fleet">Device & Network Fleet (ES-DE / RetroPie / ArcadePunks / Argosy / Grout)</span>
-      <span class="chip${tab==='mcp'?' on':''}" data-ptab="mcp">Open-Eyes & MCP Desktop Bridge</span>
+      <span class="chip${tab==='mcp'?' on':''}" data-ptab="mcp">AI agents (MCP)</span>
     </div>`;
 
     if(tab==='shell'){
@@ -3126,30 +3126,32 @@ RENDER.portal=async()=>{
         </div>`;
       };
     } else if(tab==='mcp'){
-      const cfgJson=JSON.stringify(mcp.mcp_client_config||{}, null, 2);
-      const tools=(mcp.tools||[]).map(t=>`<div class="pcard">
-        <h4><code>${esc(t.name)}</code></h4>
-        <div class="meta"><span class="pill">${esc(t.method)}</span> <code>${esc(t.path)}</code></div>
-        <div class="desc">${esc(t.description)}</div>
-      </div>`).join('');
-      $('#page').innerHTML=`<div class="card">
-        <h3>Open-Eyes Desktop Control & ROMarr MCP Bridge</h3>
-        <p class="help">Connect <a href="https://github.com/BlizzHacker/open-eyes" target="_blank" rel="noopener">BlizzHacker/open-eyes</a> (desktop vision & input control) alongside ROMarr's MCP tool surface in your local MCP host (Claude Desktop, Cursor, Windsurf, Cline, or Gemini CLI).</p>
-        ${tabBar}
-        <div class="panel-note" style="margin-bottom:12px">
-          <b>Why local MCP host config is needed:</b> Browser chat tabs run in an isolated cloud container and cannot attach directly to local <code>stdio</code> processes on your PC. Adding the JSON below to your local MCP client config gives your local AI agent full desktop control via <b>open-eyes</b> plus direct API control over <b>ROMarr</b>.
-        </div>
-        <pre style="background:var(--bg);padding:12px;border-radius:var(--r-sm);border:1px solid var(--line);overflow-x:auto;font-size:12px">${esc(cfgJson)}</pre>
-        <div class="row" style="margin-top:10px">
-          <button class="btn" id="mcp-copy">Copy mcpServers Config JSON</button>
-          <a class="btn ghost" href="https://github.com/BlizzHacker/open-eyes" target="_blank" rel="noopener">Open-Eyes Repository</a>
-        </div>
-      </div>
-      <div class="card"><h3>Exposed ROMarr MCP Endpoints (<code>/api/v1/mcp</code>)</h3><div class="pgrid">${tools}</div></div>`;
-      $('#mcp-copy').onclick=async()=>{
-        try{ await navigator.clipboard.writeText(cfgJson); toast('Copied Open-Eyes + ROMarr MCP config!'); }
-        catch{ toast('Copy failed'); }
+      const endpoint=location.origin+'/api/v1/mcp';
+      const configs={
+        claude:JSON.stringify({mcpServers:{romarr:{type:'http',url:endpoint,headers:{'X-Api-Key':'<YOUR_ROMARR_API_KEY>'}}}},null,2),
+        codex:'[mcp_servers.romarr]\nurl = '+JSON.stringify(endpoint)+'\nbearer_token_env_var = "ROMARR_API_KEY"\n',
+        hermes:'mcp_servers:\n  romarr:\n    url: '+JSON.stringify(endpoint)+'\n    headers:\n      X-Api-Key: "<YOUR_ROMARR_API_KEY>"\n',
+        antigravity:JSON.stringify({mcpServers:{romarr:{serverUrl:endpoint,headers:{'X-Api-Key':'<YOUR_ROMARR_API_KEY>'}}}},null,2),
+        stdio:JSON.stringify({mcpServers:{romarr:{command:'<PYTHON_WITH_ROMARR>',args:['<ABSOLUTE_PATH_TO_ROMARR_MCP_PY>'],env:{ROMARR_URL:location.origin,ROMARR_API_KEY:'<YOUR_ROMARR_API_KEY>'}}}},null,2)
       };
+      const toolCards=(mcp.tools||[]).map(t=>`<div class="pcard"><h4><code>${esc(t.name)}</code></h4><div class="desc">${esc(t.description)}</div></div>`).join('');
+      $('#page').innerHTML=`<div class="card"><h3>Connect an AI agent to your ROMarr</h3>
+        <p class="help">Use your own server address and API key with Claude, Codex, Hermes, Antigravity, or another MCP client. Read-only tools show cached library, activity, history, platforms and counts.</p>
+        ${tabBar}
+        <p><b>Your MCP endpoint:</b> <code>${esc(endpoint)}</code></p>
+        <p class="help">Replace the key placeholder in your client settings. Your key is never included in this example. Use HTTPS for connections outside this device, or an SSH tunnel.</p>
+        <label>Client <select id="mcp-client"><option value="claude">Claude Code</option><option value="codex">Codex</option><option value="hermes">Hermes</option><option value="antigravity">Antigravity</option><option value="stdio">Other clients using stdio</option></select></label>
+        <pre id="mcp-config" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>
+        <button class="btn" id="mcp-copy">Copy connection example</button>
+        <p class="help">Codex reads ROMARR_API_KEY from its environment. Stdio needs Python with ROMarr's requests dependency and a local ROMarr checkout, or the standalone bridge file. See the <a href="https://github.com/BlizzHacker/romarr/blob/main/docs/MCP.md" target="_blank" rel="noopener">connection guide</a> for setup and supported transports.</p>
+        <p class="help">Writes are disabled by default. A server owner may explicitly allow adding Wanted entries and requesting a background library refresh. This connector does not run shell commands, browse files, control your desktop, or forward arbitrary API calls.</p>
+      </div><div class="card"><h3>Available read tools</h3><div class="pgrid">${toolCards}</div></div>
+      <div class="card"><h3>Optional desktop control</h3><p class="help"><a href="https://github.com/BlizzHacker/open-eyes" target="_blank" rel="noopener">Open-Eyes</a> is a separate desktop-control integration. It is optional and is not needed to connect to ROMarr.</p></div>`;
+      const config=()=>configs[$('#mcp-client').value];
+      $('#mcp-client').onchange=()=>{$('#mcp-config').textContent=config();};
+      $('#mcp-client').onchange();
+      $('#mcp-copy').onclick=async()=>{try{await navigator.clipboard.writeText(config());toast('Copied connection example');}catch{toast('Copy failed');}};
+
     }
 
     document.querySelectorAll('[data-ptab]').forEach(c=>c.onclick=()=>{

@@ -173,7 +173,7 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "/api/v1/hub/igir": ("GET", "Igir v5.8.0 1G1R front-end status, default profile, and CLI execution (POST runs or previews an Igir 1G1R job with {romm} output tokens)."),
     "/api/v1/hub/exo2romm": ("GET", "eXo2romm eXoDOS-to-RomM ZIP repackager status, attribution to derkommutator, and defaults (POST previews or repackages eXoDOS game zips)."),
     "/api/v1/hub/fleet": ("GET", "Multi-device and network library sync profiles for ES-DE, RetroPie/ArcadePunks, Batocera, Argosy, Grout, Steam Deck, and RetroArch WebDAV (POST builds a 1G1R + gamelist.xml sync plan)."),
-    "/api/v1/mcp": ("GET", "Model Context Protocol (MCP) tool manifest and Open-Eyes desktop bridge configuration for ROMarr."),
+    "/api/v1/mcp": ("GET", "MCP connection manifest (GET), or authenticated stateless JSON-RPC MCP transport (POST). GET text/event-stream returns 405; no standalone SSE stream is offered."),
     "/api/v1/hub/archive-org/auth": ("POST", "Save or clear host-managed Archive.org credentials; returns status without credentials."),
     "/api/v1/hub/plugin": ("POST", "Install, enable, disable or uninstall a plugin."),
     "/api/v1/hub/source/check": ("POST", "Whether a repository URL may be "
@@ -487,6 +487,10 @@ def spec(version: str = "0.0.0", *, base_url: str = "") -> dict:
     for path in sorted(DESCRIPTIONS):
         method, summary = DESCRIPTIONS[path]
         paths[path] = _operation(path, method, summary)
+    paths["/api/v1/mcp"].update(_operation(
+        "/api/v1/mcp", "POST", "Stateless MCP JSON-RPC initialize, ping, tools/list and tools/call. Requires an explicit API-key header even when REST auth is disabled."))
+    paths["/api/v1/mcp"]["post"]["requestBody"] = {
+        "required": True, "content": {"application/json": {"schema": {"type": "object"}}}}
     paths["/api/v1/queue/import-plan"].update(_operation(
         "/api/v1/queue/import-plan", "GET", "Read-only payload preview for a completed queue item; returns grouped companions, excluded extras, sizes and an approval token."))
     paths["/api/v1/queue/import-plan"]["get"]["parameters"] = [
