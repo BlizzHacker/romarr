@@ -92,9 +92,9 @@ def audit_zip(path: Path, platform, dats):
                               _cue_and_gdi_names if suffix in (".cue", ".gdi") else None)
                     if parser:
                         referenced = _names_in_sheet(sheet, read_sheet, parser)
-                        parent = PurePosixPath(sheet).parent
+                        parent = PurePosixPath(sheet.replace(chr(92), "/")).parent
                         selected = {n.replace(chr(92), "/").casefold() for n in rom_set.members}
-                        def exact_reference(name):
+                        def exact_reference(name, parent=parent):
                             """Keep sheet-relative directories instead of matching just basenames."""
                             name = name.replace(chr(92), "/")
                             if name.startswith("/"):

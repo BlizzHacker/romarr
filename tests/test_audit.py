@@ -401,10 +401,13 @@ def test_zip_directory_budget_checked_before_member_index(tmp_path, monkeypatch)
     from romarr import audit_archive
     path = tmp_path / "huge.zip"
     path.write_bytes(struct.pack("<4s4H2LH", b"PK\x05\x06", 0, 0, 10001, 10001, 0, 0, 0))
+    calls = []
     def forbidden(*args):
+        calls.append(args)
         raise AssertionError("ZipFile constructed before metadata budget check")
     monkeypatch.setattr(audit_archive.zipfile, "ZipFile", forbidden)
     assert audit_archive.audit_zip(path, None, None).status == "unknown"
+    assert calls == []
 
 
 def test_zip_repeated_name_cannot_hide_unverified_member(tmp_path):
@@ -426,3 +429,10 @@ def test_zip_sheet_reference_requires_exact_relative_member(tmp_path):
     cue = b'FILE "missing/track.bin" BINARY\nTRACK 01 MODE2/2352\nINDEX 01 00:00:00\n'
     state = _run_zip_audit(tmp_path, [("Game.cue", cue), ("track.bin", b"track")], [("Game.cue", cue), ("track.bin", b"track")], platform_slug="psx")
     assert state["unknown"] == 1 and state["verified"] == 0
+
+
+def test_complete_disc_set_accepts_both_archive_separator_styles(tmp_path):
+    for index, prefix in enumerate(("disc/", "disc" + chr(92))):
+        cue = b'FILE "track.bin" BINARY\nTRACK 01 MODE2/2352\nINDEX 01 00:00:00\n'
+        state = _run_zip_audit(tmp_path / str(index), [(prefix+"Game.cue", cue), (prefix+"track.bin", b"track")], [("Game.cue", cue), ("track.bin", b"track")], platform_slug="psx")
+        assert state["verified"] == 1 and state["unknown"] == 0
