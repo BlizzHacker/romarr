@@ -324,6 +324,8 @@ ZIP handling is built in. Install `bsdtar` for supported `.7z` and `.rar` archiv
 
 ## Windows app
 
+![ROMarr Windows Desktop App showing Cartridge menu and Emulator Hub](img/editions/romarr-windows-edition.png)
+
 Download the portable **Windows 10/11 x64** app. The package contains the native Windows window, embedded WebView2 interface, Python backend, ROM Hub and Git. No Python, PowerShell, Docker, .NET or separate browser installation is required to use it.
 
 1. Open [ROMarr releases](https://github.com/BlizzHacker/romarr/releases/latest) and download **`ROMarr-1.8.0-win-x64.zip`** (choose the matching version on later releases).
@@ -380,6 +382,10 @@ ROMarr connects directly to dedicated living room cabinets, Raspberry Pi micro-c
 | **Cross-Platform Handhelds** | Cloud / WebDAV | RetroArch WebDAV cloud saves & states |
 
 In ROMarr, navigate to **Library Shell & Device Fleet** -> **Device Fleet** to audit existing scraped images, run Igir 1G1R deduplication against verified No-Intro/Redump DATs, and push updated `gamelist.xml` files.
+
+| Device Fleet Sync Planner | Handheld & Console Profiles |
+|---|---|
+| ![Device Fleet non-destructive 1G1R sync planner](img/device-fleet.png) | ![Device Fleet cards for ES-DE, RetroPie, Batocera, Steam Deck, and Android handhelds](img/portal-fleet.png) |
 
 ---
 

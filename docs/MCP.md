@@ -1,5 +1,7 @@
 # Connect an AI agent to your ROMarr
 
+![AI Agents MCP Connector view in ROMarr](img/ai-agents-mcp.png)
+
 ROMarr provides a real authenticated MCP endpoint at:
 
 ```text
