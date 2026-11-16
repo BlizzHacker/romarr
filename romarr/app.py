@@ -996,6 +996,7 @@ class ROMarr:
                         if callable(close):
                             close()
                     continue
+                count_failed = False
                 try:
                     split = library_counts(backend)
                     total += int(split.get("total") or 0)
@@ -1016,11 +1017,18 @@ class ROMarr:
                     self._count_split = {"total": total, "on_disk": on_disk,
                                          "catalogued": catalogued}
                 except Exception as err:
-                    ok = False
-                    failures.append(f"{label}: {err.__class__.__name__}")
-                    reasons[label] = _read_failure(err)
-                    log.warning("library count refresh failed for %s: %s",
+                    # The count is a summary, not the read. A slow server-side
+                    # count (issue #216: RomM's filtered total took 6-10 s on
+                    # a 28k library) used to flag a read that went on to fetch
+                    # every game as incomplete. Carry on with the paged read;
+                    # if it finishes, its length is the total and the split
+                    # is reported as unknown rather than guessed.
+                    count_failed = True
+                    on_disk = catalogued = None
+                    log.warning("library count refresh failed for %s: %s; "
+                                "using the games read as the total",
                                 label, err.__class__.__name__)
+                read_before = len(shelf)
                 try:
                     # The WHOLE library, in pages, published progressively.
                     # This used to stop at one 200-row page, which made a
@@ -1047,6 +1055,8 @@ class ROMarr:
                             break
                     if offset >= self.LIBRARY_MAX:
                         self._library_scan["limit_reached"] = True
+                    if count_failed:
+                        total += len(shelf) - read_before
                 except Exception as err:
                     ok = False
                     failures.append(f"{label}: {err.__class__.__name__}")
