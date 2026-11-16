@@ -152,7 +152,8 @@ def test_kirby_hub_export_and_claims(tmp_path):
     # Initial status
     status = hub.status()
     assert status["ok"] is True
-    assert status["absorption"] == "Kirby-Style Complete"
+    assert "Kirby-Style Complete" in status["absorption"]
+    assert status["gaming_standard"] == "games.gamesgamesgamesgames.*"
     assert "games.gamesgamesgamesgames.game" in status["lexicons_loaded"]
 
     # Export a single game
@@ -216,7 +217,8 @@ def test_atproto_http_endpoints(tmp_path):
         # 1. Status
         status = req("/api/v1/atproto/status")
         assert status["ok"] is True
-        assert status["absorption"] == "Kirby-Style Complete"
+        assert "Kirby-Style Complete" in status["absorption"]
+        assert status["gaming_standard"] == "games.gamesgamesgamesgames.*"
 
         # 2. Lexicons
         lexicons = req("/api/v1/atproto/lexicons")

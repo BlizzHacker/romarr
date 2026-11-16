@@ -5154,15 +5154,16 @@ RENDER.emulators=async()=>{
       <a class="btn ghost" href="https://apps.microsoft.com/detail/9MXC51W17LH4" target="_blank" rel="noopener">Cartridge for Xbox</a>
     </div>
     <pre id="cartridge-status-result" role="status" style="margin-top:8px;"></pre></div>
-    <div class="card" style="border:1px solid #ec4899;"><h3>ATProto &amp; Games Federation (Kirby Absorbed)</h3>
-      <p>Absorbed from <b>AT Protocol</b>, <b>HappyView</b>, and <b>Cartridge Studio</b>: self-sovereign game records, schema-driven XRPC AppView queries, and decentralized playState sync.</p>
+    <div class="card" style="border:1px solid #ec4899;"><h3>gamesgamesgamesgamesgames Video Game Standard (Kirby Absorbed)</h3>
+      <p>Absorbed from <b>gamesgamesgamesgamesgames</b>' use of ATProto: video game lexicons (<code>games.gamesgamesgamesgames.*</code>), HappyView game AppView queries, and Cartridge sovereign gaming library sync.</p>
       <div class="row">
-        <button class="btn" id="atproto-status-btn">ATProto Status</button>
-        <button class="btn ghost" id="atproto-lexicons-btn">Absorbed Lexicons</button>
-        <button class="btn ghost" id="atproto-export-btn">Export Library to ATProto</button>
-        <button class="btn ghost" id="atproto-xrpc-btn">Query Local AppView (XRPC)</button>
-        <a class="btn ghost" href="https://atproto.com" target="_blank" rel="noopener">AT Protocol</a>
-        <a class="btn ghost" href="https://github.com/gamesgamesgamesgamesgames/lexicon" target="_blank" rel="noopener">Games Lexicon</a>
+        <button class="btn" id="atproto-status-btn">Gaming Stack Status</button>
+        <button class="btn ghost" id="atproto-lexicons-btn">Video Game Lexicons</button>
+        <button class="btn ghost" id="atproto-export-btn">Export Games to Shelf</button>
+        <button class="btn ghost" id="atproto-xrpc-btn">Query HappyView AppView (XRPC)</button>
+        <a class="btn ghost" href="https://github.com/gamesgamesgamesgamesgames/lexicon" target="_blank" rel="noopener">games.gamesgamesgamesgames.*</a>
+        <a class="btn ghost" href="https://github.com/gamesgamesgamesgamesgames/happyview" target="_blank" rel="noopener">HappyView AppView</a>
+        <a class="btn ghost" href="https://github.com/gamesgamesgamesgamesgames/cartridge" target="_blank" rel="noopener">Cartridge Studio</a>
       </div>
       <pre id="atproto-status-result" role="status" style="margin-top:8px;"></pre>
     </div>

@@ -151,22 +151,22 @@ Source access, available files, credentials and platform support vary. Check the
 
 You can use Cartridge alongside your existing setup or keep using your favorite frontend (Playnite, LaunchBox, ES-DE, Pegasus). The Windows desktop app's **Cartridge** menu and the setup guides link to all three clients.
 
-## ATProto & Games Lexicon Federation (Kirby Absorbed)
+## gamesgamesgamesgamesgames Gaming Stack (Kirby Absorbed)
 
-ROMarr has absorbed the capabilities of the [AT Protocol](https://atproto.com) and the decentralized gaming stack ([gamesgamesgamesgamesgames/lexicon](https://github.com/gamesgamesgamesgamesgames/lexicon), [HappyView](https://github.com/gamesgamesgamesgamesgames/happyview), and [Cartridge Studio](https://github.com/gamesgamesgamesgamesgames/cartridge)) — Kirby-style complete absorption:
+ROMarr has absorbed **[gamesgamesgamesgamesgames](https://github.com/gamesgamesgamesgamesgames)' use of ATProto** — Kirby-style complete absorption. Rather than absorbing a generic social network, ROMarr gains their entire decentralized video game data architecture:
 
-- **Decentralized Game Lexicons (`games.gamesgamesgamesgames.*`)**:
-  - `games.gamesgamesgamesgames.game`: Self-sovereign video game records with IGDB, Wikidata, and ROMarr/RomM links.
+- **Video Game Lexicons ([gamesgamesgamesgamesgames/lexicon](https://github.com/gamesgamesgamesgamesgames/lexicon))**:
+  - `games.gamesgamesgamesgames.game`: Unified open standard for video games with IGDB, Wikidata, and ROMarr/RomM links.
   - `games.gamesgamesgamesgames.release`: Platform editions, dump formats, and cryptographic DAT verification checksums (SHA-256, CRC32, MD5).
-  - `games.gamesgamesgamesgames.playState`: Decentralized player progression (`playing`, `completed`, `backlog`, `dropped`, `wishlist`), play time, and ratings synced across your devices.
-  - `games.gamesgamesgamesgames.achievement`: Cross-game trophies and achievements recorded on your ATProto repository.
+  - `games.gamesgamesgamesgames.playState`: Decentralized player progression (`playing`, `completed`, `backlog`, `dropped`, `wishlist`), play time, and ratings synced across your screens.
+  - `games.gamesgamesgamesgames.achievement`: Cross-game trophies and achievements recorded on your personal game shelf.
   - `dev.cartridge.verificationRequest`: Verification assertions signing authentic No-Intro and Redump matches to your DID.
-- **Embedded HappyView AppView**:
-  - Schema-driven AppView XRPC queries served directly by ROMarr: `/xrpc/games.gamesgamesgamesgames.getGame`, `listGames`, and `getPlayState`.
-  - Real-time Jetstream event processing (`/api/v1/atproto/jetstream`) for live feed indexing and firehose replication.
-- **Cartridge ATProto Studio**:
-  - Export your entire local collection into decentralized ATProto records via `/api/v1/atproto/export`.
-  - Connect your Bluesky / ATProto PDS handle (`/api/v1/atproto/connect`) for portable, censorship-resistant game libraries.
+- **Embedded Gaming AppView ([gamesgamesgamesgamesgames/happyview](https://github.com/gamesgamesgamesgamesgames/happyview))**:
+  - Schema-driven gaming XRPC queries served directly by ROMarr: `/xrpc/games.gamesgamesgamesgames.getGame`, `listGames`, and `getPlayState`.
+  - Real-time Jetstream event processing (`/api/v1/atproto/jetstream`) streaming video game updates and community catalog changes.
+- **Sovereign Gaming Studio ([gamesgamesgamesgamesgames/cartridge](https://github.com/gamesgamesgamesgamesgames/cartridge))**:
+  - Export your entire verified ROMarr collection into sovereign video game records (`/api/v1/atproto/export`).
+  - Connect your gaming handle (`/api/v1/atproto/connect`) for portable, player-owned game libraries across any device.
 
 ## Help and documentation
 

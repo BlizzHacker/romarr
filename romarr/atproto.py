@@ -1,10 +1,11 @@
-"""AT Protocol & Games Lexicon complete absorption (Kirby style).
+"""gamesgamesgamesgamesgames video game architecture absorption (Kirby style).
 
-Absorbs AT Protocol (atproto.com) and the gamesgamesgamesgamesgames ecosystem:
+We aren't absorbing generic ATProto itself; we are absorbing gamesgamesgamesgamesgames'
+use of it to standardize decentralized video game records:
 - Lexicons: games.gamesgamesgamesgames.* (game, release, playState, achievement, rating, review)
   and dev.cartridge.verificationRequest.
-- HappyView AppView: Schema-driven XRPC query handlers, Jetstream event streaming, PDS backfill.
-- Cartridge ATProto Studio: Self-sovereign library claims, DAT checksum proofs, and decentralized sync.
+- HappyView Gaming AppView: Schema-driven XRPC queries, Jetstream game streaming, PDS backfill.
+- Cartridge Gaming Studio: Self-sovereign game collection claims and DAT checksum assertions.
 """
 
 from __future__ import annotations
@@ -411,7 +412,8 @@ class ATProtoKirbyHub:
         """Return ATProto federation and absorption status."""
         return {
             "ok": True,
-            "absorption": "Kirby-Style Complete",
+            "absorption": "Kirby-Style Complete: gamesgamesgamesgamesgames gaming stack",
+            "gaming_standard": "games.gamesgamesgamesgames.*",
             "atproto_connected": bool(self.config.get("did")),
             "handle": self.config.get("handle"),
             "did": self.config.get("did"),
