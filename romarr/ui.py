@@ -1802,8 +1802,9 @@ RENDER.library=async()=>{
           are loaded and browsable here${scanRunning?' — still reading':d.partial?' — scan incomplete':''}.</p>`:'')}
   </div>`;
   const filterCount=[LIB.genre,LIB.region,LIB.decade,LIB.origin,LIB.source,LIB.sort].filter(Boolean).length;
-  const filtersOpen=LIB.filtersOpen===null?(typeof matchMedia!=='function'||!matchMedia('(max-width:700px)').matches):LIB.filtersOpen;
-  const head=libraryScanHelp(d)+banner+`<div class="library-platform-choice">${sel('platform','All platforms',(d.platforms||[]).map(x=>({value:x.platform,count:x.count})))}</div>
+  const head=()=>{
+    const filtersOpen=LIB.filtersOpen===null?(typeof matchMedia!=='function'||!matchMedia('(max-width:700px)').matches):LIB.filtersOpen;
+    return libraryScanHelp(d)+banner+`<div class="library-platform-choice">${sel('platform','All platforms',(d.platforms||[]).map(x=>({value:x.platform,count:x.count})))}</div>
     <div class="row library-platforms" aria-label="Popular platforms" style="flex-wrap:wrap;gap:6px;margin-bottom:10px">
       <button class="btn ${LIB.platform?'ghost':''}" data-plat=""
         style="padding:4px 10px;font-size:12px">All
@@ -1835,15 +1836,17 @@ RENDER.library=async()=>{
       · ${d.grand_total} cached across ${(d.platforms||[]).length} platforms
       ${scanRunning?' · <b>still loading from the library server…</b>':d.partial?' · <b>scan incomplete — see the scan status above</b>':''}
       ${d.error?` · <span style="color:var(--warn)">last refresh: ${esc(d.error)}</span>`:''}</p>`;
+  };
 
   if(!items.length){
-    p.innerHTML=head+`<div class="empty">
+    p.innerHTML=head()+`<div class="empty">
       ${q||LIB.platform?'No game matches that.':'No games returned by the library.'}</div>`;
     bindLibraryChips(p); return;
   }
   // The shelf: status, rating and notes set by the operator, overlaid on the
   // grid. One fetch for the whole page -- the metadata is tiny.
   const meta=await j('/api/v1/game/meta').catch(()=>({items:[]}));
+  if(!current())return;
   const shelf={};
   (meta.items||[]).forEach(x=>{
     shelf[`${x.platform}/${(x.game||'').toLowerCase()}`]=x; });
@@ -1864,7 +1867,7 @@ RENDER.library=async()=>{
     ?`<div class="row" style="justify-content:center;margin:16px 0">
        <button class="btn" id="lib-more">Show more
          (${d.total-LIB.offset-items.length} left)</button></div>`:'';
-  p.innerHTML=head+grid+more;
+  p.innerHTML=head()+grid+more;
   bindLibraryChips(p);
   const moreBtn=p.querySelector('#lib-more');
   if(moreBtn) moreBtn.onclick=()=>{LIB.limit+=240;go('library');};
@@ -1878,7 +1881,13 @@ RENDER.library=async()=>{
 
 function bindLibraryChips(p){
   const filters=p.querySelector('.library-filters');
-  if(filters)filters.ontoggle=()=>{LIB.filtersOpen=filters.open;};
+  if(filters){
+    let previousOpen=filters.open;
+    filters.ontoggle=()=>{
+      if(filters.open===previousOpen)return;
+      previousOpen=filters.open;LIB.filtersOpen=previousOpen;
+    };
+  }
   p.querySelectorAll('[data-plat]').forEach(b=>b.onclick=()=>{
     LIB.platform=b.dataset.plat; LIB.offset=0; LIB.limit=120;
     go('library');
@@ -4860,7 +4869,7 @@ RENDER.status=async()=>{
       <div><b>${h.dat_games||0}</b><span>Known dumps</span></div>
       <div><b>${h.events}</b><span>History events</span></div>
       <div><b>${esc(h.uptime)}</b><span>Uptime</span></div>
-    </div>${buildIdentityLine(h.build)}</div>
+    </div>${buildIdentityLine(h.build)}<p class="help"><a href="https://romarr.app/privacy" target="_blank" rel="noopener noreferrer">Privacy policy</a> · <a href="mailto:me@romarr.app">Contact support</a></p></div>
 
     <div class="card"><h3>Backup and export</h3>
     <p class="help">A snapshot restores an install: settings, libraries,

@@ -156,6 +156,9 @@ jobs:
       - uses: actions/setup-dotnet@v5
         with:
           dotnet-version: '10.0.x'
+      - name: Check desktop version and release-tag validation
+        shell: pwsh
+        run: .\scripts\check-desktop-version.ps1
       - name: Check native server address validation
         shell: pwsh
         run: dotnet run --project desktop/tests/ServerAddressChecks/ServerAddressChecks.csproj
@@ -170,10 +173,9 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           [xml]$project = Get-Content -LiteralPath .\desktop\windows\ROMarr.Desktop.csproj
-          $version = [string]$project.Project.PropertyGroup.Version
-          if ($env:EVENT_NAME -eq 'release' -and $env:RELEASE_TAG -ne "v$version") {
-            throw 'Release tag and desktop project version must match before packages are published.'
-          }
+          . .\scripts\desktop-version.ps1
+          $projectVersion = [string]$project.Project.PropertyGroup.Version
+          $version = Resolve-ROMarrDesktopReleaseVersion -ProjectVersion $projectVersion -EventName $env:EVENT_NAME -ReleaseTag $env:RELEASE_TAG
           $output = Join-Path $env:RUNNER_TEMP 'romarr-desktop-package'
           $options = @{ OutputDirectory = $output; Version = $version; PythonPath = (Get-Command python).Source }
           if ($env:STORE_IDENTITY_NAME) { $options.StoreIdentityName = $env:STORE_IDENTITY_NAME }

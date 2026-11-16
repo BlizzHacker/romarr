@@ -68,10 +68,17 @@ Only a clean fast-forward descendant of the current checkout may be installed.
 The worker fetches the exact `refs/pull/N/head`, verifies its pinned SHA, checks
 that official `main` still matches the inspected base, and repeats local
 identity and cleanliness checks. It then uses a non-overwriting fast-forward,
-installs requirements in the checkout-local environment, restarts the verified
-service and requires two successful health probes. A diverged/non-fast-forward
+installs requirements in the checkout-local environment, records the verified
+code identity, restarts the verified service and requires two successful health probes. A diverged/non-fast-forward
 PR is refused; local commits and files are preserved. There is no force checkout
 or automatic branch replacement to make such a PR fit.
+
+After a source update, generated version and provenance files are replaced from
+its verified target. A release uses its exact tag and SHA. Nightly and PR code
+use development provenance and an unknown semantic version rather than retaining
+the old release number. Restoring a tagged commit restores that tag's identity;
+an untagged previous commit remains development code. Linked metadata paths
+block publication and retain the recovery claim.
 
 The worker's atomic claim also owns preview preparation. A busy or repeated
 request cannot overwrite an existing preview's marker, backup or rollback

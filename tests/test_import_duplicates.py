@@ -204,3 +204,125 @@ def test_scheduled_unknown_dump_enters_index_before_next_import(tmp_path):
     another = tmp_path / "second.gbc"
     another.write_bytes(PAYLOAD)
     assert not app.adopt(str(another), "gbc")["ok"]
+
+
+@pytest.mark.parametrize("compression", [zipfile.ZIP_DEFLATED, zipfile.ZIP_LZMA])
+def test_corrupt_retained_compressed_member_is_not_a_duplicate(tmp_path, compression):
+    """Actual decompressor failures in stale retained evidence must allow the new ROM."""
+    import lzma
+    import struct
+    import zlib
+    root, old, index = retained(tmp_path, archive=True)
+    with zipfile.ZipFile(old, "w", compression=compression) as archive:
+        archive.writestr("old-title.gbc", PAYLOAD)
+    data = bytearray(old.read_bytes())
+    name_size, extra_size = struct.unpack_from("<HH", data, 26)
+    start = 30 + name_size + extra_size
+    if compression == zipfile.ZIP_DEFLATED:
+        data[start] = 7  # A reserved DEFLATE block type.
+        error_type = zlib.error
+    else:
+        data[start + 4] = 255  # Invalid LZMA filter properties.
+        error_type = lzma.LZMAError
+    old.write_bytes(data)
+    with pytest.raises(error_type):
+        with zipfile.ZipFile(old) as archive:
+            archive.read("old-title.gbc")
+    incoming = tmp_path / "new.gb"
+    incoming.write_bytes(PAYLOAD)
+    assert import_rom(incoming, resolve("gb"), root, hash_index=index)[0].ok
+
+
+@pytest.mark.parametrize("comment_size", [0, 65535])
+def test_zip64_locator_is_refused_before_zipfile_construction(tmp_path, monkeypatch, comment_size):
+    """Small ordinary EOCD limits cannot authorize an overriding ZIP64 directory."""
+    import struct
+    from romarr import import_duplicates
+    root, old, index = retained(tmp_path, archive=True)
+    with zipfile.ZipFile(old, "a") as archive:
+        archive.comment = b"x" * comment_size
+    data = old.read_bytes()
+    at = data.rfind(b"PK\x05\x06")
+    locator = struct.pack("<4sLQL", b"PK\x06\x07", 0, 0, 1)
+    old.write_bytes(data[:at] + locator + data[at:])
+    def forbidden(*args, **kwargs):
+        """Any ZipFile allocation after this locator would violate the boundary."""
+        pytest.fail("ZIP64 evidence reached ZipFile construction")
+    monkeypatch.setattr(import_duplicates.zipfile, "ZipFile", forbidden)
+    incoming = tmp_path / "new.gb"
+    incoming.write_bytes(PAYLOAD)
+    assert import_rom(incoming, resolve("gb"), root, hash_index=index)[0].ok
+
+
+def test_relative_library_root_deduplicates_same_batch(tmp_path, monkeypatch):
+    """Batch records must not apply the relative library prefix a second time."""
+    from pathlib import Path
+    monkeypatch.chdir(tmp_path)
+    incoming = tmp_path / "bundle.zip"
+    with zipfile.ZipFile(incoming, "w") as archive:
+        archive.writestr("one.gb", PAYLOAD)
+        archive.writestr("two.gb", PAYLOAD)
+    result = import_rom(incoming, resolve("gb"), Path("library"),
+                        hash_index=HashIndex(tmp_path / "index.json"))
+    assert sum(item.ok for item in result) == 1
+    assert len(list((tmp_path / "library" / "gb").glob("*.gb"))) == 1
+
+
+def test_audit_keeps_physical_lookup_and_canonical_headered_identity(tmp_path):
+    """An actual audit must not make a renamed byte-identical NES import invisible."""
+    from romarr.dat import DatIndex
+    app, root = service(tmp_path)
+    data = b"NES\x1a" + b"\x00" * 12 + PAYLOAD
+    existing = root / "nes" / "audited.nes"
+    existing.parent.mkdir()
+    existing.write_bytes(data)
+    app.dats = DatIndex()
+    started = app.audit_library("nes")
+    assert "error" not in started
+    app._audit_thread.join(timeout=5)
+    assert not app._audit_thread.is_alive()
+    canonical, physical = digest(PAYLOAD), digest(data)
+    assert canonical != physical
+    assert app.hashes.by_sha1(canonical).sha1 == canonical
+    assert app.hashes.by_sha1(physical).sha1 == canonical
+    assert app.hashes.for_game("audited", "nes").sha1 == canonical
+    assert len(app.hashes) == 1
+    reloaded = HashIndex(app.hashes.path)
+    reloaded.load()
+    assert reloaded.by_sha1(physical).sha1 == canonical
+    class RefreshedLibrary:
+        """A metadata seed omits physical hashes just as real library APIs do."""
+        def hashes(self, limit=500, offset=0):
+            return ([{"sha1": canonical, "name": "audited", "platform": "nes",
+                      "verified": False, "path": "nes/audited.nes"}], 1) if not offset else ([], 0)
+    app.library_server = RefreshedLibrary()
+    assert app.index_hashes_from_library()["ok"]
+    assert app.hashes.by_sha1(physical).sha1 == canonical
+    assert app.hashes.for_game("audited", "nes").sha1 == canonical
+    assert len(app.hashes) == 1
+    after_seed = HashIndex(app.hashes.path)
+    after_seed.load()
+    assert after_seed.by_sha1(physical).sha1 == canonical
+    incoming = tmp_path / "renamed.nes"
+    incoming.write_bytes(data)
+    assert not app.adopt(str(incoming), "nes")["ok"]
+    assert not (root / "nes" / "renamed.nes").exists()
+    # Matching canonical bodies with different physical headers are not byte duplicates.
+    altered = tmp_path / "different-header.nes"
+    altered.write_bytes(b"NES\x1a" + b"\x01" + b"\x00" * 11 + PAYLOAD)
+    assert app.adopt(str(altered), "nes")["ok"]
+
+
+def test_verified_import_preserves_dat_identity_and_adds_physical_lookup(tmp_path):
+    """Publishing a headered dump must keep the canonical hash used for netplay."""
+    from romarr.dat import DatIndex, parse_dat
+    app, _ = service(tmp_path)
+    app.dats = DatIndex()
+    app.dats.add(parse_dat(f'<datafile><header><name>Fixture</name></header><game name="Known"><rom name="Known.nes" size="{len(PAYLOAD)}" sha1="{digest(PAYLOAD)}"/></game></datafile>'))
+    data = b"NES\x1a" + b"\x00" * 12 + PAYLOAD
+    incoming = tmp_path / "renamed.nes"
+    incoming.write_bytes(data)
+    assert app.adopt(str(incoming), "nes")["ok"]
+    assert app.hashes.for_game("Known", "nes").sha1 == digest(PAYLOAD)
+    assert app.hashes.by_sha1(digest(data)).sha1 == digest(PAYLOAD)
+    assert len(app.hashes) == 1

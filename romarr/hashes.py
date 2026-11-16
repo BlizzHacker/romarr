@@ -73,6 +73,7 @@ class Entry:
     platform: str = ""
     verified: bool = False
     path: str = ""
+    physical_sha1: str = ""
 
 
 class HashIndex:
@@ -82,6 +83,7 @@ class HashIndex:
         self.path = Path(path)
         self._lock = threading.RLock()
         self._by_sha1: dict[str, Entry] = {}
+        self._by_physical: dict[str, Entry] = {}
         #: (platform, normalised title) -> sha1. A game can legitimately have
         #: several dumps; the first verified one wins, because that is the one
         #: worth offering a stranger.
@@ -90,14 +92,25 @@ class HashIndex:
     # -- building ------------------------------------------------------------
 
     def add(self, sha1: str, name: str, platform: str = "",
-            verified: bool = False, path: str = "") -> Entry | None:
+            verified: bool = False, path: str = "",
+            physical_sha1: str | None = None) -> Entry | None:
+        """Preserve a dump's physical alias unless new evidence is supplied."""
         sha1 = str(sha1 or "").lower()
         if not sha1:
             return None
-        entry = Entry(sha1=sha1, name=name, platform=platform,
-                      verified=bool(verified), path=path)
         with self._lock:
+            previous = self._by_sha1.get(sha1)
+            physical = physical_sha1
+            if physical is None:
+                physical = previous.physical_sha1 if previous else ""
+            entry = Entry(sha1=sha1, name=name, platform=platform,
+                          verified=bool(verified), path=path,
+                          physical_sha1=str(physical or "").lower())
+            if previous and self._by_physical.get(previous.physical_sha1) is previous:
+                self._by_physical.pop(previous.physical_sha1, None)
             self._by_sha1[sha1] = entry
+            if entry.physical_sha1:
+                self._by_physical[entry.physical_sha1] = entry
             key = (str(platform or "").lower(), normalise(name))
             if key[1]:
                 existing = self._by_game.get(key)
@@ -137,6 +150,8 @@ class HashIndex:
                     if e.platform.lower() == slug]
             for sha1 in gone:
                 del self._by_sha1[sha1]
+            self._by_physical = {sha: entry for sha, entry in self._by_physical.items()
+                                 if entry.platform.lower() != slug}
             self._by_game = {k: v for k, v in self._by_game.items()
                              if k[0] != slug}
             return len(gone)
@@ -144,8 +159,10 @@ class HashIndex:
     # -- asking --------------------------------------------------------------
 
     def by_sha1(self, sha1: str) -> Entry | None:
+        """Find canonical or physical SHA1 evidence without duplicating catalogue rows."""
         with self._lock:
-            return self._by_sha1.get(str(sha1 or "").lower())
+            key = str(sha1 or "").lower()
+            return self._by_sha1.get(key) or self._by_physical.get(key)
 
     def for_game(self, name: str, platform: str = "") -> Entry | None:
         """The dump to offer for a shelf entry, matched on a normalised title.
@@ -195,12 +212,13 @@ class HashIndex:
             return
         with self._lock:
             self._by_sha1.clear()
+            self._by_physical.clear()
             self._by_game.clear()
         for item in raw.get("entries", []):
             if isinstance(item, dict):
                 self.add(item.get("sha1", ""), item.get("name", ""),
                          item.get("platform", ""), item.get("verified", False),
-                         item.get("path", ""))
+                         item.get("path", ""), item.get("physical_sha1", ""))
 
     def save(self) -> None:
         with self._lock:

@@ -33,7 +33,9 @@ def checkout(tmp_path, monkeypatch):
     git("config", "user.email", "tests@example.invalid", cwd=publisher)
     git("config", "user.name", "Fixture", cwd=publisher)
     (publisher / "example.txt").write_text("original\n")
-    (publisher / ".gitignore").write_text(".venv/\n")
+    (publisher / "romarr").mkdir()
+    (publisher / "romarr/version.py").write_text("# Fixture package identity\n")
+    (publisher / ".gitignore").write_text(".venv/\nromarr/_version.py\nromarr/_build_info.py\n")
     git("add", ".", cwd=publisher)
     git("commit", "-qm", "first", cwd=publisher)
     git("remote", "add", "origin", str(origin), cwd=publisher)
@@ -545,7 +547,7 @@ def _preview_fixture(checkout, monkeypatch, *, remove_file=False):
         removed = "payload/game" if remove_file == "nested" else "example.txt"
         ignored = "payload" if remove_file == "nested" else "example.txt"
         git("rm", "-q", removed, cwd=publisher)
-        (publisher / ".gitignore").write_text(".venv/\n" + ignored + "\n")
+        (publisher / ".gitignore").write_text(".venv/\nromarr/_version.py\nromarr/_build_info.py\n" + ignored + "\n")
     else:
         (publisher / "example.txt").write_text("preview fixture\n")
     git("add", ".", cwd=publisher);git("commit", "-qm", "preview", cwd=publisher)
@@ -579,7 +581,8 @@ def _execute_preview_worker(repo, env, *, ignored_pip_failure=False):
     script += 'exec ' + sys.executable + ' "$@"\n'
     interpreter.write_text(script)
     interpreter.chmod(0o755)
-    return subprocess.run(["/bin/sh", str(repo / ".git" / safety.LOCK_NAME / "run.sh")], cwd=repo,
+    gitdir = Path(git("rev-parse", "--absolute-git-dir", cwd=repo))
+    return subprocess.run(["/bin/sh", str(gitdir / safety.LOCK_NAME / "run.sh")], cwd=repo,
                           env={**os.environ, "PATH": str(testbin)+":"+os.environ["PATH"]},
                           capture_output=True, text=True, timeout=30)
 
@@ -736,3 +739,112 @@ def test_dependency_failure_rollback_preserves_new_ignored_ancestor(checkout, mo
     assert (repo / "payload").read_text() == "owner-data"
     assert git("rev-parse", "HEAD", cwd=repo) == info["head"]
     assert "ROLLBACK BLOCKED" in (repo / ".git" / safety.LOG_NAME).read_text()
+
+
+@pytest.mark.parametrize("tag", ["v1.10.1", "v1.11.0-beta.2", "v1.11.0-rc.1"])
+def test_real_release_worker_publishes_exact_version_and_revision(checkout, monkeypatch, tag):
+    """Moving the source must not leave the ignored version files on the old release."""
+    import json
+    publisher,repo,origin,env=checkout
+    (repo/"romarr/_version.py").write_text("__version__ = '1.9.0'\n")
+    new=publish(publisher)
+    git("tag",tag,new,cwd=publisher);git("push","-q","origin",tag,cwd=publisher)
+    old_run=safety.subprocess.run
+    monkeypatch.setattr(safety.subprocess,"run",lambda args,**kwargs:
+        SimpleNamespace(returncode=0,stdout="",stderr="") if args[0]=="systemd-run" else old_run(args,**kwargs))
+    result=safety.launch(env,"refs/tags/"+tag);assert result["ok"]
+    worker=_execute_preview_worker(repo,env)
+    assert worker.returncode==0,(repo/".git"/safety.LOG_NAME).read_text()
+    version={};exec((repo/"romarr/_version.py").read_text(),version)
+    assert version["__version__"]==tag[1:]
+    info={};exec((repo/"romarr/_build_info.py").read_text(),info)
+    assert info["romarr_build_kind"]=="release" and info["romarr_source_revision"]==new
+    assert info["romarr_source_ref"]=="refs/tags/"+tag
+    assert git("status","--porcelain",cwd=repo)==""
+
+
+def test_preview_restore_reinstates_previous_tagged_build_identity(checkout, monkeypatch):
+    controls,service,info,original=_preview_fixture(checkout,monkeypatch)
+    publisher,repo,origin,env=checkout
+    git("tag","v1.10.0",info["base"],cwd=repo)
+    result=controls.apply_pr(service,{"confirm":True,"number":201,"head":info["head"],"base":info["base"],"acknowledgement":"APPLY PR #201"})
+    assert result["ok"]
+    worker=_execute_preview_worker(repo,env);assert worker.returncode==0
+    generated={};exec((repo/"romarr/_build_info.py").read_text(),generated)
+    assert generated["romarr_build_kind"]=="development" and generated["romarr_source_ref"]=="refs/pull/201/head"
+    version={};exec((repo/"romarr/_version.py").read_text(),version)
+    assert version["__version__"]=="0.0.0+unknown"
+    env.commit=info["head"]
+    assert controls.restore_preview(service,{"confirm":True,"backup_id":result["backup_id"]})["ok"]
+    worker=_execute_preview_worker(repo,env);assert worker.returncode==0
+    version={};exec((repo/"romarr/_version.py").read_text(),version)
+    generated={};exec((repo/"romarr/_build_info.py").read_text(),generated)
+    assert version["__version__"]=="1.10.0"
+    assert generated["romarr_source_revision"]==info["base"]
+    assert generated["romarr_source_ref"]=="refs/tags/v1.10.0"
+
+
+def test_build_identity_publication_refuses_linked_metadata(checkout, monkeypatch):
+    publisher,repo,origin,env=checkout
+    owner=repo.parent/"owner-data";owner.write_text("preserve owner bytes")
+    (repo/"romarr/_version.py").symlink_to(owner)
+    publish(publisher)
+    old_run=safety.subprocess.run
+    monkeypatch.setattr(safety.subprocess,"run",lambda args,**kwargs:
+        SimpleNamespace(returncode=0,stdout="",stderr="") if args[0]=="systemd-run" else old_run(args,**kwargs))
+    assert safety.launch(env,"origin/main")["ok"]
+    worker=_execute_preview_worker(repo,env)
+    assert worker.returncode!=0
+    assert owner.read_text()=="preserve owner bytes"
+    assert (repo/"romarr/_version.py").is_symlink()
+    assert (repo/".git"/safety.LOCK_NAME).exists()
+
+
+def test_internal_gitfile_preview_retains_provenance_and_real_rollback(checkout, monkeypatch):
+    """An ignored in-checkout Git directory must use the same marker as preparation."""
+    controls, service, info, _original = _preview_fixture(checkout, monkeypatch)
+    _publisher, repo, _origin, env = checkout
+    gitdir = repo / ".romarr-git"
+    (repo / ".git").rename(gitdir)
+    (repo / ".git").write_text("gitdir: .romarr-git\n")
+    with (gitdir / "info/exclude").open("a") as output:
+        output.write("\n.romarr-git/\n")
+    monkeypatch.setattr(controls, "__file__", str(repo / "romarr/release_controls.py"))
+    body = {"confirm": True, "number": 201, "head": info["head"], "base": info["base"], "acknowledgement": "APPLY PR #201"}
+    result = controls.apply_pr(service, body)
+    assert result["ok"]
+    assert (gitdir / "romarr-preview.json").is_file()
+    worker = _execute_preview_worker(repo, env)
+    assert worker.returncode == 0, (gitdir / safety.LOG_NAME).read_text()
+    env.commit = info["head"]
+    assert controls.active_preview(env)["backup_id"] == result["backup_id"]
+    assert controls.preview_provenance()["romarr_source_revision"] == info["head"]
+    restored = controls.restore_preview(service, {"confirm": True, "backup_id": result["backup_id"]})
+    assert restored["ok"]
+    worker = _execute_preview_worker(repo, env)
+    assert worker.returncode == 0, (gitdir / safety.LOG_NAME).read_text()
+    assert git("rev-parse", "HEAD", cwd=repo) == info["base"]
+    assert controls.active_preview(env) is None
+
+
+def test_external_gitfile_metadata_cannot_claim_active_preview(checkout):
+    """Reading provenance must retain the updater's checkout-only metadata confinement."""
+    import json
+    from romarr import release_controls as controls
+    _publisher, repo, _origin, env = checkout
+    external = repo.parent / "external-git-metadata"
+    (repo / ".git").rename(external)
+    (repo / ".git").write_text("gitdir: " + str(external) + "\n")
+    (external / "romarr-preview.json").write_text(json.dumps({
+        "number": 201, "head": env.commit, "backup_id": "a" * 32, "previous_commit": env.commit}))
+    assert controls.active_preview(env) is None
+
+
+def test_tracked_ignore_rules_allow_source_build_identity_publication(tmp_path):
+    """Actual project ignore rules, without a workstation's private excludes, must suffice."""
+    project=Path(__file__).resolve().parents[1]
+    repo=tmp_path/"clean-ignore-check";repo.mkdir()
+    git("init","-q",str(repo))
+    (repo/".gitignore").write_bytes((project/".gitignore").read_bytes())
+    for name in ("romarr/_version.py","romarr/_build_info.py"):
+        subprocess.run(["git","check-ignore","-q",name],cwd=repo,env=safety._safe_git_env(),check=True)
