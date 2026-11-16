@@ -372,16 +372,6 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "/api/v1/cartridge/status": ("GET", "Check Cartridge player installation and available platforms."),
     "/api/v1/cartridge/install": ("POST", "Auto-install the verified portable Cartridge player."),
     "/api/v1/cartridge/launch": ("POST", "Launch Cartridge player paired with ROMarr."),
-    "/api/v1/atproto/status": ("GET", "Check AT Protocol federation and games lexicon absorption status."),
-    "/api/v1/atproto/lexicons": ("GET", "List absorbed ATProto gamesgamesgamesgamesgames schemas."),
-    "/api/v1/atproto/connect": ("POST", "Authenticate with an AT Protocol PDS account."),
-    "/api/v1/atproto/export": ("POST", "Export ROMarr games to decentralized ATProto repository records."),
-    "/api/v1/atproto/playstate": ("POST", "Publish decentralized playState for a game."),
-    "/api/v1/atproto/claim": ("POST", "Create a Cartridge ATProto ROM verification claim."),
-    "/api/v1/atproto/jetstream": ("POST", "Process incoming ATProto Jetstream commit events."),
-    "/xrpc/games.gamesgamesgamesgames.getGame": ("GET", "HappyView AppView XRPC query to fetch game metadata."),
-    "/xrpc/games.gamesgamesgamesgames.listGames": ("GET", "HappyView AppView XRPC query to list games."),
-    "/xrpc/games.gamesgamesgamesgames.getPlayState": ("GET", "HappyView AppView XRPC query to retrieve player progress."),
     "/api/v1/security/inspect": ("POST", "Inspect an explicitly selected shared file with MWM or Arkana."),
     "/api/v1/downloadclient/mdm": ("GET", "Availability of the external "
                                           "Mister Download Manager CLI for "
