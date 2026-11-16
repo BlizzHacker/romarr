@@ -1233,6 +1233,12 @@ class Romm:
     # Health and badge calls get their own short budget; see count().
     HEALTH_TIMEOUT = 5
 
+    # The three `limit=1` queries behind counts(). Each returns a total and no
+    # rows, but the `missing` filter is the slow part on a large library: a
+    # 28k-game RomM measured 6-8 s warm and 9.6 s with a cold MariaDB buffer
+    # pool (issue #216), so the 5 s health budget hung up on a healthy server.
+    COUNT_TIMEOUT = 60
+
     # RomM sorts by name using a natural-sort expression -- nested
     # REGEXP_REPLACE over roms.name. Being computed, no index can serve it, so
     # the database evaluates it for every row and then filesorts; LIMIT cannot
@@ -1458,14 +1464,14 @@ class Romm:
 
         RomM 5.x answers this without a walk -- `missing` is a server-side
         filter, so each number is a `limit=1` query that returns a `total` and
-        no rows. Three calls on the health budget, the same budget `count()`
-        already runs on.
+        no rows. They run on COUNT_TIMEOUT, not the health budget: the filtered
+        queries are the slow ones on a large library (issue #216).
         """
         url = f"{self._config.base_url.rstrip('/')}/api/roms"
 
         def ask(**extra) -> int:
             response = self._get(url, {"limit": 1, **self.CHEAP_QUERY, **extra},
-                                 self.HEALTH_TIMEOUT)
+                                 self.COUNT_TIMEOUT)
             response.raise_for_status()
             payload = response.json()
             if isinstance(payload, dict):
