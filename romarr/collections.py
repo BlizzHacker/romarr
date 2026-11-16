@@ -292,12 +292,16 @@ def _best_translation(members: list[Game], order: tuple[str, ...],
     When `pref_langs` is configured, translations are ranked by preferred
     language priority first, then region, then parent-over-clone, then name.
     """
+    lang_order = tuple(normalise_lang(c) for c in pref_langs if str(c).strip())
     wanted = {normalise_lang(c) for c in langs}
+    if lang_order:
+        wanted = wanted & set(lang_order)
+    if not wanted:
+        return None
     translations = [g for g in members
                     if is_translation(g.name) and (_game_translation_langs(g) & wanted)]
     if not translations:
         return None
-    lang_order = tuple(normalise_lang(c) for c in pref_langs if str(c).strip())
 
     def trans_key(g: Game) -> tuple[int, int, int, str]:
         if lang_order:
@@ -398,10 +402,15 @@ def _plan_language_group(
     plan: Plan,
 ) -> None:
     """Resolve one 1G1R group when `policy.preferred_languages` is active."""
+    strict = policy.region_mode == "strict"
     wanted_real = [g for g in members
                    if policy.wants(g.name)[0] and not is_translation(g.name)]
+    trans_members = (
+        [g for g in members if _region_rank(g.name, order) < len(order)]
+        if strict else members
+    )
     translation = (
-        _best_translation(members, order, policy.translation_langs,
+        _best_translation(trans_members, order, policy.translation_langs,
                           pref_langs=pref_langs)
         if policy.uses_translations else None
     )
@@ -412,7 +421,6 @@ def _plan_language_group(
     pref_set = set(pref_langs)
     eligible = [g for g in wanted_real if set(game_languages(g)) & pref_set]
     unknown = [g for g in wanted_real if not game_languages(g)]
-    strict = policy.region_mode == "strict"
 
     if eligible:
         pool = ([g for g in eligible if _region_rank(g.name, order) < len(order)]

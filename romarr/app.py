@@ -8604,11 +8604,15 @@ def make_handler(service: ROMarr):
                         [c for c in query.get("preferred_languages", [""])[0]
                          .split(",") if c.strip()]
                         if ("preferred_languages" in query
-                            or "preferred_languages=" in (parsed.query or ""))
+                            or "preferred_languages=" in (route.query or ""))
                         else None),
                     region_mode=query.get("region_mode", [""])[0] or None,
-                    exclude=[e for e in query.get("exclude", [""])[0].split(",")
-                             if e] if "exclude" in query else None))
+                    exclude=(
+                        [e for e in query.get("exclude", [""])[0].split(",")
+                         if e]
+                        if ("exclude" in query
+                            or "exclude=" in (route.query or ""))
+                        else None)))
             if route.path == "/api/v1/collection":
                 return self._json(200, service.collection_status())
             if route.path == "/api/v1/collection/source":
