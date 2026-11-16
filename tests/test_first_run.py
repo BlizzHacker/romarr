@@ -16,6 +16,7 @@ already correct in isolation while the install as a whole was unusable.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 import threading
 import urllib.error
@@ -289,3 +290,101 @@ def test_the_setup_screen_never_contains_the_api_key(fresh):
     assert key not in page
     _, page, _ = call(url + "/login")
     assert key not in page
+
+
+def test_concurrent_setup_claims_allow_only_one_winner(fresh):
+    """Two simultaneous first-run claims produce one winner and one 409."""
+    service, url = fresh()
+    barrier = threading.Barrier(2)
+    real_hash = service.auth.hash_password
+
+    def aligned_hash(password):
+        assert not service._setup_lock.locked()
+        barrier.wait(timeout=5)
+        return real_hash(password)
+
+    service.auth.hash_password = aligned_hash
+
+    def attempt(password):
+        status, body, headers = call(
+            url + "/api/v1/setup", method="POST", body={"password": password}
+        )
+        return {
+            "password": password,
+            "status": status,
+            "payload": json.loads(body),
+            "headers": headers,
+        }
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [
+            pool.submit(attempt, "first-claim-alpha"),
+            pool.submit(attempt, "second-claim-bravo"),
+        ]
+        results = [future.result() for future in futures]
+
+    assert sorted(result["status"] for result in results) == [200, 409]
+    winner = next(result for result in results if result["status"] == 200)
+    loser = next(result for result in results if result["status"] == 409)
+
+    assert service.claimed is True
+    assert winner["payload"].get("ok") is True
+    assert loser["payload"]["error"] == "already set up"
+    assert "already" in loser["payload"]["detail"].lower()
+
+    assert loser["headers"].get("Set-Cookie") is None
+    assert SESSION_COOKIE not in (loser["headers"].get("Set-Cookie") or "")
+
+    winner_cookie = session_of(winner["headers"])
+    assert call(url + "/api/v1/config", cookie=winner_cookie)[0] == 200
+    assert call(url + "/api/v1/login", method="POST",
+                body={"password": winner["password"]})[0] == 200
+    assert call(url + "/api/v1/login", method="POST",
+                body={"password": loser["password"]})[0] == 401
+
+
+def test_setup_rolls_back_when_persistence_fails(fresh, monkeypatch):
+    """A failed save leaves the install unclaimed with no session cookie."""
+    service, url = fresh()
+    save_calls = []
+
+    def failing_save(*, raise_on_error=False):
+        save_calls.append(raise_on_error)
+        raise OSError("disk full")
+
+    monkeypatch.setattr(service.store, "save", failing_save)
+
+    status, body, headers = call(
+        url + "/api/v1/setup",
+        method="POST",
+        body={"password": "first-attempt-secret"},
+    )
+    assert status == 500
+    assert save_calls == [True]
+    assert "disk full" not in body
+    assert headers.get("Set-Cookie") is None
+    assert SESSION_COOKIE not in (headers.get("Set-Cookie") or "")
+    assert service.claimed is False
+    assert service.auth.password_hash == ""
+    assert "_password_hash" not in service.store.settings
+    assert call(url + "/api/v1/config")[0] == 401
+    assert call(url + "/api/v1/login", method="POST",
+                body={"password": "first-attempt-secret"})[0] == 401
+
+    monkeypatch.undo()
+
+    status, _, headers = call(
+        url + "/api/v1/setup",
+        method="POST",
+        body={"password": "second-attempt-secret"},
+    )
+    assert status == 200
+    cookie = session_of(headers)
+    assert service.claimed is True
+    assert call(url + "/api/v1/config", cookie=cookie)[0] == 200
+    assert call(url + "/api/v1/login", method="POST",
+                body={"password": "second-attempt-secret"})[0] == 200
+    assert call(url + "/api/v1/login", method="POST",
+                body={"password": "first-attempt-secret"})[0] == 401
+    persisted = json.loads(service.store.path.read_text(encoding="utf-8"))
+    assert persisted["settings"]["_password_hash"] == service.auth.password_hash
