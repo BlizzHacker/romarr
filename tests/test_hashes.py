@@ -248,3 +248,25 @@ def test_physical_hash_aliases_persist_without_changing_canonical_identity(tmp_p
     reloaded.clear_platform("nes")
     assert reloaded.by_sha1(canonical) is None
     assert reloaded.by_sha1(replacement) is None
+
+
+def test_refresh_without_physical_hash_preserves_alias_and_explicit_hash_replaces_it(tmp_path):
+    """Library metadata refresh must not discard physical audit evidence."""
+    canonical, physical, replacement = "a" * 40, "b" * 40, "c" * 40
+    index = HashIndex(tmp_path / "hashes.json")
+    index.add(canonical, "Headered", "nes", True, "nes/game.nes", physical_sha1=physical)
+    refreshed = index.add(canonical, "Headered", "nes", False, "nes/game.nes")
+    assert index.by_sha1(physical) is refreshed
+    assert refreshed.physical_sha1 == physical
+    assert index.for_game("Headered", "nes").sha1 == canonical
+    assert len(index) == 1 and index.platforms() == {"nes": 1}
+    index.save()
+    reloaded = HashIndex(index.path)
+    reloaded.load()
+    assert reloaded.by_sha1(physical).sha1 == canonical
+    reloaded.add(canonical, "Headered", "nes", physical_sha1=replacement.upper())
+    assert reloaded.by_sha1(physical) is None
+    assert reloaded.by_sha1(replacement).sha1 == canonical
+    reloaded.add(canonical, "Headered", "nes", physical_sha1="")
+    assert reloaded.by_sha1(replacement) is None
+    assert len(reloaded) == 1

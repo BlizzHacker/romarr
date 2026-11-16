@@ -92,16 +92,20 @@ class HashIndex:
     # -- building ------------------------------------------------------------
 
     def add(self, sha1: str, name: str, platform: str = "",
-            verified: bool = False, path: str = "", physical_sha1: str = "") -> Entry | None:
-        """Record one canonical dump with an optional physical-byte lookup alias."""
+            verified: bool = False, path: str = "",
+            physical_sha1: str | None = None) -> Entry | None:
+        """Preserve a dump's physical alias unless new evidence is supplied."""
         sha1 = str(sha1 or "").lower()
         if not sha1:
             return None
-        entry = Entry(sha1=sha1, name=name, platform=platform,
-                      verified=bool(verified), path=path,
-                      physical_sha1=str(physical_sha1 or "").lower())
         with self._lock:
             previous = self._by_sha1.get(sha1)
+            physical = physical_sha1
+            if physical is None:
+                physical = previous.physical_sha1 if previous else ""
+            entry = Entry(sha1=sha1, name=name, platform=platform,
+                          verified=bool(verified), path=path,
+                          physical_sha1=str(physical or "").lower())
             if previous and self._by_physical.get(previous.physical_sha1) is previous:
                 self._by_physical.pop(previous.physical_sha1, None)
             self._by_sha1[sha1] = entry

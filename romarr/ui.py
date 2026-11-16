@@ -1881,7 +1881,13 @@ RENDER.library=async()=>{
 
 function bindLibraryChips(p){
   const filters=p.querySelector('.library-filters');
-  if(filters)filters.ontoggle=()=>{LIB.filtersOpen=filters.open;};
+  if(filters){
+    let previousOpen=filters.open;
+    filters.ontoggle=()=>{
+      if(filters.open===previousOpen)return;
+      previousOpen=filters.open;LIB.filtersOpen=previousOpen;
+    };
+  }
   p.querySelectorAll('[data-plat]').forEach(b=>b.onclick=()=>{
     LIB.platform=b.dataset.plat; LIB.offset=0; LIB.limit=120;
     go('library');

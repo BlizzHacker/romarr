@@ -838,3 +838,13 @@ def test_external_gitfile_metadata_cannot_claim_active_preview(checkout):
     (external / "romarr-preview.json").write_text(json.dumps({
         "number": 201, "head": env.commit, "backup_id": "a" * 32, "previous_commit": env.commit}))
     assert controls.active_preview(env) is None
+
+
+def test_tracked_ignore_rules_allow_source_build_identity_publication(tmp_path):
+    """Actual project ignore rules, without a workstation's private excludes, must suffice."""
+    project=Path(__file__).resolve().parents[1]
+    repo=tmp_path/"clean-ignore-check";repo.mkdir()
+    git("init","-q",str(repo))
+    (repo/".gitignore").write_bytes((project/".gitignore").read_bytes())
+    for name in ("romarr/_version.py","romarr/_build_info.py"):
+        subprocess.run(["git","check-ignore","-q",name],cwd=repo,env=safety._safe_git_env(),check=True)

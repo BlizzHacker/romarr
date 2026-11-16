@@ -34,4 +34,30 @@ foreach ($value in @('1.10.1.0-alpha.1', '1.10.1.7-beta.2', '1.10.1.7-rc.1', '1.
 foreach ($tag in @('', 'v1.10.2-rc.1', 'v2.0.0-alpha.1', 'v1.10.1.1', 'v1.10.1.0-rc.1', '1.10.1-rc.1', 'vv1.10.1', 'vnightly', "v1.10.1`n")) {
     Assert-DesktopVersionRejects { Resolve-ROMarrDesktopReleaseVersion -ProjectVersion '1.10.1' -EventName release -ReleaseTag $tag }
 }
+# Validate every assembly/MSIX core position, including legacy stable revisions.
+foreach ($position in 0..3) {
+    $parts = @('1', '10', '1', '7')
+    $parts[$position] = '65535'
+    $maximum = $parts -join '.'
+    Assert-DesktopVersionEqual $maximum (Get-ROMarrDesktopPackageVersion -Version $maximum).NumericVersion
+    $parts[$position] = '65536'
+    $overflow = $parts -join '.'
+    Assert-DesktopVersionRejects { Get-ROMarrDesktopPackageVersion -Version $overflow }
+    $parts[$position] = '9' * 1000
+    $huge = $parts -join '.'
+    Assert-DesktopVersionRejects { Get-ROMarrDesktopPackageVersion -Version $huge }
+}
+foreach ($position in 0..2) {
+    $parts = @('1', '10', '1')
+    $parts[$position] = '65535'
+    $maximum = ($parts -join '.') + '-rc.1'
+    Assert-DesktopVersionEqual $maximum (Get-ROMarrDesktopPackageVersion -Version $maximum).Version
+    $parts[$position] = '65536'
+    $overflow = ($parts -join '.') + '-beta.1'
+    Assert-DesktopVersionRejects { Get-ROMarrDesktopPackageVersion -Version $overflow }
+    $parts[$position] = '9' * 1000
+    $huge = ($parts -join '.') + '-alpha.1'
+    Assert-DesktopVersionRejects { Get-ROMarrDesktopPackageVersion -Version $huge }
+}
+Assert-DesktopVersionEqual '65535.65535.65535.65535' (Get-ROMarrDesktopPackageVersion -Version '65535.65535.65535.65535').StoreVersion
 Write-Host "$script:desktopVersionChecks desktop package and release-version checks passed"

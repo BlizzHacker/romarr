@@ -290,6 +290,19 @@ def test_audit_keeps_physical_lookup_and_canonical_headered_identity(tmp_path):
     reloaded = HashIndex(app.hashes.path)
     reloaded.load()
     assert reloaded.by_sha1(physical).sha1 == canonical
+    class RefreshedLibrary:
+        """A metadata seed omits physical hashes just as real library APIs do."""
+        def hashes(self, limit=500, offset=0):
+            return ([{"sha1": canonical, "name": "audited", "platform": "nes",
+                      "verified": False, "path": "nes/audited.nes"}], 1) if not offset else ([], 0)
+    app.library_server = RefreshedLibrary()
+    assert app.index_hashes_from_library()["ok"]
+    assert app.hashes.by_sha1(physical).sha1 == canonical
+    assert app.hashes.for_game("audited", "nes").sha1 == canonical
+    assert len(app.hashes) == 1
+    after_seed = HashIndex(app.hashes.path)
+    after_seed.load()
+    assert after_seed.by_sha1(physical).sha1 == canonical
     incoming = tmp_path / "renamed.nes"
     incoming.write_bytes(data)
     assert not app.adopt(str(incoming), "nes")["ok"]

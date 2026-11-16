@@ -185,3 +185,22 @@ def test_library_does_not_export_path_like_backend_platform_identifiers(server):
     assert "/home/alice" not in json.dumps(result)
     refused=send(server,rpc("tools/call",{"name":"romarr_library","arguments":{"platform":"../private"}})).json()["result"]
     assert refused["isError"]
+
+
+@pytest.mark.parametrize("title",['A / B','Ys I / II'])
+def test_mcp_retains_normal_slash_separators_in_titles(server,title):
+    _,service=server
+    service._library_cache=([Game("1",title,"snes")],0,"")
+    service.queue=[QueueItem(title,"snes","release",1,"grabbed")]
+    service.store.events=[Event("grabbed",title,"snes")]
+    for name,field in [("romarr_library","name"),("romarr_queue","game"),("romarr_history","game")]:
+        result=send(server,rpc("tools/call",{"name":name})).json()["result"]["structuredContent"]
+        assert result["items"][0][field]==title
+
+
+@pytest.mark.parametrize("title",["file '/home/alice/private'",'file "/home/alice/private"', "file 'C:\\private\\roms'"])
+def test_mcp_omits_quoted_absolute_history_paths(server,title):
+    _,service=server
+    service.store.events=[Event("decompressed",title,"snes")]
+    result=send(server,rpc("tools/call",{"name":"romarr_history"})).json()["result"]["structuredContent"]
+    assert result["items"][0]["game"]=="[path omitted]"

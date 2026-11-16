@@ -11,6 +11,12 @@ function Get-ROMarrDesktopPackageVersion {
         throw 'Version must be numeric or use -alpha.N, -beta.N or -rc.N without leading zeros.'
     }
     $core = $Matches['core']
+    foreach ($component in $core.Split('.')) {
+        # Length first keeps arbitrarily large inputs out of integer conversion.
+        if ($component.Length -gt 5 -or [int]$component -gt 65535) {
+            throw 'Each numeric Windows version component must be between 0 and 65535.'
+        }
+    }
     $prerelease = -not [string]::IsNullOrEmpty($Matches['stage'])
     if ($prerelease -and $core.Split('.').Count -ne 3) {
         throw 'Prerelease versions must have exactly three numeric components.'

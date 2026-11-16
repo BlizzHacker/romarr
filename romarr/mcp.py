@@ -98,7 +98,7 @@ def _rows(items, fields):
                 text = re.sub(r"https?://\S+", "[URL omitted]", value[:1000])[:300]
                 # Batch event titles are derived from library roots. Other absolute
                 # path-bearing metadata is omitted rather than exported as a title.
-                path = re.search(r"(?:^|[\s:=(])(?:/|[A-Za-z]:[\\/]|\\\\)", text)
+                path = re.search(r"""(?:^|[\s:=("'\[])(?:/[^\s/]|[A-Za-z]:[\\/]|\\\\[^\s\\])""", text)
                 row[name] = "[path omitted]" if value.casefold().startswith("batch: ") or path else text
             elif type(value) in (int, float, bool) or value is None:
                 row[name] = value
