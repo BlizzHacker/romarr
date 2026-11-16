@@ -113,6 +113,7 @@ def _reset():
 
 def _wire(monkeypatch, declares_torrent=True, proc=None):
     """Point hub.resolve_torrents at fakes: registry + PluginProcess."""
+    monkeypatch.setattr(hub, "_unsandboxed", lambda: False)
     class _Manifest:
         capabilities = {"torrent": "x.y:Z"} if declares_torrent else {}
         network = ["minerva-archive.org"]

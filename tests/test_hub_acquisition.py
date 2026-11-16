@@ -274,6 +274,9 @@ def test_search_falls_back_when_ia_modules_are_absent(tmp_path, monkeypatch):
                         lambda group, **kw: SimpleNamespace(
                             statuses=[],
                             results=[SimpleNamespace(model_dump=lambda: dict(ROW, plugin="homebrew"))]))
+    # Search plumbing, not confinement: hosts without pyseccomp refuse plugins
+    # unless the operator opts in, so opt in explicitly here.
+    monkeypatch.setenv("ROMARR_ALLOW_UNSANDBOXED_PLUGINS", "1")
     rows, err = hub.search("Super Metroid")
     assert err == ""
     assert len(rows) == 1 and rows[0]["plugin"] == "homebrew"

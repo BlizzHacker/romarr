@@ -15,6 +15,7 @@ import dataclasses
 import logging
 import os
 import re
+import sys
 import threading
 from pathlib import Path
 from .platforms import resolve, same_machine
@@ -108,7 +109,7 @@ os.environ.setdefault("ROM_HUB_HOME", str(HOME))
 
 
 def _backend_env() -> dict:
-    """Hand ROMarr's own library credentials to the Hub.
+    """Share backend connection details; credentials require an explicit grant.
 
     ROMarr already knows which library it files into and how to authenticate to
     it; the Hub needs the same thing to run `import` and `enrich`. Left to
@@ -125,10 +126,21 @@ def _backend_env() -> dict:
     if url:
         env["ROMM_URL"] = url
         env["ROM_HUB_BACKEND"] = kind
-    if user:
-        env["ROMM_USER"] = user
-    if pw:
-        env["ROMM_PASSWORD"] = pw
+    if os.environ.get("ROMARR_PLUGIN_BACKEND_CREDENTIALS") == "1":
+        if user:
+            env["ROMM_USER"] = user
+        if pw:
+            env["ROMM_PASSWORD"] = pw
+    elif url:
+        # Embedded URL credentials are the same grant as a separate password.
+        from urllib.parse import urlsplit, urlunsplit
+        try:
+            parts = urlsplit(url)
+        except ValueError:
+            env.pop("ROMM_URL", None)
+        else:
+            env["ROMM_URL"] = urlunsplit((parts.scheme, parts.netloc.rsplit("@", 1)[-1],
+                                          parts.path, "", ""))
     return env
 
 
@@ -264,36 +276,51 @@ def sandbox_state() -> tuple[bool, str]:
         return False, f"sandbox probe failed: {err.__class__.__name__}{suffix}"
 
 
-def _plugin_env() -> dict:
-    """The environment a plugin subprocess runs with.
-
-    Built by allowlist rather than by subtraction: a denylist silently stops
-    covering anything added later, and the thing added later is exactly the
-    credential nobody thought about.
-    """
+def _host_env() -> dict:
+    """Build the sanitized environment for trusted host helpers."""
     env = {name: os.environ[name] for name in _ENV_PASSTHROUGH
            if name in os.environ}
     env["ROM_HUB_HOME"] = str(HOME)
-    # CLI diagnostics and plugin names must round-trip on Windows too.
     env["PYTHONUTF8"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
-    ok, why = sandbox_state()
-    if not ok:
-        # Asked for, never assumed. ROMarr used to set this unconditionally on
-        # the belief that its container could not confine a plugin. That was
-        # wrong: the Hub's seccomp filter needs `pyseccomp` and nothing else,
-        # so the only thing standing between plugins and a real boundary was a
-        # missing dependency -- and setting the flag turned off the network and
-        # exec confinement the Hub exists to provide.
-        #
-        # The Hub's own words for this flag are "no confinement at all ... a
-        # development convenience, never a deployment setting". So it is set
-        # only when the sandbox genuinely cannot be installed, and loudly.
-        fix = ("Install pyseccomp to restore it." if "pyseccomp" in why
-               else "Plugins will run with no network or exec confinement.")
-        log.warning("running plugins WITHOUT confinement: %s. %s", why, fix)
-        env["ROM_HUB_ALLOW_UNSANDBOXED"] = "1"
     env.update(_backend_env())
+    return env
+
+
+def _confinement_possible() -> bool:
+    """Seccomp exists only on Linux; elsewhere there is nothing to install."""
+    return sys.platform.startswith("linux")
+
+
+def _sandbox_policy() -> bool:
+    """Require confinement wherever it can exist, unless the operator opts out.
+
+    On Linux a missing filter is a fixable deployment gap, so plugins are
+    refused until it is fixed or explicitly waived. Windows and macOS have no
+    seccomp at all; refusing there would only remove the plugin feature the
+    desktop apps ship, so plugins run unconfined with a warning, as before.
+    """
+    ok, why = sandbox_state()
+    if ok:
+        return False
+    if not _confinement_possible():
+        log.warning("running plugins WITHOUT confinement: %s; seccomp is Linux-only, "
+                    "so plugins on this system have no network or exec boundary", why)
+        return True
+    if os.environ.get("ROMARR_ALLOW_UNSANDBOXED_PLUGINS") != "1":
+        raise RuntimeError(
+            "ROM Hub plugin confinement is unavailable: " + why
+            + ". Install Linux pyseccomp or explicitly set "
+            "ROMARR_ALLOW_UNSANDBOXED_PLUGINS=1 to allow no confinement.")
+    log.warning("running plugins WITHOUT confinement by explicit operator choice: %s", why)
+    return True
+
+
+def _plugin_env() -> dict:
+    """Apply the same fail-closed policy to the Hub CLI and worker bridge."""
+    env = _host_env()
+    if _sandbox_policy():
+        env["ROM_HUB_ALLOW_UNSANDBOXED"] = "1"
     return env
 
 
@@ -304,12 +331,10 @@ def _run_cli(*args, timeout=180):
     shelling out to its entry point is the honest way to reuse them without
     copying the registry-mutation code here.
 
-    The subprocess runs with `_plugin_env()`, which confines it via the Hub's
-    seccomp sandbox when pyseccomp is available and only sets
-    ROM_HUB_ALLOW_UNSANDBOXED (with a warning) when the sandbox cannot be
-    installed. Installing a plugin still runs that plugin's code with ROMarr's
-    own privileges inside the confined environment; `_plugin_env` limits what
-    it inherits.
+    `_plugin_env()` refuses automatic fallback when confinement is unavailable.
+    This CLI manages installed plugin state; search and fetch workers use the
+    Hub's seccomp boundary and ROMarr's trusted interpreter startup adapter.
+    Backend credentials are shared only after an explicit operator grant.
     """
     import subprocess
     import sys
@@ -324,7 +349,10 @@ def _run_cli(*args, timeout=180):
     else:
         cmd = [sys.executable, "-c",
                "import sys; from rom_hub.cli import main; sys.exit(main())", *args]
-    env = _plugin_env()
+    try:
+        env = _plugin_env()
+    except RuntimeError as exc:
+        return {"ok": False, "out": "", "err": str(exc), "code": -1}
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env)
         ok = p.returncode == 0
@@ -449,15 +477,11 @@ def decode_result(url: str) -> dict:
 
 
 def _unsandboxed() -> bool:
-    """Whether Hub calls from this process may run plugins unconfined.
-
-    Only when the sandbox genuinely cannot run here -- the same rule
-    `_plugin_env` applies to subprocesses. Asked for, never assumed.
-    """
-    ok, why = sandbox_state()
-    if not ok:
-        log.warning("ROM Hub calls run WITHOUT confinement: %s", why)
-    return not ok
+    """Apply explicit policy and trusted startup before the Hub launches workers."""
+    allow = _sandbox_policy()
+    from .plugin_safety import install_trusted_startup
+    install_trusted_startup()
+    return allow
 
 
 def archive_org_auth_status() -> dict:
@@ -973,7 +997,7 @@ def run_igir(cfg: dict | None = None, timeout: int = 600) -> dict:
             "out": "",
         }
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=_plugin_env())
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=_host_env())
         return {
             "ok": proc.returncode == 0,
             "command": cmd_str,

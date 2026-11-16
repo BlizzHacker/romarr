@@ -6,7 +6,8 @@ requests>=2.31
 # plugins having a network boundary and having none.
 #
 # Linux-only, and optional by design: an install without it still runs, logs a
-# warning, and says so on the status page.
+# warning only after an explicit unconfined-plugin opt-in; otherwise plugins
+# refuse to run and report why. The rest of ROMarr remains available.
 pyseccomp>=0.1.2; sys_platform == "linux"
 
 # NOT LISTED, deliberately: playwright.

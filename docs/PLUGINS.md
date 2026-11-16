@@ -107,6 +107,35 @@ For the advanced [Windows source helper](INSTALL.md#windows-source-install), run
 
 Use your chosen virtual-environment path if you changed `-VenvDirectory`. Git must be on `PATH` when installing plugin repositories. The Hub page reports the lack of Linux sandbox support on Windows; do not assume it is confined there.
 
+### Plugin execution policy
+
+Linux needs a working `pyseccomp` filter for plugin execution by default.
+If the Plugins page reports confinement unavailable, install the missing
+runtime dependency or use a Linux host with seccomp support. ROMarr itself
+continues to run when plugin execution is refused.
+
+On a Linux host whose kernel lacks usable seccomp, an operator can explicitly
+set `ROMARR_ALLOW_UNSANDBOXED_PLUGINS=1` in ROMarr's service/container
+environment and restart. This runs plugins **with no confinement**; it is not a
+filesystem allowlist. Windows and macOS have no seccomp at all, so the desktop
+apps run plugins unconfined and the Hub page says so; install only plugins you
+trust there. An old
+`ROM_HUB_ALLOW_UNSANDBOXED=1` setting alone no longer enables fallback.
+
+Search and fetch do not need library passwords: ROMarr files the results.
+Legacy Hub CLI workflows that need the library login can explicitly enable
+`ROMARR_PLUGIN_BACKEND_CREDENTIALS=1`. This grants the trusted Hub CLI the
+configured backend username/password and preserves URL credentials; it never
+grants ROMarr's API key or download-client secrets. Separate credentials
+configured deliberately on a plugin remain that plugin's responsibility.
+
+The worker bootstrap uses isolated Python startup and loads the SDK and
+seccomp binding before allowing imports from the plugin directory. Existing
+plugins use the same manifest, configuration and protocol. Python startup
+hooks and shadow SDK packages inside a plugin are not supported extension
+points. The sandbox still allows ordinary filesystem reads as ROMarr's user;
+install only authors you trust. See [SECURITY.md](../SECURITY.md#plugins--read-this-before-installing-one).
+
 Installed plugin state lives under `ROM_HUB_HOME`. Docker sets this to `/config/rom-hub`, so it survives container recreation when `/config` is mounted. Source installs should set it to a writable persistent directory before starting ROMarr.
 
 ## Troubleshooting
