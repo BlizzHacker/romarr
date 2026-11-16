@@ -49,3 +49,91 @@ def test_build_fleet_sync_plan_for_steamos_and_adreno():
     })
     assert plan_adreno["ok"] is True
     assert plan_adreno["device"]["id"] == "adreno-android-handhelds"
+
+
+def test_fleet_profiles_split_files_vs_app_and_never_delete_by_default():
+    res = hub.fleet_profiles()
+    assert res["kinds"] == {
+        "files": "Copy games onto the device's ROM folder",
+        "app": "The device runs an app that connects to your library server",
+    }
+    by_id = {p["id"]: p for p in res["profiles"]}
+    assert {p["kind"] for p in res["profiles"]} == {"files", "app"}
+    for pid in ("es-de", "retropie-arcadepunks", "rpi-batocera-arcadepunks", "steamos-deck", "adreno-android-handhelds"):
+        assert by_id[pid]["kind"] == "files"
+        assert "{platform}" not in by_id[pid]["default_path"]
+    for pid in ("argosy", "grout", "deckrommsync", "retroarch-webdav", "console-cfw-feeds"):
+        assert by_id[pid]["kind"] == "app"
+        assert by_id[pid]["default_path"] == ""
+
+    # Default local plan is non-destructive and strips legacy {platform} suffix
+    local_plan = hub.build_fleet_sync_plan({
+        "device_id": "retropie-arcadepunks",
+        "transport": "local",
+        "target_path": "/home/pi/RetroPie/roms/{platform}",
+    })
+    assert local_plan["ok"] is True
+    assert local_plan["kind"] == "files"
+    assert local_plan["mirror"] is False
+    assert local_plan["warnings"] == []
+    assert local_plan["target_path"] == "/home/pi/RetroPie/roms"
+    assert local_plan["output_path"] == "/home/pi/RetroPie/roms/{es}"
+    assert "clean" not in local_plan["igir_command"].split()
+    assert local_plan["preview_command"].startswith("igir test report ")
+    assert "copy" not in local_plan["preview_command"].split()
+
+    # Default SSH plan does not pass --delete-after
+    ssh_plan = hub.build_fleet_sync_plan({
+        "device_id": "rpi-batocera-arcadepunks",
+        "transport": "ssh",
+    })
+    assert "--delete" not in ssh_plan["network_sync_command"]
+    assert "root@batocera.local:/userdata/roms/" in ssh_plan["network_sync_command"]
+
+    # Default rclone plan uses rclone copy, not rclone sync
+    rclone_plan = hub.build_fleet_sync_plan({
+        "device_id": "es-de",
+        "transport": "rclone",
+        "target_path": "remote:roms",
+    })
+    assert rclone_plan["network_sync_command"].startswith("rclone copy ")
+
+    # Explicit mirror=True enables clean / --delete-after / sync and warns
+    mirror_local = hub.build_fleet_sync_plan({
+        "device_id": "es-de",
+        "transport": "local",
+        "mirror": True,
+    })
+    assert mirror_local["mirror"] is True
+    assert "clean" in mirror_local["igir_command"].split()
+    assert mirror_local["warnings"]
+
+    mirror_ssh = hub.build_fleet_sync_plan({
+        "device_id": "retropie-arcadepunks",
+        "transport": "ssh",
+        "mirror": True,
+    })
+    assert "--delete-after" in mirror_ssh["network_sync_command"]
+    assert mirror_ssh["warnings"]
+
+
+def test_app_profiles_return_setup_steps_not_filesystem_commands():
+    plan = hub.build_fleet_sync_plan({
+        "device_id": "argosy",
+        "library_url": "https://romm.example.lan/",
+    })
+    assert plan["ok"] is True
+    assert plan["kind"] == "app"
+    assert plan["igir_command"] == ""
+    assert plan["network_sync_command"] == ""
+    assert any("https://romm.example.lan" in step for step in plan["setup"])
+
+    bad = hub.build_fleet_sync_plan({"device_id": "nonexistent-device"})
+    assert bad["ok"] is False
+
+
+def test_library_shell_ui_has_no_hardcoded_host_hacks():
+    from romarr.ui import page
+    html = page()
+    assert "romm.moveweight.com" not in html
+    assert "192.168.0.94" not in html
