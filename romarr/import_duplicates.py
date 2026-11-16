@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import hashlib
+import lzma
+import zlib
 import os
 import stat
 import struct
@@ -45,9 +47,16 @@ def _zip_contains(source, wanted, platform_slug, suffix):
             and at + 22 + comment == len(tail)
             and offset + central_size <= size - len(tail) + at):
         return False
+    eocd_offset = size - len(tail) + at
+    if eocd_offset >= 20:
+        source.seek(eocd_offset - 20)
+        if source.read(4) == b"PK\x06\x07":
+            return False
     source.seek(0)
     with zipfile.ZipFile(source) as archive:
         infos = archive.infolist()
+        if len(infos) > MAX_ARCHIVE_MEMBERS:
+            return False
         seen, total = set(), 0
         for info in infos:
             if info.is_dir():
@@ -90,6 +99,6 @@ def duplicate_reason(index, sha1, roots, *, suffix="", published=None):
                 if not same or before != _identity(source):
                     continue
             return f"already in the library ({entry.platform or 'unknown'}: {relative.as_posix()})"
-        except (OSError, ValueError, RuntimeError, zipfile.BadZipFile, EOFError):
+        except (OSError, ValueError, RuntimeError, zipfile.BadZipFile, EOFError, zlib.error, lzma.LZMAError):
             continue
     return ""

@@ -14,7 +14,9 @@ including on compatible Android desktop environments; it is not a Linux desktop 
 
 The dark native toolbar keeps the active device or server visible above the app.
 Open **ROMarr menu** (⋮) for **This device**, **Servers**, **Import ROM or DAT**,
-**Play a local file**, and **Connection details**. Long server names shorten on
+**Play a local file**, **Connection details**, and **Privacy policy**. The privacy
+policy opens `https://romarr.app/privacy` in your system browser without changing
+the selected server or exposing its session. Long server names shorten on
 small screens; Connection details shows the complete address. The toolbar and
 WebView respect system bars, display cutouts and the on-screen keyboard.
 

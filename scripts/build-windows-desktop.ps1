@@ -19,14 +19,14 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'desktop-version.ps1')
+$packageVersion = Get-ROMarrDesktopPackageVersion -Version $Version
 if (-not $IsWindows) { throw 'Build the desktop package on Windows with .NET 10 SDK and Python 3.13.' }
 $repo = Split-Path -Parent $PSScriptRoot
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $repo 'artifacts\windows' }
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 [IO.Directory]::CreateDirectory($OutputDirectory) | Out-Null
-if ($Version -notmatch '^(?<core>\d+\.\d+\.\d+(?:\.\d+)?)(?:-(?<stage>alpha|beta|rc)\.(?<preview>\d+))?$') { throw 'Version must be numeric or use -alpha.N, -beta.N or -rc.N.' }
-$numericVersion = $Matches['core']
-if (-not $StoreVersion) { $StoreVersion = if ($numericVersion.Split('.').Count -eq 3) { "$numericVersion.0" } else { $numericVersion } }
+if (-not $StoreVersion) { $StoreVersion = $packageVersion.StoreVersion }
 if ($StoreVersion -notmatch '^\d+\.\d+\.\d+\.\d+$') { throw 'StoreVersion must have four numeric components.' }
 if ($StoreIdentityName -notmatch '^[A-Za-z0-9.-]+$') { throw 'StoreIdentityName must be the package identity from Partner Center.' }
 
@@ -158,7 +158,7 @@ try {
     foreach ($image in $iconImages) { $writer.Write($image) }
 } finally { $writer.Dispose(); $iconStream.Dispose() }
 
-& dotnet publish (Join-Path $repo 'desktop\windows\ROMarr.Desktop.csproj') --configuration Release --runtime win-x64 --self-contained true --output $bundle "-p:Version=$numericVersion" "-p:InformationalVersion=$Version" '-p:DebugType=None' '-p:DebugSymbols=false' "-p:ApplicationIcon=$iconPath"
+& dotnet publish (Join-Path $repo 'desktop\windows\ROMarr.Desktop.csproj') --configuration Release --runtime win-x64 --self-contained true --output $bundle "-p:Version=$Version" "-p:InformationalVersion=$Version" '-p:DebugType=None' '-p:DebugSymbols=false' "-p:ApplicationIcon=$iconPath"
 if ($LASTEXITCODE -ne 0) { throw 'The native desktop application did not publish.' }
 if (-not (Test-Path -LiteralPath (Join-Path $bundle 'ROMarr.exe'))) { throw 'ROMarr.exe is missing.' }
 Copy-Item -LiteralPath (Join-Path $repo 'LICENSE') -Destination (Join-Path $bundle 'LICENSE.txt')

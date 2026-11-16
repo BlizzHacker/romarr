@@ -178,8 +178,19 @@ def inspect_pr(number):
 def active_preview(env=None):
     """Read preview identity only when the current Git commit matches the record."""
     try:
-        root = Path(env.repo) if getattr(env, "repo", "") else Path(__file__).resolve().parent.parent
-        marker = root / ".git" / "romarr-preview.json"
+        root = (Path(env.repo) if getattr(env, "repo", "") else Path(__file__).resolve().parent.parent).resolve(strict=True)
+        entry = root / ".git"
+        # Normal non-preview installs need no subprocess on every build-info read.
+        if entry.is_dir() and not (entry / "romarr-preview.json").is_file():
+            return None
+        if not entry.is_dir() and not entry.is_file():
+            return None
+        if Path(update_safety._cmd("git", "rev-parse", "--show-toplevel", cwd=root)).resolve(strict=True) != root:
+            return None
+        gitdir = Path(update_safety._cmd("git", "rev-parse", "--absolute-git-dir", cwd=root)).resolve(strict=True)
+        if not gitdir.is_dir() or not gitdir.is_relative_to(root):
+            return None
+        marker = gitdir / "romarr-preview.json"
         if not marker.is_file() or marker.is_symlink() or marker.stat().st_size > 65536:
             return None
         value = json.loads(marker.read_text())

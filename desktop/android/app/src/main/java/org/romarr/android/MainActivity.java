@@ -116,6 +116,7 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
   menu.getMenu().add(0,3,2,"Import ROM or DAT…");
   menu.getMenu().add(0,4,3,"Play a local file…");
   menu.getMenu().add(0,5,4,"Connection details");
+  menu.getMenu().add(0,6,5,"Privacy policy");
   menu.setOnMenuItemClickListener(item -> {
    switch(item.getItemId()) {
     case 1: local();break;
@@ -125,11 +126,16 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
     case 5: new AlertDialog.Builder(this).setTitle(wantLocal ? "This device" : "Server connection")
      .setMessage(wantLocal ? "Your private local library is available while ROMarr is running. Use Servers for an always-on library." : origin)
      .setPositiveButton("Done",null).show();break;
+    case 6: openPrivacyPolicy();break;
     default:return false;
    }
    return true;
   });
   menu.show();
+ }
+ private void openPrivacyPolicy() {
+  try { startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse("https://romarr.app/privacy"))); }
+  catch(ActivityNotFoundException e) { message("No browser installed. Privacy policy: https://romarr.app/privacy"); }
  }
  private static boolean sameOrigin(String a,String b) {
   try { URI x=new URI(a),y=new URI(b); return x.getScheme().equalsIgnoreCase(y.getScheme()) && x.getHost().equalsIgnoreCase(y.getHost()) && effectivePort(x)==effectivePort(y); }

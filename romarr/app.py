@@ -5363,7 +5363,8 @@ class ROMarr:
         acquisition pipeline did its job.
         """
         rom = getattr(verdict, "rom", None)
-        sha1 = str(sha1 or getattr(rom, "sha1", "") or "")
+        physical_sha1 = str(sha1 or "")
+        sha1 = str(getattr(rom, "sha1", "") or physical_sha1)
         if not sha1:
             return
         from .dat import VERIFIED
@@ -5379,7 +5380,7 @@ class ROMarr:
                 path = ""
         self.hashes.add(sha1, getattr(verdict, "game", "") or fallback,
                         platform, getattr(verdict, "status", "") == VERIFIED,
-                        path)
+                        path, physical_sha1=physical_sha1)
         self.hashes.save()
 
     #: Progress of the background hash seed, so the UI can show it moving
@@ -6047,18 +6048,22 @@ class ROMarr:
                 # Keep the hash. Netplay is decided on bytes, and this walk
                 # is the only place ROMarr ever computes them; discarding
                 # them here is what left an offer with nothing to carry.
-                if sha:
-                    self.hashes.add(
-                        sha, verdict.game or path.stem, platform.slug,
-                        verdict.status == VERIFIED,
-                        path.relative_to(library_root).as_posix())
                 # DAT verification strips copier headers on some platforms.
                 # Quarantine candidates must match every physical byte instead.
                 try:
                     raw_sha = raw_sha1(path)
-                    raw_size = path.stat().st_size
+                    final = path.stat()
+                    raw_size = final.st_size
                 except OSError:
                     continue
+                if (after.st_size, after.st_mtime_ns, after.st_ino) != (
+                        final.st_size, final.st_mtime_ns, final.st_ino):
+                    continue
+                if sha:
+                    self.hashes.add(
+                        sha, verdict.game or path.stem, platform.slug,
+                        verdict.status == VERIFIED,
+                        path.relative_to(library_root).as_posix(), physical_sha1=raw_sha)
                 key = (raw_sha, raw_size)
                 if key in seen:
                     state["duplicates"].append({

@@ -251,7 +251,6 @@ public class StandaloneTest {
 
  @Test public void bundledCoreVersionMatchesAndroidPackage() throws Exception {
   assertEquals(BuildConfig.VERSION_NAME,Python.getInstance().getModule("android_backend").callAttr("core_version").toString());
-  assertEquals("1.10.1-preview",BuildConfig.VERSION_NAME);
  }
 
  private static android.webkit.WebResourceRequest request(String url,boolean redirect) {
@@ -317,6 +316,17 @@ public class StandaloneTest {
   assertEquals("https://next-server.example.invalid",origin.get(activity));
   assertTrue(((java.util.Set<?>)approved.get(activity)).isEmpty());
   proveAutoPostRequiresConsent(inst,activity);
+  String selectedServer=origin.get(activity).toString();
+  android.content.IntentFilter privacyFilter=new android.content.IntentFilter(android.content.Intent.ACTION_VIEW);
+  privacyFilter.addDataScheme("https");privacyFilter.addDataAuthority("romarr.app",null);
+  privacyFilter.addDataPath("/privacy",android.os.PatternMatcher.PATTERN_LITERAL);
+  android.app.Instrumentation.ActivityMonitor privacyMonitor=new android.app.Instrumentation.ActivityMonitor(privacyFilter,new android.app.Instrumentation.ActivityResult(0,null),true);
+  inst.addMonitor(privacyMonitor);
+  java.lang.reflect.Method privacy=MainActivity.class.getDeclaredMethod("openPrivacyPolicy");privacy.setAccessible(true);
+  inst.runOnMainSync(() -> {try{privacy.invoke(activity);}catch(Exception e){throw new RuntimeException(e);}});
+  assertEquals("Privacy policy opens the known HTTPS page in an external browser",1,privacyMonitor.getHits());
+  assertEquals("Privacy does not change the selected server",selectedServer,origin.get(activity));
+  inst.removeMonitor(privacyMonitor);
   inst.runOnMainSync(activity::finish);
  }
 

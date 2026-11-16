@@ -1451,7 +1451,7 @@ def _import_rom_from_source(source, candidates, chosen_sets, download, platform,
             if imported_sha1:
                 from .hashes import Entry
                 published_hashes[imported_sha1] = Entry(imported_sha1, destination.stem,
-                                                       platform.slug, path=str(destination))
+                                                       platform.slug, path=str(destination.absolute()))
             log.info("imported %s -> %s", chosen.primary, destination)
             results.append(ImportResult(True, destination,
                                         verification=verdict, sha1=imported_sha1,
