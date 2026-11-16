@@ -306,6 +306,25 @@ class QBittorrent:
         except requests.RequestException:
             log.warning("qbittorrent removeTags error for %s", torrent_hash[:12])
 
+    def _rollback_duplicate_attach(self, torrent_hash: str, tag: str, *,
+                                   remove_tag: bool,
+                                   restore_category: str | None) -> None:
+        """Undo this attempt's tag and category changes after an incomplete attach."""
+        if remove_tag:
+            self._remove_torrent_tag(torrent_hash, tag)
+        if restore_category is not None:
+            try:
+                restored = self._post(
+                    "torrents/setCategory",
+                    data={"hashes": torrent_hash, "category": restore_category},
+                    timeout=self._config.timeout,
+                )
+                if not restored.ok:
+                    log.warning("qbittorrent category restore failed for %s: %s",
+                                torrent_hash[:12], restored.status_code)
+            except requests.RequestException:
+                log.warning("qbittorrent category restore error for %s", torrent_hash[:12])
+
     def _adopt_duplicate_magnet(self, magnet_or_url: str, tag: str) -> bool:
         """Attach an existing unowned qBittorrent torrent atomically."""
         if not str(magnet_or_url or "").startswith("magnet:"):
@@ -332,7 +351,11 @@ class QBittorrent:
             torrent_hash = str(existing[0].get("hash") or "").strip()
             if not torrent_hash:
                 return False
+            original_category = str(existing[0].get("category") or "").strip()
+            restore_cat = (original_category
+                           if original_category != self._config.category else None)
             tag_added = False
+            category_changed = False
             try:
                 tagged = self._post(
                     "torrents/addTags",
@@ -349,8 +372,10 @@ class QBittorrent:
                     timeout=self._config.timeout,
                 )
                 if categorized is None or not categorized.ok:
-                    self._remove_torrent_tag(torrent_hash, tag)
+                    self._rollback_duplicate_attach(
+                        torrent_hash, tag, remove_tag=True, restore_category=None)
                     return False
+                category_changed = True
                 try:
                     check = self._get(
                         "torrents/info", params={"tag": tag},
@@ -370,11 +395,14 @@ class QBittorrent:
                     log.info("attached request to existing qBittorrent torrent %s",
                              torrent_hash[:12])
                     return True
-                self._remove_torrent_tag(torrent_hash, tag)
+                self._rollback_duplicate_attach(
+                    torrent_hash, tag, remove_tag=True, restore_category=restore_cat)
                 return False
             except requests.RequestException:
-                if tag_added:
-                    self._remove_torrent_tag(torrent_hash, tag)
+                self._rollback_duplicate_attach(
+                    torrent_hash, tag,
+                    remove_tag=tag_added,
+                    restore_category=restore_cat if category_changed else None)
                 return False
 
     def add(self, magnet_or_url: str, *, save_path: str | None = None) -> bool:

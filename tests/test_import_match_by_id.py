@@ -501,13 +501,20 @@ def test_qbittorrent_duplicate_cleans_up_tag_on_category_or_verify_failure_and_a
     assert len(session.removed) == 1
     assert session.row["tags"] == "cross-seed"
 
-    # Verification failure also rolls back only this attempt's tag.
+    # Verification failure also rolls back only this attempt's tag and restores original category.
     session.fail_category = False
     session.fail_verify = True
     assert not client.add(magnet)
     assert client.last_job_id == ""
     assert len(session.removed) == 2
     assert session.row["tags"] == "cross-seed"
+    assert session.row["category"] == "prowlarr"
+
+    # Uncategorized original torrent is also restored to "" on verification failure.
+    session.row["category"] = ""
+    assert not client.add(magnet)
+    assert session.row["tags"] == "cross-seed"
+    assert session.row["category"] == ""
 
     # Retry succeeds once category update and verification succeed.
     session.fail_verify = False
