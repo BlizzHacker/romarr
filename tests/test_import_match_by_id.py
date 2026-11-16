@@ -172,6 +172,58 @@ def test_qbittorrent_add_tags_the_job_and_exposes_the_same_identity():
     assert url.endswith("/api/v2/torrents/add")
 
 
+def test_qbittorrent_add_attaches_a_verified_duplicate_magnet():
+    """A qBittorrent 409 adopts exactly one matching torrent for import."""
+    from romarr.clients import QBittorrent, QbitConfig
+
+    infohash = "d2a64b88b086acfcb1c89f044f81764604ceab85"
+
+    class Response:
+        def __init__(self, status_code=200, payload=None, text="Ok."):
+            self.status_code = status_code
+            self.ok = 200 <= status_code < 400
+            self.text = text
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+        def raise_for_status(self):
+            if not self.ok:
+                raise RuntimeError(self.status_code)
+
+    class Session:
+        def __init__(self):
+            self.row = {"hash": infohash, "name": "Fat Princess",
+                        "tags": "", "category": "prowlarr"}
+            self.posts = []
+
+        def post(self, url, **kwargs):
+            self.posts.append((url, kwargs))
+            if url.endswith("/torrents/add"):
+                return Response(409, text="Fails.")
+            if url.endswith("/torrents/addTags"):
+                self.row["tags"] = kwargs["data"]["tags"]
+            if url.endswith("/torrents/setCategory"):
+                self.row["category"] = kwargs["data"]["category"]
+            return Response()
+
+        def get(self, url, **kwargs):
+            return Response(payload=[dict(self.row)])
+
+    session = Session()
+    client = QBittorrent(QbitConfig(base_url="http://qbit:8080",
+                                    category="romarr"), session=session)
+    client._authed = True
+
+    assert client.add(f"magnet:?xt=urn:btih:{infohash}")
+    assert client.last_job_id.startswith("qbit-tag:romarr-")
+    assert session.row["tags"] == client.last_job_id.removeprefix("qbit-tag:")
+    assert session.row["category"] == "romarr"
+    assert any(url.endswith("/torrents/addTags") for url, _ in session.posts)
+    assert any(url.endswith("/torrents/setCategory") for url, _ in session.posts)
+
+
 def test_qbittorrent_tag_matches_a_renamed_completed_torrent():
     from romarr.downloaders import match_queue_item
     item = QueueItem("Tony Hawk 3", "ps2", "long indexer title", 0,

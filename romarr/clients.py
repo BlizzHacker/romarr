@@ -285,6 +285,7 @@ class QBittorrent:
         return self._session.post(self._url(path), **req_kwargs)
 
     def add(self, magnet_or_url: str, *, save_path: str | None = None) -> bool:
+        """Add a torrent, attaching a verified duplicate to this request."""
         if not self._authed:
             self.login()
         tag = "romarr-" + secrets.token_hex(12)
@@ -293,6 +294,49 @@ class QBittorrent:
         if save_path:
             data["savepath"] = save_path
         response = self._post("torrents/add", data=data, timeout=self._config.timeout)
+        if response.status_code == 409 and str(magnet_or_url or "").startswith("magnet:"):
+            from .retained_collection import magnet_hash
+
+            infohash = magnet_hash(magnet_or_url)
+            if infohash:
+                try:
+                    existing = [row for row in self.torrents()
+                                if _row_matches_infohash(row, infohash)]
+                except (requests.RequestException, ValueError, KeyError, TypeError):
+                    existing = []
+                if len(existing) == 1:
+                    torrent_hash = str(existing[0].get("hash") or "").strip()
+                    tagged = self._post(
+                        "torrents/addTags",
+                        data={"hashes": torrent_hash, "tags": tag},
+                        timeout=self._config.timeout,
+                    ) if torrent_hash else None
+                    categorized = self._post(
+                        "torrents/setCategory",
+                        data={"hashes": torrent_hash,
+                              "category": self._config.category},
+                        timeout=self._config.timeout,
+                    ) if torrent_hash else None
+                    if tagged is not None and tagged.ok and categorized is not None and categorized.ok:
+                        try:
+                            check = self._get(
+                                "torrents/info", params={"tag": tag},
+                                timeout=self._config.timeout,
+                            )
+                            rows = check.json() if check.ok else []
+                        except (requests.RequestException, ValueError):
+                            rows = []
+                        matches = [
+                            row for row in rows
+                            if isinstance(row, dict)
+                            and _row_has_tag(row, tag)
+                            and _row_matches_infohash(row, infohash)
+                        ]
+                        if len(matches) == 1:
+                            self._added.job_id = "qbit-tag:" + tag
+                            log.info("attached request to existing qBittorrent torrent %s",
+                                     torrent_hash[:12])
+                            return True
         if not response.ok:
             log.warning("qbittorrent add failed: %s", response.status_code)
             return False
