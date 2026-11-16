@@ -5154,6 +5154,18 @@ RENDER.emulators=async()=>{
       <a class="btn ghost" href="https://apps.microsoft.com/detail/9MXC51W17LH4" target="_blank" rel="noopener">Cartridge for Xbox</a>
     </div>
     <pre id="cartridge-status-result" role="status" style="margin-top:8px;"></pre></div>
+    <div class="card" style="border:1px solid #ec4899;"><h3>ATProto &amp; Games Federation (Kirby Absorbed)</h3>
+      <p>Absorbed from <b>AT Protocol</b>, <b>HappyView</b>, and <b>Cartridge Studio</b>: self-sovereign game records, schema-driven XRPC AppView queries, and decentralized playState sync.</p>
+      <div class="row">
+        <button class="btn" id="atproto-status-btn">ATProto Status</button>
+        <button class="btn ghost" id="atproto-lexicons-btn">Absorbed Lexicons</button>
+        <button class="btn ghost" id="atproto-export-btn">Export Library to ATProto</button>
+        <button class="btn ghost" id="atproto-xrpc-btn">Query Local AppView (XRPC)</button>
+        <a class="btn ghost" href="https://atproto.com" target="_blank" rel="noopener">AT Protocol</a>
+        <a class="btn ghost" href="https://github.com/gamesgamesgamesgamesgames/lexicon" target="_blank" rel="noopener">Games Lexicon</a>
+      </div>
+      <pre id="atproto-status-result" role="status" style="margin-top:8px;"></pre>
+    </div>
     <div class="card"><h3>Emulator Hub</h3>
     <p>Find an emulator, check its setup guide, then add your games. Install buttons install on the
     <b>ROMarr host</b>. Use the upstream downloads on a different gaming device.</p>
@@ -5295,6 +5307,34 @@ RENDER.emulators=async()=>{
       const res=await j('/api/v1/emulators/plug-and-play',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
       if(current())out.textContent=JSON.stringify(res,null,2);
     }catch(err){if(current())out.textContent='Plug & Play error: '+err.message;}
+  };
+  $('#atproto-status-btn').onclick=async()=>{
+    const out=$('#atproto-status-result');out.textContent='Checking ATProto status…';
+    try{
+      const res=await j('/api/v1/atproto/status');
+      if(current())out.textContent=JSON.stringify(res,null,2);
+    }catch(err){if(current())out.textContent='Status error: '+err.message;}
+  };
+  $('#atproto-lexicons-btn').onclick=async()=>{
+    const out=$('#atproto-status-result');out.textContent='Loading absorbed lexicons…';
+    try{
+      const res=await j('/api/v1/atproto/lexicons');
+      if(current())out.textContent=JSON.stringify(res,null,2);
+    }catch(err){if(current())out.textContent='Lexicon error: '+err.message;}
+  };
+  $('#atproto-export-btn').onclick=async()=>{
+    const out=$('#atproto-status-result');out.textContent='Exporting games to ATProto records…';
+    try{
+      const res=await j('/api/v1/atproto/export',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+      if(current())out.textContent=JSON.stringify(res,null,2);
+    }catch(err){if(current())out.textContent='Export error: '+err.message;}
+  };
+  $('#atproto-xrpc-btn').onclick=async()=>{
+    const out=$('#atproto-status-result');out.textContent='Querying HappyView XRPC…';
+    try{
+      const res=await j('/xrpc/games.gamesgamesgamesgames.listGames');
+      if(current())out.textContent=JSON.stringify(res,null,2);
+    }catch(err){if(current())out.textContent='XRPC error: '+err.message;}
   };
   document.querySelectorAll('[data-inspect]').forEach(button=>button.onclick=async()=>{
     const inspectVersion=++inspection;
