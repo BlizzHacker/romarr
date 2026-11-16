@@ -18,6 +18,7 @@ import threading
 import time
 from dataclasses import dataclass
 
+import re
 import requests
 
 from .libraries import (DEFAULT_BACKGROUND_TIMEOUT, Game,
@@ -1149,6 +1150,41 @@ class QBittorrent:
             else:
                 done.append(row)
         return done
+
+    def progress(self, *, deadline: float | None = None) -> dict[str, dict]:
+        """Read category-scoped progress, without changing torrent state."""
+        import math
+        if deadline is None:
+            deadline = time.monotonic() + 2
+        if not self._authed and not self.login(_deadline=deadline):
+            return {}
+        response = self._get("torrents/info", params={"category": self._config.category},
+                             _deadline=deadline, timeout=2)
+        response.raise_for_status()
+        payload = response.json()
+        if not isinstance(payload, list):
+            return {}
+        out = {}
+        for row in payload[:10000]:
+            if not isinstance(row, dict):
+                continue
+            key = str(row.get("hash") or "").lower()
+            if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", key):
+                continue
+            try:
+                percent = float(row.get("progress") or 0)
+                eta = float(row.get("eta", -1))
+                speed = float(row.get("dlspeed") or 0)
+                if not all(math.isfinite(v) for v in (percent, eta, speed)):
+                    continue
+            except (ValueError, TypeError, OverflowError):
+                continue
+            out[key] = {"tags": [t.strip() for t in str(row.get("tags") or "").split(",") if t.strip()],
+                        "progress": round(max(0, min(1, percent)) * 100, 1),
+                        "eta": int(eta) if 0 <= eta < 8640000 else None,
+                        "speed": max(0, int(speed)),
+                        "dl_state": str(row.get("state") or "")[:80]}
+        return out
 
     def reselect(self, row: dict) -> bool:
         """Set every file in one torrent back to normal priority.

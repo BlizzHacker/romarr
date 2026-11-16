@@ -99,7 +99,11 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
                                       "-- as query parameters or a JSON body "
                                       "-- to drop a request without importing "
                                       "it."),
-    "/api/v1/queue": ("GET", "Active downloads."),
+    "/api/v1/lookup": ("GET", "Find games by IGDB title, with per-platform library, download and monitoring state. Requires q; optional platform."),
+    "/api/v1/game/detail": ("GET", "Read one game and its cached metadata, wanted entry, queue and history; platform plus id or title."),
+    "/api/v1/wanted/add": ("POST", "Save a game/platform with boolean monitored (default true) and search (default false). Wishlist entries use monitored=false and are skipped by automatic searches."),
+    "/api/v1/wanted/monitor": ("POST", "Set boolean monitored for an existing game/platform; false pauses automatic searches without removing the entry."),
+    "/api/v1/queue": ("GET", "Active downloads, import-preview availability and client-scoped progress/ETA when available."),
     "/api/queue": ("GET", "Active downloads (legacy path)."),
     "/api/v1/history": ("GET", "What ROMarr has done."),
     "/api/v1/config": ("GET", "Settings, with every credential masked."),

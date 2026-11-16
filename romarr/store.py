@@ -120,6 +120,7 @@ class WantedItem:
     # `attempts` it drives the re-search backoff, so a title that has failed
     # for months is retried weekly rather than hourly.
     searched_at: str = ""
+    monitored: bool = True
 
 
 @dataclass
@@ -241,6 +242,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # used by ROM Hub's broker/downloader when an allowed HTTPS source answers
     # with a Cloudflare challenge. Never passed to untrusted plugin code.
     "flaresolverr_url": "",
+    "romm_public_url": "",
     # --- OpenID Connect sign-in (Authentik or any OIDC IdP) ---
     # Off until an issuer + client id exist. Distinct from forward-auth SSO
     # (sso.py), which believes a reverse proxy's headers; this makes ROMarr
@@ -523,7 +525,7 @@ class Store:
 
     # -- wanted ------------------------------------------------------------
 
-    def want(self, game: str, platform: str) -> WantedItem:
+    def want(self, game: str, platform: str, monitored: bool = True) -> WantedItem:
         """Add to Wanted, or return the existing entry.
 
         Requesting the same game twice is a retry, not a second entry.
@@ -532,10 +534,22 @@ class Store:
             for item in self.wanted:
                 if item.game.lower() == game.lower() and item.platform == platform:
                     return item
-            item = WantedItem(game=game, platform=platform)
+            item = WantedItem(game=game, platform=platform, monitored=monitored)
             self.wanted.append(item)
         self.save()
         return item
+
+    def set_monitored(self, game: str, platform: str, monitored: bool) -> bool:
+        """Turn watching on or off for one Wanted entry; False if it is not there."""
+        with self._lock:
+            for item in self.wanted:
+                if item.game.lower() == game.lower() and item.platform == platform:
+                    item.monitored = bool(monitored)
+                    break
+            else:
+                return False
+        self.save()
+        return True
 
     def fulfil(self, game: str, platform: str) -> bool:
         """Drop something from Wanted once it has actually arrived."""

@@ -35,7 +35,7 @@ def test_metadata_identify_cache_and_stale_requests_in_node():
         pytest.skip('Node.js not installed; browser logic NOT TESTED')
     source=ui.JS
     state=source[source.index('let activePage=null, pageVersion=0, metadataLookup=null;'):
-                 source.index('function go(page)')]
+                 source.index('function go(pageSpec)')]
     metadata=source[source.index('RENDER.metadata=async()=>{'):
                     source.index('// --- Calendar')]
     script = r'''

@@ -1286,18 +1286,24 @@ let metadataFilename='Chrono.Trigger.USA.v1.1.smc';
 let metadataCachedFilename='', metadataCachedResult=null;
 let metadataProviderRevision='';
 function metadataInvalidate(){metadataCachedFilename='';metadataCachedResult=null;}
-function go(page){
+let ROUTE_ARGS=[], ROUTE_SPEC="";
+function gameHref(platform,id,title,source=""){return "#game/"+encodeURIComponent(platform||"")+"/"+encodeURIComponent(id?String(id):"~"+title)+"/"+encodeURIComponent(source);}
+function go(pageSpec){
+  const parts=String(pageSpec).split("/");
+  let page=parts[0];
+  ROUTE_ARGS=parts.slice(1).map(x=>{try{return decodeURIComponent(x);}catch{return x;}});
+  ROUTE_SPEC=String(pageSpec);
   // Hashes are untrusted input; inherited Object properties are not renderers.
-  if(!Object.prototype.hasOwnProperty.call(RENDER,page)) page='library';
+  if(!Object.prototype.hasOwnProperty.call(RENDER,page)){page='library';pageSpec='library';ROUTE_ARGS=[];ROUTE_SPEC='library';}
   if(typeof RENDER!=='undefined'&&RENDER._queueTimer){clearInterval(RENDER._queueTimer);RENDER._queueTimer=null;}
   if(RENDER._libraryTimer){clearTimeout(RENDER._libraryTimer);RENDER._libraryTimer=null;}
   activePage=page;
   ++pageVersion;
   metadataLookup?.abort();
   metadataLookup=null;
-  location.hash=page;
-  sidebarSyncNav(page);
-  const titles={soundtracks:'Soundtracks',library:'Games',add:'Add New Game',search:'Interactive Search',
+  location.hash=pageSpec;
+  sidebarSyncNav(page==='game'?'library':page);
+  const titles={soundtracks:'Soundtracks',library:'Games',game:'Game',add:'Add New Game',search:'Interactive Search',
     missing:'Wanted — Missing',lists:'Import Lists',stats:'Statistics',
     discover:'Discover',ecosystem:'The Ecosystem',peers:'Friends',
     queue:'Queue',history:'History',media:'Media Management',profiles:'Profiles',
@@ -1316,7 +1322,7 @@ function go(page){
 }
 addEventListener('hashchange',()=>{
   const page=location.hash.slice(1)||'library';
-  if(page!==activePage) go(page);
+  if(page!==ROUTE_SPEC) go(page);
 });
 
 /* ---------------- pages ---------------- */
@@ -1912,9 +1918,7 @@ RENDER.library=async()=>{
   const moreBtn=p.querySelector('#lib-more');
   if(moreBtn) moreBtn.onclick=()=>{LIB.limit+=240;go('library');};
   document.querySelectorAll('[data-shelf]').forEach(t=>{
-    const open=()=>shelfEditor(items[Number(t.dataset.shelf)],
-      shelf[`${items[Number(t.dataset.shelf)].platform||''}/`
-        +`${(items[Number(t.dataset.shelf)].name||'').toLowerCase()}`]||{});
+    const open=()=>{const g=items[Number(t.dataset.shelf)];go(gameHref(g.platform_slug||g.platform,g.id,g.name,g.source||"").slice(1));};
     t.onclick=open;t.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();open();}};
   });
 };
@@ -2000,6 +2004,8 @@ function shelfEditor(g, meta){
 }
 
 RENDER.add=async()=>{
+  const version=pageVersion;
+  const current=()=>version===pageVersion&&activePage==='add';
   $('#page').innerHTML=`<div class="card">
     <h3>Request a game</h3>
     <p class="help">ROMarr searches your indexers, picks the healthiest release
@@ -2010,6 +2016,8 @@ RENDER.add=async()=>{
       <div class="field" style="width:230px;margin:0"><label>Platform</label>
         <select id="g-plat"><option value="" disabled selected hidden>Select a platform</option>${PLATFORMS.map(p=>
           `<option value="${esc(p.slug)}">${esc(p.name)}</option>`).join('')}</select></div>
+      <button class="btn ghost" id="g-catalog" style="margin-top:20px">Find games</button>
+      <button class="btn ghost" id="g-wish" style="margin-top:20px">Save to wishlist</button>
       <button class="btn" id="g-go" style="margin-top:20px">Search &amp; Grab</button>
     </div>
     <div id="g-out" style="margin-top:16px"></div></div>`;
@@ -2022,12 +2030,37 @@ RENDER.add=async()=>{
     const r=await j('/api/request',{method:'POST',
       headers:{'content-type':'application/json'},
       body:JSON.stringify({game,platform})});
+    if(!current())return;
     $('#g-out').innerHTML=r.ok
       ? `<div class="card" style="margin:0"><h3>Grabbed</h3>
          <p class="help">${esc(r.release)} — ${r.seeders} seeders</p></div>`
       : `<div class="card" style="margin:0"><h3>Not grabbed</h3>
          <p class="help">${esc(r.error||'no usable release')}</p></div>`;
     refreshCounts();
+  };
+
+  $('#g-wish').onclick=async()=>{
+    const game=$('#g-name').value.trim(),platform=$('#g-plat').value;
+    if(!game||!platform){toast('Enter a title and select a platform');return;}
+    const r=await j('/api/v1/wanted/add',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({game,platform,monitored:false})});
+    if(!current())return;
+    toast(r.ok?'Saved to wishlist; automatic searches are off':r.error||'Could not save');refreshCounts();
+  };
+  let catalogRequest=0;
+  $('#g-catalog').onclick=async()=>{
+    const q=$('#g-name').value.trim(),platform=$('#g-plat').value;
+    if(q.length<2){toast('Enter at least two characters');return;}
+    const request=++catalogRequest, out=$('#g-out');
+    out.textContent='Finding games…';
+    const d=await j('/api/v1/lookup?q='+encodeURIComponent(q)+'&platform='+encodeURIComponent(platform)).catch(()=>({error:'Game search failed'}));
+    if(!current()||request!==catalogRequest)return;
+    if(d.configured===false){out.innerHTML='<p class="help">Connect IGDB in <a href="#metadata">Metadata</a> to find games by name. You can still enter an exact title and request it or save it to your wishlist.</p>';return;}
+    if(d.error){out.textContent=d.error;return;}
+    out.innerHTML=(d.items||[]).map((g,i)=>`<div class="card"><h3>${esc(g.title)} ${g.year?esc(g.year):''}</h3><p class="help">${esc(g.summary||'')}</p><div class="row">${g.options.map(o=>`<button class="btn ghost" data-catalog="${i}" data-platform="${esc(o.slug)}">${esc(o.name)}${o.state?' · '+esc(o.state):''}</button>`).join('')}</div></div>`).join('')||'<p class="help">No matching games. Try a shorter title or add the exact title yourself.</p>';
+    out.querySelectorAll('[data-catalog]').forEach(b=>b.onclick=()=>{
+      const g=d.items[Number(b.dataset.catalog)];
+      go(gameHref(b.dataset.platform,'',g.title).slice(1));
+    });
   };
 };
 
@@ -2138,30 +2171,84 @@ RENDER.search=async()=>{
   $('#s-name').onkeydown=e=>{ if(e.key==='Enter') run(); };
 };
 
+
+RENDER.game=async()=>{
+  const version=pageVersion,[slug,idOrTitle,source]=ROUTE_ARGS;
+  const current=()=>version===pageVersion&&activePage==='game';
+  const isTitle=(idOrTitle||'').startsWith('~');
+  const d=await j('/api/v1/game/detail?platform='+encodeURIComponent(slug||'')+(isTitle?'&title='+encodeURIComponent(idOrTitle.slice(1)):'&id='+encodeURIComponent(idOrTitle||''))+'&source='+encodeURIComponent(source||'')).catch(()=>null);
+  if(!current())return;
+  if(!d||!d.title){$('#page').innerHTML='<div class="empty">'+esc(d?.error||'Game not found.')+'</div>';return;}
+  const w=d.wanted,it=d.item||{};
+  $('#page').innerHTML=`<div class="card"><h2>${esc(d.title)}</h2><p class="help">${esc(d.platform_name)} · ${d.in_library?'In your library':w?(w.monitored?'Monitored':'Wishlist'):'Not added'}</p>
+    <div class="row">${d.romm_url?`<a class="btn" id="game-romm" target="_blank" rel="noopener noreferrer">Open in RomM</a>`:''}
+    ${!d.in_library?'<button class="btn" id="game-add">Monitor and search now</button><button class="btn ghost" id="game-wish">Save to wishlist</button>':''}
+    ${w?`<button class="btn ghost" id="game-monitor" aria-pressed="${w.monitored}">${w.monitored?'Pause monitoring':'Resume monitoring'}</button>`:''}
+    <button class="btn ghost" id="game-search">Interactive search</button><button class="btn ghost" id="game-notes">Status, rating and notes</button></div>
+    <p class="help">${esc(it.summary||'')}</p></div>
+    <div class="card"><h3>Downloads</h3>${(d.queue||[]).map(q=>`<p>${esc(q.release)} · ${esc(q.state)}<br><span class="help">${esc(q.detail||'')}</span></p>`).join('')||'<p class="help">No downloads for this game.</p>'}</div>
+    <div class="card"><h3>History</h3>${(d.history||[]).map(h=>`<p>${esc(h.kind)} · ${esc(h.detail||'')}</p>`).join('')||'<p class="help">No events yet.</p>'}</div>`;
+  const romm=$('#game-romm');if(romm){try{const url=new URL(d.romm_url);if(['http:','https:'].includes(url.protocol))romm.href=url.href;else romm.remove();}catch{romm.remove();}}
+  $('#game-notes').onclick=()=>shelfEditor({name:d.title,platform:it.platform||d.platform},d.meta||{});
+  $('#game-search').onclick=()=>{go('search');$('#s-name').value=d.title;$('#s-plat').value=d.platform;$('#s-plat').dispatchEvent(new Event('change'));$('#s-go').click();};
+  const save=async(monitored,search)=>{
+    const r=await j('/api/v1/wanted/add',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({game:d.title,platform:d.platform,monitored,search})});
+    refreshCounts();if(!current())return;
+    toast(r.ok?(r.search?.ok?'Download started':search?'No release yet; monitoring is on':'Saved to wishlist'):r.error||'Could not save');
+    go(ROUTE_SPEC);
+  };
+  $('#game-add')?.addEventListener('click',()=>save(true,true));
+  $('#game-wish')?.addEventListener('click',()=>save(false,false));
+  $('#game-monitor')?.addEventListener('click',async()=>{
+    const r=await j('/api/v1/wanted/monitor',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({game:d.title,platform:d.platform,monitored:!w.monitored})});
+    if(current()&&r.ok)go(ROUTE_SPEC);
+  });
+};
+let MISSING_VIEW='all';
 RENDER.missing=async()=>{
-  const d=await j('/api/v1/wanted/missing');
-  $('#page').innerHTML=`<div class="row" style="margin-bottom:14px">
+  const version=pageVersion;
+  const all=await j('/api/v1/wanted/missing');
+  if(version!==pageVersion||activePage!=='missing')return;
+  const nMon=all.items.filter(w=>w.monitored!==false).length, nWish=all.items.length-nMon;
+  const d={items:all.items.filter(w=>MISSING_VIEW==='all'||(MISSING_VIEW==='wishlist')===(w.monitored===false))};
+  const seg=(k,l,n)=>`<button class="btn ${MISSING_VIEW===k?'':'ghost'}" data-mview="${k}" style="padding:4px 12px;font-size:12.5px">${l} ${n}</button>`;
+  $('#page').innerHTML=`<div class="row" style="margin-bottom:10px">
+      ${seg('all','All',all.items.length)}${seg('monitored','Monitored',nMon)}${seg('wishlist','Wishlist',nWish)}
+      <span class="help" style="margin:0">Wishlist = on your list but not monitored, so ROMarr never searches for it.</span></div>
+    <div class="row" style="margin-bottom:14px">
       <button class="btn" id="w-all">Search All</button>
       <span style="color:var(--dim);font-size:12.5px">
         ${d.items.length} game(s) requested but not yet imported</span></div>
-    ${d.items.length?`<table><thead><tr><th>Game</th><th>Platform</th>
-      <th>Added</th><th>Attempts</th><th>Last error</th><th></th></tr></thead><tbody>
-      ${d.items.map(w=>`<tr><td>${esc(w.game)}</td><td>${esc(w.platform||'—')}</td>
+    ${d.items.length?`<div class="tablewrap"><table><thead><tr><th>Game</th><th>Platform</th>
+      <th>Monitored</th><th>Added</th><th>Attempts</th><th>Last error</th><th></th></tr></thead><tbody>
+      ${d.items.map(w=>`<tr${w.monitored===false?' style="opacity:.62"':''}><td><a href="${esc(gameHref(w.platform,'',w.game))}">${esc(w.game)}</a></td><td>${esc(w.platform||'—')}</td>
+        <td><button class="mini" data-mon-game="${esc(w.game)}" data-mon-platform="${esc(w.platform)}"
+          data-mon="${w.monitored===false?'0':'1'}" aria-pressed="${w.monitored!==false}"
+          title="Monitored games are searched by the sweep and watched in RSS">${w.monitored===false?'Off':'On'}</button></td>
         <td title="${esc(w.added)}">${esc(fmtDate(w.added))}</td><td>${w.attempts}</td>
         <td style="color:var(--dim)">${esc(w.last_error||'—')}</td>
         <td><button class="mini" data-drop-game="${esc(w.game)}"
           data-drop-platform="${esc(w.platform)}"
           title="Stop looking for this. It stays out of Wanted until you ask for it again."
           >Remove</button></td></tr>`).join('')}
-      </tbody></table>`:'<div class="empty">Nothing missing.</div>'}`;
+      </tbody></table></div>`:'<div class="empty">Nothing missing.</div>'}`;
+  $('#page').querySelectorAll('[data-mview]').forEach(x=>x.onclick=()=>{MISSING_VIEW=x.dataset.mview; go('missing');});
   const b=$('#w-all'); if(b) b.onclick=async()=>{
     b.disabled=true; b.textContent='Searching…';
     const r=await j('/api/v1/command',{method:'POST',
       headers:{'content-type':'application/json'},
       body:JSON.stringify({name:'MissingGameSearch'})});
+    if(version!==pageVersion||activePage!=='missing')return;
     toast(`Searched ${r.searched??0}, grabbed ${r.grabbed??0}`);
     go('missing'); refreshCounts();
   };
+  $('#page').querySelectorAll('button[data-mon-game]').forEach(x=>x.onclick=async()=>{
+    x.disabled=true;
+    const r=await j('/api/v1/wanted/monitor',{method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({game:x.dataset.monGame,platform:x.dataset.monPlatform,monitored:x.dataset.mon!=='1'})});
+    if(version!==pageVersion||activePage!=='missing')return;
+    if(r.ok) go('missing'); else {x.disabled=false; toast('Could not change monitoring');}
+  });
   // Dropping a request, which Wanted could not do at all: the list was only
   // ever emptied by an import, so a typo went on being searched for forever.
   $('#page').querySelectorAll('button[data-drop-game]').forEach(x=>x.onclick=async()=>{
@@ -2170,6 +2257,7 @@ RENDER.missing=async()=>{
     x.disabled=true;
     const r=await fetch('/api/v1/wanted/missing?game='+encodeURIComponent(game)
       +'&platform='+encodeURIComponent(platform),{method:'DELETE'});
+    if(version!==pageVersion||activePage!=='missing')return;
     if(r.ok){ toast(`Removed ${game}`); go('missing'); refreshCounts(); }
     else { x.disabled=false; toast('Could not remove that request'); }
   });
@@ -4156,6 +4244,7 @@ RENDER.queue=async()=>{
     ${d.items.map((i,n)=>`<tr><td>${esc(i.game)}</td><td>${esc(i.platform)}</td>
       <td>${esc(i.release||'—')}</td><td>${i.seeders||'—'}</td>
       <td><span class="pill ${esc(i.state)}">${esc(i.state)}</span>
+      ${Number.isFinite(i.progress)?`<div class="help">${i.progress.toFixed(1)}% · ${i.eta===null?'ETA unknown':Math.ceil(i.eta/60)+' min left'} · ${(i.speed/1048576).toFixed(1)} MB/s</div>`:''}
       ${i.detail?`<div style="color:var(--dim);font-size:11.5px">${esc(i.detail)}</div>`:''}
       </td><td style="text-align:right"><div class="rowact">
         ${['failed','import-failed'].includes(i.state)?`<button data-qretry="${n}">Retry</button>`:''}
