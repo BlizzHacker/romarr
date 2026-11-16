@@ -45,24 +45,23 @@ These entries and their tagged source repositories were checked on **2026-10-24*
 | **libretro Thumbnails** | Metadata/artwork capability, rather than game search | [rom-hub-libretro-thumbnails v0.2.0](https://github.com/BlizzHacker/rom-hub-libretro-thumbnails/tree/v0.2.0) |
 | **Igir 1G1R Collection Manager** | Igir v5.8.0 1G1R DAT verification, patching (BPS/IPS/UPS/Xdelta3/PMSR) & cleanup for RomM, Gaseous, Retrom, ES-DE & Batocera | [rom-hub-igir v0.1.0](https://github.com/BlizzHacker/rom-hub-igir/tree/v0.1.0) |
 | **eXo2romm** | Repackage eXoDOS game zips for standalone RomM playback by rewriting pack-root `dosbox.conf` mounts (credits [derkommutator/eXo2romm](https://github.com/derkommutator/eXo2romm); inspired to assist more users) | [rom-hub-exo2romm v0.1.0](https://github.com/BlizzHacker/rom-hub-exo2romm/tree/v0.1.0) |
-| **gamesgamesgamesgamesgames Video Game Standard** | Decentralized video game data architecture (`games.gamesgamesgamesgames.*` lexicons, HappyView AppView queries, and Cartridge sovereign gaming studio) | [rom-hub-gamesgames v0.1.0](https://github.com/BlizzHacker/rom-hub-gamesgames/tree/v0.1.0) |
 
 The [full catalogue](https://github.com/BlizzHacker/rom-hub/blob/master/catalog/plugins.json) also includes Archive.org, Demozoo, IF Archive and other sources. Read the individual plugin's limits: for example, the itch.io entry is explicitly **play in browser, no import**. A catalogue listing does not promise downloadable copies of every game on that site.
 
 ### gamesgamesgamesgamesgames Video Game Standard (`rom-hub-gamesgames`)
 
-The `gamesgames` ROM Hub plugin ([`BlizzHacker/rom-hub-gamesgames`](https://github.com/BlizzHacker/rom-hub-gamesgames)) packages [gamesgamesgamesgamesgames](https://github.com/gamesgamesgamesgamesgames)' decentralized video game data architecture as an opt-in metadata and catalog plugin rather than baking ATProto into ROMarr core:
+The `gamesgames` ROM Hub plugin ([`BlizzHacker/rom-hub-gamesgames`](https://github.com/BlizzHacker/rom-hub-gamesgames)) packages [gamesgamesgamesgamesgames](https://github.com/gamesgamesgamesgamesgames)' decentralized video game data architecture as an opt-in metadata plugin (`[capabilities] metadata`) rather than baking ATProto into ROMarr core:
 
 - **Video Game Lexicons ([gamesgamesgamesgamesgames/lexicon](https://github.com/gamesgamesgamesgamesgames/lexicon))**:
   - `games.gamesgamesgamesgames.game`: Unified open standard for video games with IGDB, Wikidata, and ROMarr/RomM links.
   - `games.gamesgamesgamesgames.release`: Platform editions, dump formats, and cryptographic DAT verification checksums (SHA-256, CRC32, MD5).
   - `games.gamesgamesgamesgames.playState`: Decentralized player progression (`playing`, `completed`, `backlog`, `dropped`, `wishlist`), play time, and ratings synced across your screens.
   - `games.gamesgamesgamesgames.achievement`: Cross-game trophies and achievements recorded on your personal game shelf.
-  - `dev.cartridge.verificationRequest`: Verification assertions signing authentic No-Intro and Redump matches to your DID.
+  - `dev.cartridge.verificationRequest`: Verification requests stored in your DID that carry a SHA-256 or CRC32 checksum for a No-Intro or Redump candidate. The plugin does not compare the checksum with DAT data or sign the request.
 - **Embedded Gaming AppView ([gamesgamesgamesgamesgames/happyview](https://github.com/gamesgamesgamesgamesgames/happyview))**:
-  - Schema-driven gaming XRPC queries (`games.gamesgamesgamesgames.getGame`, `listGames`, `getPlayState`) and Jetstream video game catalog event indexing.
+  - In `v0.1.0`, the plugin manifest registers a metadata provider (`enrich`); standalone HTTP XRPC endpoints (`games.gamesgamesgamesgames.getGame`, `listGames`, `getPlayState`) and background Jetstream event indexing are helper classes inside `gamesgames.lexicons` and are not exposed as host HTTP routes unless wired separately.
 - **Sovereign Gaming Studio ([gamesgamesgamesgamesgames/cartridge](https://github.com/gamesgamesgamesgamesgames/cartridge))**:
-  - Portable, player-owned game libraries and verified DAT shelf records that travel with your gaming handle across devices.
+  - Portable, player-owned game libraries and shelf records that travel with your gaming handle across devices.
 
 ## Add ROM Hub to a source or LXC installation
 
