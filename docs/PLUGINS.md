@@ -52,7 +52,7 @@ The [full catalogue](https://github.com/BlizzHacker/rom-hub/blob/master/catalog/
 
 ### Expanded Ecosystem: Guides, Tutorials, Open-Source Repos, Mods & Bots
 
-All 11 plugins below implement `search`, `importer` (full file/release downloads), and `stream` (direct browser view):
+All 11 plugins below implement `search`, `importer`, and `stream` (direct browser view); 10 download full files/releases, while `youtube-tutorials` plans metadata, a thumbnail, and optional captions (streaming the video in-browser without downloading the video file):
 
 | Plugin | Category | What it covers | Key / Solver |
 |---|---|---|---|
@@ -94,7 +94,7 @@ Install Git using your operating system's package manager. Then install the host
 ```bash
 # Proxmox installation path; change it for your own source checkout.
 /opt/romarr/.venv/bin/python -m pip install \
-  "rom-hub @ https://github.com/BlizzHacker/rom-hub/archive/e268d988828c387b5180e862dde46d6b6f85cc3e.tar.gz"
+  "rom-hub @ https://github.com/BlizzHacker/rom-hub/archive/ef025c056827423b370e8fe626cd8c4ebdc034ed.tar.gz"
 ```
 
 For a checkout using `.venv`, use `.venv/bin/python` instead. Installing into system Python or another virtual environment will not make the package available to ROMarr. Refresh the Plugins page after installing; restart ROMarr after a package upgrade if it has already loaded an older module.
@@ -102,7 +102,7 @@ For a checkout using `.venv`, use `.venv/bin/python` instead. Installing into sy
 For the advanced [Windows source helper](INSTALL.md#windows-source-install), run from the repository directory:
 
 ```powershell
-.\.venv-windows\Scripts\python.exe -m pip install "rom-hub @ https://github.com/BlizzHacker/rom-hub/archive/e268d988828c387b5180e862dde46d6b6f85cc3e.tar.gz"
+.\.venv-windows\Scripts\python.exe -m pip install "rom-hub @ https://github.com/BlizzHacker/rom-hub/archive/ef025c056827423b370e8fe626cd8c4ebdc034ed.tar.gz"
 ```
 
 Use your chosen virtual-environment path if you changed `-VenvDirectory`. Git must be on `PATH` when installing plugin repositories. The Hub page reports the lack of Linux sandbox support on Windows; do not assume it is confined there.

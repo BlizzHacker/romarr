@@ -1579,26 +1579,36 @@ RENDER.hub=async()=>{
     if($('#exo-dry')) $('#exo-dry').onclick=()=>runExoJob(true);
     if($('#exo-run')) $('#exo-run').onclick=()=>runExoJob(false);
     const qi=$('#pq');
-    let t=null;
-    qi.oninput=()=>{clearTimeout(t);t=setTimeout(async()=>{
+    let t=null, hubLoadSeq=0;
+    const isCurrentHub=ver=>(typeof activePage==='undefined'||activePage==='hub')&&(typeof pageVersion!=='number'||pageVersion===ver);
+    const reloadAndRender=async(afterRender)=>{
+      const seq=++hubLoadSeq;
+      const loadVer=typeof pageVersion==='number'?pageVersion:0;
+      const data=await load();
+      if(!isCurrentHub(loadVer)||seq!==hubLoadSeq) return;
+      render(data);
+      if(afterRender) afterRender();
+    };
+    qi.oninput=()=>{clearTimeout(t);t=setTimeout(()=>{
       q=qi.value.trim();
       const at=qi.selectionStart;
-      render(await load());
-      const n=$('#pq'); n.focus(); n.setSelectionRange(at,at);
+      reloadAndRender(()=>{const n=$('#pq'); if(n){n.focus(); n.setSelectionRange(at,at);}});
     },220);};
 
-    p.querySelectorAll('.chip[data-cap]').forEach(c=>c.onclick=async()=>{
-      cap = cap===c.dataset.cap ? '' : c.dataset.cap; render(await load());});
-    p.querySelectorAll('.chip[data-inst]').forEach(c=>c.onclick=async()=>{
-      inst = inst===c.dataset.inst ? '' : c.dataset.inst; render(await load());});
-    p.querySelectorAll('.chip[data-quick]').forEach(c=>c.onclick=async()=>{
-      q = q===c.dataset.quick ? '' : c.dataset.quick; render(await load());});
+    p.querySelectorAll('.chip[data-cap]').forEach(c=>c.onclick=()=>{
+      clearTimeout(t);
+      cap = cap===c.dataset.cap ? '' : c.dataset.cap; reloadAndRender();});
+    p.querySelectorAll('.chip[data-inst]').forEach(c=>c.onclick=()=>{
+      clearTimeout(t);
+      inst = inst===c.dataset.inst ? '' : c.dataset.inst; reloadAndRender();});
+    p.querySelectorAll('.chip[data-quick]').forEach(c=>c.onclick=()=>{
+      clearTimeout(t);
+      q = q===c.dataset.quick ? '' : c.dataset.quick; reloadAndRender();});
 
     const iaForm=$('#ia-auth-form');
     const iaClear=$('#ia-auth-clear');
     const iaBtn=iaForm?iaForm.querySelector('button[type="submit"]'):null;
     const setIaBusy=busy=>{if(iaBtn)iaBtn.disabled=busy;if(iaClear)iaClear.disabled=busy;};
-    const isCurrentHub=ver=>(typeof activePage==='undefined'||activePage==='hub')&&(typeof pageVersion!=='number'||pageVersion===ver);
     const submitIaAuth=async(payload,fallbackError,okToast)=>{
       const opVer=typeof pageVersion==='number'?pageVersion:0;
       setIaBusy(true);
