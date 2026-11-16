@@ -64,7 +64,6 @@ from . import clamav, scanners, nup, mdm
 from .emulators import EmulatorHub
 from .libretro import CoreHub
 from .cartridge import CartridgeHub
-from .atproto import ATProtoKirbyHub, LEXICONS
 from .emulator_catalog import resource_catalog
 from .dat import DatIndex, parse_dat
 from .decompress import run_batch as run_decompress_batch, scan_compressed
@@ -8406,36 +8405,6 @@ def make_handler(service: ROMarr):
                     return self._json(200, CartridgeHub(service.store.path.parent).status())
                 except Exception as err:
                     return self._json(400, {"error": str(err)})
-            if route.path == "/api/v1/atproto/status":
-                try:
-                    return self._json(200, ATProtoKirbyHub(service.store.path.parent).status())
-                except Exception as err:
-                    return self._json(400, {"error": str(err)})
-            if route.path == "/api/v1/atproto/lexicons":
-                return self._json(200, {"lexicons": list(LEXICONS.keys()), "schemas": LEXICONS})
-            if route.path == "/xrpc/games.gamesgamesgamesgames.getGame":
-                try:
-                    hub_atproto = ATProtoKirbyHub(service.store.path.parent)
-                    params = {k: v[0] for k, v in query.items()}
-                    return self._json(200, hub_atproto.appview.handle_xrpc_get_game(params))
-                except KeyError as err:
-                    return self._json(404, {"error": str(err)})
-                except Exception as err:
-                    return self._json(400, {"error": str(err)})
-            if route.path == "/xrpc/games.gamesgamesgamesgames.listGames":
-                try:
-                    hub_atproto = ATProtoKirbyHub(service.store.path.parent)
-                    params = {k: v[0] for k, v in query.items()}
-                    return self._json(200, hub_atproto.appview.handle_xrpc_list_games(params))
-                except Exception as err:
-                    return self._json(400, {"error": str(err)})
-            if route.path == "/xrpc/games.gamesgamesgamesgames.getPlayState":
-                try:
-                    hub_atproto = ATProtoKirbyHub(service.store.path.parent)
-                    params = {k: v[0] for k, v in query.items()}
-                    return self._json(200, hub_atproto.appview.handle_xrpc_get_play_state(params))
-                except Exception as err:
-                    return self._json(400, {"error": str(err)})
             if route.path == "/api/v1/downloadclient/mdm":
                 return self._json(200, service.mdm_capability())
             if route.path == "/metrics":
@@ -9822,51 +9791,6 @@ def make_handler(service: ROMarr):
                     cartridge_hub = CartridgeHub(service.store.path.parent)
                     result = cartridge_hub.plug_and_play_setup()
                     return self._json(200, result)
-                except Exception as err:
-                    return self._json(400, {"error": str(err)})
-            if route.path == "/api/v1/atproto/connect":
-                try:
-                    atproto_hub = ATProtoKirbyHub(service.store.path.parent)
-                    identifier = str(body.get("identifier") or body.get("handle") or "")
-                    password = str(body.get("password") or "")
-                    return self._json(200, atproto_hub.connect(identifier, password))
-                except Exception as err:
-                    return self._json(400, {"error": str(err)})
-            if route.path == "/api/v1/atproto/export":
-                try:
-                    atproto_hub = ATProtoKirbyHub(service.store.path.parent)
-                    games = body.get("games")
-                    if games is None:
-                        from dataclasses import asdict
-                        games = [asdict(g) if hasattr(g, "__dataclass_fields__") else dict(g) for g in service.store.games.values()]
-                    return self._json(200, atproto_hub.export_library(games))
-                except Exception as err:
-                    return self._json(400, {"error": str(err)})
-            if route.path == "/api/v1/atproto/playstate":
-                try:
-                    atproto_hub = ATProtoKirbyHub(service.store.path.parent)
-                    game_uri = str(body.get("gameUri") or "")
-                    status = str(body.get("status") or "playing")
-                    play_time = int(body.get("playTimeMinutes") or 0)
-                    rating = float(body.get("rating")) if body.get("rating") is not None else None
-                    return self._json(200, atproto_hub.publish_play_state(game_uri, status, play_time, rating))
-                except Exception as err:
-                    return self._json(400, {"error": str(err)})
-            if route.path == "/api/v1/atproto/claim":
-                try:
-                    atproto_hub = ATProtoKirbyHub(service.store.path.parent)
-                    title = str(body.get("romTitle") or body.get("title") or "")
-                    platform = str(body.get("platform") or "")
-                    sha256 = str(body.get("sha256") or "")
-                    crc32 = str(body.get("crc32") or "")
-                    catalog = str(body.get("datCatalog") or "No-Intro")
-                    return self._json(200, atproto_hub.create_verification_claim(title, platform, sha256, crc32, catalog))
-                except Exception as err:
-                    return self._json(400, {"error": str(err)})
-            if route.path == "/api/v1/atproto/jetstream":
-                try:
-                    atproto_hub = ATProtoKirbyHub(service.store.path.parent)
-                    return self._json(200, atproto_hub.appview.process_jetstream_event(body))
                 except Exception as err:
                     return self._json(400, {"error": str(err)})
             if route.path == "/api/v1/security/inspect":

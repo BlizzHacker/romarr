@@ -28,9 +28,9 @@ Find games, verify ROMs, and import them into your library.
 > [!TIP]
 > **Android Beta, Handhelds & Argosy Launcher Integration!**  
 > Run ROMarr natively on your phone, tablet, or gaming handheld (Ayn Odin, Retroid Pocket, Anbernic, Logitech G Cloud):  
-> - 📲 **Google Play Test Track:** [Join the Android Beta on Google Play](https://play.google.com/apps/internaltest/4700888732790045566) (12 testers needed)  
-> - 📦 **Direct APK Sideload:** [Download the Standalone APK](https://github.com/BlizzHacker/romarr/releases) with bundled Chaquopy Python runtime — no Termux or Docker required.  
-> - 🎮 **Argosy Launcher & Emulator Pairing:** Connect [Argosy Launcher](https://github.com/rommapp/argosy-launcher) directly to ROMarr via native RomM API support, and launch games into RetroArch, Dolphin, PPSSPP, NetherSX2, DuckStation, and Citra with one tap!
+> - **Google Play Test Track:** [Join the Android Beta on Google Play](https://play.google.com/apps/internaltest/4700888732790045566) (12 testers needed)  
+> - **Direct APK Sideload:** [Download the Standalone APK](https://github.com/BlizzHacker/romarr/releases) with bundled Chaquopy Python runtime — no Termux or Docker required.  
+> - **Argosy Launcher & Emulator Pairing:** Connect [Argosy Launcher](https://github.com/rommapp/argosy-launcher) directly to ROMarr via native RomM API support, and launch games into RetroArch, Dolphin, PPSSPP, NetherSX2, DuckStation, and Citra with one tap!
 
 ![ROMarr interactive search, with scores and reasons beside each result](docs/img/interactive-search-live.png)
 
@@ -150,23 +150,6 @@ Source access, available files, credentials and platform support vary. Check the
 | **Android** | [Cartridge for Android](https://github.com/BlizzHacker/Cartridge) | Retro handhelds (Odin 2, Retroid Pocket, Anbernic), Android TV, tablets, phones | Gamepad-native launcher with bidirectional save-sync, rich metadata, on-demand downloads, and automated emulator handoff to RetroArch, Dolphin, PPSSPP, and NetherSX2. [Download APK from Releases](https://github.com/BlizzHacker/Cartridge/releases) or visit [BlizzHacker/Cartridge](https://github.com/BlizzHacker/Cartridge). |
 
 You can use Cartridge alongside your existing setup or keep using your favorite frontend (Playnite, LaunchBox, ES-DE, Pegasus). The Windows desktop app's **Cartridge** menu and the setup guides link to all three clients.
-
-## gamesgamesgamesgamesgames Gaming Stack (Kirby Absorbed)
-
-ROMarr has absorbed **[gamesgamesgamesgamesgames](https://github.com/gamesgamesgamesgamesgames)' use of ATProto** — Kirby-style complete absorption. Rather than absorbing a generic social network, ROMarr gains their entire decentralized video game data architecture:
-
-- **Video Game Lexicons ([gamesgamesgamesgamesgames/lexicon](https://github.com/gamesgamesgamesgamesgames/lexicon))**:
-  - `games.gamesgamesgamesgames.game`: Unified open standard for video games with IGDB, Wikidata, and ROMarr/RomM links.
-  - `games.gamesgamesgamesgames.release`: Platform editions, dump formats, and cryptographic DAT verification checksums (SHA-256, CRC32, MD5).
-  - `games.gamesgamesgamesgames.playState`: Decentralized player progression (`playing`, `completed`, `backlog`, `dropped`, `wishlist`), play time, and ratings synced across your screens.
-  - `games.gamesgamesgamesgames.achievement`: Cross-game trophies and achievements recorded on your personal game shelf.
-  - `dev.cartridge.verificationRequest`: Verification assertions signing authentic No-Intro and Redump matches to your DID.
-- **Embedded Gaming AppView ([gamesgamesgamesgamesgames/happyview](https://github.com/gamesgamesgamesgamesgames/happyview))**:
-  - Schema-driven gaming XRPC queries served directly by ROMarr: `/xrpc/games.gamesgamesgamesgames.getGame`, `listGames`, and `getPlayState`.
-  - Real-time Jetstream event processing (`/api/v1/atproto/jetstream`) streaming video game updates and community catalog changes.
-- **Sovereign Gaming Studio ([gamesgamesgamesgamesgames/cartridge](https://github.com/gamesgamesgamesgamesgames/cartridge))**:
-  - Export your entire verified ROMarr collection into sovereign video game records (`/api/v1/atproto/export`).
-  - Connect your gaming handle (`/api/v1/atproto/connect`) for portable, player-owned game libraries across any device.
 
 ## Help and documentation
 
