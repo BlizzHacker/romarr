@@ -19,7 +19,7 @@ See [Chrome installation guidance](https://developer.chrome.com/docs/modern-web-
 For local testing, open `chrome://extensions`, enable Developer mode, choose **Load unpacked**, and select `desktop/chrome`. The Chrome Web Store release ZIP contains only runtime files, with the manifest at the ZIP root:
 
 ```sh
-python3 desktop/chrome/package.py /opt/repos/ai-state/wadei/releases/romarr-chrome-1.0.1.zip
+python3 desktop/chrome/package.py romarr-chrome-1.0.1.zip
 ```
 
 Building the same source twice produces identical ZIP bytes. The extension uses a local service worker only to finish user-requested tab actions after the popup closes. It has no remote scripts, content scripts, injected code, cookie access, telemetry or background server API calls.

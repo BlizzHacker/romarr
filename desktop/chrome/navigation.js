@@ -1,6 +1,6 @@
 "use strict";
 importScripts('validation.js');
-const pending=new Map();
+const pending=new Map(), permissionRequests=new Map();
 let launchQueue=Promise.resolve();
 async function launchSavedServer(profile, hash) {
   profile=serverProfile(profile);
@@ -30,7 +30,7 @@ async function launchSavedServer(profile, hash) {
     try{address=new URL(tab.url);}catch{}
     // Unapproved sign-in authorities have no readable URL. Keep their flow
     // intact: focus the known tab rather than navigating or opening another.
-    held=!address||address.origin!==base.origin;
+    held=!address||address.origin!==base.origin||!address.pathname.startsWith(base.pathname);
   }else tab=await chrome.tabs.create({url:destination,active:false});
   launcherTabs[profile.url]=tab.id;
   // Persist before navigation/focus can close the action popup.
@@ -47,11 +47,16 @@ chrome.runtime.onMessage.addListener((message,sender,reply)=>{
     profile=serverProfile(message.profile);
     if(!['library','queue','emulators','general'].includes(message.hash))throw Error('Invalid section.');
   }catch{reply({error:'Invalid saved server or section.'});return false;}
-  const key=profile.url;
+  const key=profile.url+"#"+message.hash;
   if(!pending.has(key)){
     // Runtime messages carry the originating click's user gesture. Start the
     // prompt synchronously in the worker so closing its popup cannot abort it.
-    const permission=chrome.permissions.request({origins:[new URL(profile.url).origin+'/*']});
+    if(!permissionRequests.has(profile.url)){
+      const request=chrome.permissions.request({origins:[new URL(profile.url).origin+'/*']});
+      permissionRequests.set(profile.url,request);
+      request.finally(()=>{if(permissionRequests.get(profile.url)===request)permissionRequests.delete(profile.url);}).catch(()=>{});
+    }
+    const permission=permissionRequests.get(profile.url);
     const operation=permission.then(granted=>{
       if(!granted)return {denied:true};
       const launch=launchQueue.then(()=>launchSavedServer(profile,message.hash));

@@ -23,10 +23,10 @@
   "native_inputs_sha256": {
     "desktop/android/app/build.gradle": "0774dc92e1c8c9de778e396fba35499e1feb463bfb1ddf659ae8a6d4e30fbf0e",
     "desktop/android/app/src/main/AndroidManifest.xml": "15897f34234a067fe9de9a19c9901a11f69a9beddbd35ebb2fa907fee564d937",
-    "desktop/android/app/src/main/java/org/romarr/android/MainActivity.java": "0c540eda94dedf92dc246ee17f40c60b2035abe1eb3aa6c702d156afb992c066",
+    "desktop/android/app/src/main/java/org/romarr/android/MainActivity.java": "251502112e0d57785f6991614ff708b348ba6c7865209ab9ec7d2f72fef2eac2",
     "desktop/android/app/src/main/res/values/styles.xml": "61cfb9365080e9627e3f60b3a2b0a93f364510add9d4d13cdbae9e0e6f1677cd",
     "desktop/android/app/src/main/res/drawable/ic_more.xml": "94f439ed308ab7c730ec191ee59d7a1b3901bee6c4924e1e31def4c881a7306c",
-    "desktop/android/app/src/androidTest/java/org/romarr/android/StandaloneTest.java": "86a2bd567d545aaddd9aae3fd74ecef446a9b2d8098c433511e9b72e32bb6dda"
+    "desktop/android/app/src/androidTest/java/org/romarr/android/StandaloneTest.java": "223010a2c7f54689ce5b4d4cc9c16bc0bdad3e4e496d585d8302bc21907b22f7"
   },
   "layout_matrix": [
     {

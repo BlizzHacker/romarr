@@ -146,3 +146,61 @@ def test_invalid_rpc_and_manifest_compatibility(server):
     assert manifest["mcp_client_config"]["mcpServers"]["romarr"]["url"] == "https://owner.example/api/v1/mcp"
     assert "open-eyes" not in manifest["mcp_client_config"]["mcpServers"]
     assert "mcp-remote" not in json.dumps(manifest)
+
+
+def test_library_filters_backend_display_names_by_supported_slug(server):
+    _,service=server
+    service._library_cache=([Game("1","Display-name game","Super Nintendo Entertainment System",platform_slug="snes"),
+                             Game("2","Resolved-name game","Super Nintendo Entertainment System")],0,"")
+    result=send(server,rpc("tools/call",{"name":"romarr_library","arguments":{"platform":"snes"}})).json()["result"]
+    assert not result["isError"]
+    assert len(result["structuredContent"]["items"])==2
+    assert all(row["platform_slug"]=="snes" for row in result["structuredContent"]["items"])
+
+
+@pytest.mark.parametrize("title",["batch: /home/alice/roms","batch: C:\\private\\roms","batch: relative-root", "/home/alice/private", "C:\\private\\roms"])
+def test_history_omits_library_paths_carried_as_event_titles(server,title):
+    _,service=server
+    service.store.events=[Event("decompressed",title,"snes")]
+    result=send(server,rpc("tools/call",{"name":"romarr_history"})).json()["result"]["structuredContent"]
+    assert result["items"][0]["game"]=="[path omitted]"
+    assert title not in json.dumps(result)
+
+
+def test_stdio_non_ascii_results_are_valid_utf8_with_legacy_stdout_encoding(server):
+    base,service=server
+    service._library_cache=([Game("1","日本語のゲーム","snes")],0,"")
+    incoming=io.BytesIO((json.dumps(rpc("tools/call",{"name":"romarr_library"}))+"\n").encode())
+    buffer=io.BytesIO();writer=io.TextIOWrapper(buffer,encoding="cp1252")
+    mcp.bridge(base,"mcp-fixture-key",incoming,writer);writer.flush()
+    result=json.loads(buffer.getvalue().decode("utf-8"))
+    assert result["result"]["structuredContent"]["items"][0]["name"]=="日本語のゲーム"
+
+
+def test_library_does_not_export_path_like_backend_platform_identifiers(server):
+    _,service=server
+    service._library_cache=([Game("1","Game","snes",platform_slug="/home/alice/private")],0,"")
+    result=send(server,rpc("tools/call",{"name":"romarr_library"})).json()["result"]["structuredContent"]
+    assert result["items"][0]["platform_slug"]==""
+    assert "/home/alice" not in json.dumps(result)
+    refused=send(server,rpc("tools/call",{"name":"romarr_library","arguments":{"platform":"../private"}})).json()["result"]
+    assert refused["isError"]
+
+
+@pytest.mark.parametrize("title",['A / B','Ys I / II'])
+def test_mcp_retains_normal_slash_separators_in_titles(server,title):
+    _,service=server
+    service._library_cache=([Game("1",title,"snes")],0,"")
+    service.queue=[QueueItem(title,"snes","release",1,"grabbed")]
+    service.store.events=[Event("grabbed",title,"snes")]
+    for name,field in [("romarr_library","name"),("romarr_queue","game"),("romarr_history","game")]:
+        result=send(server,rpc("tools/call",{"name":name})).json()["result"]["structuredContent"]
+        assert result["items"][0][field]==title
+
+
+@pytest.mark.parametrize("title",["file '/home/alice/private'",'file "/home/alice/private"', "file 'C:\\private\\roms'"])
+def test_mcp_omits_quoted_absolute_history_paths(server,title):
+    _,service=server
+    service.store.events=[Event("decompressed",title,"snes")]
+    result=send(server,rpc("tools/call",{"name":"romarr_history"})).json()["result"]["structuredContent"]
+    assert result["items"][0]["game"]=="[path omitted]"

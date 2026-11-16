@@ -179,7 +179,10 @@ def test_a_headered_rom_still_verifies(snes):
     body = b"\xA5" * 3145728
     headered = b"\x00" * 512 + body
     crc = f"{zlib.crc32(body) & 0xFFFFFFFF:08x}"
-    dat = parse_dat(NOINTRO.replace("D63ED5F8", crc.upper()))
+    hashes = hash_bytes(body)
+    dat = parse_dat(NOINTRO.replace("D63ED5F8", crc.upper())
+                    .replace("21f3e98df4780ee1c667b84e57d88675", hashes["md5"])
+                    .replace("da957f0d63d14cb441d215462904d982ec45a7ca", hashes["sha1"]))
 
     computed = hash_bytes(headered, suffix=".smc")
     assert computed["size"] == 3145728, "the header is excluded from the size too"
@@ -366,3 +369,37 @@ def test_logiqx_dat_with_a_utf8_bom_is_still_parsed():
     xml = '\ufeff<?xml version="1.0"?><datafile><header><name>BOM</name></header>' \
           '<game name="Game"><rom name="g.bin" size="1" crc="aa"/></game></datafile>'
     assert parse_dat(xml).games["Game"].roms[0].crc == "aa"
+
+
+@pytest.mark.parametrize("fixture", [NOINTRO, CMP])
+@pytest.mark.parametrize("algorithm", ["crc", "md5"])
+@pytest.mark.parametrize("size_known", [False, True])
+def test_weaker_hash_cannot_override_a_conflicting_sha1(fixture, algorithm, size_known):
+    """Parsed publisher checksums must not bless a colliding CRC32 or MD5."""
+    dat = parse_dat(fixture)
+    rom = next(iter(dat.games.values())).roms[0]
+    hashes = {algorithm: getattr(rom, algorithm), "sha1": "f" * 40}
+    if size_known:
+        hashes["size"] = rom.size
+    match = dat.lookup(**hashes)
+    assert match.status == (BAD_DUMP if size_known else UNKNOWN)
+
+
+@pytest.mark.parametrize("fixture", [NOINTRO, CMP])
+@pytest.mark.parametrize("algorithm", ["crc", "md5"])
+def test_weaker_hash_still_works_without_sha1_evidence(fixture, algorithm):
+    """Older DATs or callers without SHA1 retain their checksum fallback."""
+    dat = parse_dat(fixture)
+    rom = next(iter(dat.games.values())).roms[0]
+    assert dat.lookup(**{algorithm: getattr(rom, algorithm), "size": rom.size}).ok
+    without_sha = fixture.replace(rom.sha1, "")
+    assert parse_dat(without_sha).lookup(**{
+        algorithm: getattr(rom, algorithm), "size": rom.size, "sha1": "f" * 40}).ok
+
+
+@pytest.mark.parametrize("fixture", [NOINTRO, CMP])
+def test_actual_sha1_match_wins_over_conflicting_weaker_checksums(fixture):
+    """An exact SHA1 hit remains authoritative before any weak fallback."""
+    dat = parse_dat(fixture)
+    rom = next(iter(dat.games.values())).roms[0]
+    assert dat.lookup(sha1=rom.sha1.upper(), crc="ffffffff", md5="f" * 32).ok

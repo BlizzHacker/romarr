@@ -285,10 +285,14 @@ class Dat:
         theoretical -- so where the DAT published a SHA1 and the caller
         computed one, that is the answer and CRC is not consulted.
         """
-        for key, table in ((sha1, self._by_sha1), (md5, self._by_md5)):
-            hit = table.get(str(key or "").lower())
-            if hit:
-                return Match(VERIFIED, hit[0], hit[1], self.name)
+        sha1 = str(sha1 or "").lower()
+        hit = self._by_sha1.get(sha1)
+        if hit:
+            return Match(VERIFIED, hit[0], hit[1], self.name)
+
+        hit = self._by_md5.get(str(md5 or "").lower())
+        if hit and not (sha1 and hit[1].sha1 and sha1 != hit[1].sha1):
+            return Match(VERIFIED, hit[0], hit[1], self.name)
 
         crc = str(crc or "").lower()
         if crc:
@@ -296,7 +300,7 @@ class Dat:
             if hit is None and not size:
                 hit = next((v for (c, _), v in self._by_crc.items() if c == crc),
                            None)
-            if hit:
+            if hit and not (sha1 and hit[1].sha1 and sha1 != hit[1].sha1):
                 return Match(VERIFIED, hit[0], hit[1], self.name)
 
         # Nothing matched. A file the exact size of a known ROM is the case

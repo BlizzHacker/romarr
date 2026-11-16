@@ -223,6 +223,25 @@ const watchdog=setTimeout(()=>{console.error('popup harness timed out');process.
   assert.ok(pair.every(value=>Number.isInteger(value.tabId)));
   assert.equal(launch.calls.session.at(-1).launcherTabs['https://a.example/'],100);
   assert.equal(launch.calls.session.at(-1).launcherTabs['https://b.example/'],101);
+  // Distinct simultaneous sections for one profile both run in request order.
+  const routeStart=launch.calls.update.length, permissionStart=launch.calls.permissions.length;
+  await Promise.all([
+    launch.send({type:'openServer',profile:fixtures[0],hash:'library'}),
+    launch.send({type:'openServer',profile:fixtures[0],hash:'queue'})
+  ]);
+  assert.deepEqual(launch.calls.update.slice(routeStart).filter(value=>value.url).map(value=>value.url),
+    ['https://a.example/#library','https://a.example/#queue']);
+  assert.equal(launch.calls.permissions.length-permissionStart,1);
+  const scoped=setup();await tick();
+  scoped.reads[0].resolve({profiles:[{name:'Scoped',url:'https://a.example/romarr/'}]});await tick();
+  scoped.tabs.set(77,{id:77,windowId:9,url:'https://a.example/romarr/#library'});
+  await scoped.action('Open / Connect server').onclick();
+  scoped.tabs.set(77,{id:77,windowId:9,url:'https://a.example/admin/'});
+  const scopeStart=scoped.calls.update.length;
+  await scoped.action('Queue').onclick();
+  assert.equal(scoped.calls.update.slice(scopeStart).filter(value=>value.url).length,0);
+  assert.equal(scoped.tabs.get(77).url,'https://a.example/admin/');
+  assert.equal(scoped.calls.create.length,0);
   // Worker rejects unsaved profiles and unapproved route names.
   assert.ok((await launch.send({type:'openServer',profile:fixtures[0],hash:'unsafe'})).error);
   assert.ok((await launch.send({type:'openServer',profile:{name:'Unsaved',url:'https://unsaved.example/'},hash:'library'})).error);

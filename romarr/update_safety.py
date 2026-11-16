@@ -29,6 +29,59 @@ SAFE_REF = re.compile(r"(?:refs/tags/v[A-Za-z0-9][A-Za-z0-9._+-]*|origin/main|re
 SAFE_SERVICE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.@-]*\Z")
 
 
+_BUILD_STAMP = r"""import os,re,subprocess,sys,tempfile
+from pathlib import Path
+root=Path.cwd();package=root/'romarr'
+if not package.is_dir() or package.is_symlink():
+    raise ValueError('Missing or linked ROMarr package; identity not written')
+target,revision=sys.argv[1:]
+actual=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
+if actual!=revision or not re.fullmatch('[0-9a-f]{40}',revision):
+    raise ValueError('Source changed before identity publication')
+pattern=re.compile(r'v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(alpha|beta|rc)\.(0|[1-9]\d*))?\Z')
+version='0.0.0+unknown';kind='development';ref=target
+if target.startswith('refs/romarr/rollback/'):
+    tags=subprocess.check_output(['git','tag','--points-at',revision],text=True).splitlines()
+    tags=[tag for tag in tags if pattern.fullmatch(tag)]
+    if tags:
+        rank={'alpha':0,'beta':1,'rc':2,None:3}
+        def key(tag):
+            a,b,c,stage,number=pattern.fullmatch(tag).groups()
+            return int(a),int(b),int(c),rank[stage],int(number or 0)
+        ref='refs/tags/'+max(tags,key=key)
+    else:
+        ref='refs/heads/'+subprocess.check_output(['git','symbolic-ref','--short','HEAD'],text=True).strip()
+elif target=='origin/main':
+    ref='refs/heads/main'
+if ref.startswith('refs/tags/'):
+    tag=ref[len('refs/tags/'):]
+    if not pattern.fullmatch(tag):
+        raise ValueError('Unsupported release version; identity not written')
+    tagged=subprocess.check_output(['git','rev-parse','--verify',ref+'^{commit}'],text=True).strip()
+    if tagged!=revision:
+        raise ValueError('Release tag changed before identity publication')
+    kind='release';version=tag[1:]
+fields={'romarr_build_kind':kind,'romarr_source_ref':ref,'romarr_source_revision':revision,'romarr_source_repository':'BlizzHacker/romarr'}
+outputs={package/'_version.py':'__version__ = '+repr(version)+'\n',package/'_build_info.py':''.join(k+' = '+repr(v)+'\n' for k,v in fields.items())}
+for path in outputs:
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise ValueError('Build metadata must be regular files')
+    if subprocess.run(['git','check-ignore','-q','--',str(path.relative_to(root))]).returncode:
+        raise ValueError('Generated metadata must be ignored by Git')
+for path,content in outputs.items():
+    descriptor,name=tempfile.mkstemp(prefix='.romarr-identity-',dir=package)
+    temporary=Path(name)
+    try:
+        os.fchmod(descriptor,0o644)
+        with os.fdopen(descriptor,'w') as output:
+            output.write(content);output.flush();os.fsync(output.fileno())
+        if path.is_symlink():
+            raise ValueError('Build metadata changed during publication')
+        os.replace(temporary,path)
+    finally:
+        temporary.unlink(missing_ok=True)
+"""
+
 _GIT_LOCATION_OVERRIDES = frozenset({
     "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE",
     "GIT_OBJECT_DIRECTORY", "GIT_COMMON_DIR",
@@ -327,6 +380,14 @@ if test -f requirements.txt; then
 fi
 if ! valid_state || test "$(git rev-parse HEAD)" != "$POST"; then
   echo 'ERROR: checkout modified during dependencies; RECOVERY REQUIRED'
+  exit 1
+fi
+if ! {py} -c {q(_BUILD_STAMP)} "$TARGET" "$POST"; then
+  echo 'ERROR: generated identity publication failed; RECOVERY REQUIRED'
+  exit 1
+fi
+if ! valid_state || test "$(git rev-parse HEAD)" != "$POST"; then
+  echo 'ERROR: checkout changed during identity publication; RECOVERY REQUIRED'
   exit 1
 fi
 if ! systemctl restart "$SERVICE"; then

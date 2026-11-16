@@ -230,7 +230,7 @@ def test_game_rom_count_fails_closed_on_unverified_identity():
     assert index.game_rom_count(index.lookup(crc="00000000", size=5)) is None
 
 
-def test_crc_conflicting_sha1_rejected_for_request_candidates_only():
+def test_crc_conflicting_sha1_rejected_for_lookup_and_request_candidates():
     dat = parse_dat("""
     <datafile><header><name>Checksum System</name></header>
       <game name="Game"><rom name="one.bin" size="4" crc="a1b2c3d4"
@@ -239,7 +239,7 @@ def test_crc_conflicting_sha1_rejected_for_request_candidates_only():
     index = DatIndex()
     index.add(dat)
     supplied = dict(crc="a1b2c3d4", size=4, sha1="b" * 40)
-    assert index.lookup(**supplied).status == VERIFIED
+    assert index.lookup(**supplied).status == BAD_DUMP
     assert index.verified_candidates(**supplied) == ()
 
 

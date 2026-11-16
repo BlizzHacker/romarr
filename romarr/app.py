@@ -492,6 +492,9 @@ class ROMarr:
         self._lock = threading.Lock()
         # A manual check and the daily sweep must never overlap or auto-apply twice.
         self._update_check_lock = threading.Lock()
+        # First-run setup claims serialize here after pre-hashing so concurrent
+        # claimants cannot both observe an unclaimed install and mint sessions.
+        self._setup_lock = threading.Lock()
         # Git HEAD can move without restarting this service. Pin the source
         # actually running at service construction, not a later checkout HEAD.
         from . import nightly, selfupdate
@@ -1645,6 +1648,29 @@ class ROMarr:
         }
         self.store.save()
         return {"ok": True}
+
+    def claim_setup(self, password: str) -> str | None:
+        """Hash outside the claim lock, then atomically persist and claim ownership."""
+        candidate_hash = self.auth.hash_password(password)
+        with self._setup_lock:
+            if self.claimed:
+                return None
+            with self.store._lock:
+                had_previous = "_password_hash" in self.store.settings
+                previous_hash = self.store.settings.get("_password_hash")
+                self.store.settings["_password_hash"] = candidate_hash
+                try:
+                    self.store.save(raise_on_error=True)
+                except Exception:
+                    if had_previous:
+                        self.store.settings["_password_hash"] = previous_hash
+                    else:
+                        self.store.settings.pop("_password_hash", None)
+                    raise
+            self.auth.password_hash = candidate_hash
+            self.claimed = True
+            log.info("this install has been claimed; setup is now closed")
+            return self.auth.issue_session()
 
     def setup_dats(self, directory: str) -> dict:
         """Validate the optional DAT folder and explain an empty result."""
@@ -5364,7 +5390,8 @@ class ROMarr:
         acquisition pipeline did its job.
         """
         rom = getattr(verdict, "rom", None)
-        sha1 = str(sha1 or getattr(rom, "sha1", "") or "")
+        physical_sha1 = str(sha1 or "")
+        sha1 = str(getattr(rom, "sha1", "") or physical_sha1)
         if not sha1:
             return
         from .dat import VERIFIED
@@ -5380,7 +5407,7 @@ class ROMarr:
                 path = ""
         self.hashes.add(sha1, getattr(verdict, "game", "") or fallback,
                         platform, getattr(verdict, "status", "") == VERIFIED,
-                        path)
+                        path, physical_sha1=physical_sha1)
         self.hashes.save()
 
     #: Progress of the background hash seed, so the UI can show it moving
@@ -6048,18 +6075,22 @@ class ROMarr:
                 # Keep the hash. Netplay is decided on bytes, and this walk
                 # is the only place ROMarr ever computes them; discarding
                 # them here is what left an offer with nothing to carry.
-                if sha:
-                    self.hashes.add(
-                        sha, verdict.game or path.stem, platform.slug,
-                        verdict.status == VERIFIED,
-                        path.relative_to(library_root).as_posix())
                 # DAT verification strips copier headers on some platforms.
                 # Quarantine candidates must match every physical byte instead.
                 try:
                     raw_sha = raw_sha1(path)
-                    raw_size = path.stat().st_size
+                    final = path.stat()
+                    raw_size = final.st_size
                 except OSError:
                     continue
+                if (after.st_size, after.st_mtime_ns, after.st_ino) != (
+                        final.st_size, final.st_mtime_ns, final.st_ino):
+                    continue
+                if sha:
+                    self.hashes.add(
+                        sha, verdict.game or path.stem, platform.slug,
+                        verdict.status == VERIFIED,
+                        path.relative_to(library_root).as_posix(), physical_sha1=raw_sha)
                 key = (raw_sha, raw_size)
                 if key in seen:
                     state["duplicates"].append({
@@ -9520,26 +9551,31 @@ def make_handler(service: ROMarr):
                 # First-run claim. Open only while unclaimed, and it closes the
                 # moment it succeeds -- so this is a one-shot, not a standing
                 # unauthenticated way to reset the password.
+                already_claimed = {
+                    "error": "already set up",
+                    "detail": "This ROMarr already has a password. Sign in "
+                              "instead.",
+                }
                 if service.claimed:
-                    return self._json(409, {
-                        "error": "already set up",
-                        "detail": "This ROMarr already has a password. Sign in "
-                                  "instead.",
-                    })
+                    return self._json(409, already_claimed)
+                if not isinstance(body, dict):
+                    return self._json(400, {"error": "Use a JSON object"})
                 password = str(body.get("password") or "")
                 if len(password) < MIN_PASSWORD:
                     return self._json(400, {
                         "error": "weak password",
                         "detail": f"Use at least {MIN_PASSWORD} characters.",
                     })
-                service.store.settings["_password_hash"] = \
-                    service.auth.hash_password(password)
-                service.auth.password_hash = \
-                    service.store.settings["_password_hash"]
-                service.claimed = True
-                service.store.save()
-                log.info("this install has been claimed; setup is now closed")
-                token = service.auth.issue_session()
+                try:
+                    token = service.claim_setup(password)
+                except Exception:
+                    log.exception("failed to persist initial setup password")
+                    return self._json(500, {
+                        "error": "could not save password",
+                        "detail": "Could not persist the setup password.",
+                    })
+                if token is None:
+                    return self._json(409, already_claimed)
                 return self._send_session(token, {"ok": True})
             if route.path == "/api/v1/login":
                 # Exchange a credential for a session, so a browser presents

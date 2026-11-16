@@ -129,6 +129,7 @@ a:hover{text-decoration:underline;text-underline-offset:2px}
   border-bottom:1px solid var(--line-soft);flex:none;overflow:hidden;
   white-space:nowrap}
 #brand span{color:var(--accent-text)}
+.brand-icon{width:30px;height:27px;margin-right:9px;flex:none;display:block}
 #navwrap{flex:1;overflow-y:auto;padding:6px 0 10px}
 .navgroup{padding:8px 0 2px}
 .navhead{padding:6px 20px;font-size:10.5px;font-weight:600;
@@ -849,6 +850,22 @@ def _theme_control_html() -> str:
         'border:1px solid var(--border,#333);border-radius:6px;display:flex;align-items:center;gap:7px;">'
         '<span aria-hidden="true">📲</span><span>Android Beta</span>'
         '<span style="margin-left:auto;font-size:10px;opacity:.7">Play ↗</span></a>'
+        '<div id="community-links" style="display:flex;gap:6px;margin:4px 10px 6px;">'
+        '<a id="discord-link" href="https://discord.gg/ywNFceuAd" '
+        'target="_blank" rel="noopener noreferrer" class="nav" '
+        'title="Join the ROMarr Discord" '
+        'style="flex:1;min-width:0;margin:0;padding:6px 8px;font-size:11.5px;font-weight:600;'
+        'color:var(--text,#eff3f8);background:var(--surface-soft,rgba(255,255,255,0.03));'
+        'border:1px solid var(--border,#273341);border-radius:6px;display:flex;align-items:center;justify-content:center;gap:4px;">'
+        '<span>Discord</span><span style="font-size:10px;opacity:.7">↗</span></a>'
+        '<a id="opencollective-link" href="https://opencollective.com/romarr" '
+        'target="_blank" rel="noopener noreferrer" class="nav" '
+        'title="Support ROMarr on Open Collective" '
+        'style="flex:1.25;min-width:0;margin:0;padding:6px 8px;font-size:11.5px;font-weight:600;'
+        'color:var(--accent-text,#3ea6ff);background:var(--surface-soft,rgba(255,255,255,0.03));'
+        'border:1px solid var(--border,#273341);border-radius:6px;display:flex;align-items:center;justify-content:center;gap:4px;">'
+        '<span>Open Collective</span><span style="font-size:10px;opacity:.7">↗</span></a>'
+        '</div>'
         '</div>'
     )
 
@@ -1802,8 +1819,9 @@ RENDER.library=async()=>{
           are loaded and browsable here${scanRunning?' — still reading':d.partial?' — scan incomplete':''}.</p>`:'')}
   </div>`;
   const filterCount=[LIB.genre,LIB.region,LIB.decade,LIB.origin,LIB.source,LIB.sort].filter(Boolean).length;
-  const filtersOpen=LIB.filtersOpen===null?(typeof matchMedia!=='function'||!matchMedia('(max-width:700px)').matches):LIB.filtersOpen;
-  const head=libraryScanHelp(d)+banner+`<div class="library-platform-choice">${sel('platform','All platforms',(d.platforms||[]).map(x=>({value:x.platform,count:x.count})))}</div>
+  const head=()=>{
+    const filtersOpen=LIB.filtersOpen===null?(typeof matchMedia!=='function'||!matchMedia('(max-width:700px)').matches):LIB.filtersOpen;
+    return libraryScanHelp(d)+banner+`<div class="library-platform-choice">${sel('platform','All platforms',(d.platforms||[]).map(x=>({value:x.platform,count:x.count})))}</div>
     <div class="row library-platforms" aria-label="Popular platforms" style="flex-wrap:wrap;gap:6px;margin-bottom:10px">
       <button class="btn ${LIB.platform?'ghost':''}" data-plat=""
         style="padding:4px 10px;font-size:12px">All
@@ -1835,15 +1853,17 @@ RENDER.library=async()=>{
       · ${d.grand_total} cached across ${(d.platforms||[]).length} platforms
       ${scanRunning?' · <b>still loading from the library server…</b>':d.partial?' · <b>scan incomplete — see the scan status above</b>':''}
       ${d.error?` · <span style="color:var(--warn)">last refresh: ${esc(d.error)}</span>`:''}</p>`;
+  };
 
   if(!items.length){
-    p.innerHTML=head+`<div class="empty">
+    p.innerHTML=head()+`<div class="empty">
       ${q||LIB.platform?'No game matches that.':'No games returned by the library.'}</div>`;
     bindLibraryChips(p); return;
   }
   // The shelf: status, rating and notes set by the operator, overlaid on the
   // grid. One fetch for the whole page -- the metadata is tiny.
   const meta=await j('/api/v1/game/meta').catch(()=>({items:[]}));
+  if(!current())return;
   const shelf={};
   (meta.items||[]).forEach(x=>{
     shelf[`${x.platform}/${(x.game||'').toLowerCase()}`]=x; });
@@ -1864,7 +1884,7 @@ RENDER.library=async()=>{
     ?`<div class="row" style="justify-content:center;margin:16px 0">
        <button class="btn" id="lib-more">Show more
          (${d.total-LIB.offset-items.length} left)</button></div>`:'';
-  p.innerHTML=head+grid+more;
+  p.innerHTML=head()+grid+more;
   bindLibraryChips(p);
   const moreBtn=p.querySelector('#lib-more');
   if(moreBtn) moreBtn.onclick=()=>{LIB.limit+=240;go('library');};
@@ -1878,7 +1898,13 @@ RENDER.library=async()=>{
 
 function bindLibraryChips(p){
   const filters=p.querySelector('.library-filters');
-  if(filters)filters.ontoggle=()=>{LIB.filtersOpen=filters.open;};
+  if(filters){
+    let previousOpen=filters.open;
+    filters.ontoggle=()=>{
+      if(filters.open===previousOpen)return;
+      previousOpen=filters.open;LIB.filtersOpen=previousOpen;
+    };
+  }
   p.querySelectorAll('[data-plat]').forEach(b=>b.onclick=()=>{
     LIB.platform=b.dataset.plat; LIB.offset=0; LIB.limit=120;
     go('library');
@@ -4888,7 +4914,7 @@ RENDER.status=async()=>{
       <div><b>${h.dat_games||0}</b><span>Known dumps</span></div>
       <div><b>${h.events}</b><span>History events</span></div>
       <div><b>${esc(h.uptime)}</b><span>Uptime</span></div>
-    </div>${buildIdentityLine(h.build)}</div>
+    </div>${buildIdentityLine(h.build)}<p class="help"><a href="https://romarr.app/privacy" target="_blank" rel="noopener noreferrer">Privacy policy</a> · <a href="mailto:me@romarr.app">Contact support</a> · <a href="https://discord.gg/ywNFceuAd" target="_blank" rel="noopener noreferrer">Discord</a> · <a href="https://opencollective.com/romarr" target="_blank" rel="noopener noreferrer">Open Collective</a> · <a href="https://github.com/BlizzHacker/romarr" target="_blank" rel="noopener noreferrer">GitHub</a></p></div>
 
     <div class="card"><h3>Backup and export</h3>
     <p class="help">A snapshot restores an install: settings, libraries,
@@ -5871,8 +5897,8 @@ RENDER.setup=async()=>{
         :'<p><a class="btn" href="#search">Preview a game search</a></p><p class="help">Interactive Search shows the available releases before you choose one. Follow its progress in <a href="#queue">Queue</a>. If you prefer to start with files you already have, use <a href="#manualimport">Manual Import</a>.</p>')
       +'<h4 style="margin-top:22px">Want a dedicated player?</h4><p class="help">Cartridge is an optional companion for a RomM library. Choose the version for your device; ROMarr works without it.</p>'
       +'<div class="row" style="flex-wrap:wrap"><a class="btn ghost" href="https://github.com/BlizzHacker/romarr/releases/download/v1.8.0/Cartridge-Windows-Portable-0.2.0-x64.exe" target="_blank" rel="noopener">Cartridge for Windows</a><a class="btn ghost" href="https://apps.microsoft.com/detail/9MXC51W17LH4" target="_blank" rel="noopener">Cartridge for Xbox</a></div>'
-      +'<h4 style="margin-top:22px">Mobile App Beta</h4><p class="help">We are looking for 12 testers for the official ROMarr Android release on Google Play.</p>'
-      +'<div class="row" style="flex-wrap:wrap"><a class="btn ghost" href="https://play.google.com/apps/internaltest/4700888732790045566" target="_blank" rel="noopener">📲 Join Android Beta on Google Play</a></div>'
+      +'<h4 style="margin-top:22px">Mobile App Beta &amp; Community</h4><p class="help">We are looking for 12 testers for the official ROMarr Android release on Google Play, and you can connect with the community on Discord or back ROMarr on Open Collective.</p>'
+      +'<div class="row" style="flex-wrap:wrap"><a class="btn ghost" href="https://play.google.com/apps/internaltest/4700888732790045566" target="_blank" rel="noopener">📲 Join Android Beta on Google Play</a><a class="btn ghost" href="https://discord.gg/ywNFceuAd" target="_blank" rel="noopener noreferrer">Join ROMarr Discord</a><a class="btn ghost" href="https://opencollective.com/romarr" target="_blank" rel="noopener noreferrer">Support on Open Collective</a></div>'
       +'<p class="help">Stuck? You do not need to know the technical terms. Tell us the last step you reached. <a href="https://github.com/BlizzHacker/romarr/issues" target="_blank" rel="noopener">Open a GitHub issue</a> with your ROMarr version, what you expected, and the relevant error. Remove passwords and API keys from logs.</p>';
   }
   $('#page').innerHTML='<div class="card" style="max-width:900px"><div class="row" style="justify-content:space-between"><span class="help">Setup Guide</span><button class="btn ghost" id="setup-dismiss">Set up later</button></div>'
@@ -6687,6 +6713,14 @@ function paintTheme(){
   });
   const custom=$('.sw.pick'); if(custom) custom.classList.toggle('on',!preset);
   const pick=$('#accent-pick'); if(pick) pick.value=accent;
+  const fav=document.querySelector('link[rel="icon"]');
+  if(fav&&accent){
+    const svg=document.querySelector('#brand .brand-icon');
+    if(svg){
+      const raw=svg.outerHTML.replace(/var\\(--accent[^)]*\\)/g,accent);
+      fav.href='data:image/svg+xml;utf8,'+encodeURIComponent(raw);
+    }
+  }
 }
 function bindTheme(){
   document.documentElement.addEventListener('themechange',paintTheme);
@@ -6741,17 +6775,54 @@ async function refreshCounts(){
 """
 
 
+BRAND_ICON_PATHS = (
+    '<path d="M40 12C40 6.5 44.5 2 50 2H102C108.6 2 114 7.4 114 14V58.5'
+    'C119.8 64.2 123 72.1 123 80.5C123 97.9 108.9 112 91.5 112C84.8 112 '
+    '78.5 109.9 73.4 106.3L63.8 114.2C60.1 117.2 54.6 116.8 51.3 113.3'
+    'C48.1 109.8 48.2 104.3 51.6 101L56.2 96.6H29V102C29 105.3 26.3 108 '
+    '23 108H19C15.7 108 13 105.3 13 102V89.2L4.2 83.2C1.6 81.4 0 78.4 0 '
+    '75.2V36C0 29.9 4.5 24.8 10.4 24C12.2 18.8 17.1 15 23 15H26.4C29.1 '
+    '10.3 34.1 7 40 7V12Z" fill="#0E141D" stroke="#2B3D54" stroke-width="2.5"/>'
+    '<rect x="8" y="31" width="14" height="44" rx="5" fill="#E5E9F0"/>'
+    '<rect x="13" y="37" width="8" height="38" rx="3" fill="#3B5270"/>'
+    '<rect x="19" y="22" width="15" height="53" rx="6" fill="#E5E9F0"/>'
+    '<rect x="25" y="29" width="9" height="46" rx="3" fill="#3B5270"/>'
+    '<rect x="31" y="15" width="16" height="60" rx="6" fill="#E5E9F0"/>'
+    '<rect x="37" y="23" width="10" height="52" rx="3" fill="#3B5270"/>'
+    '<rect x="44" y="8" width="62" height="68" rx="9" fill="var(--accent, #75adff)"/>'
+    '<rect x="42" y="25" width="8" height="4.5" rx="2.2" fill="#0E141D"/>'
+    '<rect x="42" y="34" width="8" height="4.5" rx="2.2" fill="#0E141D"/>'
+    '<rect x="42" y="43" width="8" height="4.5" rx="2.2" fill="#0E141D"/>'
+    '<rect x="100" y="25" width="8" height="4.5" rx="2.2" fill="#0E141D"/>'
+    '<rect x="100" y="34" width="8" height="4.5" rx="2.2" fill="#0E141D"/>'
+    '<rect x="100" y="43" width="8" height="4.5" rx="2.2" fill="#0E141D"/>'
+    '<path d="M53 75V62C53 59.8 54.8 58 57 58H78" stroke="#0E141D" '
+    'stroke-width="3.2" stroke-linecap="round"/>'
+    '<rect x="54" y="17" width="42" height="36" rx="6" fill="#0E141D"/>'
+    '<path d="M66 23H69V26H66V23ZM81 23H84V26H81V23ZM69 26H72V29H69V26Z'
+    'M78 26H81V29H78V26ZM66 29H84V32H66V29ZM63 32H69V35H63V32ZM72 32H78'
+    'V35H72V32ZM81 32H87V35H81V32ZM60 35H90V41H60V35ZM60 41H63V47H60V41Z'
+    'M66 41H84V44H66V41ZM87 41H90V47H87V41ZM66 44H69V47H66V44ZM81 44H84'
+    'V47H81V44ZM69 47H74V50H69V47ZM76 47H81V50H76V47Z" fill="#F8FAFC"/>'
+    '<path d="M8 71L23 81H68L64 89H25V101H18V85L8 78V71Z" fill="#E5E9F0"/>'
+    '<circle cx="91" cy="79" r="24" fill="#0E141D" stroke="#2B3D54" stroke-width="2"/>'
+    '<path d="M74 94L57 109" stroke="#0E141D" stroke-width="15" stroke-linecap="round"/>'
+    '<path d="M74 94L58 108" stroke="#E5E9F0" stroke-width="9" stroke-linecap="round"/>'
+    '<circle cx="91" cy="79" r="19.5" fill="#0E141D" stroke="#E5E9F0" stroke-width="5.5"/>'
+    '<path d="M81.5 79.5L88 86L101 72" stroke="var(--accent, #75adff)" '
+    'stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/>'
+)
+
+BRAND_ICON_SVG = (
+    '<svg class="brand-icon" xmlns="http://www.w3.org/2000/svg" '
+    f'viewBox="0 0 128 116" fill="none" aria-hidden="true">{BRAND_ICON_PATHS}</svg>'
+)
+
 FAVICON_SVG = (
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">'
-    '<rect x="8" y="6" width="48" height="52" rx="6" fill="#12141a" '
-    'stroke="#f0a92c" stroke-width="4"/>'
-    '<path d="M16 6v14h32V6" fill="#1b1f2a" stroke="#f0a92c" stroke-width="3"/>'
-    '<rect x="16" y="28" width="32" height="18" rx="3" fill="#f0a92c"/>'
-    '<rect x="20" y="50" width="4" height="8" fill="#f0a92c"/>'
-    '<rect x="28" y="50" width="4" height="8" fill="#f0a92c"/>'
-    '<rect x="36" y="50" width="4" height="8" fill="#f0a92c"/>'
-    '<rect x="44" y="50" width="4" height="8" fill="#f0a92c"/>'
-    '</svg>'
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 116" '
+    'fill="none" data-legacy-accent="#f0a92c">'
+    + BRAND_ICON_PATHS.replace("var(--accent, #75adff)", "#75adff")
+    + '</svg>'
 )
 
 FAVICON_LINK = '<link rel="icon" type="image/svg+xml" href="/favicon.svg">'
@@ -6827,7 +6898,7 @@ def page() -> str:
 <title>ROMarr</title><meta name="viewport" content="width=device-width,initial-scale=1">
 {FAVICON_LINK}{APP_HEAD}<style>{CSS}</style><script>{THEME_BOOT}</script></head><body>
 <input id="sidebar-native-toggle" type="checkbox" aria-label="Toggle navigation" aria-controls="rail">
-<nav id="rail" aria-label="Main navigation"><div id="brand">ROM<span>arr</span></div>
+<nav id="rail" aria-label="Main navigation"><div id="brand">{BRAND_ICON_SVG}ROM<span>arr</span></div>
 <button id="sidebar-close" type="button" aria-label="Close navigation">×</button>
 <div id="navwrap">{_nav_html()}</div>
 {_theme_control_html()}</nav>
@@ -6872,9 +6943,10 @@ body{display:flex;align-items:center;justify-content:center;min-height:100vh;
 .box{width:100%;max-width:390px;background:var(--surface);
   border:1px solid var(--line);border-radius:var(--r-lg);padding:30px;
   box-shadow:var(--shadow-2),var(--edge)}
-.box h1{display:flex;gap:0;font-size:26px;font-weight:700;letter-spacing:-.03em;
+.box h1{display:flex;align-items:center;gap:0;font-size:26px;font-weight:700;letter-spacing:-.03em;
   justify-content:center;margin-bottom:6px}
 .box h1 span{color:var(--accent-text)}
+.box h1 .brand-icon{width:36px;height:33px;margin-right:10px}
 .box .sub{text-align:center;color:var(--dim);font-size:13px;margin-bottom:24px}
 .box label{display:block;font-size:10.5px;font-weight:600;color:var(--dim);
   margin:15px 0 6px;text-transform:uppercase;letter-spacing:.08em}
@@ -6967,7 +7039,7 @@ def login_page(*, claimed: bool, totp: bool = False,
 <meta name="viewport" content="width=device-width,initial-scale=1">
 {FAVICON_LINK}<style>{CSS}{LOGIN_CSS}</style><script>{THEME_BOOT}</script></head><body>
 <form class="box" id="f" autocomplete="on">
-  <h1>ROM<span>arr</span></h1>
+  <h1>{BRAND_ICON_SVG}ROM<span>arr</span></h1>
   <div class="sub">{title}</div>
   {sso_button}
   {fields}
@@ -7174,7 +7246,7 @@ def link_page() -> str:
 <meta name="referrer" content="no-referrer">
 {FAVICON_LINK}<style>{CSS}{LOGIN_CSS}{LINK_CSS}</style></head><body>
 <div class="box" id="box">
-  <h1>ROM<span>arr</span></h1>
+  <h1>{BRAND_ICON_SVG}ROM<span>arr</span></h1>
   <div class="sub">Checking this invitation&hellip;</div>
 </div>
 <script>{LINK_JS}</script></body></html>"""

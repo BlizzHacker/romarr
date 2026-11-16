@@ -79,6 +79,14 @@ def _arguments(definition, value):
     return value
 
 
+def _platform_slug(value):
+    """Use supported identifiers even when a backend supplies display names."""
+    from .platforms import resolve
+    value = str(value or "")
+    platform = resolve(value)
+    return platform.slug if platform else (value.casefold() if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}", value) else "")
+
+
 def _rows(items, fields):
     """Export only named scalar metadata, never raw backend objects or credentials."""
     result = []
@@ -87,7 +95,11 @@ def _rows(items, fields):
         for name in fields:
             value = item.get(name) if isinstance(item, dict) else getattr(item, name, None)
             if isinstance(value, str):
-                row[name] = re.sub(r"https?://\S+", "[URL omitted]", value[:1000])[:300]
+                text = re.sub(r"https?://\S+", "[URL omitted]", value[:1000])[:300]
+                # Batch event titles are derived from library roots. Other absolute
+                # path-bearing metadata is omitted rather than exported as a title.
+                path = re.search(r"""(?:^|[\s:=("'\[])(?:/[^\s/]|[A-Za-z]:[\\/]|\\\\[^\s\\])""", text)
+                row[name] = "[path omitted]" if value.casefold().startswith("batch: ") or path else text
             elif type(value) in (int, float, bool) or value is None:
                 row[name] = value
         result.append(row)
@@ -118,11 +130,17 @@ def call(service, name, arguments):
             games = service._library_cache[0]
             if games is None:
                 return {"items": [], "loading": True, "cached": True}
-            query, platform = args.get("query", "").casefold(), args.get("platform", "").casefold()
+            query, platform = args.get("query", "").casefold(), _platform_slug(args.get("platform", ""))
+            if args.get("platform") and not platform:
+                raise ValueError("Use a supported platform identifier")
             selected = [g for g in games[:MAX_SCAN] if
                         (not query or query in g.name.casefold()) and
-                        (not platform or g.platform.casefold() == platform)]
-            return {"items": _rows(selected[offset:offset + limit], ("name", "platform", "year", "rating")),
+                        (not platform or _platform_slug(getattr(g, "platform_slug", "") or g.platform) == platform)]
+            page = selected[offset:offset + limit]
+            rows = _rows(page, ("name", "platform", "year", "rating"))
+            for game, row in zip(page, rows):
+                row["platform_slug"] = _platform_slug(getattr(game, "platform_slug", "") or game.platform)
+            return {"items": rows,
                     "total": len(selected), "offset": offset, "cached": True,
                     "scan_limited": len(games) > MAX_SCAN}
         if name == "romarr_queue":
@@ -320,7 +338,7 @@ def bridge(url, key, incoming=None, outgoing=None):
                                -32603, "MCP server unavailable or rejected the request")
             if isinstance(message, dict) and "id" not in message:
                 continue
-            writer.write(json.dumps(answer, ensure_ascii=False) + "\n")
+            writer.write(json.dumps(answer, ensure_ascii=True) + "\n")
             writer.flush()
 
 

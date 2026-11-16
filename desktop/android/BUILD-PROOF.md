@@ -16,7 +16,8 @@ toolchains or build outputs were written to Windows C:.
   scan/quarantine/restore, and a live process-local scheduler.
 - Sign-in checks cover HTTPS authority consent, ordinary external links, stale
   redirect isolation, an actual auto-submitting cross-authority POST, and the
-  active Authentik login form without credentials entered.
+  active Authentik login form without credentials entered. The known public privacy
+  URL is opened through an external ACTION_VIEW intent without switching servers.
 - The native toolbar and actual WebView/IME bounds check also passed at **360 ×
   640 dp**, font scales **1.0 and 1.3**, and actual **640 × 360 dp landscape** at
   font scale **1.3**. It verifies the 48 dp menu target, a long server label,
