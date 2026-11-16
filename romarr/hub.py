@@ -15,10 +15,86 @@ import dataclasses
 import logging
 import os
 import re
+import threading
 from pathlib import Path
 from .platforms import resolve, same_machine
 
 log = logging.getLogger(__name__)
+
+_FLARESOLVERR_LOCK = threading.Lock()
+_FLARESOLVERR_URL = ""
+
+
+def configure_flaresolverr(url: str | None) -> None:
+    """Set the operator-configured FlareSolverr URL for host-side Hub HTTP."""
+    global _FLARESOLVERR_URL
+    with _FLARESOLVERR_LOCK:
+        _FLARESOLVERR_URL = str(url or "").strip().rstrip("/")
+
+
+def flaresolverr_url() -> str:
+    """Return the active FlareSolverr URL from settings or environment."""
+    with _FLARESOLVERR_LOCK:
+        configured = _FLARESOLVERR_URL
+    return configured or os.environ.get("ROM_HUB_FLARESOLVERR_URL", "").strip().rstrip("/")
+
+
+def _build_fetcher(HttpxFetcher, *, timeout: float | None = None, transport=None):
+    """Construct HttpxFetcher, passing flaresolverr_url when supported."""
+    kwargs = {"transport": transport}
+    if timeout is not None:
+        kwargs["timeout"] = timeout
+    solver = flaresolverr_url()
+    if solver:
+        try:
+            return HttpxFetcher(**kwargs, flaresolverr_url=solver)
+        except TypeError:
+            pass
+    return HttpxFetcher(**kwargs)
+
+
+def _wrap_download_transport(base_transport):
+    """Wrap an httpx download transport with FlareSolverr when configured.
+
+    For binary downloads, solving a Cloudflare challenge must retry the
+    original request against the inner transport using the cached clearance
+    cookie rather than returning the solver's HTML wrapper page as the file.
+    """
+    solver = flaresolverr_url()
+    if not solver:
+        return base_transport
+    try:
+        import httpx
+        from rom_hub.flaresolverr import (
+            FlareSolverrTransport,
+            is_cloudflare_challenge,
+            normalize_flaresolverr_url,
+        )
+        normalized = normalize_flaresolverr_url(solver)
+        if not normalized:
+            return base_transport
+
+        class _BinaryDownloadSolverTransport(FlareSolverrTransport):
+            def handle_request(self, request: httpx.Request) -> httpx.Response:
+                req = self._apply_cached(request)
+                response = self._inner.handle_request(req)
+                if request.method.upper() != "GET" or response.status_code not in (403, 503):
+                    return response
+                body = response.read()
+                if not is_cloudflare_challenge(response.status_code, response.headers, body):
+                    return httpx.Response(
+                        status_code=response.status_code,
+                        headers=response.headers,
+                        content=body,
+                        request=req,
+                    )
+                response.close()
+                self._solve(str(request.url))
+                return self._inner.handle_request(self._apply_cached(request))
+
+        return _BinaryDownloadSolverTransport(normalized, inner=base_transport)
+    except Exception:
+        return base_transport
 
 # ROM Hub keeps its state (catalog cache, installed plugins) under this home.
 # ROMarr gives it a stable directory it owns so state survives restarts.
@@ -502,7 +578,7 @@ def search(query: str, platform: str | None = None, limit: int = 25,
             continue
         try:
             transport = archive_transport(auth_slug, HOME) if auth_slug else None
-            fetcher = HttpxFetcher(timeout=max(60.0, timeout), transport=transport)
+            fetcher = _build_fetcher(HttpxFetcher, timeout=max(60.0, timeout), transport=transport)
         except Exception as exc:
             auth_error = f"Archive.org authentication setup failed: {type(exc).__name__}: {exc}"
             continue
@@ -687,12 +763,13 @@ def fetch(row: dict, dest_dir) -> dict:
     except ImportError:
         archive_transport = lambda *a, **k: None
     try:
-        fetcher = HttpxFetcher(transport=archive_transport(slug, HOME))
+        fetcher = _build_fetcher(HttpxFetcher, transport=archive_transport(slug, HOME))
     except Exception as exc:
         return {"ok": False,
                 "error": f"Archive.org authentication setup failed: {type(exc).__name__}: {exc}",
                 "files": []}
     try:
+        dl_transport = _wrap_download_transport(archive_transport(slug, HOME))
         with PluginProcess(plugin_dir=plugin.path, manifest=plugin.manifest,
                            config=getattr(plugin, "config", {}) or {},
                            fetcher=fetcher,
@@ -701,12 +778,14 @@ def fetch(row: dict, dest_dir) -> dict:
             with HttpDownloader(
                     allowlist=list(getattr(plugin.manifest, "network", [])
                                    or []),
-                    transport=archive_transport(slug, HOME)) as downloader:
+                    transport=dl_transport) as downloader:
                 files = []
                 for f in plan.files:
+                    dl_kwargs = {"headers": f.headers} if getattr(f, "headers", None) else {}
                     saved = downloader.download(f.url,
                                                 dest / f.relative_path(),
-                                                f.size_bytes)
+                                                f.size_bytes,
+                                                **dl_kwargs)
                     files.append(str(saved))
     except Exception as exc:
         return {"ok": False,

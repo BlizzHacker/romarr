@@ -48,7 +48,29 @@ These entries and their tagged source repositories were checked on **2026-10-24*
 | **Igir 1G1R Collection Manager** | Igir v5.8.0 1G1R DAT verification, patching (BPS/IPS/UPS/Xdelta3/PMSR) & cleanup for RomM, Gaseous, Retrom, ES-DE & Batocera | [rom-hub-igir v0.1.0](https://github.com/BlizzHacker/rom-hub-igir/tree/v0.1.0) |
 | **eXo2romm** | Repackage eXoDOS game zips for standalone RomM playback by rewriting pack-root `dosbox.conf` mounts (credits [derkommutator/eXo2romm](https://github.com/derkommutator/eXo2romm); inspired to assist more users) | [rom-hub-exo2romm v0.1.0](https://github.com/BlizzHacker/rom-hub-exo2romm/tree/v0.1.0) |
 
-The [full catalogue](https://github.com/BlizzHacker/rom-hub/blob/master/catalog/plugins.json) also includes Archive.org, Demozoo, IF Archive and other sources. Read the individual plugin's limits: for example, the itch.io entry is explicitly **play in browser, no import**. A catalogue listing does not promise downloadable copies of every game on that site.
+The [full catalogue](https://github.com/BlizzHacker/rom-hub/blob/master/catalog/plugins.json) also includes Archive.org, Demozoo, IF Archive and the expanded **Guides, Tutorials, Open-Source Games/Bots, and Mod Communities** plugins below.
+
+### Expanded Ecosystem: Guides, Tutorials, Open-Source Repos, Mods & Bots
+
+All 11 plugins below implement `search`, `importer`, and `stream` (direct browser view); 10 download full files/releases, while `youtube-tutorials` plans metadata, a thumbnail, and optional captions (streaming the video in-browser without downloading the video file):
+
+| Plugin | Category | What it covers | Key / Solver |
+|---|---|---|---|
+| **GameFAQs** (`gamefaqs`) | Guides & FAQs | Walkthroughs, FAQs, and maps (`?single=1&print=1` HTML/TXT) | Optional FlareSolverr |
+| **StrategyWiki** (`strategywiki`) | Guides & FAQs | Open MediaWiki walkthroughs, chapters, and plain-text guides | None |
+| **Game Manuals** (`game-manuals`) | Manuals & Guides | Scanned PDF/CBZ/EPUB player's guides & manuals on Archive.org | None |
+| **YouTube Tutorials** (`youtube-tutorials`) | Video Tutorials | Keyless tutorial/walkthrough search, metadata, thumbnails & captions (optional YouTube Data API v3 key) | Optional `api_key` |
+| **GitHub Games & Bots** (`github-games`) | Repos & Bots | Open-source games, source ports, game bots (Diablo II, WoW, Minecraft, OSRS), and mod tools (`releases/latest` + source zip) | Optional `github_token` |
+| **CurseForge** (`curseforge`) | Mods & Addons | WoW, Minecraft, Stardew Valley, BG3, and more (`api.curseforge.com/v1` + ForgeCDN formula + web fallback) | Optional `api_key` / FlareSolverr |
+| **ModDB** (`moddb`) | Mods & Conversions | Classic & modern PC game mods (Diablo II LoD, S.T.A.L.K.E.R., Doom) with 2-step mirror resolution | Optional FlareSolverr |
+| **Nexus Mods** (`nexusmods`) | Mods | Anonymous GraphQL v2 search across all Nexus games + v1 file downloads for Premium keys (or browser stream for free) | Optional `api_key` |
+| **Modrinth** (`modrinth`) | Mods & Modpacks | Minecraft mods, modpacks, plugins & shaders via open API v2 & direct CDN | None |
+| **Thunderstore** (`thunderstore`) | Mods | 100+ modded games (Valheim, Lethal Company, Risk of Rain 2, etc.) | None |
+| **GameBanana** (`gamebanana`) | Mods & Tools | Mods, skins, maps, and modding tools via API v11 | None |
+
+### Optional FlareSolverr for Cloudflare-protected Hub sources
+
+For upstream websites that return Cloudflare challenges to plain HTTP requests (such as `gamefaqs.gamespot.com`, `www.moddb.com`, or unauthenticated `www.curseforge.com` web search), enter your **FlareSolverr URL** (for example `http://localhost:8191`) under **Settings → General**, or set `ROM_HUB_FLARESOLVERR_URL`. ROM Hub runs FlareSolverr strictly host-side inside the broker/downloader transport — untrusted plugin subprocesses never receive the solver URL or clearance cookies.
 
 ### gamesgamesgamesgamesgames Video Game Standard (`rom-hub-gamesgames`)
 
@@ -72,7 +94,7 @@ Install Git using your operating system's package manager. Then install the host
 ```bash
 # Proxmox installation path; change it for your own source checkout.
 /opt/romarr/.venv/bin/python -m pip install \
-  "rom-hub @ https://github.com/BlizzHacker/rom-hub/archive/b0c7885c057730c42608c5570359166128bbe3eb.tar.gz"
+  "rom-hub @ https://github.com/BlizzHacker/rom-hub/archive/ef025c056827423b370e8fe626cd8c4ebdc034ed.tar.gz"
 ```
 
 For a checkout using `.venv`, use `.venv/bin/python` instead. Installing into system Python or another virtual environment will not make the package available to ROMarr. Refresh the Plugins page after installing; restart ROMarr after a package upgrade if it has already loaded an older module.
@@ -80,7 +102,7 @@ For a checkout using `.venv`, use `.venv/bin/python` instead. Installing into sy
 For the advanced [Windows source helper](INSTALL.md#windows-source-install), run from the repository directory:
 
 ```powershell
-.\.venv-windows\Scripts\python.exe -m pip install "rom-hub @ https://github.com/BlizzHacker/rom-hub/archive/b0c7885c057730c42608c5570359166128bbe3eb.tar.gz"
+.\.venv-windows\Scripts\python.exe -m pip install "rom-hub @ https://github.com/BlizzHacker/rom-hub/archive/ef025c056827423b370e8fe626cd8c4ebdc034ed.tar.gz"
 ```
 
 Use your chosen virtual-environment path if you changed `-VenvDirectory`. Git must be on `PATH` when installing plugin repositories. The Hub page reports the lack of Linux sandbox support on Windows; do not assume it is confined there.

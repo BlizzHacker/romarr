@@ -89,7 +89,7 @@ The separated vector icon ([`romarr-icon.svg`](docs/img/brand/romarr-icon.svg)) 
 |---|---|
 | **Library Overview** — 76,056 files on disk, platform pills, genre/region/decade filters, and cover grid | ![ROMarr library view across 73 platforms](docs/img/library.png) |
 | **Discover Shelf** — 42,210 metadata-matched games from your library with top-rated, hidden-gem, and franchise filters | ![ROMarr Discover shelf with 42,210 games](docs/img/discover.png) |
-| **ROM Hub Plugins** — 29 confined subprocess sources (`archive-org`, `vimm-net`, `minerva-archive`, `theromdepot`, and more) | ![ROM Hub showing 29 enabled plugins](docs/img/hub-plugins.png) |
+| **ROM Hub Plugins** — 40+ confined subprocess sources across ROMs (`archive-org`, `vimm-net`, `minerva-archive`, `theromdepot`), mods (`curseforge`, `moddb`, `nexusmods`, `modrinth`, `thunderstore`, `gamebanana`), guides/tutorials (`gamefaqs`, `strategywiki`, `game-manuals`, `youtube-tutorials`), and open-source games & bots (`github-games`) | ![ROM Hub showing enabled plugins](docs/img/hub-plugins.png) |
 | **Device Fleet & 1G1R Planner** — Non-destructive Igir sync plans and frontend exports for ES-DE, RetroPie, Batocera, Steam Deck, and Argosy | ![Device Fleet non-destructive 1G1R sync planner](docs/img/device-fleet.png) |
 
 <details>

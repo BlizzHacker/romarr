@@ -542,6 +542,10 @@ class ROMarr:
         self.store.settings["_prowlarr_url"] = e.get("PROWLARR_URL", "")
         self.store.settings["_qbit_url"] = e.get("QBITTORRENT_URL", "")
         self.store.settings["_romm_url"] = e.get("ROMM_URL", "")
+        hub.configure_flaresolverr(
+            str(self.store.settings.get("flaresolverr_url")
+                or e.get("ROM_HUB_FLARESOLVERR_URL", "") or "")
+        )
 
         # The headless RetroArch stream server, if the operator runs one. It is
         # what plays the machines EmulatorJS has no core for -- PS2, GameCube,
@@ -8936,6 +8940,7 @@ def make_handler(service: ROMarr):
                                         "sandboxed": confined,
                                         "sandbox_detail": why,
                                         "archive_org_auth": hub.archive_org_auth_status(),
+                                        "flaresolverr_configured": bool(hub.flaresolverr_url()),
                                         "searchable_plugins": searchable,
                                         # The Plugins page says out loud what
                                         # enabling a plugin now does: its
@@ -9998,6 +10003,8 @@ def make_handler(service: ROMarr):
                 try:
                     with service._lock:
                         updated = service.store.update_settings(body)
+                        if "flaresolverr_url" in body:
+                            hub.configure_flaresolverr(str(updated.get("flaresolverr_url") or ""))
                 except ValueError as exc:
                     return self._json(400, {"error": str(exc)})
                 if any(str(k).startswith("oidc") or k == "_oidc_client_secret"
