@@ -3003,11 +3003,14 @@ function sharingEditor(peer){
 
 RENDER.portal=async()=>{
   if(window._portalTab==='mcp'){window._portalTab='shell'; go('agents'); return;}
+  const version=pageVersion;
+  const current=()=>version===pageVersion&&activePage==='portal';
   const [libs, fleet, sys] = await Promise.all([
     j('/api/v1/library').catch(()=>({items:[]})),
     j('/api/v1/hub/fleet').catch(()=>({profiles:[],kinds:{},igir:{}})),
     j('/api/v1/system/status').catch(()=>({}))
   ]);
+  if(!current()) return;
   const servers=(libs.items||[]).filter(l=>l.url).map(l=>({...l}));
   if(sys&&sys.ggrequestz&&sys.ggrequestz.url&&!servers.some(s=>s.url===sys.ggrequestz.url)){
     servers.push({name:'GG Requestz',type:'ggrequestz',url:sys.ggrequestz.url,public_url:sys.ggrequestz.public_url||sys.ggrequestz.url,path:sys.library_path||'/roms'});
@@ -3026,7 +3029,9 @@ RENDER.portal=async()=>{
     }catch{return false;}
   };
 
+  let viewGen=0, planSeq=0;
   const draw=()=>{
+    viewGen++;
     const tabBar=`<div class="cat-bar" style="margin-bottom:14px">
       <span class="chip${tab==='shell'?' on':''}" data-ptab="shell">Library app</span>
       <span class="chip${tab==='fleet'?' on':''}" data-ptab="fleet">Devices</span>
@@ -3208,6 +3213,7 @@ RENDER.portal=async()=>{
       </div>`;
 
       const runPlan=async()=>{
+        const gen=viewGen, seq=++planSeq;
         const payload=isApp
           ? {device_id:$('#fl-dev').value, library_url:($('#fl-liburl')&&$('#fl-liburl').value.trim())||defaultLibUrl}
           : {
@@ -3221,6 +3227,7 @@ RENDER.portal=async()=>{
               mirror:$('#fl-mirror')?$('#fl-mirror').checked:false
             };
         const r=await fetch('/api/v1/hub/fleet',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(x=>x.json()).catch(e=>({ok:false,error:String(e)}));
+        if(gen!==viewGen||seq!==planSeq||!current()) return;
         if(!r.ok){
           $('#fl-out').innerHTML=`<div class="panel-note" style="margin-top:12px;border-left-color:var(--bad)"><b>Could not build the plan:</b> ${esc(r.error||'no answer from ROMarr')}</div>`;
           return;
@@ -3269,7 +3276,9 @@ RENDER.portal=async()=>{
 };
 
 RENDER.agents=async()=>{
+  const version=pageVersion;
   const mcp=await j('/api/v1/mcp').catch(()=>({tools:[],mcp_client_config:{}}));
+  if(version!==pageVersion||activePage!=='agents') return;
     const endpoint=location.origin+'/api/v1/mcp';
     const configs={
       claude:JSON.stringify({mcpServers:{romarr:{type:'http',url:endpoint,headers:{'X-Api-Key':'<YOUR_ROMARR_API_KEY>'}}}},null,2),
