@@ -1,4 +1,4 @@
-# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.10.0.schema.json
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.28.0.schema.json
 
 PackageIdentifier: MoveWeight.ROMarr
 PackageVersion: 1.10.0
@@ -14,4 +14,4 @@ Installers:
   InstallerUrl: https://github.com/BlizzHacker/romarr/releases/download/v1.10.0/ROMarr-1.10.0-win-x64.zip
   InstallerSha256: E82297B8BDF7E309C4DE39826290357C8CC15D6AB4C07EE09E4B12A726D07130
 ManifestType: installer
-ManifestVersion: 1.10.0
+ManifestVersion: 1.28.0
