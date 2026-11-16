@@ -888,6 +888,7 @@ NAV = [
         ('history', 'History', None),
         ('blocklist', 'Blocklist', None),
         ('reports', 'Reports & Help', None),
+        ('switch', 'Switch Updates & DLC', 'switch_gaps'),
     ]),
     ('Hub', [
         ('hub', 'Plugins', None),
@@ -1303,7 +1304,7 @@ function go(pageSpec){
   metadataLookup=null;
   location.hash=pageSpec;
   sidebarSyncNav(page==='game'?'library':page);
-  const titles={soundtracks:'Soundtracks',library:'Games',game:'Game',add:'Add New Game',search:'Interactive Search',
+  const titles={soundtracks:'Soundtracks',switch:'Switch Updates & DLC',library:'Games',game:'Game',add:'Add New Game',search:'Interactive Search',
     missing:'Wanted — Missing',lists:'Import Lists',stats:'Statistics',
     discover:'Discover',ecosystem:'The Ecosystem',peers:'Friends',
     queue:'Queue',history:'History',media:'Media Management',profiles:'Profiles',
@@ -4664,14 +4665,55 @@ RENDER.media=()=>settingsPage('Media Management',
      +'an allowlist — the plan counts every title omitted for having no dump '
      +'in your regions.'));
 
+RENDER.switch=async()=>{
+  const version=pageVersion;
+  const alive=()=>activePage==='switch'&&pageVersion===version;
+  let generation=0;
+  const load=async(refresh=false)=>{
+    const request=++generation;
+    const current=()=>alive()&&request===generation;
+    $('#page').innerHTML='<p class="muted">Reading Switch inventory…</p>';
+    try{
+      const data=await j('/api/v1/switch/updates'+(refresh?'?refresh=1':''));
+      if(!current())return;
+      const summary=data.summary||{};
+      $('#page').innerHTML=`<div class="card"><h2>Switch Updates &amp; DLC <span class="badge">${Number(summary.games_with_gaps)||0} games with gaps</span></h2>
+        <p>Read-only filename inventory. No downloads, imports or file changes. Version tags can be absent or inaccurate. TitleDB regional DLC metadata is incomplete; no missing entry means no known gap, never a complete collection.</p>
+        <button class="btn" id="switch-refresh">Refresh inventory</button>
+        <p>${Number(summary.games)||0} applications · ${Number(summary.update_gaps)||0} update gaps · ${Number(summary.dlc_gaps)||0} known DLC gaps · ${Number(summary.unknown_to_titledb)||0} unknown versions</p>
+        ${summary.scan_complete?'':'<p role="status">Scan incomplete: results may omit files.</p>'}
+        ${Object.entries(data.scans||{}).map(([slug,v])=>(v.warnings||[]).map(w=>`<p role="status">${esc(slug)}: ${esc(w)}</p>`).join('')).join('')}
+        ${(data.items||[]).length?'':'<p>No tagged Switch dumps found. Supported files: NSP, NSZ, XCI, XCZ, NUP. A single [16-digit title ID] identifies each file; [v65536] supplies a version. Metadata downloads start only after a tagged file is found.</p>'}
+        <div id="switch-rows">${(data.items||[]).map(row=>`<article class="card"><h3>${esc(row.name||row.game)} <small>${esc(row.platform)}</small></h3>
+          <code>${esc(row.base_tid)}</code><p>Update: <strong>${esc(row.update)}</strong> · installed ${esc(row.installed_version??'unknown')} / latest ${esc(row.latest_version??'unknown')}${row.base_present?'':' · base file missing'}</p>
+          <p>${Number(row.dlc_installed)||0} installed DLC IDs · ${row.dlc_total===null?'catalogue coverage unknown':esc(row.dlc_total)+' known regional IDs'}${row.catalog_region?' ('+esc(row.catalog_region)+')':''}</p>
+          ${[...(row.dlc_missing||[]).map(d=>({...d,ignored:false})),...(row.dlc_ignored||[]).map(d=>({...d,ignored:true}))].map(d=>`<p>${esc(d.name||d.tid)} <code>${esc(d.tid)}</code> <button class="btn small switch-ignore" data-tid="${esc(d.tid)}" data-ignore="${d.ignored?'false':'true'}">${d.ignored?'Resume tracking':'Ignore this DLC'}</button></p>`).join('')}
+          <details><summary>Inventory files</summary><ul>${row.files.map(f=>`<li>${esc(f)}</li>`).join('')}</ul></details></article>`).join('')}</div></div>`;
+      $('#switch-refresh').onclick=()=>load(true);
+      document.querySelectorAll('.switch-ignore').forEach(button=>button.onclick=async()=>{
+        button.disabled=true;
+        try{
+          await j('/api/v1/switch/ignore',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({tid:button.dataset.tid,ignored:button.dataset.ignore==='true'})});
+          if(current())load();
+        }catch(error){if(current()){button.disabled=false;toast(error.message||'Could not save preference');}}
+      });
+    }catch(error){if(current())$('#page').innerHTML=`<p role="alert">${esc(error.message||'Switch report unavailable')}</p>`;}
+  };
+  await load();
+};
+
 RENDER.profiles=async()=>{
+  const version=pageVersion;
+  const alive=()=>activePage==='profiles'&&pageVersion===version;
   const plats=await j('/api/platforms').catch(()=>[]);
+  if(!alive())return;
   plats.sort((a,b)=>a.name.localeCompare(b.name));
 
   SETTINGS.platform_profiles=SETTINGS.platform_profiles||{};
   let currentPlat=RENDER._current_profile_platform||'';
 
   const renderProfileForm=()=>{
+    if(!alive())return;
     const isGlobal=!currentPlat;
     const platInfo=isGlobal?null:(plats.find(p=>p.slug===currentPlat)||{name:currentPlat,slug:currentPlat});
     const overrides=isGlobal?null:(SETTINGS.platform_profiles[currentPlat]||null);
@@ -4701,6 +4743,9 @@ RENDER.profiles=async()=>{
     const regionScoreLines=Object.entries(regionScores||{})
       .map(([reg,sc])=>`${reg} = ${sc}`).join('\n');
 
+    const video=getVal('video_standard','none')||'none';
+    const strict=getVal('video_standard_strict',false);
+    const formatValue=isGlobal?Object.entries(SETTINGS.preferred_formats||{}).map(([k,v])=>k+' = '+v.join(', ')).join('\n'):((overrides&&overrides.preferred_formats)||(SETTINGS.preferred_formats||{})[currentPlat]||[]).join(', ');
     const preferredTerms=getVal('preferred_terms',[]);
     const preferredTermLines=(preferredTerms||[]).map(t=>{
       if(Array.isArray(t)&&t.length===2)return `${t[0]} = ${t[1]}`;
@@ -4799,6 +4844,15 @@ RENDER.profiles=async()=>{
         </div>
       </div>
 
+      <div class="field"><label for="prof-video">Video standard</label>
+        <select id="prof-video">${[['none','No preference'],['ntsc','NTSC'],['pal','PAL']].map(([v,n])=>`<option value="${v}"${video===v?' selected':''}>${n}</option>`).join('')}</select>
+        <label class="check"><input type="checkbox" id="prof-video-strict"${strict?' checked':''}>Refuse a known opposing video standard</label>
+        <small>Explicit video tags or bracketed region tags only; unknown and mixed-region releases stay eligible.</small>
+      </div>
+      <div class="field"><label for="prof-formats">Preferred formats (best first)</label>
+        <textarea id="prof-formats" rows="3" placeholder="${isGlobal?'psx = chd, cue, bin':'chd, cue, bin'}">${esc(formatValue)}</textarea>
+        <small>${isGlobal?'One platform slug = comma-separated extensions per line.':'Comma-separated extensions. Empty disables format preference for this platform.'} Only the final filename extension or selected torrent member counts.</small>
+      </div>
       <div class="field" style="margin-top:12px">
         <label>Preferred Regions</label>
         <input type="text" id="prof-regions" value="${esc(regions.join(', '))}" placeholder="USA, World, Europe, Japan">
@@ -4865,6 +4919,7 @@ RENDER.profiles=async()=>{
           headers:{'content-type':'application/json'},
           body:JSON.stringify(patch)
         });
+        if(!alive())return;
         toast(`Reverted ${platInfo.name} to global defaults`);
         renderProfileForm();
       };
@@ -4906,8 +4961,16 @@ RENDER.profiles=async()=>{
       const beta=$('#prof-allow-beta').checked;
       const hacks=$('#prof-allow-hacks').checked;
 
+      const videoStandard=$('#prof-video').value;
+      const videoStrict=$('#prof-video-strict').checked;
+      const parseFormats=value=>[...new Set(value.split(',').map(x=>x.trim().toLowerCase().replace(/^\./,'')).filter(x=>/^[a-z0-9]{1,8}$/.test(x)))].slice(0,32);
+      const formats=isGlobal?{}:parseFormats($('#prof-formats').value);
+      if(isGlobal)$('#prof-formats').value.split('\n').forEach(line=>{const [slug,value]=line.split('=');if(slug&&/^[a-z0-9][a-z0-9-]{0,63}$/.test(slug.trim()))formats[slug.trim()]=parseFormats(value||'');});
       const patch={};
       if(isGlobal){
+        patch.video_standard=videoStandard;
+        patch.video_standard_strict=videoStrict;
+        patch.preferred_formats=formats;
         patch.min_size_mb=minSz;
         patch.max_size_mb=maxSz;
         patch.min_seeders=seeders;
@@ -4923,6 +4986,9 @@ RENDER.profiles=async()=>{
       } else {
         SETTINGS.platform_profiles=SETTINGS.platform_profiles||{};
         SETTINGS.platform_profiles[currentPlat]={
+          video_standard:videoStandard,
+          video_standard_strict:videoStrict,
+          preferred_formats:formats,
           min_size_mb:minSz,
           max_size_mb:maxSz,
           min_seeders:seeders,
@@ -4944,6 +5010,7 @@ RENDER.profiles=async()=>{
         headers:{'content-type':'application/json'},
         body:JSON.stringify(patch)
       });
+      if(!alive())return;
       toast(`Saved ${isGlobal?'global':platInfo.name} release profile`);
       renderProfileForm();
     };

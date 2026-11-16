@@ -69,7 +69,8 @@ from .cartridge import CartridgeHub
 from .emulator_catalog import resource_catalog
 from .dat import DatIndex, parse_dat
 from .decompress import run_batch as run_decompress_batch, scan_compressed
-from .titled import TitleDBIndex, build_index as build_titled_index, validate_switch_rom
+from .switch_report import report as build_switch_report
+from .titled import classify_tid, TitleDBIndex, build_index as build_titled_index, validate_switch_rom
 from .downloaders import (
     Blackhole, CLIENT_TYPES, DebridClient, HubDownloader, NZBGet, NzbgetConfig, SABnzbd, SabConfig, SiteDownloader, build_client,
     hand_off_with_id, match_queue_item, merge_secrets, pick_client, redact,
@@ -814,6 +815,9 @@ class ROMarr:
         # over after the handoff.
         self._automatic_grab_reservations: set[tuple[str, str]] = set()
         self._dat_reload_lock = threading.Lock()
+        self._titled_lock = threading.RLock()
+        self._switch_lock = threading.Lock()
+        self._switch_cache = None
         # Coordinates provider writes, reloads and revision-bearing reads.
         self._metadata_lock = threading.RLock()
         self._collection_source_lock = threading.Lock()
@@ -3593,16 +3597,87 @@ class ROMarr:
         rather than stopping startup. Names (a 90MB region file) stay off
         unless TITLED_NAMES=1 -- see titled.py for the reasoning.
         """
+        with self._titled_lock:
+            try:
+                self.titled = build_titled_index(cache_dir=self.store.path.parent / "titledb")
+                count = len(self.titled.titles) if self.titled else 0
+                log.info("TitleDB index loaded with %d Switch title IDs", count)
+                return {"loaded": count, "names": self.titled.names_loaded,
+                        "status": "ok"}
+            except Exception as exc:
+                log.warning("TitleDB initialization failed: %s", exc)
+                self.titled = TitleDBIndex()
+                return {"loaded": 0, "status": "error", "error": str(exc)}
+
+    def ensure_titled(self):
+        """Lazily initialize metadata when a report finds actual Switch dumps."""
+        with self._titled_lock:
+            if not getattr(self, "titled", None):
+                self.reload_titled()
+            return self.titled
+
+    def switch_updates(self, refresh=False, *, cached_only=False):
+        """Bounded read-only report for the effective routed Switch shelves."""
+        roots = {}
+        for slug in ("switch", "switch-2"):
+            target = self.library_for(slug)
+            cfg = target[0] if target else {}
+            roots[slug] = platform_dir(self.library_root(cfg), slug,
+                                      layout=self.library_layout(cfg),
+                                      platform_folders=self.platform_folders(cfg))
+        key = tuple((slug, str(path)) for slug, path in roots.items())
+        if not self._switch_lock.acquire(blocking=not cached_only):
+            return {"ready": False, "games_with_gaps": 0}
         try:
-            self.titled = build_titled_index()
-            count = len(self.titled.titles) if self.titled else 0
-            log.info("TitleDB index loaded with %d Switch title IDs", count)
-            return {"loaded": count, "names": self.titled.names_loaded,
-                    "status": "ok"}
-        except Exception as exc:
-            log.warning("TitleDB initialization failed: %s", exc)
-            self.titled = TitleDBIndex()
-            return {"loaded": 0, "status": "error", "error": str(exc)}
+            cached = self._switch_cache
+            fresh = cached and cached[0] == key and time.monotonic() - cached[1] < 1800
+            if cached_only and not fresh:
+                return {"ready": False, "games_with_gaps": 0}
+            if refresh or not fresh:
+                payload = build_switch_report(roots, self.ensure_titled)
+                self._switch_cache = (key, time.monotonic(), payload)
+            else:
+                payload = cached[2]
+        finally:
+            self._switch_lock.release()
+        # A per-title ignore preference changes presentation, never the cached facts.
+        with self._metadata_lock:
+            raw_ignored = self.store.settings.get("ignored_dlc", [])
+            ignored = {str(tid).lower() for tid in raw_ignored if isinstance(tid, str)} if isinstance(raw_ignored, list) else set()
+        if cached_only:
+            summary = dict(payload["summary"])
+            summary["dlc_gaps"] = sum(d["tid"].lower() not in ignored for row in payload["items"] for d in row["dlc_missing"])
+            summary["games_with_gaps"] = sum(row["update"] in ("missing", "outdated") or any(d["tid"].lower() not in ignored for d in row["dlc_missing"]) for row in payload["items"])
+            return {"ready": True, **summary}
+        import copy
+        out = copy.deepcopy(payload)
+        for row in out["items"]:
+            row["dlc_ignored"] = [d for d in row["dlc_missing"] if d["tid"].lower() in ignored]
+            row["dlc_missing"] = [d for d in row["dlc_missing"] if d["tid"].lower() not in ignored]
+        out["summary"]["dlc_gaps"] = sum(len(r["dlc_missing"]) for r in out["items"])
+        out["summary"]["games_with_gaps"] = sum(r["update"] in ("missing", "outdated") or bool(r["dlc_missing"]) for r in out["items"])
+        out["ready"] = True
+        return out
+
+    def switch_ignore(self, body):
+        """Save an explicit DLC-only preference; never acquire or alter files."""
+        if not isinstance(body, dict) or not isinstance(body.get("ignored"), bool):
+            raise ValueError("Supply a DLC title ID and boolean ignored")
+        tid = str(body.get("tid", "")).lower()
+        if not re.fullmatch(r"[0-9a-f]{16}", tid) or classify_tid(tid) != "dlc":
+            raise ValueError("A valid DLC title ID is required")
+        with self._metadata_lock:
+            raw = self.store.settings.get("ignored_dlc", [])
+            values = {str(value).lower() for value in raw if isinstance(value, str) and classify_tid(value) == "dlc"} if isinstance(raw, list) else set()
+            if body["ignored"]:
+                values.add(tid)
+            else:
+                values.discard(tid)
+            if len(values) > 1024:
+                raise ValueError("At most 1024 ignored DLC IDs")
+            self.store.settings["ignored_dlc"] = sorted(values)
+            self.store.save()
+        return {"ok": True}
 
     # -- the queue ----------------------------------------------------------
 
@@ -5584,7 +5659,8 @@ class ROMarr:
         # data loss. The two categories ride alongside it so the badge can
         # say which half is which instead of implying they are the same kind
         # of thing.
-        return {"games": games,
+        return {"switch_gaps": self.switch_updates(cached_only=True).get("games_with_gaps", 0) if hasattr(self, "_switch_lock") else 0,
+                "games": games,
                 "games_on_disk": split["on_disk"],
                 "games_catalogued": split["catalogued"],
                 "missing": len(self.store.wanted), "queued": queued}
@@ -9345,6 +9421,10 @@ def make_handler(service: ROMarr):
                     redact_library(lib) for lib in service.store.list_items("libraries")]})
             if route.path == "/api/v1/library/schema":
                 return self._json(200, {"types": LIBRARY_TYPES})
+            if route.path == "/api/v1/switch/updates":
+                return self._json(200, service.switch_updates((query.get("refresh") or [""])[0] == "1"))
+            if route.path == "/api/v1/switch/gaps":
+                return self._json(200, service.switch_updates(cached_only=True))
             if route.path == "/api/v1/file-reports":
                 return self._json(200, service.report_manager().list())
             if route.path == "/api/v1/setup/status":
@@ -10264,6 +10344,11 @@ def make_handler(service: ROMarr):
                                 "platform": platform.slug if platform else "",
                                 "unresolved": platform is None})
                 return self._json(200, {"items": out, "total": len(entries)})
+            if route.path == "/api/v1/switch/ignore":
+                try:
+                    return self._json(200, service.switch_ignore(body))
+                except ValueError as exc:
+                    return self._json(400, {"error": str(exc)})
             if route.path in ("/api/v1/file-reports/submit", "/api/v1/file-reports/quarantine",
                               "/api/v1/file-reports/restore", "/api/v1/support/github"):
                 if not isinstance(body, dict):

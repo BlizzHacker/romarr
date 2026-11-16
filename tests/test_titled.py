@@ -37,8 +37,8 @@ def _index():
     index.add(SwitchTitle(
         title_id=MARIO_BASE, name="Super Mario Odyssey",
         versions={"65536": "2017-10-27"}))
-    # A DLC and an update of BotW: same 13-hex prefix, different low bits.
-    index.add(SwitchTitle(title_id=BOTW_BASE[:13] + "001",
+    # A DLC and an update of BotW: the same 0x2000-wide application family.
+    index.add(SwitchTitle(title_id=f"{int(BOTW_BASE, 16) + 0x1001:016x}",
                           versions={"65536": "2017-11-30"}))
     index.add(SwitchTitle(title_id=BOTW_BASE[:13] + "800",
                           versions={"196608": "2018-02-01"}))
@@ -84,10 +84,10 @@ def test_switch_name_does_not_resolve_to_nes():
 # ------------------------------------------------------ ID classification --
 
 def test_kind_comes_from_the_id_alone():
-    """Base, DLC and update are arithmetic on the low 12 bits -- no
+    """Base, DLC and update are arithmetic on the low 13 bits -- no
     database needed, which is the point."""
     assert classify_tid(BOTW_BASE) == "base"
-    assert classify_tid(BOTW_BASE[:13] + "001") == "dlc"
+    assert classify_tid(f"{int(BOTW_BASE, 16) + 0x1001:016x}") == "dlc"
     assert classify_tid(BOTW_BASE[:13] + "800") == "update"
 
 
@@ -110,7 +110,7 @@ def test_case_and_0x_prefix_are_tolerated():
 
 
 def test_base_tid_of_groups_a_family():
-    assert base_tid_of(BOTW_BASE[:13] + "001") == BOTW_BASE
+    assert base_tid_of(f"{int(BOTW_BASE, 16) + 0x1001:016x}") == BOTW_BASE
     assert base_tid_of(BOTW_BASE[:13] + "800") == BOTW_BASE
     assert base_tid_of("garbage") == ""
 
@@ -134,7 +134,7 @@ def test_lookup_misses_cleanly():
 
 
 def test_family_of_returns_base_dlc_and_update():
-    family = _index().family_of(BOTW_BASE[:13] + "001")
+    family = _index().family_of(f"{int(BOTW_BASE, 16) + 0x1001:016x}")
     assert [t.title_id for t in family["base"]] == [BOTW_BASE]
     assert len(family["dlc"]) == 1
     assert len(family["update"]) == 1
@@ -170,7 +170,7 @@ def test_validate_accepts_an_explicit_title_id():
 
 def test_a_dlc_id_verifies_as_dlc():
     result = validate_switch_rom(
-        f"DLC [{BOTW_BASE[:13].upper()}001].nsp", index=_index())
+        f"DLC [{int(BOTW_BASE,16)+0x1001:016X}].nsp", index=_index())
     assert result["valid"] and result["kind"] == "dlc"
 
 

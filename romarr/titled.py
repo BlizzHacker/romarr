@@ -28,7 +28,7 @@ its updates, or finding the latest version of a title -- that is arithmetic
 on the title ID and a max() over the version history:
 
   * ``xxxxxxxxxxxx000`` -- base title (application)
-  * ``xxxxxxxxxxxx001``..``xxxxxxxxxxxx0ff`` -- DLC / add-on content
+  * base ID + ``0x1001`` through ``0x1fff`` -- DLC / add-on content
   * ``xxxxxxxxxxxx800`` -- update / patch of the base title
   * IDs below ``0100000000002000`` -- system titles (applets, services)
 
@@ -113,41 +113,31 @@ class SwitchTitle:
 def classify_tid(title_id: str) -> str:
     """What kind of Switch title an ID names, from the ID alone.
 
-    The low 12 bits are the category: 0x000 base, 0x001-0x0FF add-on
-    content, 0x800 update. Base titles under 0x0100000000002000 are system
-    software. This needs no database at all, which is why it is a module
-    function rather than an index method.
+    Applications reserve a 0x2000-wide family: base at 0, update at
+    0x800 and add-on content at 0x1001..0x1fff.
     """
     tid = str(title_id or "").strip().lower().removeprefix("0x")
     if not re.fullmatch(r"[0-9a-f]{16}", tid):
         return "invalid"
-    try:
-        value = int(tid, 16)
-    except ValueError:
-        return "invalid"
-    low = value & 0xFFF
-    if low == 0x000:
-        return "system" if value < SYSTEM_TID_BOUNDARY else "base"
+    value = int(tid, 16)
+    if value < SYSTEM_TID_BOUNDARY:
+        return "system"
+    low = value & 0x1FFF
+    if low == 0:
+        return "base"
     if low == 0x800:
         return "update"
-    if low <= 0x0FF:
+    if 0x1001 <= low <= 0x1FFF:
         return "dlc"
-    # 0x100-0x7FF and 0x801-0xFFF are reserved/unused ranges; treat them as
-    # unknown rather than guessing a category.
     return "unknown"
 
 
 def base_tid_of(title_id: str) -> str:
-    """The base-game ID a DLC or update ID belongs to.
-
-    DLC 01007EF00011E001 and update 01007EF00011E800 both belong to base
-    01007EF00011E000 -- which is what makes "show me this game and its
-    add-ons" a group-by rather than a database join.
-    """
+    """Return the application ID shared by an update and its add-on content."""
     tid = str(title_id or "").strip().lower().removeprefix("0x")
     if not re.fullmatch(r"[0-9a-f]{16}", tid):
         return ""
-    return tid[:13] + "000"
+    return f"{int(tid, 16) & ~0x1fff:016x}"
 
 
 def _fetch_json(url: str, timeout: int = FETCH_TIMEOUT):
@@ -262,24 +252,25 @@ class TitleDBIndex:
     def family_of(self, title_id: str) -> dict[str, list[SwitchTitle]]:
         """Base game, its DLC and its updates, grouped by kind.
 
-        The answer to the issue's "see base games, dlc and updates": the
-        low 12 bits of the ID are the only thing separating them, so the
-        family is one prefix scan.
+        Match the application family across the update and DLC ranges.
         """
         base = base_tid_of(title_id)
         if not base:
             return {}
         groups: dict[str, list[SwitchTitle]] = {
             "base": [], "dlc": [], "update": []}
-        prefix = base[:13]
         for tid, title in self.by_id.items():
-            if tid.startswith(prefix):
+            if base_tid_of(tid) == base:
                 kind = classify_tid(tid)
                 if kind in groups:
                     groups[kind].append(title)
         return groups
 
     def add(self, title: SwitchTitle) -> None:
+        old = self.by_id.get(title.title_id)
+        if old and old.name:
+            self._by_name[old.name.lower()] = [
+                tid for tid in self._by_name.get(old.name.lower(), []) if tid != title.title_id]
         self.by_id[title.title_id] = title
         if title.name:
             key = title.name.lower()
@@ -321,7 +312,7 @@ def build_index(cache_dir: Optional[str | Path] = None,
     """
     index = TitleDBIndex()
     versions = fetch_versions(cache_dir)
-    if versions:
+    if isinstance(versions, dict):
         for tid, history in versions.items():
             tid_norm = str(tid).strip().lower()
             if not re.fullmatch(r"[0-9a-f]{16}", tid_norm):
@@ -329,6 +320,17 @@ def build_index(cache_dir: Optional[str | Path] = None,
             index.add(SwitchTitle(
                 title_id=tid_norm,
                 versions=history if isinstance(history, dict) else {}))
+        for title in list(index.by_id.values()):
+            if title.kind != "base":
+                continue
+            patch_id = f"{int(title.title_id, 16) + 0x800:016x}"
+            existing = index.lookup_by_id(patch_id)
+            history = dict(existing.versions) if existing else {}
+            for value, date in title.versions.items():
+                if re.fullmatch(r"[0-9]{1,10}", str(value)) and 0 < int(value) <= 0xFFFFFFFF:
+                    history.setdefault(str(value), date)
+            if history:
+                index.add(SwitchTitle(patch_id, versions=history))
         log.info("TitleDB: indexed %d Switch title IDs", len(index))
     else:
         log.warning("TitleDB: versions.json unavailable; Switch validation "
@@ -359,20 +361,27 @@ def load_names_into(index: TitleDBIndex,
         log.warning("TitleDB: region file %s unavailable", region)
         return 0
     named = 0
+    seen = set()
     for tid, row in data.items():
-        tid_norm = str(tid).strip().lower()
-        if not re.fullmatch(r"[0-9a-f]{16}", tid_norm):
-            continue
         if not isinstance(row, dict):
             continue
+        # Region catalogues are keyed by eShop product ID; the row carries the title ID.
+        tid_norm = str(row.get("id") or tid).strip().lower()
+        if not re.fullmatch(r"[0-9a-f]{16}", tid_norm) or tid_norm in seen:
+            continue
+        seen.add(tid_norm)
         name = str(row.get("name") or "").strip()
+        try:
+            size = max(0, int(row.get("size") or 0))
+        except (ValueError, TypeError, OverflowError):
+            size = 0
         existing = index.by_id.get(tid_norm)
         title = SwitchTitle(
             title_id=tid_norm,
             name=name,
             versions=existing.versions if existing else {},
             region=region,
-            size=int(row.get("size") or 0),
+            size=size,
             publisher=str(row.get("publisher") or ""),
             description=str(row.get("description") or ""),
             release_date=str(row.get("releaseDate") or ""),
@@ -380,8 +389,8 @@ def load_names_into(index: TitleDBIndex,
         index.add(title)
         if name:
             named += 1
-    index.names_loaded = True
-    index.region = region
+    index.names_loaded = named > 0
+    index.region = region if named else ""
     log.info("TitleDB: %d titles named from %s", named, region)
     return named
 

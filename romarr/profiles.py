@@ -25,6 +25,7 @@ import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
+from pathlib import PurePosixPath
 
 log = logging.getLogger(__name__)
 
@@ -97,6 +98,42 @@ def _region_matches(region_key: str, lowered: str) -> bool:
     return False
 
 
+VIDEO_STANDARD_POINTS = 30
+FORMAT_FIRST_POINTS = 30
+FORMAT_STEP_POINTS = 10
+_VIDEO_TAG = {
+    "ntsc": re.compile(r"(?<![a-z0-9])ntsc(?:[- ]?[ujm])?(?![a-z0-9])", re.I),
+    "pal": re.compile(r"(?<![a-z0-9])pal(?:[- ]?[a-z])?(?![a-z0-9])", re.I),
+}
+_VIDEO_REGIONS = {
+    "ntsc": re.compile(r"(?<![a-z0-9])(?:usa|united states|japan|canada|u|us|j|jp|jpn|ju|uj)(?![a-z0-9])", re.I),
+    "pal": re.compile(r"(?<![a-z0-9])(?:europe|australia|new zealand|germany|france|spain|italy|netherlands|sweden|e|eu|eur|aus)(?![a-z0-9])", re.I),
+}
+
+
+def _clean_formats(raw) -> dict[str, list[str]]:
+    """Normalize platform-to-extension preferences without accepting filename words."""
+    if not isinstance(raw, dict):
+        return {}
+    result = {}
+    for slug, values in raw.items():
+        slug = str(slug).strip().lower()
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", slug) or not isinstance(values, (list, tuple)):
+            continue
+        extensions = []
+        for value in values:
+            ext = str(value or "").strip().lower().lstrip(".")
+            if re.fullmatch(r"[a-z0-9]{1,8}", ext) and ext not in extensions:
+                extensions.append(ext)
+        result[slug] = extensions[:32]
+    return result
+
+
+def _flag(value) -> bool:
+    """Interpret stored booleans without treating the string false as enabled."""
+    return value is True or str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
 @dataclass
 class ReleaseProfile:
     """Preferred, excluded and required terms, sizing limits, and scoring preferences.
@@ -134,6 +171,9 @@ class ReleaseProfile:
     region_mode: str = "prefer"
     #: Fan translation policy: "exclude" | "prefer" | "fill" | "keep_both"
     translation_policy: str = "exclude"
+    video_standard: str = ""
+    video_strict: bool = False
+    formats: dict[str, list[str]] = field(default_factory=dict)
     _settings_ref: dict | None = None
     _max_size_is_global: bool = field(default=False, repr=False, compare=False)
 
@@ -274,7 +314,19 @@ class ReleaseProfile:
         region_mode = str(platform_cfg.get("region_mode") or settings.get("region_mode") or "prefer").strip().lower()
         translation_policy = str(platform_cfg.get("translation_policy") or settings.get("translation_policy") or "exclude").strip().lower()
 
+        standard = str(platform_cfg.get("video_standard") or settings.get("video_standard") or "").strip().lower()
+        if standard == "inherit":
+            standard = str(settings.get("video_standard") or "").strip().lower()
+        strict = platform_cfg.get("video_standard_strict")
+        if strict is None:
+            strict = settings.get("video_standard_strict", False)
+        formats = _clean_formats(settings.get("preferred_formats"))
+        if platform and isinstance(platform_cfg.get("preferred_formats"), (list, tuple)):
+            formats.update(_clean_formats({slug: platform_cfg["preferred_formats"]}))
+
         return cls(
+            video_standard=standard if standard in ("ntsc", "pal") else "",
+            video_strict=_flag(strict), formats=formats,
             preferred=preferred,
             excluded=excluded,
             required=required,
@@ -291,6 +343,28 @@ class ReleaseProfile:
             _max_size_is_global=max_size_is_global,
         )
 
+    def _video(self, title: str) -> bool | None:
+        """Compare explicit timing labels or bracketed region hints; unknown stays neutral."""
+        if self.video_standard not in ("ntsc", "pal"):
+            return None
+        groups = re.findall(r"[\[(]([^\])]+)[\])]", title)
+        found = {standard: bool(_VIDEO_TAG[standard].search(title)) or any(
+            _VIDEO_REGIONS[standard].search(group) for group in groups)
+            for standard in ("ntsc", "pal")}
+        if found["ntsc"] == found["pal"]:
+            return None
+        return found[self.video_standard]
+
+    def _format_points(self, title: str, platform_slug: str, content_path: str = "") -> tuple[int, str] | None:
+        """Score only the parsed final extension of a named release or selected member."""
+        order = self.formats.get(platform_slug or "", [])
+        suffix = PurePosixPath(str(content_path or title).replace("\\", "/")).suffix.lower().lstrip(".")
+        if suffix not in order:
+            return None
+        rank = order.index(suffix)
+        return (max(FORMAT_FIRST_POINTS - rank * FORMAT_STEP_POINTS, FORMAT_STEP_POINTS // 2),
+                f"format: .{suffix} is your #{rank + 1} for this console")
+
     def refusal(self, lowered: str, size: int = 0, *, content_path: str = "") -> str:
         """Why this release is refused outright, or "" if it is not."""
         for term in self.excluded:
@@ -303,14 +377,30 @@ class ReleaseProfile:
             return f"smaller than release profile minimum size ({self.min_size_mb}MB)"
         if self.max_size_bytes and size > self.max_size_bytes:
             return f"larger than release profile maximum size ({self.max_size_mb}MB)"
+        if self.video_strict and self._video(lowered) is False:
+            opposing = "PAL" if self.video_standard == "ntsc" else "NTSC"
+            return f"{opposing} timing hint refused: {self.video_standard.upper()} required"
         return ""
 
-    def adjustments(self, lowered: str) -> list[tuple[int, str]]:
-        """Point changes this profile makes, ready for `Judgement.reasons`."""
+    def adjustments(self, lowered: str, platform_slug: str = "", *, content_path: str = "",
+                    platform_evidence: bool = True) -> list[tuple[int, str]]:
+        """Point changes this profile makes, ready for `Judgement.reasons`.
+
+        A matching video standard or preferred format only earns points for
+        a release that also shows it is for this platform; an opposing video
+        standard always costs points.
+        """
         out = []
         for term, points in self.preferred:
             if points and _matches(term, lowered):
                 out.append((points, f"release profile prefers {term!r}"))
+        video = self._video(lowered)
+        if video is not None and (platform_evidence or not video):
+            out.append((VIDEO_STANDARD_POINTS if video else -VIDEO_STANDARD_POINTS,
+                        f"video standard: {'matches' if video else 'opposes'} {self.video_standard.upper()} timing hint"))
+        preferred_format = self._format_points(lowered, platform_slug, content_path)
+        if preferred_format and platform_evidence:
+            out.append(preferred_format)
         return out
 
     def region_score_for(self, lowered: str) -> tuple[int, str] | None:

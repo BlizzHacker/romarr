@@ -328,6 +328,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "preferred_terms": [],
     "excluded_terms": [],
     "required_terms": [],
+    "ignored_dlc": [],
+    "video_standard": "",
+    "video_standard_strict": False,
+    "preferred_formats": {},
     "platform_profiles": {},         # slug -> {min_size_mb, max_size_mb, ...}
     "protocol": "torrent",       # torrent | usenet
     # Remote path mappings, the same concept Radarr and Sonarr expose.
