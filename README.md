@@ -195,6 +195,10 @@ The image includes archive tools. **ROM Hub is included on amd64/arm64; it is un
 - Exact duplicate audit, quarantine and restore; a preview comes before any move.
 - Preview-first renaming for DAT-verified single files already in a library, with a saved restore journal.
 - Multiple library destinations, notifications, import lists and frontend exports.
+- Game pages, a wishlist that saves games without searching, and monitoring you can switch on or off later. [Monitoring guide](docs/MONITORING.md).
+- Game soundtracks found by title or picked from your music folder, uploaded into RomM's Jukebox with exact undo. [Soundtracks guide](docs/SOUNDTRACKS.md).
+- A Switch Updates & DLC report; new updates and DLC are filed inside their game's folder where RomM finds them; plus NTSC/PAL and preferred-format release preferences. [Switch guide](docs/SWITCH-INVENTORY.md).
+- ZIP, 7z, RAR and compressed TAR downloads, read without extracting unsafe paths.
 - PS4, PS5 and PS Vita search/import formats, with [explicit playback and installation limits](docs/MODERN-CONSOLES.md).
 
 Source access, available files, credentials and platform support vary. Check the result and the task history; a configured connection does not guarantee a particular game is available.
@@ -238,6 +242,10 @@ Bug reports, documentation fixes and integration field reports are welcome. For 
 
 Source plugins live in [ROM Hub](https://github.com/BlizzHacker/rom-hub); see its [contribution guide](https://github.com/BlizzHacker/rom-hub/blob/master/CONTRIBUTING.md). ROMarr's API schema is available at `/api/v1/openapi.json` on your own install.
 
+### Acknowledgements
+
 Thanks to the library, emulator and preservation projects ROMarr works with, and to [Radarr](https://github.com/Radarr/Radarr), [Sonarr](https://github.com/Sonarr/Sonarr), [Questarr](https://github.com/Doezer/Questarr) and [gamarr](https://github.com/JeremiahM37/gamarr) for ideas and familiar workflows.
+
+Soundtracks, the Switch report, wishlist monitoring and plugin start-up hardening build on MIT-licensed work from [romarrng](https://github.com/Squeaks72/romarrng), Copyright (c) 2026 MOVE WEIGHT.
 
 MIT — [LICENSE](LICENSE). ROMarr is an independent project and is not endorsed by its integrations.
