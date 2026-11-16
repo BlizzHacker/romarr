@@ -391,3 +391,43 @@ def test_direct_hash_and_job_matches_respect_download_client():
     legacy = QueueItem("Zelda", "nes", "Zelda Legacy", 1, "grabbed", release_id=f"btih:{HASH}")
     assert match_queue_item([legacy, row_b], {"hash": HASH},
                             client_id="qbit-b", client_protocol="torrent") is row_b
+
+
+@pytest.mark.parametrize("tags", ["romarr-0123456789abcdef01234567",
+                                  "romarr-collection-0123456789abcdef01234567"])
+def test_qbittorrent_duplicate_already_tracked_by_romarr_is_not_adopted(tags):
+    """An existing request or retained collection keeps sole ownership of its torrent."""
+    from romarr.clients import QBittorrent, QbitConfig
+
+    infohash = "d2a64b88b086acfcb1c89f044f81764604ceab85"
+
+    class Response:
+        def __init__(self, status_code=200, payload=None, text="Ok."):
+            self.status_code, self.ok, self.text = status_code, 200 <= status_code < 400, text
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+        def raise_for_status(self):
+            if not self.ok:
+                raise RuntimeError(self.status_code)
+
+    class Session:
+        def __init__(self):
+            self.row = {"hash": infohash, "name": "Fat Princess", "tags": tags, "category": "romarr"}
+            self.posts = []
+
+        def post(self, url, **kwargs):
+            self.posts.append(url)
+            return Response(409, text="Fails.") if url.endswith("/torrents/add") else Response()
+
+        def get(self, url, **kwargs):
+            return Response(payload=[dict(self.row)])
+
+    session = Session()
+    client = QBittorrent(QbitConfig(base_url="http://qbit:8080", category="romarr"), session=session)
+    client._authed = True
+
+    assert not client.add(f"magnet:?xt=urn:btih:{infohash}")
+    assert not any(url.endswith(("/torrents/addTags", "/torrents/setCategory")) for url in session.posts)

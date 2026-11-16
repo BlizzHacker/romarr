@@ -284,6 +284,13 @@ class QBittorrent:
             req_kwargs["timeout"] = self._deadline_timeout(deadline, base_timeout)
         return self._session.post(self._url(path), **req_kwargs)
 
+    def _already_owned(self, row: dict) -> bool:
+        """Whether a torrent already carries a ROMarr request or collection tag."""
+        tags = row.get("tags", "")
+        parts = tags.split(",") if isinstance(tags, str) else tags if isinstance(tags, (list, tuple, set)) else []
+        return (str(row.get("hash") or "") in self._selective_hashes
+                or any(str(part).strip().startswith("romarr-") for part in parts))
+
     def add(self, magnet_or_url: str, *, save_path: str | None = None) -> bool:
         """Add a torrent, attaching a verified duplicate to this request."""
         if not self._authed:
@@ -303,6 +310,11 @@ class QBittorrent:
                     existing = [row for row in self.torrents()
                                 if _row_matches_infohash(row, infohash)]
                 except (requests.RequestException, ValueError, KeyError, TypeError):
+                    existing = []
+                if len(existing) == 1 and self._already_owned(existing[0]):
+                    # Another request (or a retained collection) already tracks
+                    # it; a second tag would make both imports ambiguous.
+                    log.warning("qbittorrent duplicate is already tracked by ROMarr; not attaching")
                     existing = []
                 if len(existing) == 1:
                     torrent_hash = str(existing[0].get("hash") or "").strip()
