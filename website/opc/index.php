@@ -377,7 +377,7 @@ $h = static fn(string $v): string => htmlspecialchars($v, ENT_QUOTES | ENT_SUBST
   <meta name="theme-color" content="#080b10">
   <title>ROMarr · Open Collective &amp; Community Bridge</title>
   <link rel="icon" href="/assets/mark.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/styles.css?v=romarr-blue-workbench-6">
+  <link rel="stylesheet" href="/styles.css?v=romarr-blue-workbench-7">
   <style>
     .opc-shell{max-width:980px;margin:0 auto;padding:42px 24px 64px}
     .opc-card{background:var(--surface,#101720);border:1px solid var(--line,#273341);border-radius:12px;padding:24px;margin-top:20px}
