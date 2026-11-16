@@ -6,19 +6,20 @@ exact steps left to publish each one. The packaging itself lives in
 validation log and submission guide. Live listings (Unraid CA, Google Play beta,
 Microsoft Store, GHCR) are tracked in [SUBMISSIONS.md](SUBMISSIONS.md).
 
-Status as of 2026-11-15, packaging ROMarr **1.10.0**. Nothing below has been
-submitted yet: each step that opens a pull request on someone else's repository
-is for a maintainer to do.
+Status as of 2026-11-16, packaging ROMarr **1.10.0**. Submitted: TrueNAS,
+CasaOS, Umbrel, winget and the Homebrew tap. Flathub's checklist requires the
+submitter to confirm the PR was not made by an AI agent, so a maintainer opens
+it by hand. Proxmox community-scripts waits for their eligibility rules.
 
 | Store | Package | Validated with | Status | Next step |
 |---|---|---|---|---|
-| **Flathub** (Linux, Steam Deck, ChromeOS) | [`packaging/flatpak`](../packaging/flatpak/) `app.romarr.ROMarr` | `org.flatpak.Builder` build, `flatpak-builder-lint` manifest + repo + appstream, `desktop-file-validate`, app run | Ready | PR to `flathub/flathub` `new-pr` |
+| **Flathub** (Linux, Steam Deck, ChromeOS) | [`packaging/flatpak`](../packaging/flatpak/) `app.romarr.ROMarr` | `org.flatpak.Builder` build, `flatpak-builder-lint` manifest + repo + appstream, `desktop-file-validate`, app run | Ready | Maintainer opens the PR to `flathub/flathub` `new-pr` (needs a demo video) |
 | **Proxmox VE Community Scripts** | [`packaging/proxmox`](../packaging/proxmox/) `ct/` `install/` `json/` | `bash -n`, `shellcheck`, real install + update on PVE 8.4 with the current engine | Ready, **not yet eligible** | Submit after 2027-01-28 **and** 1,000 stars |
-| **TrueNAS SCALE** (Community train) | [`packaging/truenas`](../packaging/truenas/) `ix-dev/community/romarr` | `port_validation.py`, `check_metadata.py`, `ci.py` render + run (healthy) | Ready | PR to `truenas/apps` |
-| **CasaOS / ZimaOS** | [`packaging/casaos`](../packaging/casaos/) `Apps/ROMarr` | `validate_compose.py` (0 issues), `build_dist.sh`, real compose run | Ready | PR to `IceWhaleTech/CasaOS-AppStore` |
-| **Umbrel** | [`packaging/umbrel`](../packaging/umbrel/) `romarr/` | `lint-apps.mjs --check-images` (no issues) | Ready | Update existing PR getumbrel/umbrel-apps#5947 |
-| **winget** (Windows) | [`packaging/winget`](../packaging/winget/) `MoveWeight.ROMarr` | `winget validate` | Ready | `wingetcreate submit` to `microsoft/winget-pkgs` |
-| **Homebrew** (macOS, Linux) | [`packaging/homebrew`](../packaging/homebrew/) `Formula/romarr.rb` | `brew style`, `brew audit --strict --new --online`, source install, `brew test` | Ready | Publish tap `BlizzHacker/homebrew-romarr`, then homebrew-core |
+| **TrueNAS SCALE** (Community train) | [`packaging/truenas`](../packaging/truenas/) `ix-dev/community/romarr` | `port_validation.py`, `check_metadata.py`, `ci.py` render + run (healthy) | **Submitted** | [truenas/apps#6524](https://github.com/truenas/apps/pull/6524) |
+| **CasaOS / ZimaOS** | [`packaging/casaos`](../packaging/casaos/) `Apps/ROMarr` | `validate_compose.py` (0 issues), `build_dist.sh`, real compose run | **Submitted** | [IceWhaleTech/CasaOS-AppStore#1156](https://github.com/IceWhaleTech/CasaOS-AppStore/pull/1156) |
+| **Umbrel** | [`packaging/umbrel`](../packaging/umbrel/) `romarr/` | `lint-apps.mjs --check-images` (no issues) | **Submitted** | [getumbrel/umbrel-apps#5947](https://github.com/getumbrel/umbrel-apps/pull/5947), updated to 1.10.0 |
+| **winget** (Windows) | [`packaging/winget`](../packaging/winget/) `MoveWeight.ROMarr` | `winget validate` | **Submitted** | [microsoft/winget-pkgs#481242](https://github.com/microsoft/winget-pkgs/pull/481242); sign the Microsoft CLA when the bot asks |
+| **Homebrew** (macOS, Linux) | [`packaging/homebrew`](../packaging/homebrew/) `Formula/romarr.rb` | `brew style`, `brew audit --strict --new --online`, source install, `brew test` | **Tap live** | `brew install blizzhacker/romarr/romarr` ([tap](https://github.com/BlizzHacker/homebrew-romarr)); homebrew-core later |
 
 ## Flathub
 
