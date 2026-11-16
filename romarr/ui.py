@@ -874,9 +874,10 @@ NAV = [
     ('Hub', [
         ('hub', 'Plugins', None),
         ('emulators', 'Emulators', None),
-        ('portal', 'Library Shell', None),
+        ('portal', 'Library & Devices', None),
         ('peers', 'Friends', None),
         ('ecosystem', 'Ecosystem', None),
+        ('agents', 'AI Agents', None),
     ]),
     ('Settings', [
         ('general', 'General', None),
@@ -1290,7 +1291,7 @@ function go(page){
     calendar:'Release Calendar',manualimport:'Manual Import',
     collections:'Collections \u2014 full sets and 1G1R',
     getstarted:'Get Started',setup:'Setup Guide',reports:'Reports & Help',
-    hub:'ROM Hub — Plugins',emulators:'Emulator Hub',portal:'Library Shell & Device Fleet'};
+    hub:'ROM Hub — Plugins',emulators:'Emulator Hub',portal:'Library & Devices',agents:'AI Agents (MCP)'};
   $('#top h1').textContent=titles[page]||'ROMarr';
   $('#search').classList.toggle('hide', page !== 'library');
   (RENDER[page]||RENDER.library)();
@@ -1425,7 +1426,7 @@ RENDER.hub=async()=>{
       +'<div class="row" style="margin-top:8px">'
       +'<button class="btn" id="igir-dry">Preview / Dry-Run 1G1R (test + report)</button>'
       +'<button class="btn ghost" id="igir-run">Execute 1G1R Sort (copy + extract + test + clean)</button>'
-      +'<button class="btn ghost" id="igir-portal">Open Library Shell & Device Fleet</button>'
+      +'<button class="btn ghost" id="igir-portal">Library & Devices</button>'
       +'<button class="btn ghost" id="igir-eco">RomM Ecosystem & Console Feeds</button>'
       +'<a class="btn ghost" href="https://github.com/emmercm/igir/releases/tag/v5.8.0" target="_blank" rel="noopener">Igir v5.8.0 Docs</a>'
       +'</div>'
@@ -3001,10 +3002,10 @@ function sharingEditor(peer){
 }
 
 RENDER.portal=async()=>{
-  const [libs, fleet, mcp, sys] = await Promise.all([
+  if(window._portalTab==='mcp'){window._portalTab='shell'; go('agents'); return;}
+  const [libs, fleet, sys] = await Promise.all([
     j('/api/v1/library').catch(()=>({items:[]})),
     j('/api/v1/hub/fleet').catch(()=>({profiles:[],kinds:{},igir:{}})),
-    j('/api/v1/mcp').catch(()=>({tools:[],mcp_client_config:{}})),
     j('/api/v1/system/status').catch(()=>({}))
   ]);
   const servers=(libs.items||[]).filter(l=>l.url).map(l=>({...l}));
@@ -3027,9 +3028,8 @@ RENDER.portal=async()=>{
 
   const draw=()=>{
     const tabBar=`<div class="cat-bar" style="margin-bottom:14px">
-      <span class="chip${tab==='shell'?' on':''}" data-ptab="shell">Library Shell (RomM / Retrom / Gaseous)</span>
-      <span class="chip${tab==='fleet'?' on':''}" data-ptab="fleet">Device Fleet (ES-DE / RetroPie / Batocera / Steam Deck / Argosy)</span>
-      <span class="chip${tab==='mcp'?' on':''}" data-ptab="mcp">AI Agents (MCP)</span>
+      <span class="chip${tab==='shell'?' on':''}" data-ptab="shell">Library app</span>
+      <span class="chip${tab==='fleet'?' on':''}" data-ptab="fleet">Devices</span>
     </div>`;
 
     if(tab==='shell'){
@@ -3047,13 +3047,13 @@ RENDER.portal=async()=>{
       const popOutHref=activeSrv?(activeSrv.public_url||activeSrv.url):currentUrl;
 
       $('#page').innerHTML=`<div class="card">
-        <h3>Library Shell</h3>
+        <h3>Your library app</h3>
         <p class="help">Open your configured library frontend (<b>RomM</b>, <b>Retrom</b>, <b>Gaseous</b>, <b>Gameyfin</b>, or <b>GG Requestz</b>) right inside ROMarr, or pop it out in a new tab. Add or edit library servers in <a href="#libraries">Settings → Libraries</a>.</p>
         ${tabBar}
         <div class="row" style="margin-bottom:10px">
           ${srvBtns||'<span class="help">No library server configured yet — add one in <a href="#libraries">Settings → Libraries</a> or enter a URL below.</span>'}
           <input id="portal-url" placeholder="http://192.168.1.50:8080" value="${esc(currentUrl)}" style="flex:1;min-width:220px;padding:7px 11px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--r-sm)">
-          <button class="btn" id="portal-load">Load in Shell</button>
+          <button class="btn" id="portal-load">Open</button>
           <button class="btn ghost" id="portal-rescan">Refresh Library</button>
           <button class="btn ghost" id="portal-1g1r">Preview 1G1R (Igir)</button>
           <button class="btn ghost" id="portal-hashes">Seed Netplay Hashes</button>
@@ -3120,7 +3120,7 @@ RENDER.portal=async()=>{
       const igirInfo=fleet.igir||{};
       const igirBadge=igirInfo.available
         ? `<span class="pill" style="border-color:var(--ok);color:var(--ok)">Igir ${esc(igirInfo.version||'installed')} ready</span>`
-        : `<span class="pill">Runs via <code>npx igir@latest</code> or local Igir</span>`;
+        : `<span class="pill" title="Run the plan on a machine that has Igir">Igir not installed here: <code>${esc(igirInfo.install_cmd||'npm install -g igir')}</code></span>`;
 
       const opts=[
         `<optgroup label="Copy games onto the device's ROM folder">`,
@@ -3145,7 +3145,7 @@ RENDER.portal=async()=>{
 
       $('#page').innerHTML=`<div class="card">
         <div class="row" style="justify-content:space-between;align-items:center">
-          <h3 style="margin:0">Device Fleet</h3>
+          <h3 style="margin:0">Put games on your devices</h3>
           ${igirBadge}
         </div>
         <p class="help" style="margin-top:6px">Get games onto handhelds, living-room boxes, and consoles in two ways: <b>copy verified ROMs into a device's ROM folder</b> (ES-DE, RetroPie, Batocera, EmuDeck, Android handhelds), or <b>point a device app at your library server</b> (Argosy, Grout, DeckRommSync, RetroArch cloud saves, console feeds). Plans are <b>non-destructive by default</b> — existing files on the device are never deleted unless Mirror is checked.</p>
@@ -3220,7 +3220,11 @@ RENDER.portal=async()=>{
               single_1g1r:$('#fl-1g1r')?$('#fl-1g1r').checked:true,
               mirror:$('#fl-mirror')?$('#fl-mirror').checked:false
             };
-        const r=await fetch('/api/v1/hub/fleet',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(x=>x.json()).catch(()=>({}));
+        const r=await fetch('/api/v1/hub/fleet',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(x=>x.json()).catch(e=>({ok:false,error:String(e)}));
+        if(!r.ok){
+          $('#fl-out').innerHTML=`<div class="panel-note" style="margin-top:12px;border-left-color:var(--bad)"><b>Could not build the plan:</b> ${esc(r.error||'no answer from ROMarr')}</div>`;
+          return;
+        }
         if(r.kind==='app'){
           const stepsHtml=(r.setup||[]).map((s,i)=>`<div style="margin-top:6px"><b>${i+1}.</b> ${esc(s)}</div>`).join('');
           $('#fl-out').innerHTML=`<div class="panel-note" style="margin-top:12px">
@@ -3231,13 +3235,17 @@ RENDER.portal=async()=>{
           const warnHtml=(r.warnings||[]).map(w=>`<div class="panel-note" style="margin-top:10px;border-left-color:var(--warn)"><b>Caution:</b> ${esc(w)}</div>`).join('');
           const stepsHtml=(r.steps||[]).map((st,i)=>`<div style="margin-top:10px">
             <b>${i+1}. ${esc(st.title)}:</b><br>
-            ${st.command?`<code>${esc(st.command)}</code>`:''}
+            ${st.command?`<code>${esc(st.command)}</code> <button class="btn ghost sm" data-copycmd="${esc(st.command)}">Copy</button>`:''}
             ${st.url?`<a href="${esc(st.url)}" target="_blank">${esc(st.url)}</a>`:''}
           </div>`).join('');
           $('#fl-out').innerHTML=warnHtml+`<div class="panel-note" style="margin-top:12px">
             <b>Sync plan for ${esc((r.device&&r.device.name)||selected.name)}</b> (target folder: <code>${esc(r.output_path||r.target_path||'')}</code>)
             ${stepsHtml}
+            <div class="help" style="margin-top:10px">Run these on the machine that holds your library. Step 1 only reads; nothing changes until step 2.</div>
           </div>`;
+          document.querySelectorAll('[data-copycmd]').forEach(b=>b.onclick=async()=>{
+            try{await navigator.clipboard.writeText(b.dataset.copycmd);toast('Copied');}catch{toast('Copy failed');}
+          });
         }
       };
 
@@ -3251,33 +3259,6 @@ RENDER.portal=async()=>{
       });
       $('#fl-plan').onclick=runPlan;
       runPlan();
-    } else if(tab==='mcp'){
-      const endpoint=location.origin+'/api/v1/mcp';
-      const configs={
-        claude:JSON.stringify({mcpServers:{romarr:{type:'http',url:endpoint,headers:{'X-Api-Key':'<YOUR_ROMARR_API_KEY>'}}}},null,2),
-        codex:'[mcp_servers.romarr]\nurl = '+JSON.stringify(endpoint)+'\nbearer_token_env_var = "ROMARR_API_KEY"\n',
-        hermes:'mcp_servers:\n  romarr:\n    url: '+JSON.stringify(endpoint)+'\n    headers:\n      X-Api-Key: "<YOUR_ROMARR_API_KEY>"\n',
-        antigravity:JSON.stringify({mcpServers:{romarr:{serverUrl:endpoint,headers:{'X-Api-Key':'<YOUR_ROMARR_API_KEY>'}}}},null,2),
-        stdio:JSON.stringify({mcpServers:{romarr:{command:'<PYTHON_WITH_ROMARR>',args:['<ABSOLUTE_PATH_TO_ROMARR_MCP_PY>'],env:{ROMARR_URL:location.origin,ROMARR_API_KEY:'<YOUR_ROMARR_API_KEY>'}}}},null,2)
-      };
-      const toolCards=(mcp.tools||[]).map(t=>`<div class="pcard"><h4><code>${esc(t.name)}</code></h4><div class="desc">${esc(t.description)}</div></div>`).join('');
-      $('#page').innerHTML=`<div class="card"><h3>Connect an AI agent to your ROMarr</h3>
-        <p class="help">Use your own server address and API key with Claude, Codex, Hermes, Antigravity, or another MCP client. Read-only tools show cached library, activity, history, platforms and counts.</p>
-        ${tabBar}
-        <p><b>Your MCP endpoint:</b> <code>${esc(endpoint)}</code></p>
-        <p class="help">Replace the key placeholder in your client settings. Your key is never included in this example. Use HTTPS for connections outside this device, or an SSH tunnel.</p>
-        <label>Client <select id="mcp-client"><option value="claude">Claude Code</option><option value="codex">Codex</option><option value="hermes">Hermes</option><option value="antigravity">Antigravity</option><option value="stdio">Other clients using stdio</option></select></label>
-        <pre id="mcp-config" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>
-        <button class="btn" id="mcp-copy">Copy connection example</button>
-        <p class="help">Codex reads ROMARR_API_KEY from its environment. Stdio needs Python with ROMarr's requests dependency and a local ROMarr checkout, or the standalone bridge file. See the <a href="https://github.com/BlizzHacker/romarr/blob/main/docs/MCP.md" target="_blank" rel="noopener">connection guide</a> for setup and supported transports.</p>
-        <p class="help">Writes are disabled by default. A server owner may explicitly allow adding Wanted entries and requesting a background library refresh. This connector does not run shell commands, browse files, control your desktop, or forward arbitrary API calls.</p>
-      </div><div class="card"><h3>Available read tools</h3><div class="pgrid">${toolCards}</div></div>
-      <div class="card"><h3>Optional desktop control</h3><p class="help"><a href="https://github.com/BlizzHacker/open-eyes" target="_blank" rel="noopener">Open-Eyes</a> is a separate desktop-control integration. It is optional and is not needed to connect to ROMarr.</p></div>`;
-      const config=()=>configs[$('#mcp-client').value];
-      $('#mcp-client').onchange=()=>{$('#mcp-config').textContent=config();};
-      $('#mcp-client').onchange();
-      $('#mcp-copy').onclick=async()=>{try{await navigator.clipboard.writeText(config());toast('Copied connection example');}catch{toast('Copy failed');}};
-
     }
 
     document.querySelectorAll('[data-ptab]').forEach(c=>c.onclick=()=>{
@@ -3285,6 +3266,34 @@ RENDER.portal=async()=>{
     });
   };
   draw();
+};
+
+RENDER.agents=async()=>{
+  const mcp=await j('/api/v1/mcp').catch(()=>({tools:[],mcp_client_config:{}}));
+    const endpoint=location.origin+'/api/v1/mcp';
+    const configs={
+      claude:JSON.stringify({mcpServers:{romarr:{type:'http',url:endpoint,headers:{'X-Api-Key':'<YOUR_ROMARR_API_KEY>'}}}},null,2),
+      codex:'[mcp_servers.romarr]\nurl = '+JSON.stringify(endpoint)+'\nbearer_token_env_var = "ROMARR_API_KEY"\n',
+      hermes:'mcp_servers:\n  romarr:\n    url: '+JSON.stringify(endpoint)+'\n    headers:\n      X-Api-Key: "<YOUR_ROMARR_API_KEY>"\n',
+      antigravity:JSON.stringify({mcpServers:{romarr:{serverUrl:endpoint,headers:{'X-Api-Key':'<YOUR_ROMARR_API_KEY>'}}}},null,2),
+      stdio:JSON.stringify({mcpServers:{romarr:{command:'<PYTHON_WITH_ROMARR>',args:['<ABSOLUTE_PATH_TO_ROMARR_MCP_PY>'],env:{ROMARR_URL:location.origin,ROMARR_API_KEY:'<YOUR_ROMARR_API_KEY>'}}}},null,2)
+    };
+    const toolCards=(mcp.tools||[]).map(t=>`<div class="pcard"><h4><code>${esc(t.name)}</code></h4><div class="desc">${esc(t.description)}</div></div>`).join('');
+    $('#page').innerHTML=`<div class="card"><h3>Connect an AI agent to your ROMarr</h3>
+      <p class="help">Use your own server address and API key with Claude, Codex, Hermes, Antigravity, or another MCP client. Read-only tools show cached library, activity, history, platforms and counts.</p>
+      <p><b>Your MCP endpoint:</b> <code>${esc(endpoint)}</code></p>
+      <p class="help">Replace the key placeholder in your client settings. Your key is never included in this example. Use HTTPS for connections outside this device, or an SSH tunnel.</p>
+      <label>Client <select id="mcp-client"><option value="claude">Claude Code</option><option value="codex">Codex</option><option value="hermes">Hermes</option><option value="antigravity">Antigravity</option><option value="stdio">Other clients using stdio</option></select></label>
+      <pre id="mcp-config" style="white-space:pre-wrap;overflow-wrap:anywhere"></pre>
+      <button class="btn" id="mcp-copy">Copy connection example</button>
+      <p class="help">Codex reads ROMARR_API_KEY from its environment. Stdio needs Python with ROMarr's requests dependency and a local ROMarr checkout, or the standalone bridge file. See the <a href="https://github.com/BlizzHacker/romarr/blob/main/docs/MCP.md" target="_blank" rel="noopener">connection guide</a> for setup and supported transports.</p>
+      <p class="help">Writes are disabled by default. A server owner may explicitly allow adding Wanted entries and requesting a background library refresh. This connector does not run shell commands, browse files, control your desktop, or forward arbitrary API calls.</p>
+    </div><div class="card"><h3>Available read tools</h3><div class="pgrid">${toolCards}</div></div>
+    <div class="card"><h3>Optional desktop control</h3><p class="help"><a href="https://github.com/BlizzHacker/open-eyes" target="_blank" rel="noopener">Open-Eyes</a> is a separate desktop-control integration. It is optional and is not needed to connect to ROMarr.</p></div>`;
+    const config=()=>configs[$('#mcp-client').value];
+    $('#mcp-client').onchange=()=>{$('#mcp-config').textContent=config();};
+    $('#mcp-client').onchange();
+    $('#mcp-copy').onclick=async()=>{try{await navigator.clipboard.writeText(config());toast('Copied connection example');}catch{toast('Copy failed');}};
 };
 
 RENDER.ecosystem=async()=>{
@@ -3335,7 +3344,7 @@ RENDER.ecosystem=async()=>{
         </div>
         <div class="row">
           <button class="btn" id="eco-open-hub">Open Igir 1G1R Runner in Hub</button>
-          <button class="btn ghost" id="eco-open-portal">Open Library Shell & Device Fleet</button>
+          <button class="btn ghost" id="eco-open-portal">Library & Devices</button>
           <button class="btn ghost" data-copy="${esc(igir.install_cmd||'npm install -g igir@5.8.0')}">Copy Igir v5.8.0 Install</button>
           <a class="btn ghost" href="https://github.com/emmercm/igir/releases/tag/v5.8.0" target="_blank" rel="noopener">Igir v5.8.0 Release</a>
           <a class="btn ghost" href="https://docs.romm.app/latest/ecosystem/" target="_blank" rel="noopener">RomM Ecosystem Docs</a>

@@ -137,3 +137,41 @@ def test_library_shell_ui_has_no_hardcoded_host_hacks():
     html = page()
     assert "romm.moveweight.com" not in html
     assert "192.168.0.94" not in html
+
+
+def test_library_and_devices_page_is_named_plainly_and_agents_have_their_own_page():
+    """AI agents are not a device or a library app: they get their own page,
+    and the page that remains says what it is."""
+    from romarr.ui import JS, page
+    html = page()
+    assert "Library &amp; Devices" in html or "Library & Devices" in html
+    assert 'data-page="agents"' in html
+    assert "RENDER.agents=" in JS
+    portal = JS[JS.index("RENDER.portal="):JS.index("RENDER.agents=")]
+    assert "data-ptab=\"mcp\"" not in portal
+    assert "/api/v1/mcp" not in portal
+    assert "go('agents')" in portal          # old saved tab still lands somewhere
+    for jargon in ("Library Shell", "Device Fleet", "Load in Shell", "npx igir@latest"):
+        assert jargon not in JS, jargon
+
+
+def test_device_plan_page_offers_copy_and_shows_errors():
+    from romarr.ui import JS
+    portal = JS[JS.index("RENDER.portal="):JS.index("RENDER.agents=")]
+    assert "data-copycmd" in portal
+    assert "Could not build the plan" in portal
+
+
+def test_home_relative_device_folders_still_expand_in_the_shell():
+    """`~/ROMs` inside single quotes is a folder named "~", not home."""
+    import subprocess
+    local = hub.build_fleet_sync_plan({"device_id": "es-de", "source_path": "/roms"})
+    output_arg = local["igir_command"].split("--output ")[1].split(" ")[0]
+    assert output_arg == "~/'ROMs/{es}'"
+    expanded = subprocess.run(["bash", "-c", "printf %s " + output_arg],
+                              capture_output=True, text=True, check=True).stdout
+    assert expanded.startswith("/") and expanded.endswith("/ROMs/{es}")
+
+    remote = hub.build_fleet_sync_plan({"device_id": "steamos-deck", "transport": "ssh"})
+    assert "deck@steamdeck.local:Emulation/roms/" in remote["network_sync_command"]
+    assert "~" not in remote["network_sync_command"]
