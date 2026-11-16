@@ -117,30 +117,33 @@ if ($LASTEXITCODE -ne 0) { throw 'The embedded Python package is incomplete.' }
 & (Join-Path $bundle 'git\cmd\git.exe') --version
 if ($LASTEXITCODE -ne 0) { throw 'Bundled MinGit did not run.' }
 
-# A small vector-drawn monogram supplies every Windows icon size.
+# Every Windows icon size is scaled from the official brand icon (docs/img/brand).
 Add-Type -AssemblyName System.Drawing
+$brandIconPath = Join-Path $repo 'docs\img\brand\romarr-icon-512.png'
+if (-not (Test-Path -LiteralPath $brandIconPath -PathType Leaf)) { throw "Brand icon not found: $brandIconPath" }
+$brandIcon = [Drawing.Image]::FromFile($brandIconPath)
+function New-ROMarrBrandBitmap([int]$Size) {
+    $bitmap = [Drawing.Bitmap]::new($Size,$Size,[Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $graphics = [Drawing.Graphics]::FromImage($bitmap)
+    try {
+        $graphics.Clear([Drawing.Color]::Transparent)
+        $graphics.InterpolationMode = [Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+        $graphics.SmoothingMode = [Drawing.Drawing2D.SmoothingMode]::HighQuality
+        $graphics.PixelOffsetMode = [Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+        $graphics.DrawImage($brandIcon,[Drawing.Rectangle]::new(0,0,$Size,$Size))
+    } finally { $graphics.Dispose() }
+    return $bitmap
+}
 $iconPath = Join-Path $work 'ROMarr.ico'
 $iconImages = [Collections.Generic.List[byte[]]]::new()
 $iconSizes = @(16,24,32,48,64,128,256)
 foreach ($size in $iconSizes) {
-    $bitmap = [Drawing.Bitmap]::new($size,$size)
-    $graphics = [Drawing.Graphics]::FromImage($bitmap)
+    $bitmap = New-ROMarrBrandBitmap $size
     $stream = [IO.MemoryStream]::new()
-    $brush = [Drawing.SolidBrush]::new([Drawing.ColorTranslator]::FromHtml('#f2a33c'))
-    $font = [Drawing.Font]::new('Segoe UI',[single]($size*0.68),[Drawing.FontStyle]::Bold,[Drawing.GraphicsUnit]::Pixel)
-    $format = [Drawing.StringFormat]::new()
     try {
-        $graphics.Clear([Drawing.ColorTranslator]::FromHtml('#12141a'))
-        $graphics.TextRenderingHint = [Drawing.Text.TextRenderingHint]::AntiAliasGridFit
-        $format.Alignment = [Drawing.StringAlignment]::Center
-        $format.LineAlignment = [Drawing.StringAlignment]::Center
-        $graphics.DrawString('R',$font,$brush,[Drawing.RectangleF]::new(0,0,$size,$size),$format)
         $bitmap.Save($stream,[Drawing.Imaging.ImageFormat]::Png)
         $iconImages.Add($stream.ToArray())
-    } finally {
-        $format.Dispose(); $font.Dispose(); $brush.Dispose()
-        $stream.Dispose(); $graphics.Dispose(); $bitmap.Dispose()
-    }
+    } finally { $stream.Dispose(); $bitmap.Dispose() }
 }
 $iconStream = [IO.File]::Create($iconPath)
 $writer = [IO.BinaryWriter]::new($iconStream)
@@ -201,22 +204,9 @@ if (-not $SkipMsix) {
     $assets = Join-Path $bundle 'Assets'
     [IO.Directory]::CreateDirectory($assets) | Out-Null
     foreach ($asset in @(@('Square44x44Logo.png',44),@('Square150x150Logo.png',150),@('StoreLogo.png',50))) {
-        $size = [int]$asset[1]
-        $bitmap = [Drawing.Bitmap]::new($size,$size)
-        $graphics = [Drawing.Graphics]::FromImage($bitmap)
-        try {
-            $graphics.Clear([Drawing.ColorTranslator]::FromHtml('#12141a'))
-            $brush = [Drawing.SolidBrush]::new([Drawing.ColorTranslator]::FromHtml('#f2a33c'))
-            $font = [Drawing.Font]::new('Segoe UI',[single]($size*0.46),[Drawing.FontStyle]::Bold,[Drawing.GraphicsUnit]::Pixel)
-            $format = [Drawing.StringFormat]::new()
-            try {
-                $format.Alignment = [Drawing.StringAlignment]::Center
-                $format.LineAlignment = [Drawing.StringAlignment]::Center
-                $graphics.TextRenderingHint = [Drawing.Text.TextRenderingHint]::AntiAliasGridFit
-                $graphics.DrawString('R',$font,$brush,[Drawing.RectangleF]::new(0,0,$size,$size),$format)
-                $bitmap.Save((Join-Path $assets $asset[0]),[Drawing.Imaging.ImageFormat]::Png)
-            } finally { $brush.Dispose(); $font.Dispose(); $format.Dispose() }
-        } finally { $graphics.Dispose(); $bitmap.Dispose() }
+        $bitmap = New-ROMarrBrandBitmap ([int]$asset[1])
+        try { $bitmap.Save((Join-Path $assets $asset[0]),[Drawing.Imaging.ImageFormat]::Png) }
+        finally { $bitmap.Dispose() }
     }
     $template = Get-Content -LiteralPath (Join-Path $repo 'desktop\windows\Package.appxmanifest') -Raw
     foreach ($entry in @{
