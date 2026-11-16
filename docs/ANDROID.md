@@ -10,13 +10,54 @@ Minimum Android version: Android 7.0 (API 24). Target/compile API: 36.
 Packaged architectures: ARM64 and x86_64. This is an installable Android application,
 including on compatible Android desktop environments; it is not a Linux desktop binary.
 
-## Google Play Beta / Internal Test Track
+## Google Play Beta & Direct APK Downloads
 
-We need 12 testers to test and verify ROMarr on real Android hardware:
+ROMarr is available for Android in two convenient ways:
 
-👉 **[Join the Android Beta on Google Play](https://play.google.com/apps/internaltest/4700888732790045566)**
+1. 📲 **Google Play Closed Beta Track (12 Testers Needed)**:
+   👉 **[Join the Android Beta on Google Play](https://play.google.com/apps/internaltest/4700888732790045566)**  
+   Opting in allows direct install and automatic updates from Google Play on your phone, tablet, or gaming handheld.
 
-Once opted in through the link above, you can install and update ROMarr directly from Google Play on your Android devices.
+2. 📦 **Direct APK Sideload (GitHub Releases)**:
+   👉 **[Download the Latest APK from Releases](https://github.com/BlizzHacker/romarr/releases)**  
+   Self-contained APK with Chaquopy Python runtime embedded. Install directly on any ARM64 or x86_64 device running Android 7.0+ without waiting for Google Play approval or needing Termux/Docker.
+
+## Argosy Launcher and Frontend Integration
+
+ROMarr includes native RomM v5 API compatibility. This allows mobile launchers and frontend apps originally built for RomM to use ROMarr directly as their backend server.
+
+### Connecting Argosy Launcher
+
+[Argosy Launcher](https://github.com/rommapp/argosy-launcher) is an open-source, controller-first Android launcher designed for retro gaming handhelds.
+
+To pair Argosy with ROMarr:
+1. Ensure ROMarr is running (either locally on your Android device or on your home server/NAS at `http://<your-server-ip>:6868`).
+2. Open **Argosy Launcher** on your Android device.
+3. In the server setup screen, enter your ROMarr URL:
+   - For local ROMarr on the same device: `http://127.0.0.1:6868`
+   - For remote server: `http://<lan-ip>:6868` or your HTTPS domain.
+4. Argosy queries `/api/heartbeat`, `/api/users/me`, `/api/permissions/me`, and `/api/platforms`.
+5. ROMarr's standalone portal proxy responds with full RomM 5.1.0-compatible capabilities, letting Argosy discover your platforms, library ROMs, box art, and metadata.
+
+### Handheld Gaming Devices & Controller Navigation
+
+ROMarr and Argosy Launcher are optimized for modern Android gaming handhelds, including:
+- **Ayn Odin 2 / Odin 2 Mini / Odin Pro**
+- **Retroid Pocket 4 Pro / Retroid Pocket 5 / Retroid Pocket Mini / Retroid Pocket 3+**
+- **Anbernic RG556 / RG Cube / RG405M / RG505**
+- **Logitech G Cloud / Razer Edge / Pimax Portal**
+
+### Compatible Android Emulators
+
+Files in your library can be launched directly into installed emulators via Android's `ACTION_VIEW` intent and FileProvider:
+- **RetroArch** (`com.retroarch` / `com.retroarch.aarch64`)
+- **Dolphin Emulator** (`org.dolphinemu.dolphinemu`)
+- **DuckStation** (`com.github.stenzek.duckstation`)
+- **PPSSPP** (`org.ppsspp.ppsspp` / `org.ppsspp.ppssppgold`)
+- **NetherSX2 / AetherSX2** (`xyz.aethersx2.android`)
+- **Citra / Lime3DS / Citra Enhanced** (`org.citra.citra_emu`)
+- **Vita3K Android** (`org.vita3k.emulator`)
+- **Mupen64Plus FZ** (`org.mupen64plusae.v3.fzurita`)
 
 ## Use
 

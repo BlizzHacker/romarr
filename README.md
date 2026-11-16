@@ -9,16 +9,20 @@ Find games, verify ROMs, and import them into your library.
 [![Tests and images](https://github.com/BlizzHacker/romarr/actions/workflows/docker.yml/badge.svg)](https://github.com/BlizzHacker/romarr/actions/workflows/docker.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Android Beta](https://img.shields.io/badge/Google_Play-Android_Beta-brightgreen?logo=googleplay&logoColor=white)](https://play.google.com/apps/internaltest/4700888732790045566)
+[![Android APK](https://img.shields.io/badge/Android-Direct_APK-3DDC84?logo=android&logoColor=white)](https://github.com/BlizzHacker/romarr/releases)
+[![Argosy Compatible](https://img.shields.io/badge/Frontend-Argosy_Launcher-purple?logo=android&logoColor=white)](https://github.com/rommapp/argosy-launcher)
 [![Unraid Community Apps](https://img.shields.io/badge/Unraid-Community_Apps-orange?logo=unraid&logoColor=white)](https://ca.unraid.net/apps/romarr-04jslct0riva81?q=romarr)
 [![Microsoft Store](https://img.shields.io/badge/Microsoft_Store-Windows_App-0078D4?logo=windows&logoColor=white)](https://github.com/BlizzHacker/romarr/releases)
 [![Submit Package](https://img.shields.io/badge/Package_Submissions-Submit_ROMarr-purple?logo=github&logoColor=white)](docs/SUBMISSIONS.md)
 
-**[Install](#install)** · **[First setup](docs/GETTING-STARTED.md)** · **[Android Beta](https://play.google.com/apps/internaltest/4700888732790045566)** · **[Unraid App](https://ca.unraid.net/apps/romarr-04jslct0riva81?q=romarr)** · **[Plugins](docs/PLUGINS.md)** · **[Roadmap](ROADMAP.md)** · **[Releases](https://github.com/BlizzHacker/romarr/releases)** · **[Submit Package](docs/SUBMISSIONS.md)** · **[Privacy](docs/PRIVACY.md)**
+**[Install](#install)** · **[First setup](docs/GETTING-STARTED.md)** · **[Android App & APK](docs/ANDROID.md)** · **[Unraid App](https://ca.unraid.net/apps/romarr-04jslct0riva81?q=romarr)** · **[Plugins](docs/PLUGINS.md)** · **[Roadmap](ROADMAP.md)** · **[Releases](https://github.com/BlizzHacker/romarr/releases)** · **[Submit Package](docs/SUBMISSIONS.md)** · **[Privacy](docs/PRIVACY.md)**
 
 > [!TIP]
-> **Android Beta Testers Wanted!**  
-> We need 12 testers for our Google Play test track. Help test ROMarr on your Android devices:  
-> 📲 **[Join the Android Beta on Google Play](https://play.google.com/apps/internaltest/4700888732790045566)**
+> **Android Beta, Handhelds & Argosy Launcher Integration!**  
+> Run ROMarr natively on your phone, tablet, or gaming handheld (Ayn Odin, Retroid Pocket, Anbernic, Logitech G Cloud):  
+> - 📲 **Google Play Test Track:** [Join the Android Beta on Google Play](https://play.google.com/apps/internaltest/4700888732790045566) (12 testers needed)  
+> - 📦 **Direct APK Sideload:** [Download the Standalone APK](https://github.com/BlizzHacker/romarr/releases) with bundled Chaquopy Python runtime — no Termux or Docker required.  
+> - 🎮 **Argosy Launcher & Emulator Pairing:** Connect [Argosy Launcher](https://github.com/rommapp/argosy-launcher) directly to ROMarr via native RomM API support, and launch games into RetroArch, Dolphin, PPSSPP, NetherSX2, DuckStation, and Citra with one tap!
 
 ![ROMarr interactive search, with scores and reasons beside each result](docs/img/interactive-search-live.png)
 
@@ -37,6 +41,8 @@ Forks and code reuse are welcome; independent projects should use their own bran
 | Connect an AI assistant | **Hub → Library Shell → AI agents (MCP)** | Your server URL and API key. [Claude, Codex, Hermes and Antigravity setup](docs/MCP.md). |
 | Reclaim space taken by exact duplicates | **Stats → Audit** | A local library; review the preview before moving duplicates to quarantine. Restore is available. |
 | Add another game source | **Hub → Plugins** | ROM Hub, included in the Windows app and amd64/arm64 Docker images. [Details](docs/PLUGINS.md). |
+| Adopt an existing RomM collection | **Settings → Library & Hub** | Point ROMarr at RomM's roms directory, keep DAT verification automatic, and pair with [Argosy Launcher](docs/ANDROID.md#argosy-launcher-and-frontend-integration). |
+| Sync with Handhelds & Emulators | **Hub → Handheld Fleet** | Sync verified libraries to Android handhelds, Steam Deck, Batocera, RetroPie, and muOS with 1,200+ emulator presets. |
 
 You can use a plain **folder** as your library. RomM, Gaseous, Retrom and other library integrations are optional. Your emulator or frontend plays the games; ROMarr handles finding, checking and importing files.
 
@@ -52,7 +58,7 @@ Imports can be checked against DAT checksums. The result is **verified**, **bad 
 | **Docker Compose** | Most servers, NAS hosts, or Docker Desktop | [Quick start below](#docker-compose-quick-start) |
 | **Windows app** | Windows 10/11 on x64 | [Download the Windows ZIP](docs/INSTALL.md#windows-app), extract it and double-click **ROMarr.exe**. No Python, PowerShell or .NET installation required. |
 | **macOS, Linux & SteamOS** | Desktop PCs, MacBooks, Steam Deck & Handhelds (Non-Server) | [Standalone Desktop Launcher](docs/INSTALL.md#macos-linux--steamos-standalone-launcher-non-server-users): run `./scripts/start-desktop.sh` |
-| **Android preview** | Android 7+ phones, tablets, Odin/Retroid handhelds | [Join the Google Play Beta](https://play.google.com/apps/internaltest/4700888732790045566) or read [Android setup and limits](docs/ANDROID.md). Native file import and compatible emulator handoff. |
+| **Android & Handhelds** | Android 7+ on ARM64/x86_64 (Odin, Retroid, phones, tablets) | [Join Google Play Beta](https://play.google.com/apps/internaltest/4700888732790045566) or download APK from [Releases](https://github.com/BlizzHacker/romarr/releases). Embedded Chaquopy core, emulator handoff, and [Argosy Launcher](docs/ANDROID.md#argosy-launcher-and-frontend-integration) compatibility. Read [Android setup](docs/ANDROID.md). |
 | **Proxmox LXC** | A Proxmox host | [LXC installer](docs/INSTALL.md#proxmox-lxc) |
 | **Chrome / ChromeOS** | A running ROMarr server | [Install the web app or server-launcher extension](docs/CHROME.md). Online connection required. |
 | **Linux/macOS source checkout** | Development or an existing Python host | [Source instructions](docs/INSTALL.md#from-source) |
