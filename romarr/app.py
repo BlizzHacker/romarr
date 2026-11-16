@@ -492,6 +492,9 @@ class ROMarr:
         self._lock = threading.Lock()
         # A manual check and the daily sweep must never overlap or auto-apply twice.
         self._update_check_lock = threading.Lock()
+        # First-run setup claims serialize here after pre-hashing so concurrent
+        # claimants cannot both observe an unclaimed install and mint sessions.
+        self._setup_lock = threading.Lock()
         # Git HEAD can move without restarting this service. Pin the source
         # actually running at service construction, not a later checkout HEAD.
         from . import nightly, selfupdate
@@ -1645,6 +1648,29 @@ class ROMarr:
         }
         self.store.save()
         return {"ok": True}
+
+    def claim_setup(self, password: str) -> str | None:
+        """Hash outside the claim lock, then atomically persist and claim ownership."""
+        candidate_hash = self.auth.hash_password(password)
+        with self._setup_lock:
+            if self.claimed:
+                return None
+            with self.store._lock:
+                had_previous = "_password_hash" in self.store.settings
+                previous_hash = self.store.settings.get("_password_hash")
+                self.store.settings["_password_hash"] = candidate_hash
+                try:
+                    self.store.save(raise_on_error=True)
+                except Exception:
+                    if had_previous:
+                        self.store.settings["_password_hash"] = previous_hash
+                    else:
+                        self.store.settings.pop("_password_hash", None)
+                    raise
+            self.auth.password_hash = candidate_hash
+            self.claimed = True
+            log.info("this install has been claimed; setup is now closed")
+            return self.auth.issue_session()
 
     def setup_dats(self, directory: str) -> dict:
         """Validate the optional DAT folder and explain an empty result."""
@@ -9525,26 +9551,31 @@ def make_handler(service: ROMarr):
                 # First-run claim. Open only while unclaimed, and it closes the
                 # moment it succeeds -- so this is a one-shot, not a standing
                 # unauthenticated way to reset the password.
+                already_claimed = {
+                    "error": "already set up",
+                    "detail": "This ROMarr already has a password. Sign in "
+                              "instead.",
+                }
                 if service.claimed:
-                    return self._json(409, {
-                        "error": "already set up",
-                        "detail": "This ROMarr already has a password. Sign in "
-                                  "instead.",
-                    })
+                    return self._json(409, already_claimed)
+                if not isinstance(body, dict):
+                    return self._json(400, {"error": "Use a JSON object"})
                 password = str(body.get("password") or "")
                 if len(password) < MIN_PASSWORD:
                     return self._json(400, {
                         "error": "weak password",
                         "detail": f"Use at least {MIN_PASSWORD} characters.",
                     })
-                service.store.settings["_password_hash"] = \
-                    service.auth.hash_password(password)
-                service.auth.password_hash = \
-                    service.store.settings["_password_hash"]
-                service.claimed = True
-                service.store.save()
-                log.info("this install has been claimed; setup is now closed")
-                token = service.auth.issue_session()
+                try:
+                    token = service.claim_setup(password)
+                except Exception:
+                    log.exception("failed to persist initial setup password")
+                    return self._json(500, {
+                        "error": "could not save password",
+                        "detail": "Could not persist the setup password.",
+                    })
+                if token is None:
+                    return self._json(409, already_claimed)
                 return self._send_session(token, {"ok": True})
             if route.path == "/api/v1/login":
                 # Exchange a credential for a session, so a browser presents
