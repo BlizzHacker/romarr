@@ -73,6 +73,7 @@ public sealed class MainWindow : Form
         var companion = new ToolStripMenuItem("Cartridge");
         companion.DropDownItems.Add("Get Cartridge for Windows", null, (_,_) => OpenExternal("https://github.com/BlizzHacker/romarr/releases/download/v1.8.0/Cartridge-Windows-Portable-0.2.0-x64.exe"));
         companion.DropDownItems.Add("Get Cartridge for Xbox", null, (_,_) => OpenExternal("https://apps.microsoft.com/detail/9MXC51W17LH4"));
+        companion.DropDownItems.Add("Get Cartridge for Android (Argosy)", null, (_,_) => OpenExternal("https://github.com/BlizzHacker/argosy-launcher/releases"));
         var help = new ToolStripMenuItem("Help");
         help.DropDownItems.Add("Getting started", null, (_,_) => OpenExternal("https://github.com/BlizzHacker/romarr/blob/main/docs/GETTING-STARTED.md"));
         help.DropDownItems.Add("ROM Hub plugins", null, (_,_) => OpenHubPage());
