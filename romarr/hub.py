@@ -908,158 +908,300 @@ def run_igir(cfg: dict | None = None, timeout: int = 600) -> dict:
         return {"ok": False, "command": cmd_str, "error": str(exc), "out": ""}
 
 
-# -------------------------------------- Device Fleet & Supportive Shell API --
+# --------------------------------------------------- Devices (fleet) API --
+#
+# Two different kinds of device, and the page treats them differently:
+#
+#   kind "files"  a device whose frontend reads a ROM folder (ES-DE, RetroPie,
+#                 Batocera, EmuDeck, Android handhelds). ROMarr plans an Igir
+#                 copy of verified games into that folder, laid out with the
+#                 frontend's own platform folder names (the Igir token), and,
+#                 when the device is remote, the rsync/rclone step to get there.
+#   kind "app"    a device running an app that talks to your library server
+#                 (Argosy, Grout, DeckRommSync, RetroArch cloud sync, console
+#                 feeds). Nothing is copied; the plan is the setup steps.
+#
+# Plans are non-destructive unless the caller asks for a mirror: no Igir
+# `clean`, no `rsync --delete`, `rclone copy` rather than `rclone sync`. A
+# device folder usually holds games and saves that are not in the library.
 
 DEVICE_PROFILES: list[dict] = [
     {
         "id": "es-de",
+        "kind": "files",
         "name": "ES-DE (EmulationStation Desktop Edition)",
-        "category": "Frontend / Desktop & Handheld",
-        "protocol": "Local / SMB / NFS / SSH + gamelist.xml",
-        "default_path": "~/ROMs/{platform}",
+        "category": "Desktop and handheld frontend",
+        "protocol": "Folder, SMB/NFS share or SSH",
+        "default_path": "~/ROMs",
+        "default_ssh_host": "user@device.local",
         "gamelist_format": "esde",
         "igir_token": "{es}",
-        "description": "Generates ES-DE gamelist.xml per platform and syncs verified 1G1R ROM subsets over LAN, SMB, or SSH.",
+        "description": "ES-DE on Windows, macOS, Linux or Android. Games are copied into its ROMs folder with ES-DE's platform folder names.",
     },
     {
         "id": "retropie-arcadepunks",
-        "name": "Raspberry Pi — RetroPie / ArcadePunks / Batocera",
-        "category": "SBC / Cabinet / Bartop",
-        "protocol": "SSH / rsync / SFTP / SMB (\\retropie\roms)",
-        "default_path": "/home/pi/RetroPie/roms/{platform}",
-        "gamelist_format": "esde",
-        "igir_token": "{batocera}",
-        "description": "Audits existing RetroPie, Batocera, or ArcadePunks image ROM folders against No-Intro/Redump DATs, prunes duplicates with Igir 1G1R, and updates gamelist.xml.",
-    },
-    {
-        "id": "argosy",
-        "name": "Argosy Launcher (Android)",
-        "category": "First-Party RomM Mobile",
-        "protocol": "RomM REST API + Client API Token",
-        "default_path": "https://romm.your-network.local",
-        "gamelist_format": "romm-api",
-        "igir_token": "{romm}",
-        "description": "Official Android launcher that browses and launches your RomM library on mobile with token pairing.",
-    },
-    {
-        "id": "grout",
-        "name": "Grout (muOS / NextUI Linux Handhelds)",
-        "category": "First-Party RomM Handheld",
-        "protocol": "SSH Sync + RomM Device Sync Protocol",
-        "default_path": "/mnt/mmc/ROMS/{platform}",
-        "gamelist_format": "romm-api",
-        "igir_token": "{romm}",
-        "description": "Linux handheld companion for Anbernic, Miyoo, and TrimUI devices running muOS or NextUI.",
-    },
-    {
-        "id": "deckrommsync",
-        "name": "DeckRommSync (Steam Deck)",
-        "category": "Community Handheld",
-        "protocol": "RomM REST API + WebDAV Save Sync",
-        "default_path": "/run/media/mmcblk0p1/Emulation/roms/{romm}",
-        "gamelist_format": "esde",
-        "igir_token": "{romm}",
-        "description": "Syncs Steam Deck EmuDeck / ES-DE libraries and RetroArch saves with RomM and ROMarr.",
-    },
-    {
-        "id": "retroarch-webdav",
-        "name": "RetroArch Built-in Cloud Sync (WebDAV)",
-        "category": "Cross-Platform Save & State Sync",
-        "protocol": "WebDAV (/webdav/)",
-        "default_path": "{romm_url}/webdav/",
-        "gamelist_format": "webdav",
-        "igir_token": "{romm}",
-        "description": "Zero-companion save and savestate cloud sync across PC, Raspberry Pi, Android, and handhelds.",
-    },
-    {
-        "id": "console-cfw-feeds",
-        "name": "Console Homebrew Feeds (Tinfoil / pkgj / pkgi / fpkgi / Kekatsu)",
-        "category": "Direct Console Installers",
-        "protocol": "HTTP/HTTPS URL Feeds",
-        "default_path": "{romm_url}/api/feeds/",
-        "gamelist_format": "feed",
-        "igir_token": "{romm}",
-        "description": "Direct over-the-air package feeds for Switch (.nsp/.xci), PS Vita/PSP/PS3/PS4/PS5, and Nintendo DS.",
-    },
-    {
-        "id": "steamos-deck",
-        "name": "SteamOS / Steam Deck (EmuDeck & Non-Steam Standalone)",
-        "category": "Handheld / Console Mode",
-        "protocol": "Local Standalone / SSH / SMB",
-        "default_path": "~/Emulation/roms/{platform}",
+        "kind": "files",
+        "name": "RetroPie (Raspberry Pi, including ArcadePunks RetroPie images)",
+        "category": "Raspberry Pi and arcade cabinets",
+        "protocol": "SSH (rsync) or the \\\\retropie\\roms share",
+        "default_path": "/home/pi/RetroPie/roms",
+        "default_ssh_host": "pi@retropie.local",
         "gamelist_format": "esde",
         "igir_token": "{es}",
-        "description": "Native standalone launcher and EmuDeck library manager for Steam Deck & SteamOS handhelds. Syncs gamelist.xml and launches on loopback without Docker.",
+        "description": "RetroPie uses EmulationStation folder names under /home/pi/RetroPie/roms.",
     },
     {
         "id": "rpi-batocera-arcadepunks",
-        "name": "Raspberry Pi & Arcade Punks Custom Images (Batocera / RetroPie)",
-        "category": "SBC & Dedicated Arcade Setups",
-        "protocol": "SMB Share (\\\\batocera\\share\\roms) / SSH rsync",
-        "default_path": "/userdata/roms/{platform}",
+        "kind": "files",
+        "name": "Batocera (including Arcade Punks Batocera images)",
+        "category": "Raspberry Pi, PC and arcade cabinets",
+        "protocol": "SSH (rsync) or the \\\\batocera\\share\\roms share",
+        "default_path": "/userdata/roms",
+        "default_ssh_host": "root@batocera.local",
         "gamelist_format": "esde",
         "igir_token": "{batocera}",
-        "description": "Full support for Arcade Punks pre-configured image packs, Batocera 40+, and RetroPie 4.8. Audits scraped gamelists and ROM sets against clean DATs.",
+        "description": "Batocera 40+ and Arcade Punks Batocera packs keep ROMs under /userdata/roms with Batocera's folder names.",
+    },
+    {
+        "id": "steamos-deck",
+        "kind": "files",
+        "name": "Steam Deck / SteamOS (EmuDeck or RetroDECK)",
+        "category": "Handheld PC",
+        "protocol": "Folder, SD card or SSH",
+        "default_path": "~/Emulation/roms",
+        "default_ssh_host": "deck@steamdeck.local",
+        "gamelist_format": "esde",
+        "igir_token": "{es}",
+        "description": "EmuDeck keeps ROMs in ~/Emulation/roms (or the same path on the SD card) with ES-DE folder names.",
     },
     {
         "id": "adreno-android-handhelds",
-        "name": "Snapdragon / Adreno Handhelds (Odin 2, Retroid Pocket 4/5, AYN, Ayaneo)",
-        "category": "Android Emulation Handhelds",
-        "protocol": "MTP / MicroSD / SSH (Termux) / RomM Argosy",
-        "default_path": "/storage/emulated/0/ROMs/{platform}",
+        "kind": "files",
+        "name": "Android handhelds — Snapdragon / Adreno (Odin 2, Retroid Pocket, AYN, Ayaneo)",
+        "category": "Android handheld",
+        "protocol": "microSD card, MTP or SSH (Termux)",
+        "default_path": "/storage/emulated/0/ROMs",
+        "default_ssh_host": "user@android.local",
         "gamelist_format": "esde",
         "igir_token": "{romm}",
-        "description": "Tailored for high-performance Snapdragon/Adreno chipsets running ES-DE Android, Daijisho, Beacon, or Argosy. Maps turnip driver configs and high-tier Switch/PS2 ROM structures.",
+        "description": "For ES-DE Android, Daijisho or Beacon reading a ROMs folder on internal storage or the SD card.",
+    },
+    {
+        "id": "argosy",
+        "kind": "app",
+        "name": "Argosy Launcher (Android)",
+        "category": "App that connects to RomM",
+        "protocol": "RomM API",
+        "default_path": "",
+        "gamelist_format": "romm-api",
+        "igir_token": "{romm}",
+        "description": "Android launcher that browses and launches your RomM library.",
+        "setup": [
+            "Install Argosy from its GitHub releases on the Android device.",
+            "Add a server and enter your RomM address: {library_url}.",
+            "Sign in with a RomM account (a dedicated one is best).",
+        ],
+    },
+    {
+        "id": "grout",
+        "kind": "app",
+        "name": "Grout (muOS / NextUI handhelds)",
+        "category": "App that connects to RomM",
+        "protocol": "RomM API",
+        "default_path": "",
+        "gamelist_format": "romm-api",
+        "igir_token": "{romm}",
+        "description": "Companion for Anbernic, Miyoo and TrimUI handhelds running muOS or NextUI; downloads games from RomM on the device.",
+        "setup": [
+            "Install Grout on the handheld following its README.",
+            "Point it at your RomM address: {library_url}.",
+            "Pick platforms on the device; Grout downloads into its own ROM folders.",
+        ],
+    },
+    {
+        "id": "deckrommsync",
+        "kind": "app",
+        "name": "DeckRommSync (Steam Deck)",
+        "category": "App that connects to RomM",
+        "protocol": "RomM API",
+        "default_path": "",
+        "gamelist_format": "romm-api",
+        "igir_token": "{romm}",
+        "description": "Keeps a Steam Deck's EmuDeck library and saves in step with RomM.",
+        "setup": [
+            "Install DeckRommSync on the Steam Deck (desktop mode).",
+            "Enter your RomM address: {library_url}.",
+            "Choose which platforms to keep on the Deck.",
+        ],
+    },
+    {
+        "id": "retroarch-webdav",
+        "kind": "app",
+        "name": "RetroArch cloud sync (WebDAV)",
+        "category": "Saves and states",
+        "protocol": "WebDAV",
+        "default_path": "",
+        "gamelist_format": "webdav",
+        "igir_token": "{romm}",
+        "description": "RetroArch's built-in cloud sync keeps saves and states the same on every device.",
+        "setup": [
+            "In RetroArch: Settings > Saving > Cloud Sync, turn it on and choose WebDAV.",
+            "Enter your library server's WebDAV address: {library_url}/webdav/.",
+            "Use the same account on every device.",
+        ],
+    },
+    {
+        "id": "console-cfw-feeds",
+        "kind": "app",
+        "name": "Console homebrew feeds (Tinfoil, pkgj, pkgi, Kekatsu)",
+        "category": "Console installers",
+        "protocol": "HTTP feeds",
+        "default_path": "",
+        "gamelist_format": "feed",
+        "igir_token": "{romm}",
+        "description": "Install straight onto a modded Switch, PS Vita, PSP, PS3 or DS from your RomM feeds.",
+        "setup": [
+            "On the console's installer (Tinfoil, pkgj, pkgi, Kekatsu), add a custom source.",
+            "Use your RomM feed address: {library_url}/api/feeds/.",
+        ],
     },
 ]
 
+TRANSPORTS = ("local", "ssh", "rclone")
+STAGE_ROOT = "/tmp/romarr-stage"
+
+
+def _device(device_id: str) -> dict | None:
+    return next((p for p in DEVICE_PROFILES if p["id"] == device_id), None)
+
+
+def _device_root(path: str) -> str:
+    """The device's ROM folder without a per-platform placeholder.
+
+    Earlier plans asked for `.../roms/{platform}`, which Igir does not expand
+    (it would create a folder literally named `{platform}`). The platform
+    folder is the profile's Igir token, appended by the plan.
+    """
+    root = str(path or "").strip().rstrip("/")
+    for placeholder in ("{platform}", "{romm}", "{es}", "{batocera}"):
+        if root.endswith("/" + placeholder):
+            root = root[: -len(placeholder) - 1]
+    return root
+
 
 def fleet_profiles() -> dict:
-    """Return all supported multi-device & LAN/Cloud network library sync profiles."""
+    """Every supported device, grouped by kind, and whether Igir is installed."""
     return {
         "profiles": DEVICE_PROFILES,
+        "kinds": {
+            "files": "Copy games onto the device's ROM folder",
+            "app": "The device runs an app that connects to your library server",
+        },
         "igir": igir_status(),
     }
 
 
 def build_fleet_sync_plan(spec: dict | None = None) -> dict:
-    """Build a non-destructive sync/verification command plan for a target device or network share."""
+    """Plan getting games onto one device: commands for folders, steps for apps.
+
+    Nothing runs here. The plan is shown to the user, who previews it and runs
+    it on the machine that holds the library.
+    """
     import shlex
     spec = spec if isinstance(spec, dict) else {}
-    device_id = str(spec.get("device_id") or "retropie-arcadepunks").strip()
-    profile = next((p for p in DEVICE_PROFILES if p["id"] == device_id), DEVICE_PROFILES[0])
-    target_path = str(spec.get("target_path") or profile["default_path"]).strip()
-    source_path = str(spec.get("source_path") or "/library/roms").strip()
-    regions = [str(r).strip().upper() for r in (spec.get("prefer_regions") or ["USA", "WORLD", "EUR", "JPN"]) if str(r).strip()]
-    transport = str(spec.get("transport") or "local").strip().lower()
-    ssh_host = str(spec.get("ssh_host") or "pi@retropie.local").strip()
+    device_id = str(spec.get("device_id") or "es-de").strip()
+    profile = _device(device_id)
+    if profile is None:
+        return {"ok": False, "error": f"unknown device {device_id!r}"}
 
-    igir_cmd = build_igir_command({
-        "commands": ["copy", "extract", "test", "clean", "report"],
-        "input_dirs": [source_path],
-        "output_dir": target_path if transport == "local" else f"/tmp/romarr-stage/{device_id}/{profile['igir_token']}",
+    if profile["kind"] == "app":
+        library_url = str(spec.get("library_url") or "").strip().rstrip("/") or "your RomM address"
+        return {
+            "ok": True,
+            "kind": "app",
+            "device": profile,
+            "setup": [step.replace("{library_url}", library_url) for step in profile["setup"]],
+            "steps": [],
+            "igir_command": "",
+            "network_sync_command": "",
+            "gamelist_export_url": "",
+        }
+
+    transport = str(spec.get("transport") or "local").strip().lower()
+    if transport not in TRANSPORTS:
+        transport = "local"
+    mirror = bool(spec.get("mirror", False))
+    target_root = _device_root(spec.get("target_path") or profile["default_path"])
+    source = (str(spec.get("source_path") or "").strip()
+              or os.environ.get("LIBRARY_PATH") or "/roms")
+    regions = [str(r).strip().upper()
+               for r in (spec.get("prefer_regions") or ["USA", "WORLD", "EUR", "JPN"])
+               if str(r).strip()]
+    ssh_host = str(spec.get("ssh_host") or profile.get("default_ssh_host") or "user@device.local").strip()
+    token = profile["igir_token"]
+    stage = f"{STAGE_ROOT}/{device_id}"
+    output = f"{target_root}/{token}" if transport == "local" else f"{stage}/{token}"
+
+    commands = ["copy", "extract", "test", "report"]
+    if mirror and transport == "local":
+        commands.insert(3, "clean")
+    igir_cfg = {
+        "input_dirs": [source],
+        "output_dir": output,
         "dat_dirs": [str(spec.get("dat_dir") or "/config/dats")],
         "single_1g1r": bool(spec.get("single_1g1r", True)),
         "prefer_verified": True,
         "prefer_good": True,
         "prefer_regions": regions,
         "dry_run": bool(spec.get("dry_run", False)),
-    })
-    igir_str = " ".join(shlex.quote(x) for x in igir_cmd)
+    }
 
-    rsync_str = ""
+    def quoted(cmd: list[str]) -> str:
+        return " ".join(shlex.quote(x) for x in cmd)
+
+    preview = quoted(build_igir_command({**igir_cfg, "commands": ["test", "report"], "dry_run": True}))
+    copy = quoted(build_igir_command({**igir_cfg, "commands": commands}))
+
+    transfer = ""
     if transport == "ssh":
-        rsync_str = f"rsync -avz --progress --delete-after /tmp/romarr-stage/{device_id}/ {shlex.quote(ssh_host)}:{shlex.quote(target_path)}"
+        delete = " --delete-after" if mirror else ""
+        transfer = (f"rsync -avz --progress{delete} {shlex.quote(stage + '/')} "
+                    f"{shlex.quote(ssh_host + ':' + target_root + '/')}")
     elif transport == "rclone":
-        rsync_str = f"rclone sync /tmp/romarr-stage/{device_id}/ {shlex.quote(target_path)} --progress"
+        verb = "sync" if mirror else "copy"
+        transfer = f"rclone {verb} {shlex.quote(stage + '/')} {shlex.quote(target_root + '/')} --progress"
+
+    gamelist = (f"/api/v1/frontend/export?format={profile['gamelist_format']}"
+                if profile["gamelist_format"] in ("esde", "launchbox", "playnite") else "")
+
+    steps = [
+        {"title": "Preview: check what would be copied (changes nothing)", "command": preview},
+        {"title": ("Copy verified games into the device folder" if transport == "local"
+                   else "Copy verified games into a staging folder"), "command": copy},
+    ]
+    if transfer:
+        steps.append({"title": "Send them to the device", "command": transfer})
+    if gamelist:
+        steps.append({"title": "Download the frontend's game list", "url": gamelist})
+
+    warnings = []
+    if mirror:
+        warnings.append("Mirror is on: files on the device that are not in this set will be deleted.")
 
     return {
         "ok": True,
+        "kind": "files",
         "device": profile,
-        "target_path": target_path,
-        "igir_command": igir_str,
-        "network_sync_command": rsync_str,
-        "gamelist_export_url": f"/api/v1/frontend/export?format={profile['gamelist_format']}" if profile["gamelist_format"] in ("esde", "launchbox", "playnite") else "",
+        "transport": transport,
+        "mirror": mirror,
+        "target_path": target_root,
+        "output_path": output,
+        "steps": steps,
+        "warnings": warnings,
+        "preview_command": preview,
+        "igir_command": copy,
+        "network_sync_command": transfer,
+        "gamelist_export_url": gamelist,
     }
 
 
