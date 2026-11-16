@@ -8,6 +8,10 @@ Find games, verify ROMs, and import them into your library.
 
 [![Tests and images](https://github.com/BlizzHacker/romarr/actions/workflows/docker.yml/badge.svg)](https://github.com/BlizzHacker/romarr/actions/workflows/docker.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![GG Requestz](https://img.shields.io/badge/Companion-GG_Requestz-8A2BE2?logo=gamepad&logoColor=white)](https://github.com/BlizzHacker/ggrequestz)
+[![RomM Ecosystem](https://img.shields.io/badge/Ecosystem-RomM-blue?logo=gamepad&logoColor=white)](https://github.com/rommapp/romm)
+[![r/romm](https://img.shields.io/badge/Reddit-r%2Fromm-FF4500?logo=reddit&logoColor=white)](https://www.reddit.com/r/romm)
+[![r/arr](https://img.shields.io/badge/Reddit-r%2Farr-FF4500?logo=reddit&logoColor=white)](https://www.reddit.com/r/arr)
 [![Android Beta](https://img.shields.io/badge/Google_Play-Android_Beta-brightgreen?logo=googleplay&logoColor=white)](https://play.google.com/apps/internaltest/4700888732790045566)
 [![Android APK](https://img.shields.io/badge/Android-Direct_APK-3DDC84?logo=android&logoColor=white)](https://github.com/BlizzHacker/romarr/releases)
 [![Argosy Compatible](https://img.shields.io/badge/Frontend-Argosy_Launcher-purple?logo=android&logoColor=white)](https://github.com/rommapp/argosy-launcher)
@@ -15,7 +19,11 @@ Find games, verify ROMs, and import them into your library.
 [![Microsoft Store](https://img.shields.io/badge/Microsoft_Store-Windows_App-0078D4?logo=windows&logoColor=white)](https://github.com/BlizzHacker/romarr/releases)
 [![Submit Package](https://img.shields.io/badge/Package_Submissions-Submit_ROMarr-purple?logo=github&logoColor=white)](docs/SUBMISSIONS.md)
 
-**[Install](#install)** · **[First setup](docs/GETTING-STARTED.md)** · **[Android App & APK](docs/ANDROID.md)** · **[Unraid App](https://ca.unraid.net/apps/romarr-04jslct0riva81?q=romarr)** · **[Plugins](docs/PLUGINS.md)** · **[Roadmap](ROADMAP.md)** · **[Releases](https://github.com/BlizzHacker/romarr/releases)** · **[Submit Package](docs/SUBMISSIONS.md)** · **[Privacy](docs/PRIVACY.md)**
+**[Install](#install)** · **[First setup](docs/GETTING-STARTED.md)** · **[GG Requestz](https://github.com/BlizzHacker/ggrequestz)** · **[RomM](https://github.com/rommapp/romm)** · **[r/romm](https://www.reddit.com/r/romm)** · **[r/arr](https://www.reddit.com/r/arr)** · **[Android App & APK](docs/ANDROID.md)** · **[Unraid App](https://ca.unraid.net/apps/romarr-04jslct0riva81?q=romarr)** · **[Plugins](docs/PLUGINS.md)** · **[Roadmap](ROADMAP.md)** · **[Releases](https://github.com/BlizzHacker/romarr/releases)** · **[Submit Package](docs/SUBMISSIONS.md)** · **[Privacy](docs/PRIVACY.md)**
+
+> [!NOTE]
+> **Community & Where You'll Most Likely Find Me:**  
+> Hang out and chat in the community! You'll most likely find me on Reddit in **[r/romm](https://www.reddit.com/r/romm)** and **[r/arr](https://www.reddit.com/r/arr)** (along with [r/selfhosted](https://www.reddit.com/r/selfhosted)). Connect with companion game request workflows via **[GG Requestz](https://github.com/BlizzHacker/ggrequestz)** and frontend setups via **[RomM](https://github.com/rommapp/romm)**.
 
 > [!TIP]
 > **Android Beta, Handhelds & Argosy Launcher Integration!**  
@@ -137,11 +145,28 @@ Source access, available files, credentials and platform support vary. Check the
 
 | Platform | Client | Best Fit | Features & Downloads |
 |---|---|---|---|
-| **Windows** | [Cartridge for Windows](https://github.com/BlizzHacker/RommForDesktop) | Desktop PCs, laptops, and Windows handhelds (ROG Ally, Legion Go) | Embedded RomM console player, standalone window, no external browser required. [Download Portable EXE](https://github.com/BlizzHacker/romarr/releases/download/v1.8.0/Cartridge-Windows-Portable-0.2.0-x64.exe) or explore [RommForDesktop](https://github.com/BlizzHacker/RommForDesktop). |
-| **Xbox** | [Cartridge for Xbox](https://github.com/BlizzHacker/RommForXbox) | Xbox Series X\|S and Xbox One consoles | Native UWP/WebView2 gamepad experience, big-screen TV navigation, and EmulatorJS cores. Available on [Microsoft Store (App ID: 9MXC51W17LH4)](https://apps.microsoft.com/detail/9MXC51W17LH4) and [RommForXbox](https://github.com/BlizzHacker/RommForXbox). |
-| **Android** | [Cartridge for Android (Argosy)](https://github.com/BlizzHacker/argosy-launcher) | Retro handhelds (Odin 2, Retroid Pocket, Anbernic), Android TV, tablets, phones | Gamepad-native launcher with bidirectional save-sync, rich IGDB metadata, on-demand downloads, and automated emulator handoff to RetroArch, Dolphin, PPSSPP, and NetherSX2. [Download APK from Releases](https://github.com/BlizzHacker/argosy-launcher/releases) or visit [Argosy Launcher](https://github.com/BlizzHacker/argosy-launcher). |
+| **Windows** | [Cartridge for Windows](https://github.com/BlizzHacker/Cartridge) | Desktop PCs, laptops, and Windows handhelds (ROG Ally, Legion Go) | Embedded RomM console player, standalone window, no external browser required. [Download Portable EXE](https://github.com/BlizzHacker/romarr/releases/download/v1.8.0/Cartridge-Windows-Portable-0.2.0-x64.exe) or visit [BlizzHacker/Cartridge](https://github.com/BlizzHacker/Cartridge). |
+| **Xbox** | [Cartridge for Xbox](https://github.com/BlizzHacker/Cartridge) | Xbox Series X\|S and Xbox One consoles | Native UWP/WebView2 gamepad experience, big-screen TV navigation, and EmulatorJS cores. Available on [Microsoft Store (App ID: 9MXC51W17LH4)](https://apps.microsoft.com/detail/9MXC51W17LH4) and [BlizzHacker/Cartridge](https://github.com/BlizzHacker/Cartridge). |
+| **Android** | [Cartridge for Android](https://github.com/BlizzHacker/Cartridge) | Retro handhelds (Odin 2, Retroid Pocket, Anbernic), Android TV, tablets, phones | Gamepad-native launcher with bidirectional save-sync, rich metadata, on-demand downloads, and automated emulator handoff to RetroArch, Dolphin, PPSSPP, and NetherSX2. [Download APK from Releases](https://github.com/BlizzHacker/Cartridge/releases) or visit [BlizzHacker/Cartridge](https://github.com/BlizzHacker/Cartridge). |
 
 You can use Cartridge alongside your existing setup or keep using your favorite frontend (Playnite, LaunchBox, ES-DE, Pegasus). The Windows desktop app's **Cartridge** menu and the setup guides link to all three clients.
+
+## gamesgamesgamesgamesgames Gaming Stack (Kirby Absorbed)
+
+ROMarr has absorbed **[gamesgamesgamesgamesgames](https://github.com/gamesgamesgamesgamesgames)' use of ATProto** — Kirby-style complete absorption. Rather than absorbing a generic social network, ROMarr gains their entire decentralized video game data architecture:
+
+- **Video Game Lexicons ([gamesgamesgamesgamesgames/lexicon](https://github.com/gamesgamesgamesgamesgames/lexicon))**:
+  - `games.gamesgamesgamesgames.game`: Unified open standard for video games with IGDB, Wikidata, and ROMarr/RomM links.
+  - `games.gamesgamesgamesgames.release`: Platform editions, dump formats, and cryptographic DAT verification checksums (SHA-256, CRC32, MD5).
+  - `games.gamesgamesgamesgames.playState`: Decentralized player progression (`playing`, `completed`, `backlog`, `dropped`, `wishlist`), play time, and ratings synced across your screens.
+  - `games.gamesgamesgamesgames.achievement`: Cross-game trophies and achievements recorded on your personal game shelf.
+  - `dev.cartridge.verificationRequest`: Verification assertions signing authentic No-Intro and Redump matches to your DID.
+- **Embedded Gaming AppView ([gamesgamesgamesgamesgames/happyview](https://github.com/gamesgamesgamesgamesgames/happyview))**:
+  - Schema-driven gaming XRPC queries served directly by ROMarr: `/xrpc/games.gamesgamesgamesgames.getGame`, `listGames`, and `getPlayState`.
+  - Real-time Jetstream event processing (`/api/v1/atproto/jetstream`) streaming video game updates and community catalog changes.
+- **Sovereign Gaming Studio ([gamesgamesgamesgamesgames/cartridge](https://github.com/gamesgamesgamesgamesgames/cartridge))**:
+  - Export your entire verified ROMarr collection into sovereign video game records (`/api/v1/atproto/export`).
+  - Connect your gaming handle (`/api/v1/atproto/connect`) for portable, player-owned game libraries across any device.
 
 ## Help and documentation
 
