@@ -8,6 +8,7 @@ venv/
 
 # Live state and scratch artefacts that accumulate beside a deployed install.
 romarr.json
+!packaging/proxmox/json/romarr.json
 romarr.json.*
 *.log
 *.jsonl
