@@ -4218,6 +4218,14 @@ RENDER.media=()=>settingsPage('Media Management',
        Comma-separated codes, e.g. <code>de, en</code>. Matches scene markers
        like <code>[T-De]</code> / <code>[T+Eng]</code>; an unmarked
        <code>(Translation)</code> counts as English.</div></div>`
+  +`<div class="field"><label>Preferred languages (1G1R filter)</label>
+     <input type="text" data-k="preferred_languages" data-list="1"
+       placeholder="Optional, e.g. French, English"
+       value="${esc((SETTINGS.preferred_languages||[]).join(', '))}">
+     <div style="color:var(--dim);font-size:11.5px;margin-top:4px">
+       Optional ordered languages (e.g. <code>French, English</code> or <code>fr, en</code>).
+       When set, Collections picks by language priority first then region, omits games
+       with no eligible language/translation, and lists unknown-language titles separately.</div></div>`
   +sel('region_mode','Region list in 1G1R sets',
      [['prefer','Prefer selected regions — keep a title even when no dump matches'],
       ['strict','Only selected regions — omit a title when no dump matches']],
@@ -6138,6 +6146,11 @@ RENDER.collections=async()=>{
        +'value="'+esc((SETTINGS.translation_langs||['en']).join(', '))+'" '
        +'style="width:110px;padding:6px 8px;background:var(--bg);color:var(--fg);'
        +'border:1px solid var(--line);border-radius:6px" title="Comma-separated codes, e.g. de, en">'
+       +'<label class="help" style="margin:0;margin-left:8px">Preferred languages</label>'
+       +'<input id="cpreflangs" placeholder="Optional: French, English" '
+       +'value="'+esc((SETTINGS.preferred_languages||[]).join(', '))+'" '
+       +'style="width:170px;padding:6px 8px;background:var(--bg);color:var(--fg);'
+       +'border:1px solid var(--line);border-radius:6px" title="Optional ordered languages, e.g. French, English. Empty disables language filtering.">'
        +'</div>'
       :'<div class="empty-cat"><b>No DAT loaded</b>'
        +'Point DAT_PATH at a directory of No-Intro or Redump DATs. Without one '
@@ -6302,6 +6315,7 @@ RENDER.collections=async()=>{
       +'&region_mode='+($('#cstrict').checked?'strict':'prefer')
       +'&translation_policy='+encodeURIComponent($('#ctrans').value)
       +'&translation_langs='+encodeURIComponent($('#ctranslangs').value.trim())
+      +'&preferred_languages='+encodeURIComponent($('#cpreflangs').value.trim())
       +'&exclude='+encodeURIComponent(ex);
     const d=await j('/api/v1/collection/plan?'+q).catch(()=>({error:'plan failed'}));
     if(d.error){out.innerHTML='<div class="panel-note panel-warn">'+esc(d.error)+'</div>';return;}
@@ -6317,9 +6331,12 @@ RENDER.collections=async()=>{
       +tile(c.bad,'bad dumps','var(--bad)')
       +tile(c.excluded,'excluded by policy','var(--dim)')
       +((c.region_omitted||0)?tile(c.region_omitted,'omitted — no dump in your regions','var(--dim)'):'')
+      +((c.language_omitted||0)?tile(c.language_omitted,'omitted — language not in preference','var(--dim)'):'')
+      +((c.unknown_language||0)?tile(c.unknown_language,'unknown language (not counted)','var(--dim)'):'')
       +'</div>'
       +'<p class="help">'+esc(d.dat)+(d.dat_version?' ('+esc(d.dat_version)+')':'')
       +' — region order '+esc((d.policy.regions||[]).join(' → '))
+      +((d.policy.preferred_languages||[]).length?' · preferred languages '+esc(d.policy.preferred_languages.join(' → ')):'')
       +(d.policy.region_mode==='strict'?' (strict: titles without a matching-region dump are omitted)':'')+'.</p>'
       +'<div class="row"><button class="btn" id="cstart">Request '+c.missing
       +' missing</button>'
@@ -6348,7 +6365,14 @@ RENDER.collections=async()=>{
           +clones+'</td></tr>';
       }).join('')+'</tbody></table>'
       +(d.titles.length>300?'<p class="help">Showing the first 300 of '
-        +d.titles.length+'.</p>':'');
+        +d.titles.length+'.</p>':'')
+      +((d.unknown_language_titles||[]).length
+        ?'<details style="margin-top:14px"><summary class="help" style="margin:0;cursor:pointer">'
+         +'Unknown language metadata ('+d.unknown_language_titles.length+' games — not counted as missing)</summary>'
+         +'<table style="margin-top:8px"><thead><tr><th>Title</th><th>Status</th><th>Note</th></tr></thead><tbody>'
+         +d.unknown_language_titles.slice(0,200).map(u=>
+           '<tr><td>'+esc(u.name)+'</td><td><span class="pill">'+esc(u.status||'missing')+'</span></td><td class="help" style="margin:0">'+esc(u.why||'')+'</td></tr>'
+         ).join('')+'</tbody></table></details>':'');
 
     $('#cstart').onclick=async e=>{
       e.target.disabled=true; e.target.textContent='Queueing…';
@@ -6362,6 +6386,7 @@ RENDER.collections=async()=>{
           region_mode:$('#cstrict').checked?'strict':'prefer',
           translation_policy:$('#ctrans').value,
           translation_langs:($('#ctranslangs').value.trim()||'').split(',').map(s=>s.trim()).filter(Boolean),
+          preferred_languages:($('#cpreflangs').value.trim()||'').split(',').map(s=>s.trim()).filter(Boolean),
           exclude:ex.split(',').filter(Boolean)})});
       toast(r.error?r.error:('Queued '+(r.queued||0)+' titles'));
       e.target.disabled=false; e.target.textContent='Request missing';

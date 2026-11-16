@@ -4045,6 +4045,16 @@ class ROMarr:
         from .collections import normalise_lang
         translation_langs = tuple(dict.fromkeys(
             normalise_lang(c) for c in translation_langs if str(c).strip()))
+        raw_pref_langs = (
+            policy_kw["preferred_languages"]
+            if policy_kw.get("preferred_languages") is not None
+            else self.store.settings.get("preferred_languages") or ()
+        )
+        if isinstance(raw_pref_langs, str):
+            raw_pref_langs = [c for c in raw_pref_langs.split(",")
+                              if c.strip()]
+        preferred_languages = tuple(dict.fromkeys(
+            normalise_lang(c) for c in raw_pref_langs if str(c).strip()))
         region_mode = str(policy_kw.get("region_mode")
                           or self.store.settings.get("region_mode")
                           or "prefer").lower()
@@ -4056,6 +4066,7 @@ class ROMarr:
             translation_langs=translation_langs,
             region_mode=region_mode if region_mode in ("prefer", "strict")
             else "prefer",
+            preferred_languages=preferred_languages,
         )
         plan = build_plan(dat, self._present_titles(platform), policy)
         return {
@@ -4068,6 +4079,7 @@ class ROMarr:
                        "exclude": sorted(policy.exclude),
                        "translation_policy": policy.translation_policy,
                        "translation_langs": list(policy.translation_langs),
+                       "preferred_languages": list(policy.preferred_languages),
                        "region_mode": policy.region_mode},
             "titles": [
                 {"name": t.name, "parent": t.parent, "status": t.status,
@@ -4076,6 +4088,12 @@ class ROMarr:
                  "outside_preference": t.outside_preference,
                  "translation": t.is_translation}
                 for t in plan.titles
+            ],
+            "unknown_language_titles": [
+                {"name": t.name, "parent": t.parent, "status": t.status,
+                 "why": t.chosen_because,
+                 "outside_preference": t.outside_preference}
+                for t in plan.unknown_language_titles
             ],
         }
 
@@ -8582,6 +8600,10 @@ def make_handler(service: ROMarr):
                     translation_langs=[
                         c for c in query.get("translation_langs", [""])[0]
                         .split(",") if c] or None,
+                    preferred_languages=(
+                        [c for c in query.get("preferred_languages", [""])[0]
+                         .split(",") if c.strip()]
+                        if "preferred_languages" in query else None),
                     region_mode=query.get("region_mode", [""])[0] or None,
                     exclude=[e for e in query.get("exclude", [""])[0].split(",")
                              if e] if "exclude" in query else None))
@@ -9100,6 +9122,10 @@ def make_handler(service: ROMarr):
                     regions=body.get("regions") or None,
                     translation_policy=body.get("translation_policy") or None,
                     translation_langs=body.get("translation_langs") or None,
+                    preferred_languages=(
+                        body.get("preferred_languages")
+                        if body.get("preferred_languages") is not None
+                        else None),
                     region_mode=body.get("region_mode") or None,
                     exclude=body.get("exclude")
                     if body.get("exclude") is not None else None))

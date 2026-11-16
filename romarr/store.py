@@ -298,6 +298,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # historical English-only behaviour; operators select their own codes
     # under Settings -> Media Management.
     "translation_langs": ["en"],
+    # Ordered preferred game languages for language-aware 1G1R filtering
+    # (e.g. ["fr", "en"]). Empty preserves region-only 1G1R behaviour.
+    "preferred_languages": [],
     # "prefer" keeps a title even when no dump matches the region list (the
     # historical fallback); "strict" treats the list as an allowlist.
     "region_mode": "prefer",
