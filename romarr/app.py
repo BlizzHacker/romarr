@@ -7070,7 +7070,7 @@ class ROMarr:
             if sub_path.startswith("/api/heartbeat"):
                 payload = {
                     "SYSTEM": {
-                        "version": getattr(self, "VERSION", "1.10.2"),
+                        "version": VERSION,
                         "romm_version": "5.1.0-romarr",
                         "arch": "x86_64",
                         "os": "Linux"
