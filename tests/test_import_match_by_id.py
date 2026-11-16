@@ -431,3 +431,162 @@ def test_qbittorrent_duplicate_already_tracked_by_romarr_is_not_adopted(tags):
 
     assert not client.add(f"magnet:?xt=urn:btih:{infohash}")
     assert not any(url.endswith(("/torrents/addTags", "/torrents/setCategory")) for url in session.posts)
+
+
+def test_qbittorrent_duplicate_cleans_up_tag_on_category_or_verify_failure_and_allows_retry():
+    """Failed duplicate adoption removes only this attempt's tag so a retry succeeds."""
+    from romarr.clients import QBittorrent, QbitConfig
+
+    infohash = "d2a64b88b086acfcb1c89f044f81764604ceab85"
+
+    class Response:
+        def __init__(self, status_code=200, payload=None, text="Ok."):
+            self.status_code, self.ok, self.text = status_code, 200 <= status_code < 400, text
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+        def raise_for_status(self):
+            if not self.ok:
+                raise RuntimeError(self.status_code)
+
+    class Session:
+        def __init__(self):
+            self.row = {"hash": infohash, "name": "Fat Princess",
+                        "tags": "cross-seed", "category": "prowlarr"}
+            self.fail_category = True
+            self.fail_verify = False
+            self.removed = []
+
+        def post(self, url, **kwargs):
+            data = kwargs.get("data") or {}
+            if url.endswith("/torrents/add"):
+                return Response(409, text="Fails.")
+            if url.endswith("/torrents/addTags"):
+                current = [t.strip() for t in self.row["tags"].split(",") if t.strip()]
+                current.append(data["tags"])
+                self.row["tags"] = ", ".join(current)
+                return Response()
+            if url.endswith("/torrents/removeTags"):
+                self.removed.append(data["tags"])
+                current = [t.strip() for t in self.row["tags"].split(",") if t.strip()]
+                self.row["tags"] = ", ".join(t for t in current if t != data["tags"])
+                return Response()
+            if url.endswith("/torrents/setCategory"):
+                if self.fail_category:
+                    return Response(500, text="Error.")
+                self.row["category"] = data["category"]
+                return Response()
+            return Response()
+
+        def get(self, url, **kwargs):
+            params = kwargs.get("params") or {}
+            if params.get("tag"):
+                if self.fail_verify:
+                    return Response(payload=[])
+                tag = params["tag"]
+                tags = {t.strip() for t in self.row["tags"].split(",") if t.strip()}
+                return Response(payload=[dict(self.row)] if tag in tags else [])
+            return Response(payload=[dict(self.row)])
+
+    session = Session()
+    client = QBittorrent(QbitConfig(base_url="http://qbit:8080", category="romarr"), session=session)
+    client._authed = True
+    magnet = f"magnet:?xt=urn:btih:{infohash}"
+
+    # Category failure rolls back only this attempt's tag and keeps unrelated tags.
+    assert not client.add(magnet)
+    assert client.last_job_id == ""
+    assert len(session.removed) == 1
+    assert session.row["tags"] == "cross-seed"
+
+    # Verification failure also rolls back only this attempt's tag.
+    session.fail_category = False
+    session.fail_verify = True
+    assert not client.add(magnet)
+    assert client.last_job_id == ""
+    assert len(session.removed) == 2
+    assert session.row["tags"] == "cross-seed"
+
+    # Retry succeeds once category update and verification succeed.
+    session.fail_verify = False
+    assert client.add(magnet)
+    assert client.last_job_id.startswith("qbit-tag:romarr-")
+    attached_tag = client.last_job_id.removeprefix("qbit-tag:")
+    final_tags = [t.strip() for t in session.row["tags"].split(",")]
+    assert "cross-seed" in final_tags
+    assert [t for t in final_tags if t.startswith("romarr-")] == [attached_tag]
+    assert session.row["category"] == "romarr"
+
+
+def test_qbittorrent_concurrent_duplicate_attaches_are_serialized():
+    """Concurrent 409 attaches for one magnet leave exactly one ROMarr owner tag."""
+    import threading
+    from romarr.clients import QBittorrent, QbitConfig
+
+    infohash = "d2a64b88b086acfcb1c89f044f81764604ceab85"
+
+    class Response:
+        def __init__(self, status_code=200, payload=None, text="Ok."):
+            self.status_code, self.ok, self.text = status_code, 200 <= status_code < 400, text
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+        def raise_for_status(self):
+            if not self.ok:
+                raise RuntimeError(self.status_code)
+
+    class Session:
+        def __init__(self):
+            self.state_lock = threading.Lock()
+            self.add_barrier = threading.Barrier(2)
+            self.row = {"hash": infohash, "name": "Fat Princess", "tags": "", "category": "prowlarr"}
+            self.add_tags_calls = 0
+
+        def post(self, url, **kwargs):
+            data = kwargs.get("data") or {}
+            if url.endswith("/torrents/add"):
+                self.add_barrier.wait(timeout=5)
+                return Response(409, text="Fails.")
+            with self.state_lock:
+                if url.endswith("/torrents/addTags"):
+                    self.add_tags_calls += 1
+                    current = [t.strip() for t in self.row["tags"].split(",") if t.strip()]
+                    current.append(data["tags"])
+                    self.row["tags"] = ", ".join(current)
+                elif url.endswith("/torrents/setCategory"):
+                    self.row["category"] = data["category"]
+            return Response()
+
+        def get(self, url, **kwargs):
+            with self.state_lock:
+                return Response(payload=[dict(self.row)])
+
+    session = Session()
+    client = QBittorrent(QbitConfig(base_url="http://qbit:8080", category="romarr"), session=session)
+    client._authed = True
+    magnet = f"magnet:?xt=urn:btih:{infohash}"
+
+    results = []
+    job_ids = []
+
+    def worker():
+        ok = client.add(magnet)
+        results.append(ok)
+        job_ids.append(client.last_job_id)
+
+    t1 = threading.Thread(target=worker)
+    t2 = threading.Thread(target=worker)
+    t1.start()
+    t2.start()
+    t1.join(timeout=5)
+    t2.join(timeout=5)
+
+    assert sorted(results) == [False, True]
+    assert session.add_tags_calls == 1
+    non_empty_jobs = [jid for jid in job_ids if jid]
+    assert len(non_empty_jobs) == 1
+    assert session.row["tags"] == non_empty_jobs[0].removeprefix("qbit-tag:")
