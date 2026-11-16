@@ -1,0 +1,50 @@
+{
+  "name": "ROMarr",
+  "slug": "romarr",
+  "categories": [
+    14
+  ],
+  "date_created": "2026-11-15",
+  "type": "ct",
+  "updateable": true,
+  "privileged": false,
+  "interface_port": 6868,
+  "documentation": "https://github.com/BlizzHacker/romarr/blob/main/docs/GETTING-STARTED.md",
+  "website": "https://romarr.app",
+  "repository": "https://github.com/BlizzHacker/romarr",
+  "platforms": ["pve"],
+  "logo": "https://cdn.jsdelivr.net/gh/selfhst/icons@main/webp/romarr.webp",
+  "description": "ROMarr is the *arr for games. Request a title and it searches your indexers through Prowlarr, sends the best release to qBittorrent, SABnzbd or NZBGet, and files the verified game into RomM, Gaseous, Retrom or a plain folder tree for ES-DE, EmuDeck and RetroArch.",
+  "install_methods": [
+    {
+      "type": "default",
+      "script": "ct/romarr.sh",
+      "config_path": "/opt/romarr_data/.env",
+      "resources": {
+        "cpu": 1,
+        "ram": 512,
+        "hdd": 4,
+        "os": "Debian",
+        "version": "13"
+      }
+    }
+  ],
+  "default_credentials": {
+    "username": null,
+    "password": null
+  },
+  "notes": [
+    {
+      "text": "There is no default login: the first visit to the web UI sets the password, so open it right after the install.",
+      "type": "warning"
+    },
+    {
+      "text": "Games are filed into /mnt/roms. Bind-mount your library there, or change the path under Settings > Libraries.",
+      "type": "info"
+    },
+    {
+      "text": "Add Prowlarr and a download client under Settings; the completed-downloads folder must be reachable from this container at the path the client reports.",
+      "type": "info"
+    }
+  ]
+}
