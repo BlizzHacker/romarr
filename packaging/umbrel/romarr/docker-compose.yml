@@ -1,0 +1,21 @@
+version: "3.7"
+
+services:
+  app_proxy:
+    environment:
+      APP_HOST: romarr_web_1
+      APP_PORT: 6868
+      PROXY_AUTH_WHITELIST: "/api/*"
+
+  web:
+    image: ghcr.io/blizzhacker/romarr:1.10.0@sha256:f16e7fa86b43202ff0991e94100acee71719cccebeb39ccaaa48fd3f7d844727
+    restart: on-failure
+    stop_grace_period: 1m
+    volumes:
+      - ${APP_DATA_DIR}/data/config:/config
+      - ${UMBREL_ROOT}/data/storage/downloads:/downloads
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      TZ: ${TZ}
+      LIBRARY_PATH: /downloads/roms

@@ -48,6 +48,21 @@ These entries and their tagged source repositories were checked on **2026-10-24*
 
 The [full catalogue](https://github.com/BlizzHacker/rom-hub/blob/master/catalog/plugins.json) also includes Archive.org, Demozoo, IF Archive and other sources. Read the individual plugin's limits: for example, the itch.io entry is explicitly **play in browser, no import**. A catalogue listing does not promise downloadable copies of every game on that site.
 
+### gamesgamesgamesgamesgames Video Game Standard (`rom-hub-gamesgames`)
+
+The `gamesgames` ROM Hub plugin ([`BlizzHacker/rom-hub-gamesgames`](https://github.com/BlizzHacker/rom-hub-gamesgames)) packages [gamesgamesgamesgamesgames](https://github.com/gamesgamesgamesgamesgames)' decentralized video game data architecture as an opt-in metadata plugin (`[capabilities] metadata`) rather than baking ATProto into ROMarr core:
+
+- **Video Game Lexicons ([gamesgamesgamesgamesgames/lexicon](https://github.com/gamesgamesgamesgamesgames/lexicon))**:
+  - `games.gamesgamesgamesgames.game`: Unified open standard for video games with IGDB, Wikidata, and ROMarr/RomM links.
+  - `games.gamesgamesgamesgames.release`: Platform editions, dump formats, and cryptographic DAT verification checksums (SHA-256, CRC32, MD5).
+  - `games.gamesgamesgamesgames.playState`: Decentralized player progression (`playing`, `completed`, `backlog`, `dropped`, `wishlist`), play time, and ratings synced across your screens.
+  - `games.gamesgamesgamesgames.achievement`: Cross-game trophies and achievements recorded on your personal game shelf.
+  - `dev.cartridge.verificationRequest`: Verification requests stored in your DID that carry a SHA-256 or CRC32 checksum for a No-Intro or Redump candidate. The plugin does not compare the checksum with DAT data or sign the request.
+- **Embedded Gaming AppView ([gamesgamesgamesgamesgames/happyview](https://github.com/gamesgamesgamesgamesgames/happyview))**:
+  - In `v0.1.0`, the plugin manifest registers a metadata provider (`enrich`); standalone HTTP XRPC endpoints (`games.gamesgamesgamesgames.getGame`, `listGames`, `getPlayState`) and background Jetstream event indexing are helper classes inside `gamesgames.lexicons` and are not exposed as host HTTP routes unless wired separately.
+- **Sovereign Gaming Studio ([gamesgamesgamesgamesgames/cartridge](https://github.com/gamesgamesgamesgamesgames/cartridge))**:
+  - Portable, player-owned game libraries and shelf records that travel with your gaming handle across devices.
+
 ## Add ROM Hub to a source or LXC installation
 
 Install Git using your operating system's package manager. Then install the host into **ROMarr's own virtual environment**. This example uses the same pinned Hub revision as the Docker image:

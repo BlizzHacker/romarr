@@ -601,7 +601,8 @@ def test_pinned_pr_apply_backup_and_code_restore_use_real_git(checkout, monkeypa
     assert git("rev-parse","HEAD",cwd=repo)==info["head"]
     assert controls.active_preview(env)["head"]==info["head"]
     env.commit=info["head"]
-    service.store.update_settings({"owner_changed_after_preview": "keep current settings"})
+    service.store.update_settings({"update_channel": "beta"})
+    assert service.store.settings["update_channel"] == "beta"
     current_settings = service.store.path.read_bytes()
     restored=controls.restore_preview(service,{"confirm":True,"backup_id":ident});assert restored["ok"]
     worker=_execute_preview_worker(repo,env);assert worker.returncode==0,(repo/".git"/safety.LOG_NAME).read_text()

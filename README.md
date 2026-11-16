@@ -1,4 +1,6 @@
-# ROMarr
+# <img src="docs/img/brand/romarr-icon.svg" alt="" width="44" height="40" align="absmiddle"> ROMarr
+
+![ROMarr — Find, verify and organize your game library](docs/img/brand/romarr-hero-banner.jpg)
 
 The *arr for games.
 
@@ -8,8 +10,29 @@ Find games, verify ROMs, and import them into your library.
 
 [![Tests and images](https://github.com/BlizzHacker/romarr/actions/workflows/docker.yml/badge.svg)](https://github.com/BlizzHacker/romarr/actions/workflows/docker.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![GG Requestz](https://img.shields.io/badge/Companion-GG_Requestz-8A2BE2?logo=gamepad&logoColor=white)](https://github.com/BlizzHacker/ggrequestz)
+[![RomM Ecosystem](https://img.shields.io/badge/Ecosystem-RomM-blue?logo=gamepad&logoColor=white)](https://github.com/rommapp/romm)
+[![r/romm](https://img.shields.io/badge/Reddit-r%2Fromm-FF4500?logo=reddit&logoColor=white)](https://www.reddit.com/r/romm)
+[![r/arr](https://img.shields.io/badge/Reddit-r%2Farr-FF4500?logo=reddit&logoColor=white)](https://www.reddit.com/r/arr)
+[![Android Beta](https://img.shields.io/badge/Google_Play-Android_Beta-brightgreen?logo=googleplay&logoColor=white)](https://play.google.com/apps/internaltest/4700888732790045566)
+[![Android APK](https://img.shields.io/badge/Android-Direct_APK-3DDC84?logo=android&logoColor=white)](https://github.com/BlizzHacker/romarr/releases)
+[![Argosy Compatible](https://img.shields.io/badge/Frontend-Argosy_Launcher-purple?logo=android&logoColor=white)](https://github.com/rommapp/argosy-launcher)
+[![Unraid Community Apps](https://img.shields.io/badge/Unraid-Community_Apps-orange?logo=unraid&logoColor=white)](https://ca.unraid.net/apps/romarr-04jslct0riva81?q=romarr)
+[![Microsoft Store](https://img.shields.io/badge/Microsoft_Store-Windows_App-0078D4?logo=windows&logoColor=white)](https://github.com/BlizzHacker/romarr/releases)
+[![Submit Package](https://img.shields.io/badge/Package_Submissions-Submit_ROMarr-purple?logo=github&logoColor=white)](docs/SUBMISSIONS.md)
 
-**[Install](#install)** · **[First setup](docs/GETTING-STARTED.md)** · **[Plugins](docs/PLUGINS.md)** · **[Roadmap](ROADMAP.md)** · **[Releases](https://github.com/BlizzHacker/romarr/releases)** · **[Privacy](docs/PRIVACY.md)**
+**[Install](#install)** · **[First setup](docs/GETTING-STARTED.md)** · **[GG Requestz](https://github.com/BlizzHacker/ggrequestz)** · **[RomM](https://github.com/rommapp/romm)** · **[r/romm](https://www.reddit.com/r/romm)** · **[r/arr](https://www.reddit.com/r/arr)** · **[Android App & APK](docs/ANDROID.md)** · **[Unraid App](https://ca.unraid.net/apps/romarr-04jslct0riva81?q=romarr)** · **[Plugins](docs/PLUGINS.md)** · **[Roadmap](ROADMAP.md)** · **[Releases](https://github.com/BlizzHacker/romarr/releases)** · **[Submit Package](docs/SUBMISSIONS.md)** · **[Privacy](docs/PRIVACY.md)**
+
+> [!NOTE]
+> **Community & Where You'll Most Likely Find Me:**  
+> Hang out and chat in the community! You'll most likely find me on Reddit in **[r/romm](https://www.reddit.com/r/romm)** and **[r/arr](https://www.reddit.com/r/arr)** (along with [r/selfhosted](https://www.reddit.com/r/selfhosted)). Connect with companion game request workflows via **[GG Requestz](https://github.com/BlizzHacker/ggrequestz)** and frontend setups via **[RomM](https://github.com/rommapp/romm)**.
+
+> [!TIP]
+> **Android Beta, Handhelds & Argosy Launcher Integration!**  
+> Run ROMarr natively on your phone, tablet, or gaming handheld (Ayn Odin, Retroid Pocket, Anbernic, Logitech G Cloud):  
+> - **Google Play Test Track:** [Join the Android Beta on Google Play](https://play.google.com/apps/internaltest/4700888732790045566) (12 testers needed)  
+> - **Direct APK Sideload:** [Download the Standalone APK](https://github.com/BlizzHacker/romarr/releases) with bundled Chaquopy Python runtime — no Termux or Docker required.  
+> - **Argosy Launcher & Emulator Pairing:** Connect [Argosy Launcher](https://github.com/rommapp/argosy-launcher) directly to ROMarr via native RomM API support, and launch games into RetroArch, Dolphin, PPSSPP, NetherSX2, DuckStation, and Citra with one tap!
 
 ![ROMarr interactive search, with scores and reasons beside each result](docs/img/interactive-search-live.png)
 
@@ -28,6 +51,8 @@ Forks and code reuse are welcome; independent projects should use their own bran
 | Connect an AI assistant | **Hub → Library Shell → AI agents (MCP)** | Your server URL and API key. [Claude, Codex, Hermes and Antigravity setup](docs/MCP.md). |
 | Reclaim space taken by exact duplicates | **Stats → Audit** | A local library; review the preview before moving duplicates to quarantine. Restore is available. |
 | Add another game source | **Hub → Plugins** | ROM Hub, included in the Windows app and amd64/arm64 Docker images. [Details](docs/PLUGINS.md). |
+| Adopt an existing RomM collection | **Settings → Library & Hub** | Point ROMarr at RomM's roms directory, keep DAT verification automatic, and pair with [Argosy Launcher](docs/ANDROID.md#argosy-launcher-and-frontend-integration). |
+| Sync with Handhelds & Emulators | **Hub → Handheld Fleet** | Sync verified libraries to Android handhelds, Steam Deck, Batocera, RetroPie, and muOS with 1,200+ emulator presets. |
 
 You can use a plain **folder** as your library. RomM, Gaseous, Retrom and other library integrations are optional. Your emulator or frontend plays the games; ROMarr handles finding, checking and importing files.
 
@@ -39,13 +64,16 @@ Imports can be checked against DAT checksums. The result is **verified**, **bad 
 
 | Method | Best fit | Guide |
 |---|---|---|
+| **Unraid** | Unraid NAS & server arrays | [Install from Unraid Community Applications](https://ca.unraid.net/apps/romarr-04jslct0riva81?q=romarr) |
 | **Docker Compose** | Most servers, NAS hosts, or Docker Desktop | [Quick start below](#docker-compose-quick-start) |
-| **Proxmox LXC** | A Proxmox host | [LXC installer](docs/INSTALL.md#proxmox-lxc) |
 | **Windows app** | Windows 10/11 on x64 | [Download the Windows ZIP](docs/INSTALL.md#windows-app), extract it and double-click **ROMarr.exe**. No Python, PowerShell or .NET installation required. |
-| **Android preview** | Android 7+ on ARM64 or x86_64; local core or an HTTPS server | [Android setup and limits](docs/ANDROID.md). Native file import and compatible emulator handoff. |
+| **macOS, Linux & SteamOS** | Desktop PCs, MacBooks, Steam Deck & Handhelds (Non-Server) | [Standalone Desktop Launcher](docs/INSTALL.md#macos-linux--steamos-standalone-launcher-non-server-users): run `./scripts/start-desktop.sh` |
+| **Android & Handhelds** | Android 7+ on ARM64/x86_64 (Odin, Retroid, phones, tablets) | [Join Google Play Beta](https://play.google.com/apps/internaltest/4700888732790045566) or download APK from [Releases](https://github.com/BlizzHacker/romarr/releases). Embedded Chaquopy core, emulator handoff, and [Argosy Launcher](docs/ANDROID.md#argosy-launcher-and-frontend-integration) compatibility. Read [Android setup](docs/ANDROID.md). |
+| **Proxmox LXC** | A Proxmox host | [LXC installer](docs/INSTALL.md#proxmox-lxc) |
 | **Chrome / ChromeOS** | A running ROMarr server | [Install the web app or server-launcher extension](docs/CHROME.md). Online connection required. |
 | **Linux/macOS source checkout** | Development or an existing Python host | [Source instructions](docs/INSTALL.md#from-source) |
 | **Home Assistant add-on** | A Home Assistant installation | [Add-on instructions](docs/INSTALL.md#home-assistant); this packaging needs more field testing. |
+| **Package Submissions** | Community Catalogs (TrueNAS, CasaOS, Flathub) | [Submission Directory & Registry Guides](docs/SUBMISSIONS.md) |
 
 For Docker, have Docker Engine or Docker Desktop with Compose installed. Reserve port **6868** and choose where settings, downloads, and ROMs will live. ROMs and download space are usually much larger than the app itself.
 
@@ -115,7 +143,15 @@ Source access, available files, credentials and platform support vary. Check the
 
 ## Play with Cartridge
 
-[Cartridge for Windows](https://github.com/BlizzHacker/romarr/releases/download/v1.8.0/Cartridge-Windows-Portable-0.2.0-x64.exe) and [Cartridge for Xbox](https://github.com/BlizzHacker/RommForXbox) are optional players for a RomM library. Choose the app for your device. ROMarr manages acquisition and imports; Cartridge connects to RomM to browse and play. You can keep using your existing frontend instead. The Windows app's **Cartridge** menu and the Setup Guide link to both.
+**Cartridge** is the dedicated player ecosystem for self-hosted game libraries, connecting seamlessly to [RomM](https://romm.app) or directly to **ROMarr's embedded RomM-API backend**. While ROMarr finds, verifies, and organizes your files, Cartridge provides controller-first frontends to browse, sync saves, and launch games across your screens:
+
+| Platform | Client | Best Fit | Features & Downloads |
+|---|---|---|---|
+| **Windows** | [Cartridge for Windows](https://github.com/BlizzHacker/Cartridge) | Desktop PCs, laptops, and Windows handhelds (ROG Ally, Legion Go) | Embedded RomM console player, standalone window, no external browser required. [Download Portable EXE](https://github.com/BlizzHacker/romarr/releases/download/v1.8.0/Cartridge-Windows-Portable-0.2.0-x64.exe) or visit [BlizzHacker/Cartridge](https://github.com/BlizzHacker/Cartridge). |
+| **Xbox** | [Cartridge for Xbox](https://github.com/BlizzHacker/Cartridge) | Xbox Series X\|S and Xbox One consoles | Native UWP/WebView2 gamepad experience, big-screen TV navigation, and EmulatorJS cores. Available on [Microsoft Store (App ID: 9MXC51W17LH4)](https://apps.microsoft.com/detail/9MXC51W17LH4) and [BlizzHacker/Cartridge](https://github.com/BlizzHacker/Cartridge). |
+| **Android** | [Cartridge for Android](https://github.com/BlizzHacker/Cartridge) | Retro handhelds (Odin 2, Retroid Pocket, Anbernic), Android TV, tablets, phones | Gamepad-native launcher with bidirectional save-sync, rich metadata, on-demand downloads, and automated emulator handoff to RetroArch, Dolphin, PPSSPP, and NetherSX2. [Download APK from Releases](https://github.com/BlizzHacker/Cartridge/releases) or visit [BlizzHacker/Cartridge](https://github.com/BlizzHacker/Cartridge). |
+
+You can use Cartridge alongside your existing setup or keep using your favorite frontend (Playnite, LaunchBox, ES-DE, Pegasus). The Windows desktop app's **Cartridge** menu and the setup guides link to all three clients.
 
 ## Help and documentation
 

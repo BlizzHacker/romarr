@@ -63,6 +63,7 @@ from . import hub  # ROM Hub bridge -- the Cartridge plugin layer
 from . import clamav, scanners, nup, mdm
 from .emulators import EmulatorHub
 from .libretro import CoreHub
+from .cartridge import CartridgeHub
 from .emulator_catalog import resource_catalog
 from .dat import DatIndex, parse_dat
 from .decompress import run_batch as run_decompress_batch, scan_compressed
@@ -7007,6 +7008,70 @@ class ROMarr:
 
         targets = self._portal_targets()
         wanted = str(url or "").strip() or self.active_portal_url()
+        sub_path = str(path or "").strip()
+        if not sub_path and wanted:
+            parts = urlsplit(wanted)
+            sub_path = parts.path or "/"
+            if parts.query:
+                sub_path = f"{sub_path}?{parts.query}"
+        if not sub_path.startswith("/"):
+            sub_path = "/" + sub_path
+
+        # Standalone ROMarr local emulation & Argosy fallback response when no external library is configured
+        if not wanted or not targets:
+            if sub_path.startswith("/api/heartbeat"):
+                payload = {
+                    "SYSTEM": {
+                        "version": getattr(self, "VERSION", "1.10.1"),
+                        "romm_version": "5.1.0-romarr",
+                        "arch": "x86_64",
+                        "os": "Linux"
+                    },
+                    "METADATA_SOURCES": {
+                        "libretro_api_enabled": True,
+                        "steam_grid_db_enabled": True
+                    },
+                    "SAVE_SYNC": {
+                        "enabled": True,
+                        "snapshots_enabled": True
+                    }
+                }
+                return 200, "application/json", json.dumps(payload).encode("utf-8")
+            if sub_path.startswith("/api/users/me"):
+                payload = {
+                    "id": 1,
+                    "username": "romarr",
+                    "enabled": True,
+                    "role": "admin",
+                    "avatar_path": None,
+                    "updated_at": None,
+                    "ra_username": None
+                }
+                return 200, "application/json", json.dumps(payload).encode("utf-8")
+            if sub_path.startswith("/api/permissions/me"):
+                payload = {
+                    "is_admin": True,
+                    "hidden": {"platforms": [], "roms": []}
+                }
+                return 200, "application/json", json.dumps(payload).encode("utf-8")
+            if sub_path.startswith("/api/platforms"):
+                plats = []
+                for idx, p in enumerate(PLATFORMS, 1):
+                    plats.append({
+                        "id": idx,
+                        "slug": p.slug,
+                        "name": p.name,
+                        "fs_slug": p.slug,
+                        "rom_count": 0,
+                        "display_name": p.name,
+                        "url_logo": None,
+                        "firmware": []
+                    })
+                return 200, "application/json", json.dumps(plats).encode("utf-8")
+            if sub_path.startswith("/api/roms"):
+                return 200, "application/json", b'{"items":[],"total":0,"page":1,"size":50,"pages":0}'
+            return 400, "application/json", b'{"error":"http(s) URL required"}'
+
         parts = urlsplit(wanted)
         if parts.scheme not in ("http", "https") or not parts.netloc:
             return 400, "application/json", b'{"error":"http(s) URL required"}'
@@ -7828,7 +7893,9 @@ def is_portal_subpath(path: str) -> bool:
                         "/api/stats", "/api/tasks", "/api/playlists",
                         "/api/saves", "/api/states", "/api/screenshots",
                         "/api/platforms/", "/api/platform", "/api/activity",
-                        "/api/client_tokens", "/api/play_sessions",
+                        "/api/client_tokens", "/api/client-tokens", "/api/auth/device",
+                        "/api/search/cover", "/api/search",
+                        "/api/play_sessions",
                         "/api/recommendations", "/api/music", "/api/sync",
                         "/api/feeds", "/api/logs", "/api/export",
                         "/api/netplay", "/api/permissions", "/api/memory_cards",
@@ -8338,6 +8405,11 @@ def make_handler(service: ROMarr):
                     return self._json(200, result)
                 except (ValueError, requests.RequestException):
                     return self._json(400, {"error": "Could not check this upstream release. Use its downloads page."})
+            if route.path == "/api/v1/cartridge/status":
+                try:
+                    return self._json(200, CartridgeHub(service.store.path.parent).status())
+                except Exception as err:
+                    return self._json(400, {"error": str(err)})
             if route.path == "/api/v1/downloadclient/mdm":
                 return self._json(200, service.mdm_capability())
             if route.path == "/metrics":
@@ -9703,6 +9775,29 @@ def make_handler(service: ROMarr):
                         scanners.ScanUnavailable) as err:
                     log.warning("Emulator installation failed: %s", type(err).__name__)
                     return self._json(400, {"error": str(err) if isinstance(err, (ValueError, scanners.ScanUnavailable)) else "Emulator installation failed"})
+            if route.path == "/api/v1/cartridge/install":
+                try:
+                    cartridge_hub = CartridgeHub(service.store.path.parent)
+                    result = cartridge_hub.install(scanner=service.scan_installation)
+                    return self._json(200, result)
+                except (ValueError, OSError, requests.RequestException, scanners.ScanUnavailable) as err:
+                    log.warning("Cartridge installation failed: %s", type(err).__name__)
+                    return self._json(400, {"error": str(err) if isinstance(err, (ValueError, scanners.ScanUnavailable)) else "Cartridge installation failed"})
+            if route.path == "/api/v1/cartridge/launch":
+                try:
+                    cartridge_hub = CartridgeHub(service.store.path.parent)
+                    port_val = service.port if hasattr(service, "port") else 6868
+                    result = cartridge_hub.launch(port=port_val, game_id=str(body.get("game_id") or "") or None)
+                    return self._json(200, result)
+                except Exception as err:
+                    return self._json(400, {"error": str(err)})
+            if route.path == "/api/v1/emulators/plug-and-play":
+                try:
+                    cartridge_hub = CartridgeHub(service.store.path.parent)
+                    result = cartridge_hub.plug_and_play_setup()
+                    return self._json(200, result)
+                except Exception as err:
+                    return self._json(400, {"error": str(err)})
             if route.path == "/api/v1/security/inspect":
                 try:
                     return self._json(200, service.security_inspect(

@@ -71,8 +71,13 @@ public sealed class MainWindow : Form
         file.DropDownItems.Add("View desktop log", null, (_,_) => { if (File.Exists(logPath)) OpenExternal(logPath); });
         file.DropDownItems.Add("Exit", null, (_,_) => Close());
         var companion = new ToolStripMenuItem("Cartridge");
+        companion.DropDownItems.Add("Auto-install Cartridge Player", null, (_,_) => RunCartridgeAction("/api/v1/cartridge/install"));
+        companion.DropDownItems.Add("Launch Cartridge Player", null, (_,_) => LaunchCartridge());
+        companion.DropDownItems.Add("Plug & Play Setup (All Emulators)", null, (_,_) => RunCartridgeAction("/api/v1/emulators/plug-and-play"));
+        companion.DropDownItems.Add(new ToolStripSeparator());
         companion.DropDownItems.Add("Get Cartridge for Windows", null, (_,_) => OpenExternal("https://github.com/BlizzHacker/romarr/releases/download/v1.8.0/Cartridge-Windows-Portable-0.2.0-x64.exe"));
         companion.DropDownItems.Add("Get Cartridge for Xbox", null, (_,_) => OpenExternal("https://apps.microsoft.com/detail/9MXC51W17LH4"));
+        companion.DropDownItems.Add("Get Cartridge for Android", null, (_,_) => OpenExternal("https://github.com/BlizzHacker/Cartridge/releases"));
         var help = new ToolStripMenuItem("Help");
         help.DropDownItems.Add("Getting started", null, (_,_) => OpenExternal("https://github.com/BlizzHacker/romarr/blob/main/docs/GETTING-STARTED.md"));
         help.DropDownItems.Add("ROM Hub plugins", null, (_,_) => OpenHubPage());
@@ -447,6 +452,60 @@ public sealed class MainWindow : Form
             || (server.Scheme != Uri.UriSchemeHttp && server.Scheme != Uri.UriSchemeHttps)) return false;
         browser.CoreWebView2.Navigate(server.GetLeftPart(UriPartial.Authority) + "/#hub");
         return true;
+    }
+
+    async void RunCartridgeAction(string endpoint)
+    {
+        if (string.IsNullOrEmpty(origin) || (!remoteConnected && backend is not { HasExited: false }))
+        {
+            MessageBox.Show(this, "Start ROMarr or connect to a server before running Cartridge setup.", "Cartridge", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        try
+        {
+            status.Text = "Running Cartridge action...";
+            using var client = new HttpClient { Timeout = TimeSpan.FromMinutes(2) };
+            var response = await client.PostAsync(origin + endpoint, null);
+            var content = await response.Content.ReadAsStringAsync();
+            if (response.IsSuccessStatusCode)
+            {
+                status.Text = "Cartridge action completed.";
+                MessageBox.Show(this, "Completed successfully:\n\n" + content, "Cartridge", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            else
+            {
+                status.Text = "Cartridge action failed.";
+                MessageBox.Show(this, "Failed (" + (int)response.StatusCode + "):\n\n" + content, "Cartridge", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+        catch (Exception ex)
+        {
+            status.Text = "Cartridge action error: " + ex.Message;
+            MessageBox.Show(this, "Could not run Cartridge action: " + ex.Message, "Cartridge", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+    }
+
+    async void LaunchCartridge()
+    {
+        if (string.IsNullOrEmpty(origin) || (!remoteConnected && backend is not { HasExited: false }))
+        {
+            MessageBox.Show(this, "Start ROMarr or connect to a server before launching Cartridge.", "Cartridge", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return;
+        }
+        try
+        {
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+            var response = await client.PostAsync(origin + "/api/v1/cartridge/launch", null);
+            var content = await response.Content.ReadAsStringAsync();
+            if (!response.IsSuccessStatusCode)
+            {
+                MessageBox.Show(this, "Could not launch Cartridge:\n\n" + content, "Cartridge", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            }
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(this, "Could not launch Cartridge: " + ex.Message, "Cartridge", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
     }
 
     /// <summary>Connects to a user-selected server without starting a local backend.</summary>

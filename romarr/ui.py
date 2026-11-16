@@ -129,6 +129,7 @@ a:hover{text-decoration:underline;text-underline-offset:2px}
   border-bottom:1px solid var(--line-soft);flex:none;overflow:hidden;
   white-space:nowrap}
 #brand span{color:var(--accent-text)}
+.brand-icon{width:30px;height:27px;margin-right:9px;flex:none;display:block}
 #navwrap{flex:1;overflow-y:auto;padding:6px 0 10px}
 .navgroup{padding:8px 0 2px}
 .navhead{padding:6px 20px;font-size:10.5px;font-weight:600;
@@ -841,7 +842,15 @@ def _theme_control_html() -> str:
         '<label class="sw pick" title="Any colour you like">'
         f'<input type="color" id="accent-pick" value="{ACCENTS[0][0]}" '
         'aria-label="Custom accent colour"></label>'
-        '</div></div></details></div>'
+        '</div></div></details>'
+        '<a id="android-beta-link" href="https://play.google.com/apps/internaltest/4700888732790045566" '
+        'target="_blank" rel="noopener noreferrer" class="nav" '
+        'style="margin:8px 10px 4px;padding:7px 10px;font-size:12px;font-weight:600;'
+        'color:var(--accent-text,#3ea6ff);background:var(--accent-soft,rgba(62,166,255,0.1));'
+        'border:1px solid var(--border,#333);border-radius:6px;display:flex;align-items:center;gap:7px;">'
+        '<span aria-hidden="true">📲</span><span>Android Beta</span>'
+        '<span style="margin-left:auto;font-size:10px;opacity:.7">Play ↗</span></a>'
+        '</div>'
     )
 
 # The nav, in *arr order. `count` names a stat the badge reads.
@@ -2998,66 +3007,77 @@ function sharingEditor(peer){
 RENDER.portal=async()=>{
   const [libs, fleet, mcp, sys] = await Promise.all([
     j('/api/v1/library').catch(()=>({items:[]})),
-    j('/api/v1/hub/fleet').catch(()=>({profiles:[],igir:{}})),
+    j('/api/v1/hub/fleet').catch(()=>({profiles:[],kinds:{},igir:{}})),
     j('/api/v1/mcp').catch(()=>({tools:[],mcp_client_config:{}})),
     j('/api/v1/system/status').catch(()=>({}))
   ]);
   const servers=(libs.items||[]).filter(l=>l.url).map(l=>({...l}));
   if(sys&&sys.ggrequestz&&sys.ggrequestz.url&&!servers.some(s=>s.url===sys.ggrequestz.url)){
-    servers.push({name:'GG Requestz',type:'ggrequestz',url:sys.ggrequestz.url,path:sys.library_path||'/mnt/roms'});
+    servers.push({name:'GG Requestz',type:'ggrequestz',url:sys.ggrequestz.url,public_url:sys.ggrequestz.public_url||sys.ggrequestz.url,path:sys.library_path||'/roms'});
   }
-  if(location.hostname.includes('moveweight.com')&&!servers.some(s=>s.url==='https://romm.moveweight.com')){
-    servers.push({name:'RomM (Public)',type:'romm',url:'https://romm.moveweight.com',path:sys.library_path||'/mnt/roms'});
-  }
-  let tab='shell';
+  let tab=window._portalTab||'shell';
   let currentUrl=window._portalTargetUrl||(servers[0]&&servers[0].url)||'';
   let currentName=window._portalTargetName||(servers[0]&&servers[0].name)||'Library Server';
   let useProxy=window._portalUseProxy!==undefined?window._portalUseProxy:true;
   let showShieldHelp=false;
 
+  const isConfiguredOrigin=(u)=>{
+    if(!u) return false;
+    try{
+      const target=new URL(u).origin;
+      return servers.some(s=>{try{return new URL(s.url).origin===target;}catch{return false;}});
+    }catch{return false;}
+  };
+
   const draw=()=>{
     const tabBar=`<div class="cat-bar" style="margin-bottom:14px">
-      <span class="chip${tab==='shell'?' on':''}" data-ptab="shell">Supportive Library Shell (RomM / Retrom / Gaseous)</span>
-      <span class="chip${tab==='fleet'?' on':''}" data-ptab="fleet">Device & Network Fleet (ES-DE / RetroPie / ArcadePunks / Argosy / Grout)</span>
-      <span class="chip${tab==='mcp'?' on':''}" data-ptab="mcp">AI agents (MCP)</span>
+      <span class="chip${tab==='shell'?' on':''}" data-ptab="shell">Library Shell (RomM / Retrom / Gaseous)</span>
+      <span class="chip${tab==='fleet'?' on':''}" data-ptab="fleet">Device Fleet (ES-DE / RetroPie / Batocera / Steam Deck / Argosy)</span>
+      <span class="chip${tab==='mcp'?' on':''}" data-ptab="mcp">AI Agents (MCP)</span>
     </div>`;
 
     if(tab==='shell'){
       const srvBtns=servers.map(s=>
         `<button class="chip${currentUrl===s.url?' on':''}" data-srvurl="${esc(s.url)}" data-srvname="${esc(s.name)}">
-          ${esc(s.name)} <span class="n">(${esc(s.type)})</span>
+          ${esc(s.name)} <span class="n">(${esc(s.type||'library')})</span>
         </button>`
       ).join(' ');
+      const activeSrv=servers.find(s=>s.url===currentUrl)||null;
+      const canProxy=isConfiguredOrigin(currentUrl);
+      const effectiveProxy=useProxy&&canProxy;
       const frameSrc=currentUrl
-        ? (useProxy ? ('/api/v1/portal/proxy?url='+encodeURIComponent(currentUrl)) : currentUrl)
+        ? (effectiveProxy ? ('/api/v1/portal/proxy?url='+encodeURIComponent(currentUrl)) : currentUrl)
         : '';
+      const popOutHref=activeSrv?(activeSrv.public_url||activeSrv.url):currentUrl;
 
       $('#page').innerHTML=`<div class="card">
-        <h3>Supportive Library Shell — Absorb & Empower Without Replacing</h3>
-        <p class="help">Embed <b>RomM</b>, <b>Retrom</b>, <b>Gaseous</b>, <b>Gameyfin</b>, or <b>GG Requestz</b> directly inside ROMarr.
-          Use the deep root controls below to trigger rescans, run Igir v5.8.0 1G1R verification, seed Netplay hashes, or export frontend manifests while working inside your library UI.</p>
+        <h3>Library Shell</h3>
+        <p class="help">Open your configured library frontend (<b>RomM</b>, <b>Retrom</b>, <b>Gaseous</b>, <b>Gameyfin</b>, or <b>GG Requestz</b>) right inside ROMarr, or pop it out in a new tab. Add or edit library servers in <a href="#libraries">Settings → Libraries</a>.</p>
         ${tabBar}
         <div class="row" style="margin-bottom:10px">
-          ${srvBtns||'<span class="help">No library server URL configured yet — enter one below or add one in Settings → Libraries.</span>'}
-          <input id="portal-url" placeholder="https://romm.local or http://192.168.0.6:8080" value="${esc(currentUrl)}" style="flex:1;min-width:240px;padding:7px 11px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--r-sm)">
+          ${srvBtns||'<span class="help">No library server configured yet — add one in <a href="#libraries">Settings → Libraries</a> or enter a URL below.</span>'}
+          <input id="portal-url" placeholder="http://192.168.1.50:8080" value="${esc(currentUrl)}" style="flex:1;min-width:220px;padding:7px 11px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--r-sm)">
           <button class="btn" id="portal-load">Load in Shell</button>
-          <button class="btn ghost" id="portal-rescan">Rescan API</button>
-          <button class="btn ghost" id="portal-1g1r">Igir 1G1R Sort</button>
+          <button class="btn ghost" id="portal-rescan">Refresh Library</button>
+          <button class="btn ghost" id="portal-1g1r">Preview 1G1R (Igir)</button>
           <button class="btn ghost" id="portal-hashes">Seed Netplay Hashes</button>
-          <button class="btn ${useProxy?'':'ghost'}" id="portal-shield" title="Toggle Same-Origin Authenticated Proxy Shield">${useProxy?'Shield: Same-Origin Proxy (ON)':'Framing / CSP Shield (Direct)'}</button>
-          ${currentUrl?`<a class="btn ghost" href="${esc(currentUrl.includes('192.168.0.94') && location.hostname.includes('moveweight.com') ? 'https://romm.moveweight.com' : currentUrl)}" target="_blank" rel="noopener noreferrer">Pop Out</a>`:''}
+          <button class="btn ${effectiveProxy?'':'ghost'}" id="portal-shield" title="Toggle Same-Origin Authenticated Proxy">${effectiveProxy?'Proxy: Same-Origin (ON)':'Mode: Direct Iframe'}</button>
+          ${currentUrl?`<a class="btn ghost" href="${esc(popOutHref)}" target="_blank" rel="noopener noreferrer">Open in New Tab ↗</a>`:''}
         </div>
         <div id="portal-status"></div>
+        ${currentUrl&&!canProxy?`<div class="panel-note" style="margin-bottom:12px">
+          <b>Direct iframe mode:</b> <code>${esc(currentUrl)}</code> is not in <a href="#libraries">Settings → Libraries</a>, so ROMarr loads it directly in your browser instead of routing through <code>/api/v1/portal/proxy</code> (which only proxies configured library origins).
+        </div>`:''}
         ${showShieldHelp?`<div class="panel-note" style="margin-bottom:12px">
-          <b>Same-Origin Authenticated Proxy Shield (${useProxy?'Active':'Direct URL Mode'}):</b> ROMarr routes your configured library through <code>/api/v1/portal/proxy</code>, automatically attaching your stored library credentials and stripping <code>X-Frame-Options</code> so OIDC, cross-origin cookies, and HTTPS mixed-content blocks never break the embedded shell.
-          <button class="btn ghost sm" id="portal-toggle-mode" style="margin-left:8px">${useProxy?'Switch to Direct Iframe URL':'Switch to Same-Origin Proxy'}</button>
+          <b>Same-Origin Authenticated Proxy (${effectiveProxy?'Active':'Direct URL Mode'}):</b> For servers configured in <a href="#libraries">Settings → Libraries</a>, ROMarr can relay requests through <code>/api/v1/portal/proxy</code>, attaching your stored library credentials and removing frame-blocking headers so cross-origin cookies and mixed-content blocks do not break the embedded view.
+          ${canProxy?`<button class="btn ghost sm" id="portal-toggle-mode" style="margin-left:8px">${useProxy?'Switch to Direct Iframe URL':'Switch to Same-Origin Proxy'}</button>`:''}
         </div>`:''}
         ${currentUrl
           ? `<div style="border:1px solid var(--line);border-radius:var(--r-md);overflow:hidden;background:#0d1117;height:74vh">
                <iframe id="portal-frame" src="${esc(frameSrc)}" style="width:100%;height:100%;border:0"
                  allow="fullscreen; gamepad; autoplay; clipboard-read; clipboard-write"></iframe>
              </div>`
-          : `<div class="empty-cat"><b>Select or enter a Library URL above</b>Load RomM, Retrom, or Gaseous right inside this tab so you never have to leave ROMarr.</div>`}
+          : `<div class="empty-cat"><b>No library server selected</b>Choose a configured library above, add one in <a href="#libraries">Settings → Libraries</a>, or paste a URL to open it here.</div>`}
       </div>`;
 
       document.querySelectorAll('[data-srvurl]').forEach(b=>b.onclick=()=>{
@@ -3076,7 +3096,7 @@ RENDER.portal=async()=>{
       $('#portal-rescan').onclick=async()=>{
         $('#portal-status').innerHTML='<div class="panel-note">Triggering library rescan across connected backends…</div>';
         const r=await fetch('/api/v1/command',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'RefreshLibrary'})}).then(x=>x.json()).catch(()=>({}));
-        const msg=r.message||r.error||'Library rescan triggered via API.';
+        const msg=r.message||r.error||'Library rescan triggered.';
         $('#portal-status').innerHTML='<div class="panel-note" style="border-left-color:var(--ok)">'+esc(msg)+'</div>';
       };
       $('#portal-hashes').onclick=async()=>{
@@ -3086,74 +3106,155 @@ RENDER.portal=async()=>{
         $('#portal-status').innerHTML='<div class="panel-note" style="border-left-color:var(--ok)"><b>Netplay Hash Seed:</b> '+esc(msg)+'</div>';
       };
       $('#portal-1g1r').onclick=async()=>{
-        const activeSrv=servers.find(s=>s.url===currentUrl)||servers[0]||{};
-        const libPath=activeSrv.path||(sys&&sys.library_path)||'/mnt/roms';
-        $('#portal-status').innerHTML='<div class="panel-note">Running Igir v5.8.0 1G1R verification preview on <code>'+esc(libPath)+'</code>…</div>';
+        const srv=servers.find(s=>s.url===currentUrl)||servers[0]||{};
+        const libPath=srv.path||(sys&&sys.library_path)||'/roms';
+        $('#portal-status').innerHTML='<div class="panel-note">Building Igir 1G1R verification preview for <code>'+esc(libPath)+'</code>…</div>';
         const r=await fetch('/api/v1/hub/igir',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({input_paths:[libPath],output_path:libPath+'/{romm}',dry_run:true,preview_only:true})}).then(x=>x.json()).catch(()=>({}));
-        $('#portal-status').innerHTML='<div class="panel-note" style="border-left-color:var(--ok)"><b>Igir v5.8.0 1G1R Command:</b> <code>'+esc(r.command||'')+'</code></div>';
+        $('#portal-status').innerHTML='<div class="panel-note" style="border-left-color:var(--ok)"><b>Igir 1G1R Preview Command (changes nothing):</b><br><code>'+esc(r.command||'')+'</code></div>';
       };
     } else if(tab==='fleet'){
       const profiles=fleet.profiles||[];
-      const opts=profiles.map(p=>`<option value="${esc(p.id)}">${esc(p.name)} — ${esc(p.category)}</option>`).join('');
-      const cards=profiles.map(p=>`<div class="pcard">
+      const fileProfiles=profiles.filter(p=>(p.kind||'files')==='files');
+      const appProfiles=profiles.filter(p=>p.kind==='app');
+      const selectedId=window._fleetDeviceId||(fileProfiles[0]&&fileProfiles[0].id)||(profiles[0]&&profiles[0].id)||'es-de';
+      const selected=profiles.find(p=>p.id===selectedId)||profiles[0]||{id:'es-de',kind:'files',default_path:'~/ROMs',default_ssh_host:'user@device.local',igir_token:'{es}'};
+      const isApp=selected.kind==='app';
+      const defaultLibUrl=(servers[0]&&(servers[0].public_url||servers[0].url))||location.origin;
+      const defaultSrc=(sys&&sys.library_path)||'/roms';
+      const igirInfo=fleet.igir||{};
+      const igirBadge=igirInfo.available
+        ? `<span class="pill" style="border-color:var(--ok);color:var(--ok)">Igir ${esc(igirInfo.version||'installed')} ready</span>`
+        : `<span class="pill">Runs via <code>npx igir@latest</code> or local Igir</span>`;
+
+      const opts=[
+        `<optgroup label="Copy games onto the device's ROM folder">`,
+        ...fileProfiles.map(p=>`<option value="${esc(p.id)}"${p.id===selected.id?' selected':''}>${esc(p.name)}</option>`),
+        `</optgroup>`,
+        `<optgroup label="App on the device connects to your library server">`,
+        ...appProfiles.map(p=>`<option value="${esc(p.id)}"${p.id===selected.id?' selected':''}>${esc(p.name)}</option>`),
+        `</optgroup>`
+      ].join('');
+
+      const renderCard=(p)=>`<div class="pcard" data-pickdev="${esc(p.id)}" style="cursor:pointer;${p.id===selected.id?'border-color:var(--acc)':''}">
         <h4>${esc(p.name)}</h4>
-        <div class="meta"><span class="pill">${esc(p.category)}</span> <span class="pill">${esc(p.protocol)}</span> <span class="pill">${esc(p.igir_token)}</span></div>
+        <div class="meta">
+          <span class="pill">${esc(p.kind==='app'?'App / Feed':'ROM Folder')}</span>
+          <span class="pill">${esc(p.category)}</span>
+          <span class="pill">${esc(p.protocol)}</span>
+          ${p.kind==='files'?`<span class="pill">Folder layout: ${esc(p.igir_token)}</span>`:''}
+        </div>
         <div class="desc">${esc(p.description)}</div>
-        <div class="help">Default Path: <code>${esc(p.default_path)}</code></div>
-      </div>`).join('');
+        ${p.default_path?`<div class="help">Default ROM folder: <code>${esc(p.default_path)}</code></div>`:''}
+      </div>`;
 
       $('#page').innerHTML=`<div class="card">
-        <h3>Multi-Device & Network Library Fleet Manager</h3>
-        <p class="help">Synchronize, verify (1G1R via Igir v5.8.0), and export metadata (<code>gamelist.xml</code>, Playnite, LaunchBox, WebDAV, or RomM API) across every device on your LAN, SMB/NFS shares, Tailscale mesh, or cloud network.</p>
+        <div class="row" style="justify-content:space-between;align-items:center">
+          <h3 style="margin:0">Device Fleet</h3>
+          ${igirBadge}
+        </div>
+        <p class="help" style="margin-top:6px">Get games onto handhelds, living-room boxes, and consoles in two ways: <b>copy verified ROMs into a device's ROM folder</b> (ES-DE, RetroPie, Batocera, EmuDeck, Android handhelds), or <b>point a device app at your library server</b> (Argosy, Grout, DeckRommSync, RetroArch cloud saves, console feeds). Plans are <b>non-destructive by default</b> — existing files on the device are never deleted unless Mirror is checked.</p>
         ${tabBar}
         <div class="panels" style="margin-top:8px">
-          <div class="field"><label>Device / Setup Profile</label>
+          <div class="field"><label>Device or App</label>
             <select id="fl-dev" style="padding:9px 12px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--r-sm)">${opts}</select>
           </div>
-          <div class="field"><label>Network Transport</label>
-            <select id="fl-trans" style="padding:9px 12px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--r-sm)">
-              <option value="local">Local / Mounted NAS / SMB / NFS Share</option>
-              <option value="ssh">SSH / rsync over LAN or Tailscale (RetroPie / Batocera / Grout / Deck)</option>
-              <option value="rclone">Cloud / rclone Remote (WebDAV / S3 / Nextcloud)</option>
-            </select>
-          </div>
-          <div class="field"><label>Target Device Path or Share</label><input id="fl-path" value="/home/pi/RetroPie/roms/{platform}"></div>
-          <div class="field"><label>SSH / Network Host (if SSH/Tailscale)</label><input id="fl-host" value="pi@retropie.local"></div>
-          <div class="field"><label>Source ROM Library Root</label><input id="fl-src" value="/library/roms"></div>
-          <div class="field"><label>1G1R Region Priority (Igir v5.8.0)</label><input id="fl-reg" value="USA,WORLD,EUR,JPN"></div>
+          ${isApp?`
+            <div class="field"><label>Your Library Server URL (RomM or ROMarr)</label>
+              <input id="fl-liburl" value="${esc(window._fleetLibUrl||defaultLibUrl)}" placeholder="http://192.168.1.50:8080">
+            </div>
+          `:`
+            <div class="field"><label>How ROMarr Reaches the Device</label>
+              <select id="fl-trans" style="padding:9px 12px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--r-sm)">
+                <option value="local">Local folder or mounted SMB / NFS share / SD card</option>
+                <option value="ssh">SSH + rsync over LAN or Tailscale (RetroPie / Batocera / Steam Deck)</option>
+                <option value="rclone">rclone remote (WebDAV / S3 / Nextcloud / cloud drive)</option>
+              </select>
+            </div>
+            <div class="field"><label>Device ROM Folder (Igir adds <code>${esc(selected.igir_token)}</code> per platform)</label>
+              <input id="fl-path" value="${esc(selected.default_path)}">
+            </div>
+            <div class="field"><label>SSH Host (when using SSH + rsync)</label>
+              <input id="fl-host" value="${esc(selected.default_ssh_host||'pi@retropie.local')}">
+            </div>
+            <div class="field"><label>Source ROM Library Folder</label>
+              <input id="fl-src" value="${esc(defaultSrc)}">
+            </div>
+            <div class="field"><label>1G1R Region Priority</label>
+              <input id="fl-reg" value="USA,WORLD,EUR,JPN">
+            </div>
+          `}
         </div>
-        <div class="row" style="margin-top:8px">
-          <button class="btn" id="fl-plan">Build 1G1R Device Sync Plan</button>
-          <a class="btn ghost" href="/api/v1/frontend/export?format=esde" target="_blank">Export ES-DE / RetroPie gamelist.xml</a>
-          <a class="btn ghost" href="/api/v1/frontend/export?format=playnite" target="_blank">Export Playnite JSON</a>
-          <a class="btn ghost" href="/api/v1/frontend/export?format=launchbox" target="_blank">Export LaunchBox XML</a>
+        ${isApp?'':`
+          <div class="row" style="margin-top:8px;gap:16px">
+            <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="fl-1g1r" checked> One game, one ROM (1G1R preferred region)</label>
+            <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="fl-mirror"> Mirror folder (delete device files not in this set)</label>
+          </div>
+        `}
+        <div class="row" style="margin-top:10px">
+          <button class="btn" id="fl-plan">${isApp?'Show Setup Steps':'Build Device Sync Plan'}</button>
+          ${isApp?'':`
+            <a class="btn ghost" href="/api/v1/frontend/export?format=esde" target="_blank">Export ES-DE / RetroPie gamelist.xml</a>
+            <a class="btn ghost" href="/api/v1/frontend/export?format=playnite" target="_blank">Export Playnite JSON</a>
+            <a class="btn ghost" href="/api/v1/frontend/export?format=launchbox" target="_blank">Export LaunchBox XML</a>
+          `}
         </div>
         <div id="fl-out"></div>
       </div>
-      <div class="card"><h3>Supported Device & Network Targets</h3><div class="pgrid">${cards}</div></div>`;
+      <div class="card">
+        <h3>Copy Games to a Device's ROM Folder</h3>
+        <p class="help">Frontends and OS images that read ROMs from a folder. Click a device to configure its sync plan.</p>
+        <div class="pgrid">${fileProfiles.map(renderCard).join('')}</div>
+      </div>
+      <div class="card">
+        <h3>Apps & Feeds That Connect to Your Library Server</h3>
+        <p class="help">Companion apps, WebDAV save sync, and console homebrew installers that talk to RomM or ROMarr directly — no ROM folder copy needed.</p>
+        <div class="pgrid">${appProfiles.map(renderCard).join('')}</div>
+      </div>`;
 
-      const devSel=$('#fl-dev');
-      devSel.onchange=()=>{
-        const found=profiles.find(x=>x.id===devSel.value);
-        if(found) $('#fl-path').value=found.default_path;
+      const runPlan=async()=>{
+        const payload=isApp
+          ? {device_id:$('#fl-dev').value, library_url:($('#fl-liburl')&&$('#fl-liburl').value.trim())||defaultLibUrl}
+          : {
+              device_id:$('#fl-dev').value,
+              transport:$('#fl-trans').value,
+              target_path:$('#fl-path').value.trim(),
+              ssh_host:$('#fl-host').value.trim(),
+              source_path:$('#fl-src').value.trim(),
+              prefer_regions:$('#fl-reg').value.split(',').map(s=>s.trim()).filter(Boolean),
+              single_1g1r:$('#fl-1g1r')?$('#fl-1g1r').checked:true,
+              mirror:$('#fl-mirror')?$('#fl-mirror').checked:false
+            };
+        const r=await fetch('/api/v1/hub/fleet',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).then(x=>x.json()).catch(()=>({}));
+        if(r.kind==='app'){
+          const stepsHtml=(r.setup||[]).map((s,i)=>`<div style="margin-top:6px"><b>${i+1}.</b> ${esc(s)}</div>`).join('');
+          $('#fl-out').innerHTML=`<div class="panel-note" style="margin-top:12px">
+            <b>Setup for ${esc((r.device&&r.device.name)||selected.name)}:</b>
+            ${stepsHtml}
+          </div>`;
+        } else {
+          const warnHtml=(r.warnings||[]).map(w=>`<div class="panel-note" style="margin-top:10px;border-left-color:var(--warn)"><b>Caution:</b> ${esc(w)}</div>`).join('');
+          const stepsHtml=(r.steps||[]).map((st,i)=>`<div style="margin-top:10px">
+            <b>${i+1}. ${esc(st.title)}:</b><br>
+            ${st.command?`<code>${esc(st.command)}</code>`:''}
+            ${st.url?`<a href="${esc(st.url)}" target="_blank">${esc(st.url)}</a>`:''}
+          </div>`).join('');
+          $('#fl-out').innerHTML=warnHtml+`<div class="panel-note" style="margin-top:12px">
+            <b>Sync plan for ${esc((r.device&&r.device.name)||selected.name)}</b> (target folder: <code>${esc(r.output_path||r.target_path||'')}</code>)
+            ${stepsHtml}
+          </div>`;
+        }
       };
-      $('#fl-plan').onclick=async()=>{
-        const r=await fetch('/api/v1/hub/fleet',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
-          device_id:$('#fl-dev').value,
-          transport:$('#fl-trans').value,
-          target_path:$('#fl-path').value.trim(),
-          ssh_host:$('#fl-host').value.trim(),
-          source_path:$('#fl-src').value.trim(),
-          prefer_regions:$('#fl-reg').value.split(',').map(s=>s.trim()).filter(Boolean),
-          single_1g1r:true
-        })}).then(x=>x.json()).catch(()=>({}));
-        $('#fl-out').innerHTML=`<div class="panel-note" style="margin-top:12px">
-          <b>1. Igir v5.8.0 1G1R Verification & Routing Command:</b><br>
-          <code>${esc(r.igir_command||'')}</code>
-          ${r.network_sync_command?`<br><br><b>2. LAN / Tailscale / Cloud Transfer Command:</b><br><code>${esc(r.network_sync_command)}</code>`:''}
-          ${r.gamelist_export_url?`<br><br><b>3. Frontend Metadata Manifest:</b> <a href="${esc(r.gamelist_export_url)}" target="_blank">${esc(r.gamelist_export_url)}</a>`:''}
-        </div>`;
+
+      $('#fl-dev').onchange=()=>{
+        window._fleetDeviceId=$('#fl-dev').value;
+        draw();
       };
+      document.querySelectorAll('[data-pickdev]').forEach(card=>card.onclick=()=>{
+        window._fleetDeviceId=card.dataset.pickdev;
+        draw();
+      });
+      $('#fl-plan').onclick=runPlan;
+      runPlan();
     } else if(tab==='mcp'){
       const endpoint=location.origin+'/api/v1/mcp';
       const configs={
@@ -3184,7 +3285,7 @@ RENDER.portal=async()=>{
     }
 
     document.querySelectorAll('[data-ptab]').forEach(c=>c.onclick=()=>{
-      tab=c.dataset.ptab; draw();
+      tab=c.dataset.ptab; window._portalTab=tab; draw();
     });
   };
   draw();
@@ -5139,7 +5240,17 @@ RENDER.emulators=async()=>{
   const version=pageVersion;
   const current=()=>version===pageVersion && activePage==='emulators';
   let offset=0, query='', mode='projects', hostPlatform='', request=0, inspection=0;
-  $('#page').innerHTML=`<div class="card"><h3>Emulator Hub</h3>
+  $('#page').innerHTML=`<div class="card" style="border:1px solid #3b82f6;"><h3>Cartridge &amp; Plug-and-Play Setup</h3>
+    <p>Turnkey integration between ROMarr and Cartridge. Auto-install the Cartridge Player, launch it directly, or configure all emulators with one click.</p>
+    <div class="row">
+      <button class="btn" id="cartridge-auto-install">Auto-Install Cartridge (Windows)</button>
+      <button class="btn ghost" id="cartridge-launch">Launch Cartridge</button>
+      <button class="btn ghost" id="cartridge-pnp">Plug &amp; Play Setup (All Emulators)</button>
+      <a class="btn ghost" href="https://github.com/BlizzHacker/Cartridge/releases" target="_blank" rel="noopener">Cartridge for Android (APK)</a>
+      <a class="btn ghost" href="https://apps.microsoft.com/detail/9MXC51W17LH4" target="_blank" rel="noopener">Cartridge for Xbox</a>
+    </div>
+    <pre id="cartridge-status-result" role="status" style="margin-top:8px;"></pre></div>
+    <div class="card"><h3>Emulator Hub</h3>
     <p>Find an emulator, check its setup guide, then add your games. Install buttons install on the
     <b>ROMarr host</b>. Use the upstream downloads on a different gaming device.</p>
     <p class="help">Free and noncommercial projects are included. Each project keeps its own terms.
@@ -5259,6 +5370,27 @@ RENDER.emulators=async()=>{
   $('#core-config').onclick=async()=>{
     const result=await j('/api/v1/emulators/cores/configure',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
     if(current())$('#core-config-result').textContent=JSON.stringify(result,null,2);
+  };
+  $('#cartridge-auto-install').onclick=async()=>{
+    const out=$('#cartridge-status-result');out.textContent='Downloading and verifying Cartridge Player…';
+    try{
+      const res=await j('/api/v1/cartridge/install',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+      if(current())out.textContent=JSON.stringify(res,null,2);
+    }catch(err){if(current())out.textContent='Install error: '+err.message;}
+  };
+  $('#cartridge-launch').onclick=async()=>{
+    const out=$('#cartridge-status-result');out.textContent='Launching Cartridge Player…';
+    try{
+      const res=await j('/api/v1/cartridge/launch',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+      if(current())out.textContent=JSON.stringify(res,null,2);
+    }catch(err){if(current())out.textContent='Launch error: '+err.message;}
+  };
+  $('#cartridge-pnp').onclick=async()=>{
+    const out=$('#cartridge-status-result');out.textContent='Configuring Plug & Play emulators and system paths…';
+    try{
+      const res=await j('/api/v1/emulators/plug-and-play',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+      if(current())out.textContent=JSON.stringify(res,null,2);
+    }catch(err){if(current())out.textContent='Plug & Play error: '+err.message;}
   };
   document.querySelectorAll('[data-inspect]').forEach(button=>button.onclick=async()=>{
     const inspectVersion=++inspection;
@@ -5714,6 +5846,8 @@ RENDER.setup=async()=>{
         :'<p><a class="btn" href="#search">Preview a game search</a></p><p class="help">Interactive Search shows the available releases before you choose one. Follow its progress in <a href="#queue">Queue</a>. If you prefer to start with files you already have, use <a href="#manualimport">Manual Import</a>.</p>')
       +'<h4 style="margin-top:22px">Want a dedicated player?</h4><p class="help">Cartridge is an optional companion for a RomM library. Choose the version for your device; ROMarr works without it.</p>'
       +'<div class="row" style="flex-wrap:wrap"><a class="btn ghost" href="https://github.com/BlizzHacker/romarr/releases/download/v1.8.0/Cartridge-Windows-Portable-0.2.0-x64.exe" target="_blank" rel="noopener">Cartridge for Windows</a><a class="btn ghost" href="https://apps.microsoft.com/detail/9MXC51W17LH4" target="_blank" rel="noopener">Cartridge for Xbox</a></div>'
+      +'<h4 style="margin-top:22px">Mobile App Beta</h4><p class="help">We are looking for 12 testers for the official ROMarr Android release on Google Play.</p>'
+      +'<div class="row" style="flex-wrap:wrap"><a class="btn ghost" href="https://play.google.com/apps/internaltest/4700888732790045566" target="_blank" rel="noopener">📲 Join Android Beta on Google Play</a></div>'
       +'<p class="help">Stuck? You do not need to know the technical terms. Tell us the last step you reached. <a href="https://github.com/BlizzHacker/romarr/issues" target="_blank" rel="noopener">Open a GitHub issue</a> with your ROMarr version, what you expected, and the relevant error. Remove passwords and API keys from logs.</p>';
   }
   $('#page').innerHTML='<div class="card" style="max-width:900px"><div class="row" style="justify-content:space-between"><span class="help">Setup Guide</span><button class="btn ghost" id="setup-dismiss">Set up later</button></div>'
@@ -6528,6 +6662,14 @@ function paintTheme(){
   });
   const custom=$('.sw.pick'); if(custom) custom.classList.toggle('on',!preset);
   const pick=$('#accent-pick'); if(pick) pick.value=accent;
+  const fav=document.querySelector('link[rel="icon"]');
+  if(fav&&accent){
+    const svg=document.querySelector('#brand .brand-icon');
+    if(svg){
+      const raw=svg.outerHTML.replace(/var\\(--accent[^)]*\\)/g,accent);
+      fav.href='data:image/svg+xml;utf8,'+encodeURIComponent(raw);
+    }
+  }
 }
 function bindTheme(){
   document.documentElement.addEventListener('themechange',paintTheme);
@@ -6582,17 +6724,54 @@ async function refreshCounts(){
 """
 
 
+BRAND_ICON_PATHS = (
+    '<path d="M40 12C40 6.5 44.5 2 50 2H102C108.6 2 114 7.4 114 14V58.5'
+    'C119.8 64.2 123 72.1 123 80.5C123 97.9 108.9 112 91.5 112C84.8 112 '
+    '78.5 109.9 73.4 106.3L63.8 114.2C60.1 117.2 54.6 116.8 51.3 113.3'
+    'C48.1 109.8 48.2 104.3 51.6 101L56.2 96.6H29V102C29 105.3 26.3 108 '
+    '23 108H19C15.7 108 13 105.3 13 102V89.2L4.2 83.2C1.6 81.4 0 78.4 0 '
+    '75.2V36C0 29.9 4.5 24.8 10.4 24C12.2 18.8 17.1 15 23 15H26.4C29.1 '
+    '10.3 34.1 7 40 7V12Z" fill="#0E141D" stroke="#2B3D54" stroke-width="2.5"/>'
+    '<rect x="8" y="31" width="14" height="44" rx="5" fill="#E5E9F0"/>'
+    '<rect x="13" y="37" width="8" height="38" rx="3" fill="#3B5270"/>'
+    '<rect x="19" y="22" width="15" height="53" rx="6" fill="#E5E9F0"/>'
+    '<rect x="25" y="29" width="9" height="46" rx="3" fill="#3B5270"/>'
+    '<rect x="31" y="15" width="16" height="60" rx="6" fill="#E5E9F0"/>'
+    '<rect x="37" y="23" width="10" height="52" rx="3" fill="#3B5270"/>'
+    '<rect x="44" y="8" width="62" height="68" rx="9" fill="var(--accent, #75adff)"/>'
+    '<rect x="42" y="25" width="8" height="4.5" rx="2.2" fill="#0E141D"/>'
+    '<rect x="42" y="34" width="8" height="4.5" rx="2.2" fill="#0E141D"/>'
+    '<rect x="42" y="43" width="8" height="4.5" rx="2.2" fill="#0E141D"/>'
+    '<rect x="100" y="25" width="8" height="4.5" rx="2.2" fill="#0E141D"/>'
+    '<rect x="100" y="34" width="8" height="4.5" rx="2.2" fill="#0E141D"/>'
+    '<rect x="100" y="43" width="8" height="4.5" rx="2.2" fill="#0E141D"/>'
+    '<path d="M53 75V62C53 59.8 54.8 58 57 58H78" stroke="#0E141D" '
+    'stroke-width="3.2" stroke-linecap="round"/>'
+    '<rect x="54" y="17" width="42" height="36" rx="6" fill="#0E141D"/>'
+    '<path d="M66 23H69V26H66V23ZM81 23H84V26H81V23ZM69 26H72V29H69V26Z'
+    'M78 26H81V29H78V26ZM66 29H84V32H66V29ZM63 32H69V35H63V32ZM72 32H78'
+    'V35H72V32ZM81 32H87V35H81V32ZM60 35H90V41H60V35ZM60 41H63V47H60V41Z'
+    'M66 41H84V44H66V41ZM87 41H90V47H87V41ZM66 44H69V47H66V44ZM81 44H84'
+    'V47H81V44ZM69 47H74V50H69V47ZM76 47H81V50H76V47Z" fill="#F8FAFC"/>'
+    '<path d="M8 71L23 81H68L64 89H25V101H18V85L8 78V71Z" fill="#E5E9F0"/>'
+    '<circle cx="91" cy="79" r="24" fill="#0E141D" stroke="#2B3D54" stroke-width="2"/>'
+    '<path d="M74 94L57 109" stroke="#0E141D" stroke-width="15" stroke-linecap="round"/>'
+    '<path d="M74 94L58 108" stroke="#E5E9F0" stroke-width="9" stroke-linecap="round"/>'
+    '<circle cx="91" cy="79" r="19.5" fill="#0E141D" stroke="#E5E9F0" stroke-width="5.5"/>'
+    '<path d="M81.5 79.5L88 86L101 72" stroke="var(--accent, #75adff)" '
+    'stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/>'
+)
+
+BRAND_ICON_SVG = (
+    '<svg class="brand-icon" xmlns="http://www.w3.org/2000/svg" '
+    f'viewBox="0 0 128 116" fill="none" aria-hidden="true">{BRAND_ICON_PATHS}</svg>'
+)
+
 FAVICON_SVG = (
-    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">'
-    '<rect x="8" y="6" width="48" height="52" rx="6" fill="#12141a" '
-    'stroke="#f0a92c" stroke-width="4"/>'
-    '<path d="M16 6v14h32V6" fill="#1b1f2a" stroke="#f0a92c" stroke-width="3"/>'
-    '<rect x="16" y="28" width="32" height="18" rx="3" fill="#f0a92c"/>'
-    '<rect x="20" y="50" width="4" height="8" fill="#f0a92c"/>'
-    '<rect x="28" y="50" width="4" height="8" fill="#f0a92c"/>'
-    '<rect x="36" y="50" width="4" height="8" fill="#f0a92c"/>'
-    '<rect x="44" y="50" width="4" height="8" fill="#f0a92c"/>'
-    '</svg>'
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 116" '
+    'fill="none" data-legacy-accent="#f0a92c">'
+    + BRAND_ICON_PATHS.replace("var(--accent, #75adff)", "#75adff")
+    + '</svg>'
 )
 
 FAVICON_LINK = '<link rel="icon" type="image/svg+xml" href="/favicon.svg">'
@@ -6668,7 +6847,7 @@ def page() -> str:
 <title>ROMarr</title><meta name="viewport" content="width=device-width,initial-scale=1">
 {FAVICON_LINK}{APP_HEAD}<style>{CSS}</style><script>{THEME_BOOT}</script></head><body>
 <input id="sidebar-native-toggle" type="checkbox" aria-label="Toggle navigation" aria-controls="rail">
-<nav id="rail" aria-label="Main navigation"><div id="brand">ROM<span>arr</span></div>
+<nav id="rail" aria-label="Main navigation"><div id="brand">{BRAND_ICON_SVG}ROM<span>arr</span></div>
 <button id="sidebar-close" type="button" aria-label="Close navigation">×</button>
 <div id="navwrap">{_nav_html()}</div>
 {_theme_control_html()}</nav>
@@ -6713,9 +6892,10 @@ body{display:flex;align-items:center;justify-content:center;min-height:100vh;
 .box{width:100%;max-width:390px;background:var(--surface);
   border:1px solid var(--line);border-radius:var(--r-lg);padding:30px;
   box-shadow:var(--shadow-2),var(--edge)}
-.box h1{display:flex;gap:0;font-size:26px;font-weight:700;letter-spacing:-.03em;
+.box h1{display:flex;align-items:center;gap:0;font-size:26px;font-weight:700;letter-spacing:-.03em;
   justify-content:center;margin-bottom:6px}
 .box h1 span{color:var(--accent-text)}
+.box h1 .brand-icon{width:36px;height:33px;margin-right:10px}
 .box .sub{text-align:center;color:var(--dim);font-size:13px;margin-bottom:24px}
 .box label{display:block;font-size:10.5px;font-weight:600;color:var(--dim);
   margin:15px 0 6px;text-transform:uppercase;letter-spacing:.08em}
@@ -6808,7 +6988,7 @@ def login_page(*, claimed: bool, totp: bool = False,
 <meta name="viewport" content="width=device-width,initial-scale=1">
 {FAVICON_LINK}<style>{CSS}{LOGIN_CSS}</style><script>{THEME_BOOT}</script></head><body>
 <form class="box" id="f" autocomplete="on">
-  <h1>ROM<span>arr</span></h1>
+  <h1>{BRAND_ICON_SVG}ROM<span>arr</span></h1>
   <div class="sub">{title}</div>
   {sso_button}
   {fields}
@@ -7015,7 +7195,7 @@ def link_page() -> str:
 <meta name="referrer" content="no-referrer">
 {FAVICON_LINK}<style>{CSS}{LOGIN_CSS}{LINK_CSS}</style></head><body>
 <div class="box" id="box">
-  <h1>ROM<span>arr</span></h1>
+  <h1>{BRAND_ICON_SVG}ROM<span>arr</span></h1>
   <div class="sub">Checking this invitation&hellip;</div>
 </div>
 <script>{LINK_JS}</script></body></html>"""
