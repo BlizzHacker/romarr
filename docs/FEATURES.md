@@ -122,9 +122,6 @@ The schema at `/api/v1/openapi.json` describes the current routes on your instal
 | `POST /api/request` | Request a game |
 | `POST /api/v1/command` | Run a task |
 | `GET /api/v1/system/status` | ROMarr and dependency status |
-| `POST /api/v1/webhook/opencollective` | Inbound Open Collective activity webhook (verified & forwarded to Connections) |
-
-Community channels and funding links are built into the UI sidebar and status view: [ROMarr Discord](https://discord.gg/ywNFceuAd), [Open Collective](https://opencollective.com/romarr), and the public webhook bridge at [romarr.app/opc](https://romarr.app/opc).
 
 Release grabs use the ID returned by search so clients do not need indexer download URLs containing credentials. [Authentication and environment reference](INSTALL.md#configuration-reference).
 

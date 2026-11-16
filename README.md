@@ -23,11 +23,11 @@ Find games, verify ROMs, and import them into your library.
 [![Microsoft Store](https://img.shields.io/badge/Microsoft_Store-Windows_App-0078D4?logo=windows&logoColor=white)](https://github.com/BlizzHacker/romarr/releases)
 [![Submit Package](https://img.shields.io/badge/Package_Submissions-Submit_ROMarr-purple?logo=github&logoColor=white)](docs/SUBMISSIONS.md)
 
-**[Install](#install)** · **[First setup](docs/GETTING-STARTED.md)** · **[Discord](https://discord.gg/ywNFceuAd)** · **[Open Collective](https://opencollective.com/romarr)** · **[Webhook Bridge (`romarr.app/opc`)](https://romarr.app/opc)** · **[GG Requestz](https://github.com/BlizzHacker/ggrequestz)** · **[RomM](https://github.com/rommapp/romm)** · **[r/romm](https://www.reddit.com/r/romm)** · **[r/arr](https://www.reddit.com/r/arr)** · **[Android App & APK](docs/ANDROID.md)** · **[Unraid App](https://ca.unraid.net/apps/romarr-04jslct0riva81?q=romarr)** · **[Plugins](docs/PLUGINS.md)** · **[Roadmap](ROADMAP.md)** · **[Releases](https://github.com/BlizzHacker/romarr/releases)** · **[Submit Package](docs/SUBMISSIONS.md)** · **[Privacy](docs/PRIVACY.md)**
+**[Install](#install)** · **[First setup](docs/GETTING-STARTED.md)** · **[Discord](https://discord.gg/ywNFceuAd)** · **[Open Collective](https://opencollective.com/romarr)** · **[GG Requestz](https://github.com/BlizzHacker/ggrequestz)** · **[RomM](https://github.com/rommapp/romm)** · **[r/romm](https://www.reddit.com/r/romm)** · **[r/arr](https://www.reddit.com/r/arr)** · **[Android App & APK](docs/ANDROID.md)** · **[Unraid App](https://ca.unraid.net/apps/romarr-04jslct0riva81?q=romarr)** · **[Plugins](docs/PLUGINS.md)** · **[Roadmap](ROADMAP.md)** · **[Releases](https://github.com/BlizzHacker/romarr/releases)** · **[Submit Package](docs/SUBMISSIONS.md)** · **[Privacy](docs/PRIVACY.md)**
 
 > [!NOTE]
-> **Community, Support & Open Collective:**  
-> Join the official **[ROMarr Discord](https://discord.gg/ywNFceuAd)**, follow or sponsor development on **[Open Collective](https://opencollective.com/romarr)** (public webhook & supporter status hub at **[romarr.app/opc](https://romarr.app/opc)**), or hang out on Reddit in **[r/romm](https://www.reddit.com/r/romm)** and **[r/arr](https://www.reddit.com/r/arr)**. Connect companion game request workflows via **[GG Requestz](https://github.com/BlizzHacker/ggrequestz)** and frontend setups via **[RomM](https://github.com/rommapp/romm)**.
+> **Community & Support:**  
+> Join the official **[ROMarr Discord](https://discord.gg/ywNFceuAd)**, follow or sponsor the project on **[Open Collective](https://opencollective.com/romarr)**, or hang out on Reddit in **[r/romm](https://www.reddit.com/r/romm)** and **[r/arr](https://www.reddit.com/r/arr)**. Connect companion game request workflows via **[GG Requestz](https://github.com/BlizzHacker/ggrequestz)** and frontend setups via **[RomM](https://github.com/rommapp/romm)**.
 
 > [!TIP]
 > **Android Beta, Handhelds & Argosy Launcher Integration!**  
@@ -211,11 +211,10 @@ Source access, available files, credentials and platform support vary. Check the
 
 You can use Cartridge alongside your existing setup or keep using your favorite frontend (Playnite, LaunchBox, ES-DE, Pegasus). The Windows desktop app's **Cartridge** menu and the setup guides link to all three clients.
 
-## Community, Sponsors & Webhooks
+## Community & Support
 
 - **Discord:** Join the [ROMarr Discord server](https://discord.gg/ywNFceuAd) for release help, plugin tips, and troubleshooting.
-- **Open Collective:** Back ROMarr via [opencollective.com/romarr](https://opencollective.com/romarr) or inspect tiers with the [Open Collective contributor badge](https://opencollective.com/romarr/tiers/backer/badge.svg?label=Backer&color=brightgreen).
-- **Webhook Integration (`romarr.app/opc`):** Open Collective activity events (`ORDER_PROCESSED`, `COLLECTIVE_MEMBER_CREATED`, updates, and expenses) connect through [https://romarr.app/opc](https://romarr.app/opc) or directly into any ROMarr instance at `POST /api/v1/webhook/opencollective?apikey=<ROMARR_API_KEY>`, fanning out notifications across Discord, Slack, generic Webhooks, ntfy, Gotify, Telegram, Pushover, and Apprise.
+- **Open Collective:** Back ROMarr on [opencollective.com/romarr](https://opencollective.com/romarr) ([contributors badge](https://opencollective.com/romarr/tiers/backer/badge.svg?label=Backer&color=brightgreen)).
 
 ## Help and documentation
 

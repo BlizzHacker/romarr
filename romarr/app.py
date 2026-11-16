@@ -89,7 +89,7 @@ from .catalogue import (Submission, check_source, facets as hub_facets,
 from .frontends import FORMATS as FRONTEND_FORMATS
 from .metadata import PROVIDERS as METADATA_PROVIDERS
 from .notify import (NOTIFIERS, Message, Notifier, failed, grabbed, imported,
-                     FIELD_HELP, FIELD_LABELS, opencollective_event, send_test,
+                     FIELD_HELP, FIELD_LABELS, send_test,
                      update_available)
 from .profiles import Blocklist, ReleaseProfile, release_id
 from .upgrade import is_upgrade, merge_tags, scan as scan_directory
@@ -423,49 +423,6 @@ class ProxyResponse(tuple):
         return instance
 
 
-ROMARR_OPENCOLLECTIVE_URL = "https://opencollective.com/romarr"
-ROMARR_OPENCOLLECTIVE_WEBHOOK_RELAY = "https://romarr.app/opc"
-ROMARR_OPENCOLLECTIVE_LEGACY_ID = 1349706
-ROMARR_DISCORD_URL = "https://discord.gg/ywNFceuAd"
-
-_OC_ACTIVITY_TYPES = frozenset({
-    "ORDER_PROCESSED", "ORDER_PENDING_CREATED",
-    "COLLECTIVE_MEMBER_CREATED", "COLLECTIVE_TRANSACTION_CREATED",
-    "COLLECTIVE_UPDATE_CREATED", "COLLECTIVE_UPDATE_PUBLISHED",
-    "COLLECTIVE_COMMENT_CREATED", "TICKET_CONFIRMED",
-    "SUBSCRIPTION_CANCELED", "SUBSCRIPTION_PAUSED", "SUBSCRIPTION_RESUMED",
-    "COLLECTIVE_EXPENSE_CREATED", "COLLECTIVE_EXPENSE_UPDATED",
-    "COLLECTIVE_EXPENSE_APPROVED", "COLLECTIVE_EXPENSE_PAID",
-    "COLLECTIVE_EXPENSE_REJECTED", "COLLECTIVE_EXPENSE_DELETED",
-    "COLLECTIVE_APPLY", "COLLECTIVE_APPROVED", "COLLECTIVE_CREATED",
-    "CONNECTED_ACCOUNT_CREATED", "VIRTUAL_CARD_PURCHASE", "WEBHOOK_TEST",
-})
-
-
-def _clean_oc_slug(raw: object) -> str:
-    slug = str(raw or "").strip().lower()
-    if slug and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,79}", slug):
-        return slug
-    return "romarr"
-
-
-def _format_oc_amount(obj: dict) -> str:
-    if not isinstance(obj, dict):
-        return ""
-    for key in ("formattedAmountWithInterval", "formattedAmount"):
-        val = str(obj.get(key) or "").strip()
-        if val:
-            return val
-    cents = obj.get("totalAmount") if obj.get("totalAmount") is not None else obj.get("amount")
-    if isinstance(cents, (int, float)) and not isinstance(cents, bool):
-        currency = str(obj.get("currency") or "USD").strip().upper()
-        prefix = "$" if currency == "USD" else f"{currency} "
-        text = f"{prefix}{cents / 100:.2f}"
-        interval = str(obj.get("interval") or "").strip().lower()
-        return f"{text} / {interval}" if interval else text
-    return ""
-
-
 class ROMarr:
     """The service. Holds config, clients, and the in-flight queue."""
 
@@ -554,9 +511,6 @@ class ROMarr:
         self._metadata_lock = threading.RLock()
         self._collection_source_lock = threading.Lock()
         self._mdm_lock = threading.Lock()
-        self._oc_lock = threading.Lock()
-        self._oc_recent: list[dict] = []
-        self._oc_seen_ids: list[str] = []
         # Lets a configuration change wake the background refresh instead of
         # waiting out its interval. Created before reload_libraries, which sets
         # it.
@@ -1786,152 +1740,6 @@ class ROMarr:
         threading.Thread(target=self.request, args=(game, platform.slug),
                          daemon=True).start()
         return {"ok": True, "accepted": True, "game": game, "platform": platform.slug}
-
-    @staticmethod
-    def parse_opencollective_webhook(body: dict) -> dict | None:
-        """Extract a sanitized activity summary from an Open Collective webhook."""
-        if not isinstance(body, dict):
-            return None
-        event_type = str(body.get("type") or "").strip().upper()
-        data = body.get("data")
-        if not isinstance(data, dict):
-            data = {}
-        collective = data.get("collective") if isinstance(data.get("collective"), dict) else {}
-        collective_id = body.get("CollectiveId") if body.get("CollectiveId") is not None else collective.get("id")
-
-        if event_type == "GAME_REQUEST" or ("game_title" in data and event_type not in _OC_ACTIVITY_TYPES):
-            return None
-        if event_type not in _OC_ACTIVITY_TYPES and collective_id is None:
-            return None
-        if not event_type:
-            event_type = "WEBHOOK_EVENT"
-
-        from_col = data.get("fromCollective") if isinstance(data.get("fromCollective"), dict) else {}
-        member = data.get("member") if isinstance(data.get("member"), dict) else {}
-        member_col = member.get("memberCollective") if isinstance(member.get("memberCollective"), dict) else {}
-        order = data.get("order") if isinstance(data.get("order"), dict) else {}
-        tx = data.get("transaction") if isinstance(data.get("transaction"), dict) else {}
-        expense = data.get("expense") if isinstance(data.get("expense"), dict) else {}
-        update = data.get("update") if isinstance(data.get("update"), dict) else {}
-        recipient = data.get("recipient") if isinstance(data.get("recipient"), dict) else {}
-        tier = data.get("tier") if isinstance(data.get("tier"), dict) else (
-            member.get("tier") if isinstance(member.get("tier"), dict) else {}
-        )
-
-        slug = _clean_oc_slug(collective.get("slug"))
-        collective_name = str(collective.get("name") or "ROMarr").strip() or "ROMarr"
-        actor = str(
-            from_col.get("name") or member_col.get("name") or recipient.get("name") or "A supporter"
-        ).strip() or "A supporter"
-        tier_name = str(tier.get("name") or "").strip()
-        amount = _format_oc_amount(order) or _format_oc_amount(tx) or _format_oc_amount(expense)
-        update_title = str(update.get("title") or "").strip()
-        url = f"https://opencollective.com/{slug}"
-
-        if event_type in ("ORDER_PROCESSED", "COLLECTIVE_TRANSACTION_CREATED"):
-            amt_part = f" contributed {amount}" if amount else " sent a contribution"
-            tier_part = f" ({tier_name})" if tier_name else ""
-            title = f"Open Collective: {actor}{amt_part}{tier_part}"
-        elif event_type == "ORDER_PENDING_CREATED":
-            amt_part = f" ({amount})" if amount else ""
-            title = f"Open Collective: pending contribution from {actor}{amt_part}"
-        elif event_type == "COLLECTIVE_MEMBER_CREATED":
-            tier_part = f" — {tier_name}" if tier_name else ""
-            title = f"Open Collective: {actor} joined {collective_name}{tier_part}"
-        elif event_type in ("COLLECTIVE_UPDATE_PUBLISHED", "COLLECTIVE_UPDATE_CREATED"):
-            title = f"Open Collective update: {update_title or collective_name}"
-        elif event_type.startswith("COLLECTIVE_EXPENSE_"):
-            state = event_type[len("COLLECTIVE_EXPENSE_"):].lower().replace("_", " ")
-            amt_part = f" ({amount})" if amount else ""
-            title = f"Open Collective expense {state}{amt_part}"
-        elif event_type.startswith("SUBSCRIPTION_"):
-            state = event_type[len("SUBSCRIPTION_"):].lower()
-            title = f"Open Collective subscription {state} for {actor}"
-        else:
-            label = event_type.lower().replace("_", " ")
-            title = f"Open Collective: {label}"
-
-        reasons = [r for r in (
-            f"Collective: {collective_name}",
-            f"Tier: {tier_name}" if tier_name else "",
-            f"Amount: {amount}" if amount else "",
-        ) if r]
-        detail = f"{event_type} · {collective_name}" + (f" · {amount}" if amount else "")
-        return {
-            "event_type": event_type,
-            "activity_id": body.get("id"),
-            "collective_id": collective_id,
-            "collective_slug": slug,
-            "collective_name": collective_name,
-            "actor": actor,
-            "tier": tier_name,
-            "formatted_amount": amount,
-            "title": title,
-            "body": f"{actor} — {event_type.lower().replace('_', ' ')}",
-            "reasons": tuple(reasons),
-            "summary_label": f"Open Collective ({actor})",
-            "detail": detail,
-            "url": url,
-            "created_at": str(body.get("createdAt") or "").strip(),
-        }
-
-    def handle_opencollective_webhook(self, body: dict) -> dict:
-        """Accept an Open Collective activity webhook, record it, and notify connections."""
-        parsed = self.parse_opencollective_webhook(body)
-        if parsed is None:
-            log.warning("Open Collective webhook rejected: unsupported payload")
-            return {"ok": False, "error": "not an Open Collective webhook payload"}
-
-        act_id = parsed.get("activity_id")
-        dedup_key = f"{parsed['event_type']}:{act_id}" if act_id not in (None, "") else ""
-        with self._oc_lock:
-            if dedup_key and dedup_key in self._oc_seen_ids:
-                return {
-                    "ok": True,
-                    "accepted": True,
-                    "duplicate": True,
-                    "event_type": parsed["event_type"],
-                    "actor": parsed["actor"],
-                    "url": parsed["url"],
-                }
-            if dedup_key:
-                self._oc_seen_ids.append(dedup_key)
-                if len(self._oc_seen_ids) > 250:
-                    del self._oc_seen_ids[:-250]
-            self._oc_recent.insert(0, {
-                "id": act_id,
-                "type": parsed["event_type"],
-                "actor": parsed["actor"],
-                "tier": parsed["tier"],
-                "amount": parsed["formatted_amount"],
-                "title": parsed["title"],
-                "url": parsed["url"],
-                "created_at": parsed["created_at"],
-            })
-            if len(self._oc_recent) > 25:
-                del self._oc_recent[25:]
-
-        self.store.record(Event(
-            kind="opencollective",
-            game=parsed["summary_label"],
-            platform="opencollective",
-            detail=parsed["detail"],
-        ))
-        log.info("Open Collective webhook accepted: %s (%s)", parsed["event_type"], parsed["actor"])
-        msg = opencollective_event(
-            parsed["title"],
-            body=parsed["body"],
-            reasons=parsed["reasons"],
-            url=parsed["url"],
-        )
-        threading.Thread(target=self.notify, args=(msg,), daemon=True).start()
-        return {
-            "ok": True,
-            "accepted": True,
-            "event_type": parsed["event_type"],
-            "actor": parsed["actor"],
-            "url": parsed["url"],
-        }
 
     def test_indexer(self, cfg: dict) -> dict:
         """Try an indexer configuration without saving it.
@@ -3262,12 +3070,6 @@ class ROMarr:
             "clamav": self.clamav_status(),
             "events": len(self.store.events),
             "uptime": f"{up // 3600}h {(up % 3600) // 60}m",
-            "community": {
-                "discord_url": ROMARR_DISCORD_URL,
-                "opencollective_url": ROMARR_OPENCOLLECTIVE_URL,
-                "opencollective_webhook_relay": ROMARR_OPENCOLLECTIVE_WEBHOOK_RELAY,
-                "opencollective_recent": list(self._oc_recent),
-            },
         }
 
     @staticmethod
@@ -8692,8 +8494,7 @@ def make_handler(service: ROMarr):
                         ] + [
                             {"name": "events", "label": "Events", "type": "list",
                              "help": "grab, import, upgrade, failure, "
-                                     "bad-dump, update, opencollective. "
-                                     "Empty means all."},
+                                     "bad-dump, update. Empty means all."},
                         ],
                     }
                 return self._json(200, {"types": types, "list": [
@@ -10023,9 +9824,6 @@ def make_handler(service: ROMarr):
                 # 202 is truthful for the asynchronous happy path; 422 makes
                 # the sender log a rejected event and gives the operator a
                 # reason in our response and logs.
-                return self._json(202 if result.get("ok") else 422, result)
-            if route.path == "/api/v1/webhook/opencollective":
-                result = service.handle_opencollective_webhook(body)
                 return self._json(202 if result.get("ok") else 422, result)
             if route.path == "/api/v1/command":
                 name = (body.get("name") or "").strip()
