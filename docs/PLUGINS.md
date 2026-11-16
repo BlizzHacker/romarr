@@ -1,5 +1,7 @@
 # ROM Hub plugins
 
+![ROM Hub showing 29 enabled confined plugins](img/hub-plugins.png)
+
 **ROM Hub** is the plugin host. A **plugin** adds a source or capability: for example, searching a homebrew catalogue or looking up metadata. Installing ROMarr and installing a plugin are separate steps.
 
 ## Is ROM Hub already installed?
