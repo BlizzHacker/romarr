@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 116" fill="none">
+  <rect x="2" y="10" width="416" height="96" rx="18" fill="#0E141D" stroke="#2B3D54" stroke-width="2.5"/>
+  <text x="24" y="72" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="68" font-weight="900" letter-spacing="-2">
+    <tspan fill="#F8FAFC">ROM</tspan><tspan fill="var(--accent, #75adff)">arr</tspan>
+  </text>
+  <line x1="28" y1="92" x2="78" y2="92" stroke="var(--accent, #75adff)" stroke-width="4" stroke-linecap="round"/>
+  <text x="210" y="97" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="17" font-weight="800" fill="#E5E9F0" letter-spacing="0.8">
+    Find <tspan fill="var(--accent, #75adff)">•</tspan> Verify <tspan fill="var(--accent, #75adff)">•</tspan> Organize
+  </text>
+  <line x1="342" y1="92" x2="392" y2="92" stroke="var(--accent, #75adff)" stroke-width="4" stroke-linecap="round"/>
+</svg>
