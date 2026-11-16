@@ -63,33 +63,11 @@ _PAREN = re.compile(r"[\(\[]([^\)\]]*)[\)\]]")
 #: a configured language list instead of assuming English.
 _TRANSLATION_MARK = re.compile(r"\bt[+-]\s*([a-z]{2,10})\b", re.IGNORECASE)
 
-#: Three-letter and spelled-out language codes normalised to the two-letter
-#: codes the planner configuration uses. Scene groups do not agree on a
-#: register (`[T-En]`, `[T+Eng]`, `[T-English]` all appear in the wild), and
-#: an operator typing "en" should match all of them.
-_LANG_ALIASES = {
-    "en": "en", "eng": "en", "english": "en",
-    "de": "de", "deu": "de", "ger": "de", "german": "de",
-    "fr": "fr", "fra": "fr", "fre": "fr", "french": "fr",
-    "es": "es", "spa": "es", "esp": "es", "spanish": "es",
-    "it": "it", "ita": "it", "italian": "it",
-    "pt": "pt", "por": "pt", "ptb": "pt",
-    "nl": "nl", "dut": "nl", "nla": "nl", "dutch": "nl",
-    "sv": "sv", "swe": "sv", "swedish": "sv",
-    "ru": "ru", "rus": "ru", "russian": "ru",
-    "ja": "ja", "jpn": "ja", "jp": "ja", "japanese": "ja",
-    "ko": "ko", "kor": "ko", "korean": "ko",
-    "zh": "zh", "chi": "zh", "chn": "zh", "chinese": "zh",
-    "pl": "pl", "pol": "pl", "polish": "pl",
-}
+from .dat import Dat, Game, game_languages, normalise_lang
 
-
-def normalise_lang(code: str) -> str:
-    """A language token from a name or from the operator, lower-cased and
-    mapped to its two-letter form. Unknown tokens pass through so a language
-    this table has never heard of still matches an identical selection."""
-    c = (code or "").strip().lower()
-    return _LANG_ALIASES.get(c, c)
+#: Three-letter and spelled-out language codes are normalised by
+#: `dat.normalise_lang` so `[T-En]`, `[T+Eng]`, `[T-English]`, and DAT
+#: `language "English"` fields all share one vocabulary.
 
 
 def translation_langs_in(name: str) -> set[str]:
@@ -194,6 +172,10 @@ class Policy:
     translation_langs: tuple[str, ...] = ("en",)
     #: How the region list is applied. See REGION_MODES.
     region_mode: str = "prefer"
+    #: Ordered preferred game languages (normalised two-letter codes, e.g.
+    #: `("fr", "en")`). Empty disables language filtering and preserves the
+    #: historical region-only 1G1R behaviour.
+    preferred_languages: tuple[str, ...] = ()
 
     @property
     def uses_translations(self) -> bool:
@@ -245,6 +227,13 @@ class Plan:
     #: because "excluded: proto/demo" and "omitted: wrong region" are
     #: different decisions with different fixes.
     region_omitted: int = 0
+    #: Titles omitted because all wanted dumps had known languages outside
+    #: `policy.preferred_languages` and no eligible translation existed.
+    language_omitted: int = 0
+    #: Representative titles whose language metadata is unknown when
+    #: `policy.preferred_languages` is active. Surfaced separately without
+    #: counting toward `expected` or `missing`.
+    unknown_language_titles: list[Title] = field(default_factory=list)
 
     def counts(self) -> dict[str, int]:
         out = {PRESENT_VERIFIED: 0, PRESENT_UNKNOWN: 0, PRESENT_BAD: 0,
@@ -254,6 +243,8 @@ class Plan:
         out["expected"] = len(self.titles)
         out["excluded"] = self.excluded
         out["region_omitted"] = self.region_omitted
+        out["language_omitted"] = self.language_omitted
+        out["unknown_language"] = len(self.unknown_language_titles)
         out["have"] = out["expected"] - out[MISSING]
         return out
 
@@ -267,26 +258,61 @@ def _region_rank(name: str, order: tuple[str, ...]) -> int:
     return min((order.index(r) for r in found if r in order), default=len(order))
 
 
+def _language_rank(game: Game, lang_order: tuple[str, ...]) -> int:
+    if not lang_order:
+        return 0
+    langs = game_languages(game)
+    return min((lang_order.index(l) for l in langs if l in lang_order),
+               default=len(lang_order))
+
+
+def _is_variant(name: str) -> bool:
+    return bool(re.search(r"[\(\[][^)\]]*\b(debug|promo)\b",
+                          name, re.IGNORECASE))
+
+
+def _game_translation_langs(game: Game) -> set[str]:
+    langs = translation_langs_in(game.name)
+    if langs:
+        return langs
+    if game.languages:
+        return set(game.languages)
+    return {"en"}
+
+
 def _best_translation(members: list[Game], order: tuple[str, ...],
-                      langs: tuple[str, ...] = ("en",)) -> "Game | None":
+                      langs: tuple[str, ...] = ("en",),
+                      pref_langs: tuple[str, ...] = ()) -> "Game | None":
     """The translation in a group most worth taking, or None.
 
     Only translations into one of the configured languages are candidates --
     the policy says which languages the operator reads, and a set that asked
     for T-De should not quietly take a T-En because it sorted first.
 
-    Prefers a translation of a preferred-region base over one of an obscure
-    region, then the parent over a clone, then name -- the same shape the
-    region ranking uses, so the choice is explainable the same way.
+    When `pref_langs` is configured, translations are ranked by preferred
+    language priority first, then region, then parent-over-clone, then name.
     """
+    lang_order = tuple(normalise_lang(c) for c in pref_langs if str(c).strip())
     wanted = {normalise_lang(c) for c in langs}
+    if lang_order:
+        wanted = wanted & set(lang_order)
+    if not wanted:
+        return None
     translations = [g for g in members
-                    if is_translation(g.name) and (_langs_of(g.name) & wanted)]
+                    if is_translation(g.name) and (_game_translation_langs(g) & wanted)]
     if not translations:
         return None
-    return min(translations,
-               key=lambda g: (_region_rank(g.name, order),
-                              0 if not g.cloneof else 1, g.name))
+
+    def trans_key(g: Game) -> tuple[int, int, int, str]:
+        if lang_order:
+            t_langs = _game_translation_langs(g) & wanted
+            l_rank = min((lang_order.index(l) for l in t_langs if l in lang_order),
+                         default=len(lang_order))
+        else:
+            l_rank = 0
+        return (l_rank, _region_rank(g.name, order), 0 if not g.cloneof else 1, g.name)
+
+    return min(translations, key=trans_key)
 
 
 #: Full language names for the plan's explanation strings. Anything not
@@ -311,22 +337,32 @@ def _lang_label(name: str) -> str:
 
 
 def explain(dat: Dat, winner: Game, group: list[Game],
-            regions: tuple[str, ...]) -> tuple[str, list[tuple[str, str]]]:
+            regions: tuple[str, ...],
+            preferred_languages: tuple[str, ...] = ()) -> tuple[str, list[tuple[str, str]]]:
     """Why `winner` won, and why each of the others did not.
 
-    Phrased from the same inputs `one_game_one_rom` ranks on -- region
-    position, then parent-over-clone, then name -- so the explanation cannot
-    drift from the decision. If it ever disagrees, one of the two is wrong and
-    a test says which.
+    Phrased from the same inputs `one_game_one_rom` ranks on -- optional
+    language priority, then region position, then parent-over-clone, then
+    name -- so the explanation cannot drift from the decision.
     """
     order = tuple(r.lower() for r in regions)
+    lang_order = tuple(normalise_lang(l) for l in preferred_languages
+                       if str(l).strip())
+    l_rank = _language_rank(winner, lang_order)
     rank = _region_rank(winner.name, order)
+    parts: list[str] = []
+    if lang_order and l_rank < len(lang_order):
+        code = lang_order[l_rank]
+        label = _LANG_LABELS.get(code, code.upper())
+        parts.append(f"language {label} is {l_rank + 1} of "
+                     f"{len(lang_order)} in your preference")
     if rank < len(order):
-        because = f"region {order[rank].upper()} is {rank + 1} of " \
-                  f"{len(order)} in your preference"
+        parts.append(f"region {order[rank].upper()} is {rank + 1} of "
+                     f"{len(order)} in your preference")
     else:
-        because = "no dump matched your preferred regions, so the set keeps " \
-                  "this one rather than losing the game"
+        parts.append("no dump matched your preferred regions, so the set "
+                     "keeps this one rather than losing the game")
+    because = "; ".join(parts)
     if not winner.cloneof:
         because += "; it is the parent dump"
 
@@ -334,13 +370,18 @@ def explain(dat: Dat, winner: Game, group: list[Game],
     for other in group:
         if other.name == winner.name:
             continue
+        other_l_rank = _language_rank(other, lang_order)
         other_rank = _region_rank(other.name, order)
-        if other_rank > rank:
+        if lang_order and other_l_rank > l_rank:
+            why = ("language not in your preference"
+                   if other_l_rank >= len(lang_order)
+                   else f"language ranks lower ({_LANG_LABELS.get(lang_order[other_l_rank], lang_order[other_l_rank].upper())})")
+        elif other_rank > rank:
             why = (f"region ranks lower ({order[other_rank].upper()})"
                    if other_rank < len(order)
                    else "region not in your preference")
-        elif (other_rank == rank and not (flags_in(winner.name) & {"debug", "promo"})
-              and flags_in(other.name) & {"debug", "promo"}):
+        elif (other_rank == rank and not _is_variant(winner.name)
+              and _is_variant(other.name)):
             why = "same region rank; retail dump preferred over debug/promo"
         elif other_rank == rank and not winner.cloneof and other.cloneof:
             why = "clone of the chosen dump, same region rank"
@@ -348,6 +389,148 @@ def explain(dat: Dat, winner: Game, group: list[Game],
             why = "same region rank; the chosen name sorts first"
         lost.append((other.name, why))
     return because, lost
+
+
+def _plan_language_group(
+    dat: Dat,
+    parent: str,
+    members: list[Game],
+    present: dict[str, str],
+    policy: Policy,
+    order: tuple[str, ...],
+    pref_langs: tuple[str, ...],
+    plan: Plan,
+) -> None:
+    """Resolve one 1G1R group when `policy.preferred_languages` is active."""
+    strict = policy.region_mode == "strict"
+    wanted_real = [g for g in members
+                   if policy.wants(g.name)[0] and not is_translation(g.name)]
+    trans_members = (
+        [g for g in members if _region_rank(g.name, order) < len(order)]
+        if strict else members
+    )
+    translation = (
+        _best_translation(trans_members, order, policy.translation_langs,
+                          pref_langs=pref_langs)
+        if policy.uses_translations else None
+    )
+    if not wanted_real and translation is None:
+        plan.excluded += 1
+        return
+
+    pref_set = set(pref_langs)
+    eligible = [g for g in wanted_real if set(game_languages(g)) & pref_set]
+    unknown = [g for g in wanted_real if not game_languages(g)]
+
+    if eligible:
+        pool = ([g for g in eligible if _region_rank(g.name, order) < len(order)]
+                if strict else eligible)
+        if not pool:
+            if policy.uses_translations and translation is not None and _region_rank(translation.name, order) < len(order):
+                plan.titles.append(Title(
+                    name=translation.name, parent=parent,
+                    status=present.get(translation.name, MISSING),
+                    chosen_because=(
+                        f"{_lang_label(translation.name)} translation "
+                        "used because no dump exists in your preferred regions"),
+                    outside_preference=False, is_translation=True))
+                return
+            plan.region_omitted += 1
+            return
+        winner = min(
+            pool,
+            key=lambda g: (
+                _language_rank(g, pref_langs),
+                _region_rank(g.name, order),
+                int(_is_variant(g.name)),
+                0 if not g.cloneof else 1,
+                g.name,
+            ),
+        )
+        winner_outside = _region_rank(winner.name, order) >= len(order)
+        if policy.uses_translations and translation is not None:
+            take_it = (policy.translation_policy == "prefer"
+                       or winner_outside)
+            if take_it and policy.translation_policy == "keep_both":
+                if not (strict and winner_outside):
+                    because, lost = explain(
+                        dat, winner, members, policy.regions,
+                        preferred_languages=pref_langs)
+                    plan.titles.append(Title(
+                        name=winner.name, parent=parent,
+                        status=present.get(winner.name, MISSING),
+                        chosen_because=because, discarded=lost,
+                        outside_preference=winner_outside))
+                if strict and _region_rank(translation.name, order) >= len(order):
+                    if winner_outside:
+                        plan.region_omitted += 1
+                    return
+                plan.titles.append(Title(
+                    name=translation.name, parent=parent,
+                    status=present.get(translation.name, MISSING),
+                    chosen_because=(
+                        f"{_lang_label(translation.name)} translation, "
+                        "kept as a variant"),
+                    outside_preference=False, is_translation=True))
+                return
+            if take_it:
+                if strict and _region_rank(translation.name, order) >= len(order):
+                    plan.region_omitted += 1
+                    return
+                plan.titles.append(Title(
+                    name=translation.name, parent=parent,
+                    status=present.get(translation.name, MISSING),
+                    chosen_because=(
+                        f"{_lang_label(translation.name)} translation "
+                        "used because no dump exists in your preferred "
+                        "regions" if winner_outside
+                        else f"{_lang_label(translation.name)} "
+                             f"translation preferred over {winner.name}"),
+                    outside_preference=False, is_translation=True))
+                return
+
+        if strict and winner_outside:
+            plan.region_omitted += 1
+            return
+        because, lost = explain(
+            dat, winner, members, policy.regions,
+            preferred_languages=pref_langs)
+        plan.titles.append(Title(
+            name=winner.name, parent=parent,
+            status=present.get(winner.name, MISSING),
+            chosen_because=because, discarded=lost,
+            outside_preference=winner_outside))
+        return
+
+    if policy.uses_translations and translation is not None:
+        if strict and _region_rank(translation.name, order) >= len(order):
+            plan.region_omitted += 1
+            return
+        plan.titles.append(Title(
+            name=translation.name, parent=parent,
+            status=present.get(translation.name, MISSING),
+            chosen_because=(
+                f"{_lang_label(translation.name)} translation used because "
+                "no dump exists in your preferred languages"),
+            outside_preference=False, is_translation=True))
+        return
+
+    if unknown:
+        rep = min(
+            unknown,
+            key=lambda g: (_region_rank(g.name, order),
+                           int(_is_variant(g.name)),
+                           0 if not g.cloneof else 1, g.name),
+        )
+        plan.unknown_language_titles.append(Title(
+            name=rep.name, parent=parent,
+            status=present.get(rep.name, MISSING),
+            chosen_because=("unknown language metadata "
+                            "(not counted in expected/missing)"),
+            outside_preference=_region_rank(rep.name, order) >= len(order)))
+        return
+
+    plan.language_omitted += 1
 
 
 def build_plan(dat: Dat, present: dict[str, str], policy: Policy) -> Plan:
@@ -363,11 +546,20 @@ def build_plan(dat: Dat, present: dict[str, str], policy: Policy) -> Plan:
     for game in dat.games.values():
         groups.setdefault(dat.group_key(game.name), []).append(game)
 
-    chosen: dict[str, Game] = (dat.one_game_one_rom(list(policy.regions))
-                               if policy.one_game_one_rom else {})
+    pref_langs = tuple(dict.fromkeys(
+        normalise_lang(c) for c in policy.preferred_languages if str(c).strip()
+    ))
+    chosen: dict[str, Game] = (
+        dat.one_game_one_rom(list(policy.regions), languages=list(pref_langs))
+        if (policy.one_game_one_rom and not pref_langs) else {}
+    )
     order = tuple(r.lower() for r in policy.regions)
 
     for parent, members in sorted(groups.items()):
+        if policy.one_game_one_rom and pref_langs:
+            _plan_language_group(
+                dat, parent, members, present, policy, order, pref_langs, plan)
+            continue
         if policy.one_game_one_rom:
             winner = next((g for g in members if g.name in chosen), None)
             if winner is None:
@@ -462,6 +654,25 @@ def build_plan(dat: Dat, present: dict[str, str], policy: Policy) -> Plan:
                 if not wanted:
                     plan.excluded += 1
                     continue
+                if pref_langs:
+                    if is_translation(game.name):
+                        t_wanted = {normalise_lang(c) for c in policy.translation_langs}
+                        if not (_langs_of(game.name) & t_wanted):
+                            plan.language_omitted += 1
+                            continue
+                    else:
+                        g_langs = game_languages(game)
+                        if not g_langs:
+                            plan.unknown_language_titles.append(Title(
+                                name=game.name, parent=parent,
+                                status=present.get(game.name, MISSING),
+                                chosen_because=("unknown language metadata "
+                                                "(not counted in expected/missing)"),
+                                outside_preference=_region_rank(game.name, order) >= len(order)))
+                            continue
+                        if not (set(g_langs) & set(pref_langs)):
+                            plan.language_omitted += 1
+                            continue
                 outside = _region_rank(game.name, order) >= len(order)
                 if policy.region_mode == "strict" and outside:
                     plan.region_omitted += 1

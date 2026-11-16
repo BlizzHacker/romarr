@@ -63,6 +63,93 @@ class Game:
     #: No-Intro marks regional variants as clones of a parent entry. This is
     #: what makes 1G1R possible at all.
     cloneof: str = ""
+    #: Normalised two-letter language codes declared by the DAT's `language`
+    #: field (e.g. `("en", "fr")` from `language "English / French"`).
+    languages: tuple[str, ...] = ()
+
+
+#: Language codes and names normalised to two-letter ISO 639-1 codes so
+#: `language "English / French"` in a DAT, `[T-Fr]` in a filename, and
+#: `"French, English"` in settings all speak the same vocabulary.
+_LANG_ALIASES = {
+    "en": "en", "eng": "en", "english": "en",
+    "de": "de", "deu": "de", "ger": "de", "german": "de",
+    "fr": "fr", "fra": "fr", "fre": "fr", "french": "fr",
+    "es": "es", "spa": "es", "esp": "es", "spanish": "es",
+    "it": "it", "ita": "it", "italian": "it",
+    "pt": "pt", "por": "pt", "ptb": "pt", "portuguese": "pt",
+    "nl": "nl", "dut": "nl", "nla": "nl", "dutch": "nl",
+    "sv": "sv", "swe": "sv", "swedish": "sv",
+    "ru": "ru", "rus": "ru", "russian": "ru",
+    "ja": "ja", "jpn": "ja", "jp": "ja", "japanese": "ja",
+    "ko": "ko", "kor": "ko", "korean": "ko",
+    "zh": "zh", "chi": "zh", "chn": "zh", "chinese": "zh",
+    "pl": "pl", "pol": "pl", "polish": "pl",
+    "da": "da", "dan": "da", "danish": "da",
+    "fi": "fi", "fin": "fi", "finnish": "fi",
+    "no": "no", "nor": "no", "norwegian": "no", "nb": "nb", "nn": "nn",
+    "cs": "cs", "cze": "cs", "ces": "cs", "czech": "cs",
+    "hu": "hu", "hun": "hu", "hungarian": "hu",
+    "el": "el", "gre": "el", "ell": "el", "greek": "el",
+    "tr": "tr", "tur": "tr", "turkish": "tr",
+    "ar": "ar", "ara": "ar", "arabic": "ar",
+    "he": "he", "heb": "he", "hebrew": "he",
+    "ca": "ca", "cat": "ca", "catalan": "ca",
+    "ro": "ro", "rum": "ro", "ron": "ro", "romanian": "ro",
+    "bg": "bg", "bul": "bg", "bulgarian": "bg",
+    "hr": "hr", "hrv": "hr", "croatian": "hr",
+    "sk": "sk", "slo": "sk", "slk": "sk", "slovak": "sk",
+    "sl": "sl", "slv": "sl", "slovenian": "sl",
+    "uk": "uk", "ukr": "uk", "ukrainian": "uk",
+    "vi": "vi", "vie": "vi", "vietnamese": "vi",
+    "th": "th", "tha": "th", "thai": "th",
+    "id": "id", "ind": "id", "indonesian": "id",
+    "ms": "ms", "may": "ms", "msa": "ms", "malay": "ms",
+}
+
+_TWO_LETTER_LANGS = frozenset(_LANG_ALIASES.values())
+_PAREN_GROUP = re.compile(r"\(([^)]+)\)")
+
+
+def normalise_lang(code: str) -> str:
+    """Normalise a language code or name to its two-letter form."""
+    c = (code or "").strip().lower()
+    return _LANG_ALIASES.get(c, c)
+
+
+def parse_dat_languages(raw: str) -> tuple[str, ...]:
+    """Parse a DAT `language` string (e.g. `"English / Japanese"`) into
+    deduplicated, normalised language codes, preserving declaration order."""
+    text = (raw or "").strip()
+    if not text:
+        return ()
+    tokens = re.split(r"[/,+&;|]+", text)
+    seen: list[str] = []
+    for tok in tokens:
+        code = normalise_lang(tok)
+        if code and code not in seen:
+            seen.append(code)
+    return tuple(seen)
+
+
+def game_languages(game: Game) -> tuple[str, ...]:
+    """Return known language codes for `game`, or `()` when unknown.
+
+    Authoritative DAT `language` metadata wins; otherwise, explicit No-Intro
+    language tags like `(En,Fr,De)` in the title are accepted without guessing
+    language from region names like `(USA)` or `(Japan)`.
+    """
+    if game.languages:
+        return game.languages
+    for group in _PAREN_GROUP.findall(game.name or ""):
+        parts = [p.strip().lower() for p in re.split(r"[,/]+", group) if p.strip()]
+        if (
+            parts
+            and all(len(p) == 2 and p.isascii() and p.isalpha() for p in parts)
+            and any(p in _TWO_LETTER_LANGS for p in parts)
+        ):
+            return tuple(dict.fromkeys(parts))
+    return ()
 
 
 @dataclass(frozen=True)
@@ -358,8 +445,12 @@ class Dat:
             return base_title(game)
         return base_title(entry.cloneof or entry.name)
 
-    def one_game_one_rom(self, regions: list[str]) -> dict[str, Game]:
-        """One entry per game, choosing by region preference.
+    def one_game_one_rom(
+        self,
+        regions: list[str],
+        languages: list[str] | None = None,
+    ) -> dict[str, Game]:
+        """One entry per game, choosing by optional language then region preference.
 
         Igir's headline feature and the reason a 10,000-entry set collapses to
         a playable 3,000. The ladder is supplied by the caller so that a 1G1R
@@ -375,8 +466,17 @@ class Dat:
             groups.setdefault(self.group_key(game.name), []).append(game)
 
         order = [r.lower() for r in regions]
+        lang_order = [normalise_lang(l) for l in (languages or ()) if str(l).strip()]
 
-        def rank(game: Game) -> tuple[int, int, int, str]:
+        def rank(game: Game) -> tuple[int, int, int, int, str]:
+            if lang_order:
+                g_langs = game_languages(game)
+                lang_best = min(
+                    (lang_order.index(l) for l in g_langs if l in lang_order),
+                    default=len(lang_order),
+                )
+            else:
+                lang_best = 0
             found = _regions_in(game.name)
             best = min((order.index(r) for r in found if r in order),
                        default=len(order))
@@ -386,7 +486,7 @@ class Dat:
             # without cloneof relationships. Keep promo/debug-only games.
             variant = bool(re.search(r"[\(\[][^)\]]*\b(debug|promo)\b",
                                      game.name, re.IGNORECASE))
-            return (best, int(variant), 0 if not game.cloneof else 1, game.name)
+            return (lang_best, best, int(variant), 0 if not game.cloneof else 1, game.name)
 
         return {min(members, key=rank).name: min(members, key=rank)
                 for members in groups.values()}
@@ -449,6 +549,11 @@ def _parse_clrmamepro(body: str) -> Dat:
         if cl:
             clone = (cl.group(1) if cl.group(1) is not None
                      else cl.group(2)).strip()
+        raw_lang = ""
+        lg = re.search(r'^\s*languages?\s+(?:"([^"]*)"|(\S+))', block, re.M)
+        if lg:
+            raw_lang = (lg.group(1) if lg.group(1) is not None
+                        else lg.group(2)).strip()
 
         roms = []
         for line in re.finditer(r"^\s*rom\s*\((.*?)\)\s*$", block, re.M):
@@ -474,7 +579,12 @@ def _parse_clrmamepro(body: str) -> Dat:
                 dat._sizes.setdefault(rom.size, name)
         if name in dat.games:
             dat._ambiguous_game_names.add(name)
-        dat.games[name] = Game(name=name, roms=tuple(roms), cloneof=clone)
+        dat.games[name] = Game(
+            name=name,
+            roms=tuple(roms),
+            cloneof=clone,
+            languages=parse_dat_languages(raw_lang),
+        )
     return dat
 
 
@@ -543,9 +653,21 @@ def parse_dat(body: str) -> Dat:
         parent = (node.get("cloneof") or "").strip()
         if not parent:
             parent = ids.get((node.get("cloneofid") or "").strip(), "")
+        raw_lang = (
+            node.get("language")
+            or node.findtext("language")
+            or node.get("languages")
+            or node.findtext("languages")
+            or ""
+        ).strip()
         if name in dat.games:
             dat._ambiguous_game_names.add(name)
-        dat.games[name] = Game(name=name, roms=tuple(roms), cloneof=parent)
+        dat.games[name] = Game(
+            name=name,
+            roms=tuple(roms),
+            cloneof=parent,
+            languages=parse_dat_languages(raw_lang),
+        )
     return dat
 
 
