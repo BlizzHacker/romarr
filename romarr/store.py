@@ -230,6 +230,8 @@ class SeerrRequest:
 # Defaults are spelled out here rather than scattered through the UI so a fresh
 # install and a configured one disagree about nothing.
 DEFAULT_SETTINGS: dict[str, Any] = {
+    "soundtrack_sources": "zophar,archive",
+    "music_library_root": "",
     # How a friend's server reaches this one, e.g. https://romarr.example.com.
     # Peering is the only feature that needs ROMarr to know its own address:
     # an invitation carries it, and without one the friend who redeems the

@@ -22,7 +22,7 @@ def test_the_service_registers_its_jobs(tmp_path):
     names = {j["name"] for j in s.scheduler.status()}
     assert names == {"ImportCompleted", "MissingGameSearch", "RssSync",
                      "ListSync", "UpdateCheck", "PluginUpdate", "HashIndex",
-                     "FailedDownloads"}
+                     "FailedDownloads", "SoundtrackTorrents"}
 
 
 def test_plugin_update_job_is_off_until_asked_and_toggles_live(tmp_path):

@@ -219,7 +219,7 @@ def test_base_theme_rules_survive_an_unsupported_has_selector():
 
 def test_native_navigation_preserves_routes_in_requested_order():
     expected = {
-        'Library': 'library add discover search',
+        'Library': 'library add discover search soundtracks',
         'Wanted': 'missing lists calendar',
         'Activity': 'queue history blocklist reports',
         'Hub': 'hub emulators portal peers ecosystem agents',
@@ -235,7 +235,7 @@ def test_native_navigation_preserves_routes_in_requested_order():
     assert [g['data-group'] for g in groups if 'open' in g] == ['library']
     assert all(g['name'] == 'romarr-groups' for g in groups)
     links = [a for t, a in nodes if t == 'a']
-    assert len(links) == len({a['data-page'] for a in links}) == 35
+    assert len(links) == len({a['data-page'] for a in links}) == 36
     assert all(a['href'] == '#' + a['data-page'] for a in links)
     assert [a['data-ct'] for _, a in nodes if 'data-ct' in a] == [
         'games', 'missing', 'queued', 'queued']

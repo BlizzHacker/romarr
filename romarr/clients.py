@@ -325,7 +325,8 @@ class QBittorrent:
             except requests.RequestException:
                 log.warning("qbittorrent category restore error for %s", torrent_hash[:12])
 
-    def _adopt_duplicate_magnet(self, magnet_or_url: str, tag: str) -> bool:
+    def _adopt_duplicate_magnet(self, magnet_or_url: str, tag: str,
+                                category: str | None = None) -> bool:
         """Attach an existing unowned qBittorrent torrent atomically."""
         if not str(magnet_or_url or "").startswith("magnet:"):
             return False
@@ -353,7 +354,7 @@ class QBittorrent:
                 return False
             original_category = str(existing[0].get("category") or "").strip()
             restore_cat = (original_category
-                           if original_category != self._config.category else None)
+                           if original_category != (category or self._config.category) else None)
             tag_added = False
             category_changed = False
             try:
@@ -368,7 +369,7 @@ class QBittorrent:
                 categorized = self._post(
                     "torrents/setCategory",
                     data={"hashes": torrent_hash,
-                          "category": self._config.category},
+                          "category": (category or self._config.category)},
                     timeout=self._config.timeout,
                 )
                 if categorized is None or not categorized.ok:
@@ -389,7 +390,7 @@ class QBittorrent:
                     if isinstance(row, dict)
                     and _row_has_tag(row, tag)
                     and _row_matches_infohash(row, infohash)
-                    and (row.get("category") or "") == self._config.category
+                    and (row.get("category") or "") == (category or self._config.category)
                 ]
                 if len(matches) == 1:
                     self._added.job_id = "qbit-tag:" + tag
@@ -406,27 +407,32 @@ class QBittorrent:
                     restore_category=restore_cat if category_changed else None)
                 return False
 
-    def add(self, magnet_or_url: str, *, save_path: str | None = None) -> bool:
+    def add(self, magnet_or_url: str, *, save_path: str | None = None,
+            category: str | None = None) -> bool:
         """Add a torrent, attaching a verified duplicate to this request."""
         self._added.job_id = ""
+        self._added.error = ""
         if not self._authed:
             self.login()
         tag = "romarr-" + secrets.token_hex(12)
-        data = {"urls": magnet_or_url, "category": self._config.category,
+        data = {"urls": magnet_or_url, "category": category or self._config.category,
                 "tags": tag}
         if save_path:
             data["savepath"] = save_path
         response = self._post("torrents/add", data=data, timeout=self._config.timeout)
-        if response.status_code == 409 and self._adopt_duplicate_magnet(magnet_or_url, tag):
+        if response.status_code == 409 and self._adopt_duplicate_magnet(magnet_or_url, tag, category):
             return True
         if not response.ok:
             log.warning("qbittorrent add failed: %s", response.status_code)
+            return False
+        if str(getattr(response, "text", "") or "").strip().lower().startswith("fails"):
+            self._added.error = "qBittorrent did not accept the torrent"
             return False
         self._added.job_id = "qbit-tag:" + tag
         return True
 
     def add_torrent_file(self, torrent: bytes, *,
-                         save_path: str | None = None) -> bool:
+                         save_path: str | None = None, category: str | None = None) -> bool:
         """Upload a locally fetched .torrent and confirm qBittorrent added it.
 
         Prowlarr links are only reachable from ROMarr's network and carry its
@@ -438,7 +444,7 @@ class QBittorrent:
             self.login()
         tag = "romarr-" + secrets.token_hex(12)
         self._added.job_id = ""
-        data = {"category": self._config.category, "tags": tag}
+        data = {"category": category or self._config.category, "tags": tag}
         if save_path:
             data["savepath"] = save_path
         try:
@@ -1351,6 +1357,39 @@ class Romm:
         self._token = response.json().get("access_token", "")
         self._token_from_login = bool(self._token)
         return self._token or None
+
+    WRITE_SCOPES = "roms.read roms.write"
+
+    def write_token(self, refresh: bool = False) -> str | None:
+        """A bearer token that may edit ROMs, for soundtrack uploads and undo.
+
+        An operator-configured API token is used as it is (RomM decides what it
+        may do). Otherwise this is a second password grant with the write scope,
+        cached apart from the read-only token and renewed shortly before it
+        expires. Returns None when there is nothing to sign in with, or RomM
+        refuses; the body of a refusal is never logged.
+        """
+        if self._config.api_token:
+            return self._config.api_token
+        cached = getattr(self, "_write_token", "")
+        if cached and not refresh:
+            expiry = self._jwt_expiry(cached)
+            if expiry is None or expiry - time.time() >= self.REFRESH_MARGIN:
+                return cached
+        if not (self._config.username and self._config.password):
+            return None
+        response = self._session.post(
+            f"{self._config.base_url.rstrip('/')}/api/token",
+            data={"grant_type": "password", "username": self._config.username,
+                  "password": self._config.password, "scope": self.WRITE_SCOPES},
+            timeout=self._config.timeout, allow_redirects=False)
+        if not response.ok:
+            log.warning("romm write auth failed with status %s", response.status_code)
+            self._write_token = ""
+            return None
+        self._write_token = response.json().get("access_token", "")
+        return self._write_token or None
+
 
     def _token_refused_with_500(self) -> bool:
         """Whether a 500 is RomM 5.3.1 rejecting our expired bearer token.
