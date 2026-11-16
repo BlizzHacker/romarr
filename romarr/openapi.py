@@ -328,6 +328,7 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
                                           "save the result as an import list."),
     "/api/v1/openapi.json": ("GET", "This document."),
     "/api/v1/webhook/ggrequestz": ("POST", "Inbound request, GG Requestz shape."),
+    "/api/v1/webhook/opencollective": ("POST", "Inbound Open Collective activity webhook."),
     "/api/search": ("GET", "Search every configured indexer."),
     "/api/import": ("POST", "Import a finished download."),
     "/api/v1/command": ("POST", "Run a task: search, import or refresh."),

@@ -42,8 +42,10 @@ ON_FAILURE = "failure"
 ON_UPGRADE = "upgrade"
 ON_BAD_DUMP = "bad-dump"
 ON_UPDATE = "update"
+ON_OPENCOLLECTIVE = "opencollective"
 
-EVENTS = (ON_GRAB, ON_IMPORT, ON_UPGRADE, ON_FAILURE, ON_BAD_DUMP, ON_UPDATE)
+EVENTS = (ON_GRAB, ON_IMPORT, ON_UPGRADE, ON_FAILURE, ON_BAD_DUMP, ON_UPDATE,
+          ON_OPENCOLLECTIVE)
 
 TIMEOUT = 15
 
@@ -341,6 +343,18 @@ def update_available(current: str, latest: str, url: str = "") -> Message:
         event=ON_UPDATE,
         title=f"ROMarr {latest} is available",
         body=f"This install is running {current}.",
+        url=url,
+    )
+
+
+def opencollective_event(title: str, body: str = "", reasons=(),
+                         url: str = "https://opencollective.com/romarr") -> Message:
+    """Format a verified Open Collective activity webhook for configured notifiers."""
+    return Message(
+        event=ON_OPENCOLLECTIVE,
+        title=title,
+        body=body,
+        reasons=tuple(reasons or ()),
         url=url,
     )
 

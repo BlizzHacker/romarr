@@ -850,6 +850,22 @@ def _theme_control_html() -> str:
         'border:1px solid var(--border,#333);border-radius:6px;display:flex;align-items:center;gap:7px;">'
         '<span aria-hidden="true">📲</span><span>Android Beta</span>'
         '<span style="margin-left:auto;font-size:10px;opacity:.7">Play ↗</span></a>'
+        '<div id="community-links" style="display:flex;gap:6px;margin:4px 10px 6px;">'
+        '<a id="discord-link" href="https://discord.gg/ywNFceuAd" '
+        'target="_blank" rel="noopener noreferrer" class="nav" '
+        'title="Join the ROMarr Discord" '
+        'style="flex:1;min-width:0;margin:0;padding:6px 8px;font-size:11.5px;font-weight:600;'
+        'color:var(--text,#eff3f8);background:var(--surface-soft,rgba(255,255,255,0.03));'
+        'border:1px solid var(--border,#273341);border-radius:6px;display:flex;align-items:center;justify-content:center;gap:4px;">'
+        '<span>Discord</span><span style="font-size:10px;opacity:.7">↗</span></a>'
+        '<a id="opencollective-link" href="https://opencollective.com/romarr" '
+        'target="_blank" rel="noopener noreferrer" class="nav" '
+        'title="Support ROMarr on Open Collective" '
+        'style="flex:1.25;min-width:0;margin:0;padding:6px 8px;font-size:11.5px;font-weight:600;'
+        'color:var(--accent-text,#3ea6ff);background:var(--surface-soft,rgba(255,255,255,0.03));'
+        'border:1px solid var(--border,#273341);border-radius:6px;display:flex;align-items:center;justify-content:center;gap:4px;">'
+        '<span>Open Collective</span><span style="font-size:10px;opacity:.7">↗</span></a>'
+        '</div>'
         '</div>'
     )
 
@@ -4869,7 +4885,7 @@ RENDER.status=async()=>{
       <div><b>${h.dat_games||0}</b><span>Known dumps</span></div>
       <div><b>${h.events}</b><span>History events</span></div>
       <div><b>${esc(h.uptime)}</b><span>Uptime</span></div>
-    </div>${buildIdentityLine(h.build)}<p class="help"><a href="https://romarr.app/privacy" target="_blank" rel="noopener noreferrer">Privacy policy</a> · <a href="mailto:me@romarr.app">Contact support</a></p></div>
+    </div>${buildIdentityLine(h.build)}<p class="help"><a href="https://romarr.app/privacy" target="_blank" rel="noopener noreferrer">Privacy policy</a> · <a href="mailto:me@romarr.app">Contact support</a> · <a href="https://discord.gg/ywNFceuAd" target="_blank" rel="noopener noreferrer">Discord</a> · <a href="https://opencollective.com/romarr" target="_blank" rel="noopener noreferrer">Open Collective</a> · <a href="https://romarr.app/opc" target="_blank" rel="noopener noreferrer">Webhook bridge (romarr.app/opc)</a> · <a href="https://github.com/BlizzHacker/romarr" target="_blank" rel="noopener noreferrer">GitHub</a></p></div>
 
     <div class="card"><h3>Backup and export</h3>
     <p class="help">A snapshot restores an install: settings, libraries,
@@ -5225,7 +5241,28 @@ RENDER.connections=async()=>{
       '<div class="pcard"><h4>'+esc(t.label)+'</h4>'
       +'<div class="desc">'+esc(t.help)+'</div>'
       +'<div class="meta">'+(t.fields||[]).map(f=>'<span class="pill">'+esc(f)+'</span>').join(' ')+'</div>'
-      +'</div>').join('')+'</div></div>';
+      +'</div>').join('')+'</div></div>'
+
+    +'<div class="card"><h3>Community &amp; Open Collective webhooks</h3>'
+    +'<p class="help">Join the <a href="https://discord.gg/ywNFceuAd" target="_blank" rel="noopener noreferrer">ROMarr Discord</a> or back development on '
+    +'<a href="https://opencollective.com/romarr" target="_blank" rel="noopener noreferrer">Open Collective</a>. '
+    +'Open Collective webhooks can post to <a href="https://romarr.app/opc" target="_blank" rel="noopener noreferrer">https://romarr.app/opc</a> '
+    +'or directly to this ROMarr server’s authenticated webhook receiver and fan out to your Connections above.</p>'
+    +'<div class="row" style="flex-wrap:wrap;gap:8px;margin-bottom:10px">'
+    +'<a class="btn ghost" href="https://opencollective.com/romarr" target="_blank" rel="noopener noreferrer">Open Collective ↗</a>'
+    +'<a class="btn ghost" href="https://discord.gg/ywNFceuAd" target="_blank" rel="noopener noreferrer">Join Discord ↗</a>'
+    +'<a class="btn ghost" href="https://romarr.app/opc" target="_blank" rel="noopener noreferrer">Webhook Hub (romarr.app/opc) ↗</a>'
+    +'<a class="btn ghost" href="https://opencollective.com/dashboard/romarr/webhooks" target="_blank" rel="noopener noreferrer">OC Webhooks Dashboard ↗</a>'
+    +'</div>'
+    +'<label for="oc-base">Direct ROMarr Open Collective webhook URL (optional — reveals API key)</label>'
+    +'<div class="row" style="flex-wrap:wrap;gap:8px;align-items:center">'
+    +'<input id="oc-base" style="flex:1;min-width:220px" placeholder="https://romarr.example.com">'
+    +'<button class="btn" id="oc-build" type="button">Reveal webhook URL</button>'
+    +'<button class="btn ghost" id="oc-copy" type="button" disabled>Copy</button>'
+    +'</div>'
+    +'<pre id="oc-value" style="display:none;margin-top:10px;font:12px/1.6 ui-monospace,Menlo,monospace;'
+    +'color:var(--dim);white-space:pre-wrap;overflow-wrap:anywhere;background:var(--bg);'
+    +'border:1px solid var(--line);border-radius:6px;padding:10px"></pre></div>';
 
   $('#c-add').onclick=()=>addItem('connection');
   document.querySelectorAll('[data-cedit]').forEach(b=>b.onclick=()=>
@@ -5240,6 +5277,30 @@ RENDER.connections=async()=>{
       ? res.map(x=>x.name+': '+(x.ok?'delivered':'failed')).join(' · ')
       : 'No connections configured.';
   };
+  const ocBase=$('#oc-base'), ocBuild=$('#oc-build'), ocCopy=$('#oc-copy'), ocVal=$('#oc-value');
+  if(ocBase && ocBuild && ocCopy && ocVal){
+    ocBase.value='';
+    ocBase.oninput=()=>{ocVal.textContent='';ocVal.style.display='none';ocCopy.disabled=true;};
+    ocBuild.onclick=async()=>{
+      ocBuild.disabled=true;
+      try{
+        if(!ocBase.value.trim()) throw new Error('Enter your reachable ROMarr URL');
+        const d=await j('/api/v1/system/apikey');
+        if(!d.api_key) throw new Error('ROMarr did not return an API key');
+        const target=new URL('/api/v1/webhook/opencollective',ocBase.value.trim());
+        target.searchParams.set('apikey',d.api_key);
+        ocVal.textContent=target.href;
+        ocVal.style.display='block'; ocCopy.disabled=false;
+      }catch(e){
+        ocVal.textContent='Could not build URL: '+(e.message||e);
+        ocVal.style.display='block'; ocCopy.disabled=true;
+      }finally{ocBuild.disabled=false;}
+    };
+    ocCopy.onclick=async()=>{
+      try{await navigator.clipboard.writeText(ocVal.textContent); toast('Copied');}
+      catch(_){toast('Copy failed — select the URL manually');}
+    };
+  }
 };
 
 RENDER.emulators=async()=>{
@@ -5852,8 +5913,8 @@ RENDER.setup=async()=>{
         :'<p><a class="btn" href="#search">Preview a game search</a></p><p class="help">Interactive Search shows the available releases before you choose one. Follow its progress in <a href="#queue">Queue</a>. If you prefer to start with files you already have, use <a href="#manualimport">Manual Import</a>.</p>')
       +'<h4 style="margin-top:22px">Want a dedicated player?</h4><p class="help">Cartridge is an optional companion for a RomM library. Choose the version for your device; ROMarr works without it.</p>'
       +'<div class="row" style="flex-wrap:wrap"><a class="btn ghost" href="https://github.com/BlizzHacker/romarr/releases/download/v1.8.0/Cartridge-Windows-Portable-0.2.0-x64.exe" target="_blank" rel="noopener">Cartridge for Windows</a><a class="btn ghost" href="https://apps.microsoft.com/detail/9MXC51W17LH4" target="_blank" rel="noopener">Cartridge for Xbox</a></div>'
-      +'<h4 style="margin-top:22px">Mobile App Beta</h4><p class="help">We are looking for 12 testers for the official ROMarr Android release on Google Play.</p>'
-      +'<div class="row" style="flex-wrap:wrap"><a class="btn ghost" href="https://play.google.com/apps/internaltest/4700888732790045566" target="_blank" rel="noopener">📲 Join Android Beta on Google Play</a></div>'
+      +'<h4 style="margin-top:22px">Mobile App Beta &amp; Community</h4><p class="help">We are looking for 12 testers for the official ROMarr Android release on Google Play, and you can connect with the community on Discord or back ROMarr on Open Collective.</p>'
+      +'<div class="row" style="flex-wrap:wrap"><a class="btn ghost" href="https://play.google.com/apps/internaltest/4700888732790045566" target="_blank" rel="noopener">📲 Join Android Beta on Google Play</a><a class="btn ghost" href="https://discord.gg/ywNFceuAd" target="_blank" rel="noopener noreferrer">Join ROMarr Discord</a><a class="btn ghost" href="https://opencollective.com/romarr" target="_blank" rel="noopener noreferrer">Support on Open Collective</a></div>'
       +'<p class="help">Stuck? You do not need to know the technical terms. Tell us the last step you reached. <a href="https://github.com/BlizzHacker/romarr/issues" target="_blank" rel="noopener">Open a GitHub issue</a> with your ROMarr version, what you expected, and the relevant error. Remove passwords and API keys from logs.</p>';
   }
   $('#page').innerHTML='<div class="card" style="max-width:900px"><div class="row" style="justify-content:space-between"><span class="help">Setup Guide</span><button class="btn ghost" id="setup-dismiss">Set up later</button></div>'
