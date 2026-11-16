@@ -10003,6 +10003,8 @@ def make_handler(service: ROMarr):
                 try:
                     with service._lock:
                         updated = service.store.update_settings(body)
+                        if "flaresolverr_url" in body:
+                            hub.configure_flaresolverr(str(updated.get("flaresolverr_url") or ""))
                 except ValueError as exc:
                     return self._json(400, {"error": str(exc)})
                 if any(str(k).startswith("oidc") or k == "_oidc_client_secret"
@@ -10014,8 +10016,6 @@ def make_handler(service: ROMarr):
                     # A stored path nothing re-reads is a setting that lies;
                     # reload_dats both stores and applies it.
                     service.reload_dats(str(body.get("dat_path") or ""))
-                if "flaresolverr_url" in body:
-                    hub.configure_flaresolverr(str(updated.get("flaresolverr_url") or ""))
                 service.reload_policy()
                 updated = service.safe_settings()
                 # A library path is only really changed once the running

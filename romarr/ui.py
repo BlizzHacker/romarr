@@ -1407,7 +1407,7 @@ RENDER.hub=async()=>{
 
     const solverNote=hs.available===false ? '' :
       (hs.flaresolverr_configured
-        ? '<div class="panel-note" style="border-left:3px solid var(--ok)"><b>FlareSolverr connected.</b> Cloudflare-challenged sources (GameFAQs, ModDB, CurseForge web) can fall back automatically through your host solver. Configure in <a href="#general">Settings &rarr; General</a>.</div>'
+        ? '<div class="panel-note" style="border-left:3px solid var(--ok)"><b>FlareSolverr configured.</b> Cloudflare-challenged sources (GameFAQs, ModDB, CurseForge web) can fall back automatically through your host solver. Configure in <a href="#general">Settings &rarr; General</a>.</div>'
         : '<div class="panel-note"><b>Optional FlareSolverr support:</b> Set a FlareSolverr URL in <a href="#general">Settings &rarr; General</a> to unlock Cloudflare-protected sources like GameFAQs and ModDB alongside open APIs (StrategyWiki, Modrinth, Thunderstore, GameBanana, Nexus Mods, GitHub, YouTube).</div>');
 
     const items=d.items||[];
@@ -1416,7 +1416,7 @@ RENDER.hub=async()=>{
       '<span class="chip'+(cap===name?' on':'')+'" data-cap="'+esc(name)+'">'
       +esc(name)+'<span class="n">'+n+'</span></span>').join('');
     const quickFilters=[['guides','Guides & FAQs'],['tutorials','Video Tutorials'],['mods','Mods & Addons'],['bots','Bots & Tools'],['github','Open-Source Repos']].map(([kw,label])=>
-      '<span class="chip'+(q===kw?' on':'')+'" data-quick="'+esc(kw)+'">'+esc(label)+'</span>').join('');
+      '<button type="button" class="chip'+(q===kw?' on':'')+'" data-quick="'+esc(kw)+'" aria-pressed="'+(q===kw?'true':'false')+'">'+esc(label)+'</button>').join('');
 
     p.innerHTML='<div class="card"><h3>Add game, mod, guide, bot &amp; repo sources with ROM Hub</h3>'
       +'<p>ROM Hub brings ROMs, <b>game mods</b> (CurseForge, ModDB, Nexus Mods, Modrinth, Thunderstore, GameBanana), <b>guides &amp; FAQs</b> (GameFAQs, StrategyWiki, Game Manuals), <b>video tutorials</b> (YouTube), and <b>open-source games &amp; bots</b> (GitHub) into ROMarr. Pick a source below, install it, and enable it.</p>'
@@ -1597,9 +1597,11 @@ RENDER.hub=async()=>{
 
     p.querySelectorAll('.chip[data-cap]').forEach(c=>c.onclick=()=>{
       clearTimeout(t);
+      q = qi.value.trim();
       cap = cap===c.dataset.cap ? '' : c.dataset.cap; reloadAndRender();});
     p.querySelectorAll('.chip[data-inst]').forEach(c=>c.onclick=()=>{
       clearTimeout(t);
+      q = qi.value.trim();
       inst = inst===c.dataset.inst ? '' : c.dataset.inst; reloadAndRender();});
     p.querySelectorAll('.chip[data-quick]').forEach(c=>c.onclick=()=>{
       clearTimeout(t);

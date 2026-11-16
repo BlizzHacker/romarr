@@ -54,13 +54,45 @@ def _build_fetcher(HttpxFetcher, *, timeout: float | None = None, transport=None
 
 
 def _wrap_download_transport(base_transport):
-    """Wrap an httpx download transport with FlareSolverr when configured."""
+    """Wrap an httpx download transport with FlareSolverr when configured.
+
+    For binary downloads, solving a Cloudflare challenge must retry the
+    original request against the inner transport using the cached clearance
+    cookie rather than returning the solver's HTML wrapper page as the file.
+    """
     solver = flaresolverr_url()
     if not solver:
         return base_transport
     try:
-        from rom_hub.flaresolverr import build_transport
-        return build_transport(base_transport, flaresolverr_url=solver)
+        import httpx
+        from rom_hub.flaresolverr import (
+            FlareSolverrTransport,
+            is_cloudflare_challenge,
+            normalize_flaresolverr_url,
+        )
+        normalized = normalize_flaresolverr_url(solver)
+        if not normalized:
+            return base_transport
+
+        class _BinaryDownloadSolverTransport(FlareSolverrTransport):
+            def handle_request(self, request: httpx.Request) -> httpx.Response:
+                req = self._apply_cached(request)
+                response = self._inner.handle_request(req)
+                if request.method.upper() != "GET" or response.status_code not in (403, 503):
+                    return response
+                body = response.read()
+                if not is_cloudflare_challenge(response.status_code, response.headers, body):
+                    return httpx.Response(
+                        status_code=response.status_code,
+                        headers=response.headers,
+                        content=body,
+                        request=req,
+                    )
+                response.close()
+                self._solve(str(request.url))
+                return self._inner.handle_request(self._apply_cached(request))
+
+        return _BinaryDownloadSolverTransport(normalized, inner=base_transport)
     except Exception:
         return base_transport
 
