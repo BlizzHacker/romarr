@@ -9772,24 +9772,24 @@ def make_handler(service: ROMarr):
                     return self._json(400, {"error": str(err) if isinstance(err, (ValueError, scanners.ScanUnavailable)) else "Emulator installation failed"})
             if route.path == "/api/v1/cartridge/install":
                 try:
-                    hub = CartridgeHub(service.store.path.parent)
-                    result = hub.install(scanner=service.scan_installation)
+                    cartridge_hub = CartridgeHub(service.store.path.parent)
+                    result = cartridge_hub.install(scanner=service.scan_installation)
                     return self._json(200, result)
                 except (ValueError, OSError, requests.RequestException, scanners.ScanUnavailable) as err:
                     log.warning("Cartridge installation failed: %s", type(err).__name__)
                     return self._json(400, {"error": str(err) if isinstance(err, (ValueError, scanners.ScanUnavailable)) else "Cartridge installation failed"})
             if route.path == "/api/v1/cartridge/launch":
                 try:
-                    hub = CartridgeHub(service.store.path.parent)
+                    cartridge_hub = CartridgeHub(service.store.path.parent)
                     port_val = service.port if hasattr(service, "port") else 6868
-                    result = hub.launch(port=port_val, game_id=str(body.get("game_id") or "") or None)
+                    result = cartridge_hub.launch(port=port_val, game_id=str(body.get("game_id") or "") or None)
                     return self._json(200, result)
                 except Exception as err:
                     return self._json(400, {"error": str(err)})
             if route.path == "/api/v1/emulators/plug-and-play":
                 try:
-                    hub = CartridgeHub(service.store.path.parent)
-                    result = hub.plug_and_play_setup()
+                    cartridge_hub = CartridgeHub(service.store.path.parent)
+                    result = cartridge_hub.plug_and_play_setup()
                     return self._json(200, result)
                 except Exception as err:
                     return self._json(400, {"error": str(err)})
