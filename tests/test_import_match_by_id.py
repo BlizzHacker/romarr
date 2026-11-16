@@ -457,6 +457,7 @@ def test_qbittorrent_duplicate_cleans_up_tag_on_category_or_verify_failure_and_a
                         "tags": "cross-seed", "category": "prowlarr"}
             self.fail_category = True
             self.fail_verify = False
+            self.drop_category_update = False
             self.removed = []
 
         def post(self, url, **kwargs):
@@ -476,7 +477,8 @@ def test_qbittorrent_duplicate_cleans_up_tag_on_category_or_verify_failure_and_a
             if url.endswith("/torrents/setCategory"):
                 if self.fail_category:
                     return Response(500, text="Error.")
-                self.row["category"] = data["category"]
+                if not self.drop_category_update:
+                    self.row["category"] = data["category"]
                 return Response()
             return Response()
 
@@ -516,8 +518,18 @@ def test_qbittorrent_duplicate_cleans_up_tag_on_category_or_verify_failure_and_a
     assert session.row["tags"] == "cross-seed"
     assert session.row["category"] == ""
 
-    # Retry succeeds once category update and verification succeed.
+    # Confirmation rejects the row if the category does not match the configured category.
     session.fail_verify = False
+    session.row["category"] = "prowlarr"
+    session.drop_category_update = True
+    assert not client.add(magnet)
+    assert client.last_job_id == ""
+    assert len(session.removed) == 4
+    assert session.row["tags"] == "cross-seed"
+    assert session.row["category"] == "prowlarr"
+
+    # Retry succeeds once category update and verification succeed.
+    session.drop_category_update = False
     assert client.add(magnet)
     assert client.last_job_id.startswith("qbit-tag:romarr-")
     attached_tag = client.last_job_id.removeprefix("qbit-tag:")

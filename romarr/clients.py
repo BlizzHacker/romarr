@@ -389,6 +389,7 @@ class QBittorrent:
                     if isinstance(row, dict)
                     and _row_has_tag(row, tag)
                     and _row_matches_infohash(row, infohash)
+                    and (row.get("category") or "") == self._config.category
                 ]
                 if len(matches) == 1:
                     self._added.job_id = "qbit-tag:" + tag
