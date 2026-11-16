@@ -368,6 +368,10 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "/api/v1/emulators/cores/configure": ("POST", "Create a dedicated RetroArch configuration and save directories."),
     "/api/v1/emulators/release": ("GET", "Check the selected emulator's official release assets."),
     "/api/v1/emulators/install": ("POST", "Verify, scan and install a portable emulator on the ROMarr host."),
+    "/api/v1/emulators/plug-and-play": ("POST", "One-click plug-and-play setup configuring Cartridge and recommended emulators."),
+    "/api/v1/cartridge/status": ("GET", "Check Cartridge player installation and available platforms."),
+    "/api/v1/cartridge/install": ("POST", "Auto-install the verified portable Cartridge player."),
+    "/api/v1/cartridge/launch": ("POST", "Launch Cartridge player paired with ROMarr."),
     "/api/v1/security/inspect": ("POST", "Inspect an explicitly selected shared file with MWM or Arkana."),
     "/api/v1/downloadclient/mdm": ("GET", "Availability of the external "
                                           "Mister Download Manager CLI for "

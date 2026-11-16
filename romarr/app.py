@@ -63,6 +63,7 @@ from . import hub  # ROM Hub bridge -- the Cartridge plugin layer
 from . import clamav, scanners, nup, mdm
 from .emulators import EmulatorHub
 from .libretro import CoreHub
+from .cartridge import CartridgeHub
 from .emulator_catalog import resource_catalog
 from .dat import DatIndex, parse_dat
 from .decompress import run_batch as run_decompress_batch, scan_compressed
@@ -8399,6 +8400,11 @@ def make_handler(service: ROMarr):
                     return self._json(200, result)
                 except (ValueError, requests.RequestException):
                     return self._json(400, {"error": "Could not check this upstream release. Use its downloads page."})
+            if route.path == "/api/v1/cartridge/status":
+                try:
+                    return self._json(200, CartridgeHub(service.store.path.parent).status())
+                except Exception as err:
+                    return self._json(400, {"error": str(err)})
             if route.path == "/api/v1/downloadclient/mdm":
                 return self._json(200, service.mdm_capability())
             if route.path == "/metrics":
@@ -9764,6 +9770,29 @@ def make_handler(service: ROMarr):
                         scanners.ScanUnavailable) as err:
                     log.warning("Emulator installation failed: %s", type(err).__name__)
                     return self._json(400, {"error": str(err) if isinstance(err, (ValueError, scanners.ScanUnavailable)) else "Emulator installation failed"})
+            if route.path == "/api/v1/cartridge/install":
+                try:
+                    cartridge_hub = CartridgeHub(service.store.path.parent)
+                    result = cartridge_hub.install(scanner=service.scan_installation)
+                    return self._json(200, result)
+                except (ValueError, OSError, requests.RequestException, scanners.ScanUnavailable) as err:
+                    log.warning("Cartridge installation failed: %s", type(err).__name__)
+                    return self._json(400, {"error": str(err) if isinstance(err, (ValueError, scanners.ScanUnavailable)) else "Cartridge installation failed"})
+            if route.path == "/api/v1/cartridge/launch":
+                try:
+                    cartridge_hub = CartridgeHub(service.store.path.parent)
+                    port_val = service.port if hasattr(service, "port") else 6868
+                    result = cartridge_hub.launch(port=port_val, game_id=str(body.get("game_id") or "") or None)
+                    return self._json(200, result)
+                except Exception as err:
+                    return self._json(400, {"error": str(err)})
+            if route.path == "/api/v1/emulators/plug-and-play":
+                try:
+                    cartridge_hub = CartridgeHub(service.store.path.parent)
+                    result = cartridge_hub.plug_and_play_setup()
+                    return self._json(200, result)
+                except Exception as err:
+                    return self._json(400, {"error": str(err)})
             if route.path == "/api/v1/security/inspect":
                 try:
                     return self._json(200, service.security_inspect(

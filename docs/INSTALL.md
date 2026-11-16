@@ -330,7 +330,7 @@ Download the portable **Windows 10/11 x64** app. The package contains the native
 2. Extract the **whole ZIP** to a folder you own. Keep `ROMarr.exe`, `backend`, `browser` and `git` together. Do not open the EXE from inside the ZIP.
 3. Double-click **ROMarr.exe**. Choose your data folder and ROM library folder, then click **Start ROMarr**.
 4. Set your ROMarr password in the embedded interface. Follow **Settings -> Setup Guide**. Choose **I already have ROMs** to start with an existing collection.
-5. Add your connections and plugins when needed. The **Cartridge** menu offers separate optional downloads for Windows and Xbox players; neither is required for ROMarr.
+5. Add your connections and plugins when needed. The **Cartridge** menu offers optional player downloads for Windows, Xbox, and Android (Argosy Launcher); none are required for ROMarr, but they provide seamless frontends to play your library across desktop, console, and handheld screens.
 
 The app listens on `127.0.0.1:6868` by default. Its native window has folder pickers, Start/Stop, a port setting, data/log access and help links. Closing it stops the backend it started. It does not run as a Windows service or start automatically with Windows.
 

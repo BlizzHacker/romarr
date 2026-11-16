@@ -133,7 +133,15 @@ Source access, available files, credentials and platform support vary. Check the
 
 ## Play with Cartridge
 
-[Cartridge for Windows](https://github.com/BlizzHacker/romarr/releases/download/v1.8.0/Cartridge-Windows-Portable-0.2.0-x64.exe) and [Cartridge for Xbox](https://github.com/BlizzHacker/RommForXbox) are optional players for a RomM library. Choose the app for your device. ROMarr manages acquisition and imports; Cartridge connects to RomM to browse and play. You can keep using your existing frontend instead. The Windows app's **Cartridge** menu and the Setup Guide link to both.
+**Cartridge** is the dedicated player ecosystem for self-hosted game libraries, connecting seamlessly to [RomM](https://romm.app) or directly to **ROMarr's embedded RomM-API backend**. While ROMarr finds, verifies, and organizes your files, Cartridge provides controller-first frontends to browse, sync saves, and launch games across your screens:
+
+| Platform | Client | Best Fit | Features & Downloads |
+|---|---|---|---|
+| **Windows** | [Cartridge for Windows](https://github.com/BlizzHacker/RommForDesktop) | Desktop PCs, laptops, and Windows handhelds (ROG Ally, Legion Go) | Embedded RomM console player, standalone window, no external browser required. [Download Portable EXE](https://github.com/BlizzHacker/romarr/releases/download/v1.8.0/Cartridge-Windows-Portable-0.2.0-x64.exe) or explore [RommForDesktop](https://github.com/BlizzHacker/RommForDesktop). |
+| **Xbox** | [Cartridge for Xbox](https://github.com/BlizzHacker/RommForXbox) | Xbox Series X\|S and Xbox One consoles | Native UWP/WebView2 gamepad experience, big-screen TV navigation, and EmulatorJS cores. Available on [Microsoft Store (App ID: 9MXC51W17LH4)](https://apps.microsoft.com/detail/9MXC51W17LH4) and [RommForXbox](https://github.com/BlizzHacker/RommForXbox). |
+| **Android** | [Cartridge for Android (Argosy)](https://github.com/BlizzHacker/argosy-launcher) | Retro handhelds (Odin 2, Retroid Pocket, Anbernic), Android TV, tablets, phones | Gamepad-native launcher with bidirectional save-sync, rich IGDB metadata, on-demand downloads, and automated emulator handoff to RetroArch, Dolphin, PPSSPP, and NetherSX2. [Download APK from Releases](https://github.com/BlizzHacker/argosy-launcher/releases) or visit [Argosy Launcher](https://github.com/BlizzHacker/argosy-launcher). |
+
+You can use Cartridge alongside your existing setup or keep using your favorite frontend (Playnite, LaunchBox, ES-DE, Pegasus). The Windows desktop app's **Cartridge** menu and the setup guides link to all three clients.
 
 ## Help and documentation
 
