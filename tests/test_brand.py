@@ -62,6 +62,15 @@ def test_the_rendered_brand_is_exactly_romarr():
     assert _text(brand.group(1)).strip() == BRAND
 
 
+def test_brand_icon_svg_is_separated_from_text_and_accent_reactive():
+    from romarr.ui import link_page, login_page
+    for html in (page(), login_page(claimed=True), login_page(claimed=False), link_page()):
+        assert 'class="brand-icon"' in html
+        assert 'fill="var(--accent, #75adff)"' in html
+        assert 'stroke="var(--accent, #75adff)"' in html
+        assert 'ROM<span>arr</span>' in html
+
+
 def test_no_wrong_spelling_survives_anywhere_a_user_can_read_it():
     rendered = _text(page())
     found = WRONG.findall(rendered)

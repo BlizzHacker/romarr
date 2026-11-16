@@ -1,4 +1,6 @@
-# ROMarr
+# <img src="docs/img/brand/romarr-icon.svg" alt="" width="44" height="40" align="absmiddle"> ROMarr
+
+![ROMarr — Find, verify and organize your game library](docs/img/brand/romarr-hero-banner.jpg)
 
 The *arr for games.
 
