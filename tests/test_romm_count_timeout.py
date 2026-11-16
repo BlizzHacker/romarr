@@ -69,14 +69,14 @@ class EndRefresh(Exception):
     """Stop the refresh loop at its normal wait boundary."""
 
 
-def refresh_once(backend):
+def refresh_once(backend, library_max=100):
     """Run the real background loop once, without threads or configuration."""
     service = ROMarr.__new__(ROMarr)
     service.game_libraries = [({"name": "RomM"}, backend)]
     service._library_cache = (None, 0, "")
     service._library_scan = {}
     service.LIBRARY_PAGE = 2
-    service.LIBRARY_MAX = 100
+    service.LIBRARY_MAX = library_max
     published = []
 
     def publish(shelf, error, *, partial):
@@ -140,3 +140,33 @@ def test_a_failed_page_read_is_still_reported_as_incomplete():
     assert published[-1][2], "a read that stopped early stays partial"
     scan, _ = service._library_scan_status()
     assert scan["stage"] == "error"
+
+
+def test_a_count_timeout_on_a_capped_read_reports_the_total_as_unknown():
+    """Rows read up to LIBRARY_MAX are a lower bound, not the library's size."""
+    games = [Game(id=str(n), name=f"Game {n}", platform="snes") for n in range(5)]
+
+    def slow_counts():
+        raise requests.ReadTimeout("count took longer than the budget")
+
+    service, published = refresh_once(paged_backend(games, slow_counts), library_max=4)
+
+    assert len(published[-1][0]) == 4
+    assert published[-1][2], "a capped read stays marked partial"
+    assert service._count_cache[0] is None, "no capped number posing as the total"
+    assert service._count_split["total"] is None
+    scan, _ = service._library_scan_status()
+    assert scan["limit_reached"]
+
+
+def test_a_count_timeout_below_the_cap_keeps_the_exact_total():
+    """A read that finished under LIBRARY_MAX counted every game."""
+    games = [Game(id=str(n), name=f"Game {n}", platform="snes") for n in range(5)]
+
+    def slow_counts():
+        raise requests.ReadTimeout("count took longer than the budget")
+
+    service, _ = refresh_once(paged_backend(games, slow_counts), library_max=100)
+
+    assert service._count_cache[0] == 5
+    assert service._count_split["total"] == 5

@@ -902,6 +902,10 @@ class ROMarr:
                                   "read": 0, "stage": "counting", "library": "",
                                   "limit_reached": False}
             ok, total, shelf, failures = True, 0, [], []
+            # Set when a library's count failed and its read stopped at
+            # LIBRARY_MAX: the rows read are then a lower bound, so the
+            # total is published as unknown (a dash) rather than as a number.
+            total_unknown = False
             # Accumulated beside the total, because the total on its own is
             # the bug: a library that catalogues streamed entries answers
             # `count()` with the two categories added together, and every
@@ -1056,7 +1060,10 @@ class ROMarr:
                     if offset >= self.LIBRARY_MAX:
                         self._library_scan["limit_reached"] = True
                     if count_failed:
-                        total += len(shelf) - read_before
+                        if offset >= self.LIBRARY_MAX:
+                            total_unknown = True
+                        else:
+                            total += len(shelf) - read_before
                 except Exception as err:
                     ok = False
                     failures.append(f"{label}: {err.__class__.__name__}")
@@ -1068,6 +1075,8 @@ class ROMarr:
             self._library_scan.update(running=False, finished=time.monotonic(),
                                       stage="complete" if ok else "error")
             if shelf or ok:
+                if total_unknown:
+                    total = None
                 self._count_cache = (total, time.monotonic())
                 self._count_split = {"total": total, "on_disk": on_disk,
                                      "catalogued": catalogued}
