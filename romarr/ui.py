@@ -5144,7 +5144,17 @@ RENDER.emulators=async()=>{
   const version=pageVersion;
   const current=()=>version===pageVersion && activePage==='emulators';
   let offset=0, query='', mode='projects', hostPlatform='', request=0, inspection=0;
-  $('#page').innerHTML=`<div class="card"><h3>Emulator Hub</h3>
+  $('#page').innerHTML=`<div class="card" style="border:1px solid #3b82f6;"><h3>Cartridge &amp; Plug-and-Play Setup</h3>
+    <p>Turnkey integration between ROMarr and Cartridge. Auto-install the Cartridge Player, launch it directly, or configure all emulators with one click.</p>
+    <div class="row">
+      <button class="btn" id="cartridge-auto-install">Auto-Install Cartridge (Windows)</button>
+      <button class="btn ghost" id="cartridge-launch">Launch Cartridge</button>
+      <button class="btn ghost" id="cartridge-pnp">Plug &amp; Play Setup (All Emulators)</button>
+      <a class="btn ghost" href="https://github.com/BlizzHacker/Cartridge/releases" target="_blank" rel="noopener">Cartridge for Android (APK)</a>
+      <a class="btn ghost" href="https://apps.microsoft.com/detail/9MXC51W17LH4" target="_blank" rel="noopener">Cartridge for Xbox</a>
+    </div>
+    <pre id="cartridge-status-result" role="status" style="margin-top:8px;"></pre></div>
+    <div class="card"><h3>Emulator Hub</h3>
     <p>Find an emulator, check its setup guide, then add your games. Install buttons install on the
     <b>ROMarr host</b>. Use the upstream downloads on a different gaming device.</p>
     <p class="help">Free and noncommercial projects are included. Each project keeps its own terms.
@@ -5264,6 +5274,27 @@ RENDER.emulators=async()=>{
   $('#core-config').onclick=async()=>{
     const result=await j('/api/v1/emulators/cores/configure',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
     if(current())$('#core-config-result').textContent=JSON.stringify(result,null,2);
+  };
+  $('#cartridge-auto-install').onclick=async()=>{
+    const out=$('#cartridge-status-result');out.textContent='Downloading and verifying Cartridge Player…';
+    try{
+      const res=await j('/api/v1/cartridge/install',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+      if(current())out.textContent=JSON.stringify(res,null,2);
+    }catch(err){if(current())out.textContent='Install error: '+err.message;}
+  };
+  $('#cartridge-launch').onclick=async()=>{
+    const out=$('#cartridge-status-result');out.textContent='Launching Cartridge Player…';
+    try{
+      const res=await j('/api/v1/cartridge/launch',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+      if(current())out.textContent=JSON.stringify(res,null,2);
+    }catch(err){if(current())out.textContent='Launch error: '+err.message;}
+  };
+  $('#cartridge-pnp').onclick=async()=>{
+    const out=$('#cartridge-status-result');out.textContent='Configuring Plug & Play emulators and system paths…';
+    try{
+      const res=await j('/api/v1/emulators/plug-and-play',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+      if(current())out.textContent=JSON.stringify(res,null,2);
+    }catch(err){if(current())out.textContent='Plug & Play error: '+err.message;}
   };
   document.querySelectorAll('[data-inspect]').forEach(button=>button.onclick=async()=>{
     const inspectVersion=++inspection;
