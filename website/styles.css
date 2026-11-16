@@ -48,8 +48,8 @@ img,svg{display:block}
 .hero-lockup-word span{color:var(--blue)}
 .hero-lockup-tag{margin-top:4px;font:700 10px/1.2 var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
 .hero-lockup-tag b{color:var(--blue)}
-.main-nav{display:flex;align-items:center;justify-content:center;gap:clamp(14px,2.6vw,34px);margin-left:auto}
-.main-nav a,.header-link{color:#aab5c1;font-size:12px;font-weight:580;transition:color .18s ease}
+.main-nav{display:flex;align-items:center;justify-content:center;gap:clamp(10px,1.4vw,20px);margin-left:auto}
+.main-nav a,.header-link{color:#aab5c1;font-size:12px;font-weight:580;white-space:nowrap;transition:color .18s ease}
 .main-nav a:hover,.footer-links a:hover{color:var(--blue)}
 .header-link{display:inline-flex;align-items:center;min-height:44px;border:1px solid var(--line-bright);border-radius:3px;padding:8px 12px;white-space:nowrap;color:var(--ink)}
 .header-link span,.route-step a span,.text-link span,.cartridge-links a span,.direction-row a span,.direction-projects a span,.direction-links a span,.footer-links a span{color:var(--blue)}

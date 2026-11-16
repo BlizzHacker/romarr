@@ -10,6 +10,8 @@ Find games, verify ROMs, and import them into your library.
 
 [![Tests and images](https://github.com/BlizzHacker/romarr/actions/workflows/docker.yml/badge.svg)](https://github.com/BlizzHacker/romarr/actions/workflows/docker.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![Discord](https://img.shields.io/badge/Discord-Join_ROMarr-5865F2?logo=discord&logoColor=white)](https://discord.gg/ywNFceuAd)
+[![Open Collective](https://opencollective.com/romarr/tiers/badge.svg)](https://opencollective.com/romarr)
 [![GG Requestz](https://img.shields.io/badge/Companion-GG_Requestz-8A2BE2?logo=gamepad&logoColor=white)](https://github.com/BlizzHacker/ggrequestz)
 [![RomM Ecosystem](https://img.shields.io/badge/Ecosystem-RomM-blue?logo=gamepad&logoColor=white)](https://github.com/rommapp/romm)
 [![r/romm](https://img.shields.io/badge/Reddit-r%2Fromm-FF4500?logo=reddit&logoColor=white)](https://www.reddit.com/r/romm)
@@ -21,11 +23,11 @@ Find games, verify ROMs, and import them into your library.
 [![Microsoft Store](https://img.shields.io/badge/Microsoft_Store-Windows_App-0078D4?logo=windows&logoColor=white)](https://github.com/BlizzHacker/romarr/releases)
 [![Submit Package](https://img.shields.io/badge/Package_Submissions-Submit_ROMarr-purple?logo=github&logoColor=white)](docs/SUBMISSIONS.md)
 
-**[Install](#install)** · **[First setup](docs/GETTING-STARTED.md)** · **[GG Requestz](https://github.com/BlizzHacker/ggrequestz)** · **[RomM](https://github.com/rommapp/romm)** · **[r/romm](https://www.reddit.com/r/romm)** · **[r/arr](https://www.reddit.com/r/arr)** · **[Android App & APK](docs/ANDROID.md)** · **[Unraid App](https://ca.unraid.net/apps/romarr-04jslct0riva81?q=romarr)** · **[Plugins](docs/PLUGINS.md)** · **[Roadmap](ROADMAP.md)** · **[Releases](https://github.com/BlizzHacker/romarr/releases)** · **[Submit Package](docs/SUBMISSIONS.md)** · **[Privacy](docs/PRIVACY.md)**
+**[Install](#install)** · **[First setup](docs/GETTING-STARTED.md)** · **[Discord](https://discord.gg/ywNFceuAd)** · **[Open Collective](https://opencollective.com/romarr)** · **[GG Requestz](https://github.com/BlizzHacker/ggrequestz)** · **[RomM](https://github.com/rommapp/romm)** · **[r/romm](https://www.reddit.com/r/romm)** · **[r/arr](https://www.reddit.com/r/arr)** · **[Android App & APK](docs/ANDROID.md)** · **[Unraid App](https://ca.unraid.net/apps/romarr-04jslct0riva81?q=romarr)** · **[Plugins](docs/PLUGINS.md)** · **[Roadmap](ROADMAP.md)** · **[Releases](https://github.com/BlizzHacker/romarr/releases)** · **[Submit Package](docs/SUBMISSIONS.md)** · **[Privacy](docs/PRIVACY.md)**
 
 > [!NOTE]
-> **Community & Where You'll Most Likely Find Me:**  
-> Hang out and chat in the community! You'll most likely find me on Reddit in **[r/romm](https://www.reddit.com/r/romm)** and **[r/arr](https://www.reddit.com/r/arr)** (along with [r/selfhosted](https://www.reddit.com/r/selfhosted)). Connect with companion game request workflows via **[GG Requestz](https://github.com/BlizzHacker/ggrequestz)** and frontend setups via **[RomM](https://github.com/rommapp/romm)**.
+> **Community & Support:**  
+> Join the official **[ROMarr Discord](https://discord.gg/ywNFceuAd)**, follow or sponsor the project on **[Open Collective](https://opencollective.com/romarr)**, or hang out on Reddit in **[r/romm](https://www.reddit.com/r/romm)** and **[r/arr](https://www.reddit.com/r/arr)**. Connect companion game request workflows via **[GG Requestz](https://github.com/BlizzHacker/ggrequestz)** and frontend setups via **[RomM](https://github.com/rommapp/romm)**.
 
 > [!TIP]
 > **Android Beta, Handhelds & Argosy Launcher Integration!**  
@@ -208,6 +210,11 @@ Source access, available files, credentials and platform support vary. Check the
 | **Android** | [Cartridge for Android](https://github.com/BlizzHacker/Cartridge) | Retro handhelds (Odin 2, Retroid Pocket, Anbernic), Android TV, tablets, phones | Gamepad-native launcher with bidirectional save-sync, rich metadata, on-demand downloads, and automated emulator handoff to RetroArch, Dolphin, PPSSPP, and NetherSX2. [Download APK from Releases](https://github.com/BlizzHacker/Cartridge/releases) or visit [BlizzHacker/Cartridge](https://github.com/BlizzHacker/Cartridge). |
 
 You can use Cartridge alongside your existing setup or keep using your favorite frontend (Playnite, LaunchBox, ES-DE, Pegasus). The Windows desktop app's **Cartridge** menu and the setup guides link to all three clients.
+
+## Community & Support
+
+- **Discord:** Join the [ROMarr Discord server](https://discord.gg/ywNFceuAd) for release help, plugin tips, and troubleshooting.
+- **Open Collective:** Back ROMarr on [opencollective.com/romarr](https://opencollective.com/romarr) ([contributors badge](https://opencollective.com/romarr/tiers/backer/badge.svg?label=Backer&color=brightgreen)).
 
 ## Help and documentation
 

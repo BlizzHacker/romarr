@@ -8,6 +8,8 @@ Use these sources when you want a build supported by this project.
 | --- | --- |
 | Project and issues | [BlizzHacker/romarr](https://github.com/BlizzHacker/romarr) |
 | Website | [romarr.app](https://romarr.app) |
+| Discord community | [ROMarr Discord](https://discord.gg/ywNFceuAd) |
+| Open Collective | [opencollective.com/romarr](https://opencollective.com/romarr) |
 | Releases and Windows packages | [ROMarr releases](https://github.com/BlizzHacker/romarr/releases) |
 | Container images | `ghcr.io/blizzhacker/romarr` |
 | Unraid Community Applications | [ROMarr](https://ca.unraid.net/apps/romarr-04jslct0riva81?q=romarr) |
