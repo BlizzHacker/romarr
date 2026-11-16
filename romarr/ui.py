@@ -3264,6 +3264,17 @@ RENDER.portal=async()=>{
         window._fleetDeviceId=card.dataset.pickdev;
         draw();
       });
+      const invalidatePlan=()=>{
+        planSeq++;
+        const out=$('#fl-out');
+        if(out) out.innerHTML='';
+      };
+      ['#fl-mirror','#fl-1g1r','#fl-trans','#fl-path','#fl-host','#fl-src','#fl-reg','#fl-liburl'].forEach(sel=>{
+        const el=$(sel);
+        if(!el) return;
+        el.onchange=invalidatePlan;
+        if(el.tagName==='INPUT'&&el.type!=='checkbox') el.oninput=invalidatePlan;
+      });
       $('#fl-plan').onclick=runPlan;
       runPlan();
     }
