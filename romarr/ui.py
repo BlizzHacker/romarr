@@ -6303,21 +6303,36 @@ RENDER.collections=async()=>{
   enhancePlatformSelect($('#cplat'));
   const planBtn=$('#cplan');
   if(!planBtn) return;
+  let cplanSeq=0;
   planBtn.onclick=async()=>{
     const out=$('#cres');
+    const seq=++cplanSeq;
+    const planVer=typeof pageVersion==='number'?pageVersion:0;
     out.innerHTML='<div class="empty">Planning…</div>';
     const ex=[...document.querySelectorAll('.cex')].filter(c=>c.checked)
-      .map(c=>c.value).join(',');
-    const q='dat='+encodeURIComponent($('#cdat').value)
-      +'&platform='+encodeURIComponent($('#cplat').value)
-      +'&onegame='+($('#c1g1r').checked?'1':'0')
-      +'&regions='+encodeURIComponent($('#cregions').value.trim())
-      +'&region_mode='+($('#cstrict').checked?'strict':'prefer')
-      +'&translation_policy='+encodeURIComponent($('#ctrans').value)
-      +'&translation_langs='+encodeURIComponent($('#ctranslangs').value.trim())
-      +'&preferred_languages='+encodeURIComponent($('#cpreflangs').value.trim())
-      +'&exclude='+encodeURIComponent(ex);
+      .map(c=>c.value);
+    const previewPolicy={
+      dat:$('#cdat').value,
+      platform:$('#cplat').value,
+      one_game_one_rom:$('#c1g1r').checked,
+      regions:($('#cregions').value.trim()||'').split(',').filter(Boolean),
+      region_mode:$('#cstrict').checked?'strict':'prefer',
+      translation_policy:$('#ctrans').value,
+      translation_langs:($('#ctranslangs').value.trim()||'').split(',').map(s=>s.trim()).filter(Boolean),
+      preferred_languages:($('#cpreflangs').value.trim()||'').split(',').map(s=>s.trim()).filter(Boolean),
+      exclude:ex,
+    };
+    const q='dat='+encodeURIComponent(previewPolicy.dat)
+      +'&platform='+encodeURIComponent(previewPolicy.platform)
+      +'&onegame='+(previewPolicy.one_game_one_rom?'1':'0')
+      +'&regions='+encodeURIComponent(previewPolicy.regions.join(','))
+      +'&region_mode='+previewPolicy.region_mode
+      +'&translation_policy='+encodeURIComponent(previewPolicy.translation_policy)
+      +'&translation_langs='+encodeURIComponent(previewPolicy.translation_langs.join(','))
+      +'&preferred_languages='+encodeURIComponent(previewPolicy.preferred_languages.join(','))
+      +'&exclude='+encodeURIComponent(previewPolicy.exclude.join(','));
     const d=await j('/api/v1/collection/plan?'+q).catch(()=>({error:'plan failed'}));
+    if((typeof activePage!=='undefined'&&activePage!=='collections')||(typeof pageVersion==='number'&&pageVersion!==planVer)||seq!==cplanSeq) return;
     if(d.error){out.innerHTML='<div class="panel-note panel-warn">'+esc(d.error)+'</div>';return;}
     const c=d.counts;
     const tile=(n,label,colour)=>'<div style="flex:1;min-width:110px;padding:10px 12px;'
@@ -6378,16 +6393,9 @@ RENDER.collections=async()=>{
       e.target.disabled=true; e.target.textContent='Queueing…';
       const r=await j('/api/v1/collection/start',{method:'POST',
         headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({dat:$('#cdat').value,
-          platform:$('#cplat').value,
-          per_pass:parseInt($('#cpp').value,10)||5,
-          one_game_one_rom:$('#c1g1r').checked,
-          regions:($('#cregions').value.trim()||'').split(',').filter(Boolean),
-          region_mode:$('#cstrict').checked?'strict':'prefer',
-          translation_policy:$('#ctrans').value,
-          translation_langs:($('#ctranslangs').value.trim()||'').split(',').map(s=>s.trim()).filter(Boolean),
-          preferred_languages:($('#cpreflangs').value.trim()||'').split(',').map(s=>s.trim()).filter(Boolean),
-          exclude:ex.split(',').filter(Boolean)})});
+        body:JSON.stringify({
+          ...previewPolicy,
+          per_pass:parseInt($('#cpp').value,10)||5})});
       toast(r.error?r.error:('Queued '+(r.queued||0)+' titles'));
       e.target.disabled=false; e.target.textContent='Request missing';
       drawBatches();

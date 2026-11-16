@@ -85,6 +85,26 @@ _LANG_ALIASES = {
     "ko": "ko", "kor": "ko", "korean": "ko",
     "zh": "zh", "chi": "zh", "chn": "zh", "chinese": "zh",
     "pl": "pl", "pol": "pl", "polish": "pl",
+    "da": "da", "dan": "da", "danish": "da",
+    "fi": "fi", "fin": "fi", "finnish": "fi",
+    "no": "no", "nor": "no", "norwegian": "no", "nb": "nb", "nn": "nn",
+    "cs": "cs", "cze": "cs", "ces": "cs", "czech": "cs",
+    "hu": "hu", "hun": "hu", "hungarian": "hu",
+    "el": "el", "gre": "el", "ell": "el", "greek": "el",
+    "tr": "tr", "tur": "tr", "turkish": "tr",
+    "ar": "ar", "ara": "ar", "arabic": "ar",
+    "he": "he", "heb": "he", "hebrew": "he",
+    "ca": "ca", "cat": "ca", "catalan": "ca",
+    "ro": "ro", "rum": "ro", "ron": "ro", "romanian": "ro",
+    "bg": "bg", "bul": "bg", "bulgarian": "bg",
+    "hr": "hr", "hrv": "hr", "croatian": "hr",
+    "sk": "sk", "slo": "sk", "slk": "sk", "slovak": "sk",
+    "sl": "sl", "slv": "sl", "slovenian": "sl",
+    "uk": "uk", "ukr": "uk", "ukrainian": "uk",
+    "vi": "vi", "vie": "vi", "vietnamese": "vi",
+    "th": "th", "tha": "th", "thai": "th",
+    "id": "id", "ind": "id", "indonesian": "id",
+    "ms": "ms", "may": "ms", "msa": "ms", "malay": "ms",
 }
 
 _TWO_LETTER_LANGS = frozenset(_LANG_ALIASES.values())
@@ -123,7 +143,11 @@ def game_languages(game: Game) -> tuple[str, ...]:
         return game.languages
     for group in _PAREN_GROUP.findall(game.name or ""):
         parts = [p.strip().lower() for p in re.split(r"[,/]+", group) if p.strip()]
-        if parts and all(len(p) == 2 and p in _TWO_LETTER_LANGS for p in parts):
+        if (
+            parts
+            and all(len(p) == 2 and p.isascii() and p.isalpha() for p in parts)
+            and any(p in _TWO_LETTER_LANGS for p in parts)
+        ):
             return tuple(dict.fromkeys(parts))
     return ()
 

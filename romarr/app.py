@@ -8603,7 +8603,9 @@ def make_handler(service: ROMarr):
                     preferred_languages=(
                         [c for c in query.get("preferred_languages", [""])[0]
                          .split(",") if c.strip()]
-                        if "preferred_languages" in query else None),
+                        if ("preferred_languages" in query
+                            or "preferred_languages=" in (parsed.query or ""))
+                        else None),
                     region_mode=query.get("region_mode", [""])[0] or None,
                     exclude=[e for e in query.get("exclude", [""])[0].split(",")
                              if e] if "exclude" in query else None))

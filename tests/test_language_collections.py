@@ -184,3 +184,54 @@ def test_ui_and_store_expose_preferred_languages():
     assert 'data-k="preferred_languages"' in html
     assert 'id="cpreflangs"' in html
     assert "unknown_language_titles" in html
+
+
+def test_multilingual_filename_tags_unmarked_translations_and_strict_region():
+    from romarr.dat import Dat, Game
+
+    dat = Dat(
+        name="No-Intro NES",
+        games={
+            "Castlevania (Europe) (En,Da)": Game(
+                name="Castlevania (Europe) (En,Da)",
+            ),
+            "Super Mario Bros. (Europe) (Fr)": Game(
+                name="Super Mario Bros. (Europe) (Fr)",
+                languages=("fr",),
+            ),
+            "Super Mario Bros. (USA)": Game(
+                name="Super Mario Bros. (USA)",
+                cloneof="Super Mario Bros. (Europe) (Fr)",
+                languages=("en",),
+            ),
+            "Mother (Japan) (Translation)": Game(
+                name="Mother (Japan) (Translation)",
+                languages=("fr",),
+            ),
+        },
+    )
+    # 1. (En,Da) should be recognized as English + Danish, not unknown!
+    assert game_languages(dat.games["Castlevania (Europe) (En,Da)"]) == ("en", "da")
+
+    # 2. Strict region ("usa",) with preferred_languages=("fr", "en") must fall
+    #    back to English USA rather than picking French Europe and omitting!
+    strict_plan = build_plan(
+        dat,
+        {},
+        Policy(
+            regions=("usa",),
+            region_mode="strict",
+            preferred_languages=("fr", "en"),
+            translation_policy="fill",
+            translation_langs=("en",),
+        ),
+    )
+    names = {t.name for t in strict_plan.titles}
+    assert "Super Mario Bros. (USA)" in names
+    assert "Super Mario Bros. (Europe) (Fr)" not in names
+    # 3. Unmarked (Translation) with languages=("fr",) must NOT match English-only
+    #    translation_langs=("en",), and must be omitted as excluded.
+    assert "Mother (Japan) (Translation)" not in names
+    assert strict_plan.counts()["excluded"] == 1
+    assert strict_plan.counts()["region_omitted"] == 1
+

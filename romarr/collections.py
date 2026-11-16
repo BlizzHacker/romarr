@@ -271,6 +271,15 @@ def _is_variant(name: str) -> bool:
                           name, re.IGNORECASE))
 
 
+def _game_translation_langs(game: Game) -> set[str]:
+    langs = translation_langs_in(game.name)
+    if langs:
+        return langs
+    if game.languages:
+        return set(game.languages)
+    return {"en"}
+
+
 def _best_translation(members: list[Game], order: tuple[str, ...],
                       langs: tuple[str, ...] = ("en",),
                       pref_langs: tuple[str, ...] = ()) -> "Game | None":
@@ -285,14 +294,14 @@ def _best_translation(members: list[Game], order: tuple[str, ...],
     """
     wanted = {normalise_lang(c) for c in langs}
     translations = [g for g in members
-                    if is_translation(g.name) and (_langs_of(g.name) & wanted)]
+                    if is_translation(g.name) and (_game_translation_langs(g) & wanted)]
     if not translations:
         return None
     lang_order = tuple(normalise_lang(c) for c in pref_langs if str(c).strip())
 
     def trans_key(g: Game) -> tuple[int, int, int, str]:
         if lang_order:
-            t_langs = _langs_of(g.name) & wanted
+            t_langs = _game_translation_langs(g) & wanted
             l_rank = min((lang_order.index(l) for l in t_langs if l in lang_order),
                          default=len(lang_order))
         else:
@@ -406,8 +415,22 @@ def _plan_language_group(
     strict = policy.region_mode == "strict"
 
     if eligible:
+        pool = ([g for g in eligible if _region_rank(g.name, order) < len(order)]
+                if strict else eligible)
+        if not pool:
+            if policy.uses_translations and translation is not None and _region_rank(translation.name, order) < len(order):
+                plan.titles.append(Title(
+                    name=translation.name, parent=parent,
+                    status=present.get(translation.name, MISSING),
+                    chosen_because=(
+                        f"{_lang_label(translation.name)} translation "
+                        "used because no dump exists in your preferred regions"),
+                    outside_preference=False, is_translation=True))
+                return
+            plan.region_omitted += 1
+            return
         winner = min(
-            eligible,
+            pool,
             key=lambda g: (
                 _language_rank(g, pref_langs),
                 _region_rank(g.name, order),
