@@ -47,7 +47,7 @@ foreach ($directory in @($backend, $site, $backendApp)) {
 $pythonVersion = '3.13.17'
 $pythonUrl = "https://www.python.org/ftp/python/$pythonVersion/python-$pythonVersion-embed-amd64.zip"
 $pythonSha = '9e35319bffedab8b36ad44d8f377cb4f1733bcec257a0b6d04d94f01486ddb38'
-$hubCommit = 'b0c7885c057730c42608c5570359166128bbe3eb'
+$hubCommit = 'e268d988828c387b5180e862dde46d6b6f85cc3e'
 $hubUrl = "https://github.com/BlizzHacker/rom-hub/archive/$hubCommit.tar.gz"
 $gitVersion = '2.56.0.3'
 $gitUrl = 'https://github.com/git-for-windows/git/releases/download/v2.56.0.windows.3/MinGit-2.56.0.3-64-bit.zip'

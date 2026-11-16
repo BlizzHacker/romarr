@@ -542,6 +542,10 @@ class ROMarr:
         self.store.settings["_prowlarr_url"] = e.get("PROWLARR_URL", "")
         self.store.settings["_qbit_url"] = e.get("QBITTORRENT_URL", "")
         self.store.settings["_romm_url"] = e.get("ROMM_URL", "")
+        hub.configure_flaresolverr(
+            str(self.store.settings.get("flaresolverr_url")
+                or e.get("ROM_HUB_FLARESOLVERR_URL", "") or "")
+        )
 
         # The headless RetroArch stream server, if the operator runs one. It is
         # what plays the machines EmulatorJS has no core for -- PS2, GameCube,
@@ -8936,6 +8940,7 @@ def make_handler(service: ROMarr):
                                         "sandboxed": confined,
                                         "sandbox_detail": why,
                                         "archive_org_auth": hub.archive_org_auth_status(),
+                                        "flaresolverr_configured": bool(hub.flaresolverr_url()),
                                         "searchable_plugins": searchable,
                                         # The Plugins page says out loud what
                                         # enabling a plugin now does: its
@@ -10009,6 +10014,8 @@ def make_handler(service: ROMarr):
                     # A stored path nothing re-reads is a setting that lies;
                     # reload_dats both stores and applies it.
                     service.reload_dats(str(body.get("dat_path") or ""))
+                if "flaresolverr_url" in body:
+                    hub.configure_flaresolverr(str(updated.get("flaresolverr_url") or ""))
                 service.reload_policy()
                 updated = service.safe_settings()
                 # A library path is only really changed once the running

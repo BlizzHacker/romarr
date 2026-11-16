@@ -235,6 +235,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # an invitation carries it, and without one the friend who redeems the
     # invitation has nowhere to call back to.
     "public_url": "",
+    # Optional host-side FlareSolverr base URL (e.g. http://localhost:8191)
+    # used by ROM Hub's broker/downloader when an allowed HTTPS source answers
+    # with a Cloudflare challenge. Never passed to untrusted plugin code.
+    "flaresolverr_url": "",
     # --- OpenID Connect sign-in (Authentik or any OIDC IdP) ---
     # Off until an issuer + client id exist. Distinct from forward-auth SSO
     # (sso.py), which believes a reverse proxy's headers; this makes ROMarr
@@ -762,6 +766,14 @@ class Store:
         # commit unrelated fields from the same API request.
         mapping = (validate_dat_catalog_platforms(patch["dat_catalog_platforms"])
                    if "dat_catalog_platforms" in patch else None)
+        if "flaresolverr_url" in patch:
+            from urllib.parse import urlsplit
+            raw_solver = str(patch["flaresolverr_url"] or "").strip().rstrip("/")
+            if raw_solver:
+                parts = urlsplit(raw_solver)
+                if parts.scheme.lower() not in ("http", "https") or not parts.hostname:
+                    raise ValueError("FlareSolverr URL must start with http:// or https://")
+            patch = dict(patch, flaresolverr_url=raw_solver)
         with self._lock:
             # No catalog provenance can be trusted without a selected DAT root.
             # Refuse the whole patch before changing memory or the saved file.
