@@ -14,6 +14,7 @@ details it does handle are the ones that silently corrupt a library:
 from __future__ import annotations
 
 from .import_duplicates import duplicate_reason, stream_sha1
+from .tar_archive import TAR_SUFFIXES, TarSource, is_tar_name
 
 import json
 import logging
@@ -48,7 +49,12 @@ log = logging.getLogger(__name__)
 #: overwhelmingly `.7z` -- 2,621 PlayStation entries, 2,409 PS2, 1,470 Wii --
 #: and an importer that cannot open the format the content ships in supports
 #: the platform on paper only.
-ARCHIVE_SUFFIXES = (".zip", ".7z", ".rar")
+ARCHIVE_SUFFIXES = (".zip", ".7z", ".rar") + TAR_SUFFIXES
+
+
+def is_archive_name(name):
+    """Recognize complete archive extensions, including compressed TAR names."""
+    return str(name).lower().endswith(ARCHIVE_SUFFIXES)
 
 #: Handled by the standard library, with no tool to install.
 _STDLIB_ARCHIVES = (".zip",)
@@ -896,7 +902,7 @@ class _DirectorySource(_PathSource):
                 # Read through the set's first volume, never on its own.
                 continue
             relative = entry.relative_to(path).as_posix()
-            if entry not in volume_sets and entry.suffix.lower() not in ARCHIVE_SUFFIXES:
+            if entry not in volume_sets and not is_archive_name(entry.name):
                 if relative in self.members:
                     raise ValueError(f"duplicate source member: {relative}")
                 self.members[relative] = (self, relative)
@@ -1017,7 +1023,7 @@ def _source_for(download: Path, platform: Platform | None = None, *,
             if not single_file.resolve().is_relative_to(download.resolve()):
                 raise ValueError(f"source escapes download directory: {single_file}")
             single_suffix = single_file.suffix.lower()
-            if single_suffix in _STDLIB_ARCHIVES or single_suffix in ARCHIVE_SUFFIXES:
+            if is_archive_name(single_file.name):
                 return _source_for(single_file, platform, staging_budget=staging_budget)
 
     # For MAME, FBNeo and DOSBox the archive IS the ROM: the core opens it and
@@ -1025,7 +1031,7 @@ def _source_for(download: Path, platform: Platform | None = None, *,
     # of a romset and import that, which succeeds and leaves an entry no core
     # can load. Treat it as a plain file.
     if (platform is not None and platform.archive_is_the_rom
-            and download.is_file()):
+            and download.is_file() and not is_tar_name(download.name)):
         return _PathSource(download)
 
     if (download.is_dir()
@@ -1033,6 +1039,8 @@ def _source_for(download: Path, platform: Platform | None = None, *,
                                       and platform.media != "digital"))):
         return _DirectorySource(download)
 
+    if download.is_file() and is_tar_name(download.name):
+        return TarSource(download)
     suffix = download.suffix.lower()
     if download.is_file() and suffix in _STDLIB_ARCHIVES:
         # ZipFile allocates ZipInfo entries during construction. Apply the
@@ -1055,7 +1063,7 @@ def _source_for(download: Path, platform: Platform | None = None, *,
         return _rar_source(download, [download])
     if download.is_file() and suffix == ".rar" and rar_tool() is not None:
         return _RarToolSource(download, rar_tool())
-    if download.is_file() and suffix in ARCHIVE_SUFFIXES:
+    if download.is_file() and is_archive_name(download.name):
         tool = bsdtar_path()
         if tool is None:
             raise MissingArchiveTool(
@@ -1171,8 +1179,10 @@ def _digital_set_name(download: Path) -> str:
     was truncated to `Call.of.Duty.Modern.Warfare.4.[DODI`. Only strip the
     suffix when `download` is an archive file.
     """
-    if download.is_file() and download.suffix.lower() in ARCHIVE_SUFFIXES:
-        return download.stem
+    if download.is_file() and is_archive_name(download.name):
+        for extension in sorted(ARCHIVE_SUFFIXES, key=len, reverse=True):
+            if download.name.lower().endswith(extension):
+                return download.name[:-len(extension)]
     return download.name
 
 
