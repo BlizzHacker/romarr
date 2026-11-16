@@ -1156,8 +1156,15 @@ def build_fleet_sync_plan(spec: dict | None = None) -> dict:
         "dry_run": bool(spec.get("dry_run", False)),
     }
 
+    def shell_arg(arg: str) -> str:
+        # Keep a leading ~/ outside the quotes, or the shell never expands it
+        # and Igir writes into a folder literally named "~".
+        if arg.startswith("~/"):
+            return "~/" + shlex.quote(arg[2:])
+        return shlex.quote(arg)
+
     def quoted(cmd: list[str]) -> str:
-        return " ".join(shlex.quote(x) for x in cmd)
+        return " ".join(shell_arg(x) for x in cmd)
 
     preview = quoted(build_igir_command({**igir_cfg, "commands": ["test", "report"], "dry_run": True}))
     copy = quoted(build_igir_command({**igir_cfg, "commands": commands}))
@@ -1165,8 +1172,10 @@ def build_fleet_sync_plan(spec: dict | None = None) -> dict:
     transfer = ""
     if transport == "ssh":
         delete = " --delete-after" if mirror else ""
+        # rsync resolves a relative remote path from the login's home folder.
+        remote = target_root[2:] if target_root.startswith("~/") else target_root
         transfer = (f"rsync -avz --progress{delete} {shlex.quote(stage + '/')} "
-                    f"{shlex.quote(ssh_host + ':' + target_root + '/')}")
+                    f"{shlex.quote(ssh_host + ':' + remote + '/')}")
     elif transport == "rclone":
         verb = "sync" if mirror else "copy"
         transfer = f"rclone {verb} {shlex.quote(stage + '/')} {shlex.quote(target_root + '/')} --progress"

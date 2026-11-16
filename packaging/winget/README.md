@@ -1,6 +1,6 @@
 # Windows Package Manager (winget)
 
-`manifests/m/MoveWeight/ROMarr/1.10.0/` is a multi-file manifest (schema 1.10.0)
+`manifests/m/MoveWeight/ROMarr/1.10.0/` is a multi-file manifest (schema 1.28.0)
 for [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs), at the
 exact path that repository uses. It installs the release's **portable ZIP**
 (`ROMarr-1.10.0-win-x64.zip`, SHA-256 from the release's `SHA256SUMS.txt`) and
