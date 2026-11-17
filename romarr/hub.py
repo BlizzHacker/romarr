@@ -1690,8 +1690,23 @@ def repackage_exo_zip(
     }
 
 
-def run_exo2romm(cfg: dict | None = None) -> dict:
-    """Preview or run eXo2romm repackaging over one or more eXoDOS zips/folders."""
+def _outside_roots(paths: dict[str, str], roots) -> str:
+    """Name the first path that resolves outside every allowed root, or ""."""
+    real_roots = [os.path.realpath(str(root)) for root in roots if str(root or "").strip()]
+    for label, value in paths.items():
+        real = os.path.realpath(value)
+        if not any(real == root or real.startswith(root.rstrip(os.sep) + os.sep) for root in real_roots):
+            return label
+    return ""
+
+
+def run_exo2romm(cfg: dict | None = None, *, allowed_roots=None) -> dict:
+    """Preview or run eXo2romm repackaging over one or more eXoDOS zips/folders.
+
+    `allowed_roots` (supplied by the HTTP API) confines the eXoDOS folder,
+    inputs, output and error log to configured library, download and eXoDOS
+    folders, so an API client cannot read or write elsewhere on the host.
+    """
     cfg = cfg if isinstance(cfg, dict) else {}
     dos_dir = Path(str(cfg.get("dos_dir") or DEFAULT_EXO2ROMM_PROFILE["dos_dir"]).strip()
                    or str(DEFAULT_EXO2ROMM_PROFILE["dos_dir"]))
@@ -1734,6 +1749,21 @@ def run_exo2romm(cfg: dict | None = None) -> dict:
         items = [str(part or "").strip() for part in raw_inputs if str(part or "").strip()]
     else:
         items = []
+
+    if allowed_roots is not None:
+        checked = {"dos_dir": str(dos_dir), "output_dir": str(output_dir), "error_log": str(error_log)}
+        checked.update({f"input_paths[{i}]": item for i, item in enumerate(items)})
+        outside = _outside_roots(checked, allowed_roots)
+        if outside:
+            return {
+                "ok": False,
+                "error": (f"{outside} must be inside a configured library, download or eXoDOS folder. "
+                          "Add the folder under exo2romm_roots in Settings or EXO2ROMM_ROOTS."),
+                "credit": EXO2ROMM_CREDIT,
+                "upstream_url": EXO2ROMM_UPSTREAM_URL,
+            }
+        dos_dir, output_dir, error_log = (Path(os.path.realpath(str(p))) for p in (dos_dir, output_dir, error_log))
+        items = [os.path.realpath(item) for item in items]
 
     if not items:
         return {
