@@ -18,6 +18,12 @@ from romarr.app import ROMarr, make_handler
 from romarr.ui import page
 
 
+
+@pytest.fixture(autouse=True)
+def _exo2romm_roots_for_tmp(tmp_path, monkeypatch):
+    """eXo2romm only works inside allowed folders; these tests use tmp_path."""
+    monkeypatch.setenv("EXO2ROMM_ROOTS", str(tmp_path))
+
 def test_exo2romm_status_credits_derkommutator_and_notes_inspiration():
     status = hub.exo2romm_status()
     assert status["available"] is True
@@ -353,6 +359,7 @@ def test_repackage_edge_cases_symlink_noclobber_mkdir_and_unreadable_dir(tmp_pat
     assert sym_res["status"] == "skipped_error"
     assert real_target.read_bytes() == b"keep"
     monkeypatch.undo()
+    monkeypatch.setenv("EXO2ROMM_ROOTS", str(tmp_path))   # undo() also cleared the allowed folders
 
     blocker = tmp_path / "blocker"
     blocker.write_text("file", encoding="utf-8")

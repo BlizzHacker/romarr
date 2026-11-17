@@ -1,6 +1,8 @@
 """Tests for ROMarr browser-extension multi-file download & completed capture."""
 from __future__ import annotations
 
+import os
+
 import time
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -91,6 +93,7 @@ def test_start_batch_downloads_and_records_completed(tmp_path):
 
     local_file = tmp_path / "local.nes"
     local_file.write_bytes(b"NES\x1a")
+    svc.extension_import_roots = lambda: [str(tmp_path)]   # adopt only imports from allowed folders
     comp = mgr.record_completed(
         svc,
         [{"url": "https://example.com/local.nes", "filename": "local.nes",
@@ -101,4 +104,4 @@ def test_start_batch_downloads_and_records_completed(tmp_path):
     assert comp["ok"] is True
     assert comp["recorded"] == 1
     assert comp["adopted"] == 1
-    svc.adopt.assert_called_once_with(str(local_file), "nes")
+    svc.adopt.assert_called_once_with(os.path.realpath(local_file), "nes")

@@ -104,12 +104,13 @@ def resolve_dest_dir(service: Any, platform: str = "", destination: str = "") ->
         target = base / plat
     else:
         target = base / "_extension_downloads"
-    resolved_base = base.resolve()
-    resolved_target = target.resolve()
-    if resolved_target != resolved_base and resolved_base not in resolved_target.parents:
-        raise ValueError("destination escapes library root")
-    resolved_target.mkdir(parents=True, exist_ok=True)
-    return resolved_target
+    from .path_guard import confined
+    try:
+        safe = Path(confined(str(target), [str(base)]))
+    except ValueError:
+        raise ValueError("destination escapes library root") from None
+    safe.mkdir(parents=True, exist_ok=True)
+    return safe
 
 
 def _non_colliding_path(target: Path) -> Path:
@@ -324,9 +325,19 @@ class ExtensionDownloadManager:
                 "platform": str(platform or ""),
                 "adopted": False,
             }
-            if adopt and platform and local_path and os.path.isfile(local_path):
+            safe_path = ""
+            if adopt and platform and local_path:
+                # Only files in folders the operator configured (library,
+                # downloads, ~/Downloads, ROMARR_IMPORT_ROOTS) are imported.
+                from .path_guard import confined
+                roots_of = getattr(service, "extension_import_roots", None)
                 try:
-                    res = service.adopt(local_path, platform)
+                    safe_path = confined(local_path, roots_of() if callable(roots_of) else [])
+                except ValueError:
+                    rec["adopt_error"] = "file is outside the folders ROMarr may import from"
+            if safe_path and os.path.isfile(safe_path):
+                try:
+                    res = service.adopt(safe_path, platform)
                     rec["adopted"] = bool(res and res.get("ok"))
                     if rec["adopted"]:
                         adopted += 1

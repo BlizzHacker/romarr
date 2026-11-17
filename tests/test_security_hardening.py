@@ -229,3 +229,73 @@ def test_a_stricter_system_tls_minimum_is_kept(monkeypatch):
     except Exception:  # noqa: BLE001 - the handshake itself is not under test
         pass
     assert made and made[0].minimum_version == ssl.TLSVersion.TLSv1_3
+
+
+def test_exo2romm_without_api_roots_still_confines_to_defaults(tmp_path, monkeypatch):
+    monkeypatch.delenv("EXO2ROMM_ROOTS", raising=False)
+    result = hub.run_exo2romm({"dos_dir": str(tmp_path), "output_dir": str(tmp_path / "out"),
+                               "input_paths": [str(tmp_path)]})
+    assert not result["ok"] and "must be inside" in result["error"]
+
+
+def test_extension_adopt_refuses_files_outside_import_folders(tmp_path):
+    from romarr.extension_downloads import ExtensionDownloadManager
+    secret = tmp_path / "secret.gba"
+    secret.write_bytes(b"x")
+    adopted = []
+
+    class Service:
+        def extension_import_roots(self):
+            return [str(tmp_path / "downloads")]
+
+        def adopt(self, path, platform):
+            adopted.append(path)
+            return {"ok": True}
+
+    out = ExtensionDownloadManager().record_completed(
+        Service(), [{"local_path": str(secret), "filename": "secret.gba"}], platform="gba", adopt=True)
+    assert adopted == [] and "outside" in out["results"][0]["adopt_error"]
+
+
+def test_extension_adopt_imports_files_in_allowed_folders(tmp_path):
+    from romarr.extension_downloads import ExtensionDownloadManager
+    downloads = tmp_path / "downloads"
+    downloads.mkdir()
+    rom = downloads / "Game.gba"
+    rom.write_bytes(b"x")
+    adopted = []
+
+    class Service:
+        def extension_import_roots(self):
+            return [str(downloads)]
+
+        def adopt(self, path, platform):
+            adopted.append(path)
+            return {"ok": True}
+
+    out = ExtensionDownloadManager().record_completed(
+        Service(), [{"local_path": str(rom)}], platform="gba", adopt=True)
+    assert adopted == [str(rom.resolve())] and out["adopted"] == 1
+
+
+@pytest.mark.skipif(__import__("os").name == "nt", reason="POSIX system folders")
+def test_settings_cannot_widen_roots_to_the_disk_or_system_folders(tmp_path):
+    from pathlib import Path as _Path
+    svc = ROMarr({"ROMARR_DATA": str(tmp_path / "romarr.json")})
+    svc.library = _Path("/")
+    svc.store.update_settings({"download_path": "/etc"})
+    svc.store.put_item("download_clients", {"type": "hub", "name": "x", "save_path": "/usr/share"})
+    for roots in (svc.exo2romm_roots(), svc.extension_import_roots()):
+        assert "/" not in roots and "/etc" not in roots and "/usr/share" not in roots
+    result = hub.run_exo2romm({"dos_dir": "/etc", "output_dir": "/etc/x", "input_paths": ["/etc"]},
+                              allowed_roots=svc.exo2romm_roots())
+    assert not result["ok"]
+
+
+def test_mapped_download_client_folders_are_import_roots(tmp_path):
+    svc = ROMarr({"ROMARR_DATA": str(tmp_path / "romarr.json")})
+    local = tmp_path / "srv" / "downloads"
+    svc.store.update_settings({"remote_path_mappings": [{"remote": "/downloads", "local": str(local)}]})
+    svc.store.put_item("download_clients", {"type": "qbittorrent", "name": "q", "save_path": "/downloads/roms"})
+    assert str(local / "roms") in svc.extension_import_roots()
+

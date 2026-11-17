@@ -245,7 +245,10 @@ class EmulatorHub:
             parent.mkdir(parents=True, exist_ok=True)
             if shutil.disk_usage(parent).free < 2 * int(asset["bytes"]) + 128 * 1024 * 1024:
                 raise ValueError("Insufficient free space for this package")
-            destination = parent / (tag + "-" + expected_sha256[:12])
+            digest = str(asset["sha256"])               # equal to the request's value, verified above
+            if not re.fullmatch(r"[0-9a-f]{64}", digest):
+                raise ValueError("Release metadata has no valid SHA-256")
+            destination = parent / (tag + "-" + digest[:12])
             if destination.exists():
                 if scanner:
                     scanner(destination / "app")
@@ -279,7 +282,7 @@ class EmulatorHub:
                 if scanner:
                     scanner(app)
                 record = {"project": slug, "tag": release["tag"], "asset": asset_name,
-                          "sha256": expected_sha256, "source": release["website"]}
+                          "sha256": digest, "source": release["website"]}
                 (stage / "romarr-install.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
                 os.replace(stage, destination)
                 return {"ok": True, "path": str(destination / "app"), "tag": release["tag"]}
