@@ -277,3 +277,25 @@ def test_extension_adopt_imports_files_in_allowed_folders(tmp_path):
         Service(), [{"local_path": str(rom)}], platform="gba", adopt=True)
     assert adopted == [str(rom.resolve())] and out["adopted"] == 1
 
+
+@pytest.mark.skipif(__import__("os").name == "nt", reason="POSIX system folders")
+def test_settings_cannot_widen_roots_to_the_disk_or_system_folders(tmp_path):
+    from pathlib import Path as _Path
+    svc = ROMarr({"ROMARR_DATA": str(tmp_path / "romarr.json")})
+    svc.library = _Path("/")
+    svc.store.update_settings({"download_path": "/etc"})
+    svc.store.put_item("download_clients", {"type": "hub", "name": "x", "save_path": "/usr/share"})
+    for roots in (svc.exo2romm_roots(), svc.extension_import_roots()):
+        assert "/" not in roots and "/etc" not in roots and "/usr/share" not in roots
+    result = hub.run_exo2romm({"dos_dir": "/etc", "output_dir": "/etc/x", "input_paths": ["/etc"]},
+                              allowed_roots=svc.exo2romm_roots())
+    assert not result["ok"]
+
+
+def test_mapped_download_client_folders_are_import_roots(tmp_path):
+    svc = ROMarr({"ROMARR_DATA": str(tmp_path / "romarr.json")})
+    local = tmp_path / "srv" / "downloads"
+    svc.store.update_settings({"remote_path_mappings": [{"remote": "/downloads", "local": str(local)}]})
+    svc.store.put_item("download_clients", {"type": "qbittorrent", "name": "q", "save_path": "/downloads/roms"})
+    assert str(local / "roms") in svc.extension_import_roots()
+

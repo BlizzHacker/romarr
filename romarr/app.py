@@ -1708,9 +1708,17 @@ class ROMarr:
         roots += [str(self.library), str(self.store.path.parent)]
         settings = self.store.settings
         roots += [str(settings.get(key) or "") for key in ("download_path", "downloads_path", "complete_path")]
+        from .path_guard import mapped, usable_root
+        mappings = settings.get("remote_path_mappings") or []
         for client in self.store.list_items("download_clients"):
-            roots += [str(client.get(key) or "") for key in ("save_path", "savepath", "download_dir", "directory")]
-        return [root for root in dict.fromkeys(roots) if root.strip()]
+            for key in ("save_path", "savepath", "download_dir", "directory"):
+                reported = str(client.get(key) or "")
+                if reported:
+                    # The client's own spelling and where that folder is here.
+                    roots += [reported, mapped(reported, mappings)]
+        # These come from API-writable settings: never the whole disk or a
+        # system folder, so a client cannot widen confinement that way.
+        return [root for root in dict.fromkeys(roots) if usable_root(root)]
 
     def exo2romm_roots(self) -> list[str]:
         """Folders eXo2romm may read and write: libraries, downloads, data and eXoDOS.
