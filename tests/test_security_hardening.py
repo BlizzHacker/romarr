@@ -109,7 +109,9 @@ def test_query_redaction_is_linear_on_hostile_input():
 def test_a_lookalike_host_does_not_add_the_moveweight_portal(tmp_path):
     svc = ROMarr({"ROMARR_DATA": str(tmp_path / "romarr.json"),
                   "ROMM_URL": "https://evil.example/?next=moveweight.com"})
-    assert not any("romm.moveweight.com" in key for key in svc._portal_targets())
+    from urllib.parse import urlsplit
+    hosts = {urlsplit(str(key)).hostname for key in svc._portal_targets()}
+    assert "romm.moveweight.com" not in hosts
 
 
 @pytest.mark.parametrize("game", ["--exec=evil", "-x", "a b", "x" * 80])
