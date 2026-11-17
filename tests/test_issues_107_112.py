@@ -361,7 +361,7 @@ def test_issue_93_rom_hub_pin_updated():
     updated BlizzHacker/rom-hub commit containing the catalog, Igir v5.8.0,
     eXo2romm v0.1.0, and shared Archive.org host auth updates."""
     root = pathlib.Path(__file__).resolve().parents[1]
-    expected_sha = "ef025c056827423b370e8fe626cd8c4ebdc034ed"
+    expected_sha = "0d4f7114db4b047bc90a78912574a823e3b10527"
     for rel in ("Dockerfile", "Dockerfile.browser", "docs/PLUGINS.md",
                 "scripts/build-windows-desktop.ps1", ".github/workflows/docker.yml"):
         content = (root / rel).read_text(encoding="utf-8")
