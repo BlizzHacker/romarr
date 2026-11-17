@@ -8720,10 +8720,11 @@ def make_handler(service: ROMarr):
                     capture_index_dir(service._env, service.store.path)))
             if route.path == "/api/v1/extension/downloads":
                 from .extension_downloads import ExtensionDownloadManager
-                mgr = getattr(service, "_ext_dl_mgr", None)
-                if mgr is None:
-                    mgr = ExtensionDownloadManager()
-                    service._ext_dl_mgr = mgr
+                with service._lock:
+                    mgr = getattr(service, "_ext_dl_mgr", None)
+                    if mgr is None:
+                        mgr = ExtensionDownloadManager()
+                        service._ext_dl_mgr = mgr
                 return self._json(200, mgr.get_status(
                     query.get("job_id", [""])[0]))
             if route.path == "/api/v1/peer/shelf":
@@ -9115,10 +9116,11 @@ def make_handler(service: ROMarr):
                     release, str(body.get("reason") or "")))
             if route.path == "/api/v1/extension/downloads":
                 from .extension_downloads import ExtensionDownloadManager
-                mgr = getattr(service, "_ext_dl_mgr", None)
-                if mgr is None:
-                    mgr = ExtensionDownloadManager()
-                    service._ext_dl_mgr = mgr
+                with service._lock:
+                    mgr = getattr(service, "_ext_dl_mgr", None)
+                    if mgr is None:
+                        mgr = ExtensionDownloadManager()
+                        service._ext_dl_mgr = mgr
                 try:
                     return self._json(200, mgr.start_batch(
                         service,
@@ -9132,10 +9134,11 @@ def make_handler(service: ROMarr):
                     return self._json(400, {"error": str(exc)})
             if route.path == "/api/v1/extension/completed":
                 from .extension_downloads import ExtensionDownloadManager
-                mgr = getattr(service, "_ext_dl_mgr", None)
-                if mgr is None:
-                    mgr = ExtensionDownloadManager()
-                    service._ext_dl_mgr = mgr
+                with service._lock:
+                    mgr = getattr(service, "_ext_dl_mgr", None)
+                    if mgr is None:
+                        mgr = ExtensionDownloadManager()
+                        service._ext_dl_mgr = mgr
                 try:
                     return self._json(200, mgr.record_completed(
                         service,

@@ -203,6 +203,12 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
                                       "whether the index directory is "
                                       "writable. What the extension's "
                                       "connection test calls."),
+    "/api/v1/extension/downloads": ("POST", "Queue a multi-file download batch "
+                                            "extracted by the browser extension "
+                                            "or poll recent batch status (GET)."),
+    "/api/v1/extension/completed": ("POST", "Record completed local Chrome "
+                                            "downloads from the browser extension "
+                                            "and optionally adopt them."),
     "/api/v1/webhook": ("POST", "Inbound game request from a front-end."),
     "/api/request": ("POST", "Request a game."),
     "/api/v1/integration/info": ("GET", "Integration service info: name, version, capabilities."),

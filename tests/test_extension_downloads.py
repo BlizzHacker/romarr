@@ -21,15 +21,16 @@ def test_sanitization_and_ssrf_guards(tmp_path):
     assert sanitize_filename("../../evil/Game: [1].zip") == "Game_ [1].zip"
     assert sanitize_rel_subdir("../a/b\\c") == "a/b/c"
 
-    assert check_remote_url("https://example.com/mod.zip") == "https://example.com/mod.zip"
+    assert check_remote_url("https://example.com/mod.zip", resolve_dns=False) == "https://example.com/mod.zip"
     for bad in (
         "ftp://example.com/file.zip",
         "http://127.0.0.1:7878/secret",
         "http://localhost/admin",
         "http://169.254.169.254/latest/meta-data",
+        "http://10.0.0.1/internal",
     ):
         with pytest.raises(ValueError):
-            check_remote_url(bad)
+            check_remote_url(bad, resolve_dns=False)
 
     svc = SimpleNamespace(
         library=tmp_path / "lib",
@@ -51,6 +52,7 @@ def test_start_batch_downloads_and_records_completed(tmp_path):
     fake_resp = MagicMock()
     fake_resp.__enter__.return_value = fake_resp
     fake_resp.__exit__.return_value = False
+    fake_resp.status_code = 200
     fake_resp.iter_content.return_value = [b"PK\x03\x04test"]
     fake_resp.raise_for_status.return_value = None
 
@@ -72,6 +74,20 @@ def test_start_batch_downloads_and_records_completed(tmp_path):
         assert st["status"] == "done"
         assert st["completed"] == 1
         assert (tmp_path / "lib" / "pc" / "mod.zip").read_bytes() == b"PK\x03\x04test"
+
+        # Second download of same filename must not overwrite existing file.
+        res2 = mgr.start_batch(
+            svc,
+            [{"url": "https://example.com/files/mod.zip", "filename": "mod.zip"}],
+            platform="pc",
+        )
+        for _ in range(40):
+            st2 = mgr.get_status(res2["job_id"])
+            if st2["status"] in ("done", "partial", "failed"):
+                break
+            time.sleep(0.05)
+        assert st2["status"] == "done"
+        assert (tmp_path / "lib" / "pc" / "mod_1.zip").read_bytes() == b"PK\x03\x04test"
 
     local_file = tmp_path / "local.nes"
     local_file.write_bytes(b"NES\x1a")

@@ -7,12 +7,15 @@ import ipaddress
 import logging
 import os
 import re
+import socket
+import tempfile
 import threading
 import uuid
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 import requests
 
@@ -21,6 +24,9 @@ log = logging.getLogger(__name__)
 MAX_BATCH_ITEMS = 500
 MAX_JOBS = 40
 MAX_COMPLETED = 100
+MAX_WORKERS = 2
+MAX_REDIRECTS = 5
+MAX_FILE_BYTES = 16 * 1024 * 1024 * 1024  # 16 GiB per file safety ceiling
 
 _UNSAFE_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
@@ -43,22 +49,46 @@ def sanitize_rel_subdir(raw: str) -> str:
     return "/".join(parts)
 
 
-def check_remote_url(raw_url: str) -> str:
-    """Validate an http(s) URL and refuse loopback/link-local SSRF targets."""
+def _check_ip(ip_obj: ipaddress.IPv4Address | ipaddress.IPv6Address, label: str) -> None:
+    if (
+        ip_obj.is_loopback
+        or ip_obj.is_link_local
+        or ip_obj.is_unspecified
+        or ip_obj.is_private
+        or ip_obj.is_reserved
+        or ip_obj.is_multicast
+    ):
+        raise ValueError(f"refusing non-public address: {label!r}")
+
+
+def check_remote_url(raw_url: str, *, resolve_dns: bool = True) -> str:
+    """Validate an http(s) URL and refuse loopback/private/link-local SSRF targets."""
     url = str(raw_url or "").strip()
     parts = urlsplit(url)
     if parts.scheme.lower() not in ("http", "https") or not parts.hostname:
         raise ValueError(f"unsupported URL: {raw_url!r}")
     host = parts.hostname.lower().strip("[]")
-    if host in ("localhost", "localhost.localdomain"):
+    if host in ("localhost", "localhost.localdomain") or host.endswith(".local"):
         raise ValueError(f"refusing local host: {host!r}")
     try:
         ip = ipaddress.ip_address(host)
-        if ip.is_loopback or ip.is_link_local or ip.is_unspecified:
-            raise ValueError(f"refusing local address: {host!r}")
-    except ValueError as exc:
-        if "refusing" in str(exc):
-            raise
+    except ValueError:
+        ip = None
+    if ip is not None:
+        _check_ip(ip, host)
+        return url
+    if resolve_dns:
+        try:
+            infos = socket.getaddrinfo(host, parts.port or (443 if parts.scheme.lower() == "https" else 80), type=socket.SOCK_STREAM)
+        except OSError:
+            infos = []
+        for info in infos:
+            addr = info[4][0].split("%")[0]
+            try:
+                _check_ip(ipaddress.ip_address(addr), f"{host} ({addr})")
+            except ValueError as exc:
+                if "refusing" in str(exc):
+                    raise
     return url
 
 
@@ -82,14 +112,41 @@ def resolve_dest_dir(service: Any, platform: str = "", destination: str = "") ->
     return resolved_target
 
 
+def _non_colliding_path(target: Path) -> Path:
+    """Pick a unique filename inside `target.parent` without overwriting existing files."""
+    if not target.exists():
+        return target
+    stem = target.stem
+    suffix = target.suffix
+    for idx in range(1, 10000):
+        cand = target.with_name(f"{stem}_{idx}{suffix}")
+        if not cand.exists():
+            return cand
+    raise ValueError(f"too many existing files named {target.name!r}")
+
+
 class ExtensionDownloadManager:
-    """Tracks background multi-file downloads and completed local captures."""
+    """Tracks bounded background multi-file downloads and completed local captures."""
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._jobs: dict[str, dict[str, Any]] = {}
-        self._job_order: deque[str] = deque(maxlen=MAX_JOBS)
+        self._job_order: list[str] = []
         self._completed: deque[dict[str, Any]] = deque(maxlen=MAX_COMPLETED)
+        self._pool = ThreadPoolExecutor(max_workers=MAX_WORKERS, thread_name_prefix="ext-dl")
+
+    def _evict_terminal_if_needed(self) -> None:
+        while len(self._job_order) >= MAX_JOBS:
+            evicted = False
+            for idx, jid in enumerate(self._job_order):
+                job = self._jobs.get(jid)
+                if not job or job.get("status") in ("done", "partial", "failed"):
+                    self._job_order.pop(idx)
+                    self._jobs.pop(jid, None)
+                    evicted = True
+                    break
+            if not evicted:
+                break
 
     def start_batch(
         self,
@@ -148,24 +205,32 @@ class ExtensionDownloadManager:
             "files": normalized,
         }
         with self._lock:
-            if len(self._job_order) == self._job_order.maxlen:
-                oldest = self._job_order.popleft()
-                self._jobs.pop(oldest, None)
+            self._evict_terminal_if_needed()
             self._job_order.append(job_id)
             self._jobs[job_id] = job
 
-        t = threading.Thread(
-            target=self._run_job,
-            args=(job_id, str(page_url or "")),
-            daemon=True,
-        )
-        t.start()
+        self._pool.submit(self._run_job, job_id, str(page_url or ""))
         return {
             "ok": True,
             "job_id": job_id,
             "queued": len(normalized),
             "dest_dir": str(dest_dir),
         }
+
+    def _open_validated_stream(self, url: str, headers: dict[str, str]):
+        current = url
+        for _ in range(MAX_REDIRECTS + 1):
+            check_remote_url(current)
+            resp = requests.get(current, headers=headers, stream=True, timeout=60, allow_redirects=False)
+            if resp.status_code in (301, 302, 303, 307, 308):
+                loc = resp.headers.get("Location") or resp.headers.get("location") or ""
+                resp.close()
+                if not loc:
+                    raise ValueError(f"redirect {resp.status_code} missing Location")
+                current = urljoin(current, loc)
+                continue
+            return resp
+        raise ValueError("too many redirects")
 
     def _run_job(self, job_id: str, referer: str) -> None:
         with self._lock:
@@ -180,28 +245,41 @@ class ExtensionDownloadManager:
             headers["Referer"] = referer
 
         for entry in files:
-            target = Path(entry["path"])
-            tmp = target.with_name(target.name + ".part")
+            requested_target = Path(entry["path"])
+            tmp_path: Path | None = None
             try:
                 entry["status"] = "downloading"
                 written = 0
-                with requests.get(entry["url"], headers=headers, stream=True, timeout=60) as resp:
+                with self._open_validated_stream(entry["url"], headers) as resp:
                     resp.raise_for_status()
-                    with open(tmp, "wb") as fh:
+                    with tempfile.NamedTemporaryFile(
+                        dir=requested_target.parent,
+                        prefix=".extdl-",
+                        suffix=".part",
+                        delete=False,
+                    ) as fh:
+                        tmp_path = Path(fh.name)
                         for chunk in resp.iter_content(chunk_size=65536):
                             if chunk:
-                                fh.write(chunk)
                                 written += len(chunk)
-                os.replace(tmp, target)
+                                if written > MAX_FILE_BYTES:
+                                    raise ValueError("file exceeds 16 GiB safety limit")
+                                fh.write(chunk)
+                final_target = _non_colliding_path(requested_target)
+                os.replace(tmp_path, final_target)
+                tmp_path = None
+                entry["path"] = str(final_target)
+                entry["filename"] = final_target.name
                 entry["status"] = "done"
                 entry["bytes"] = written
                 with self._lock:
                     job["completed"] += 1
             except Exception as exc:
-                try:
-                    tmp.unlink(missing_ok=True)
-                except OSError:
-                    pass
+                if tmp_path is not None:
+                    try:
+                        tmp_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
                 entry["status"] = "failed"
                 entry["error"] = f"{type(exc).__name__}: {exc}"
                 with self._lock:
@@ -249,7 +327,7 @@ class ExtensionDownloadManager:
             if adopt and platform and local_path and os.path.isfile(local_path):
                 try:
                     res = service.adopt(local_path, platform)
-                    rec["adopted"] = bool(res and not res.get("error"))
+                    rec["adopted"] = bool(res and res.get("ok"))
                     if rec["adopted"]:
                         adopted += 1
                 except Exception as exc:
