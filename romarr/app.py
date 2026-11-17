@@ -8718,6 +8718,14 @@ def make_handler(service: ROMarr):
                 # the server had rejected, because health answers strangers.
                 return self._json(200, capture_status(
                     capture_index_dir(service._env, service.store.path)))
+            if route.path == "/api/v1/extension/downloads":
+                from .extension_downloads import ExtensionDownloadManager
+                mgr = getattr(service, "_ext_dl_mgr", None)
+                if mgr is None:
+                    mgr = ExtensionDownloadManager()
+                    service._ext_dl_mgr = mgr
+                return self._json(200, mgr.get_status(
+                    query.get("job_id", [""])[0]))
             if route.path == "/api/v1/peer/shelf":
                 # Peer-facing. Authenticated by peer id + token, never by
                 # the operator's session -- a peer is not a user here.
@@ -9105,6 +9113,38 @@ def make_handler(service: ROMarr):
                     indexer=str(body.get("indexer") or ""))
                 return self._json(200, service.block(
                     release, str(body.get("reason") or "")))
+            if route.path == "/api/v1/extension/downloads":
+                from .extension_downloads import ExtensionDownloadManager
+                mgr = getattr(service, "_ext_dl_mgr", None)
+                if mgr is None:
+                    mgr = ExtensionDownloadManager()
+                    service._ext_dl_mgr = mgr
+                try:
+                    return self._json(200, mgr.start_batch(
+                        service,
+                        body.get("items") or [],
+                        page_url=str(body.get("page_url") or ""),
+                        page_title=str(body.get("page_title") or ""),
+                        platform=str(body.get("platform") or ""),
+                        destination=str(body.get("destination") or ""),
+                    ))
+                except ValueError as exc:
+                    return self._json(400, {"error": str(exc)})
+            if route.path == "/api/v1/extension/completed":
+                from .extension_downloads import ExtensionDownloadManager
+                mgr = getattr(service, "_ext_dl_mgr", None)
+                if mgr is None:
+                    mgr = ExtensionDownloadManager()
+                    service._ext_dl_mgr = mgr
+                try:
+                    return self._json(200, mgr.record_completed(
+                        service,
+                        body.get("items") or [],
+                        platform=str(body.get("platform") or ""),
+                        adopt=bool(body.get("adopt")),
+                    ))
+                except ValueError as exc:
+                    return self._json(400, {"error": str(exc)})
             if route.path == "/api/v1/restore":
                 try:
                     settings, warning = read_backup(body)
