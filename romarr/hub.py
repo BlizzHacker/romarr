@@ -1758,7 +1758,7 @@ def run_exo2romm(cfg: dict | None = None, *, allowed_roots=None) -> dict:
             return {
                 "ok": False,
                 "error": (f"{outside} must be inside a configured library, download or eXoDOS folder. "
-                          "Add the folder under exo2romm_roots in Settings or EXO2ROMM_ROOTS."),
+                          "Add the folder to EXO2ROMM_ROOTS in the ROMarr service or container environment."),
                 "credit": EXO2ROMM_CREDIT,
                 "upstream_url": EXO2ROMM_UPSTREAM_URL,
             }
