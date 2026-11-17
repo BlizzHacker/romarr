@@ -876,6 +876,7 @@ NAV = [
         ('add', 'Add New', None),
         ('discover', 'Discover', None),
         ('search', 'Interactive Search', None),
+        ('soundtracks', 'Soundtracks', None),
     ]),
     ('Wanted', [
         ('missing', 'Missing', 'missing'),
@@ -887,6 +888,7 @@ NAV = [
         ('history', 'History', None),
         ('blocklist', 'Blocklist', None),
         ('reports', 'Reports & Help', None),
+        ('switch', 'Switch Updates & DLC', 'switch_gaps'),
     ]),
     ('Hub', [
         ('hub', 'Plugins', None),
@@ -1285,18 +1287,24 @@ let metadataFilename='Chrono.Trigger.USA.v1.1.smc';
 let metadataCachedFilename='', metadataCachedResult=null;
 let metadataProviderRevision='';
 function metadataInvalidate(){metadataCachedFilename='';metadataCachedResult=null;}
-function go(page){
+let ROUTE_ARGS=[], ROUTE_SPEC="";
+function gameHref(platform,id,title,source=""){return "#game/"+encodeURIComponent(platform||"")+"/"+encodeURIComponent(id?String(id):"~"+title)+"/"+encodeURIComponent(source);}
+function go(pageSpec){
+  const parts=String(pageSpec).split("/");
+  let page=parts[0];
+  ROUTE_ARGS=parts.slice(1).map(x=>{try{return decodeURIComponent(x);}catch{return x;}});
+  ROUTE_SPEC=String(pageSpec);
   // Hashes are untrusted input; inherited Object properties are not renderers.
-  if(!Object.prototype.hasOwnProperty.call(RENDER,page)) page='library';
+  if(!Object.prototype.hasOwnProperty.call(RENDER,page)){page='library';pageSpec='library';ROUTE_ARGS=[];ROUTE_SPEC='library';}
   if(typeof RENDER!=='undefined'&&RENDER._queueTimer){clearInterval(RENDER._queueTimer);RENDER._queueTimer=null;}
   if(RENDER._libraryTimer){clearTimeout(RENDER._libraryTimer);RENDER._libraryTimer=null;}
   activePage=page;
   ++pageVersion;
   metadataLookup?.abort();
   metadataLookup=null;
-  location.hash=page;
-  sidebarSyncNav(page);
-  const titles={library:'Games',add:'Add New Game',search:'Interactive Search',
+  location.hash=pageSpec;
+  sidebarSyncNav(page==='game'?'library':page);
+  const titles={soundtracks:'Soundtracks',switch:'Switch Updates & DLC',library:'Games',game:'Game',add:'Add New Game',search:'Interactive Search',
     missing:'Wanted — Missing',lists:'Import Lists',stats:'Statistics',
     discover:'Discover',ecosystem:'The Ecosystem',peers:'Friends',
     queue:'Queue',history:'History',media:'Media Management',profiles:'Profiles',
@@ -1315,7 +1323,7 @@ function go(page){
 }
 addEventListener('hashchange',()=>{
   const page=location.hash.slice(1)||'library';
-  if(page!==activePage) go(page);
+  if(page!==ROUTE_SPEC) go(page);
 });
 
 /* ---------------- pages ---------------- */
@@ -1911,9 +1919,7 @@ RENDER.library=async()=>{
   const moreBtn=p.querySelector('#lib-more');
   if(moreBtn) moreBtn.onclick=()=>{LIB.limit+=240;go('library');};
   document.querySelectorAll('[data-shelf]').forEach(t=>{
-    const open=()=>shelfEditor(items[Number(t.dataset.shelf)],
-      shelf[`${items[Number(t.dataset.shelf)].platform||''}/`
-        +`${(items[Number(t.dataset.shelf)].name||'').toLowerCase()}`]||{});
+    const open=()=>{const g=items[Number(t.dataset.shelf)];go(gameHref(g.platform_slug||g.platform,g.id,g.name,g.source||"").slice(1));};
     t.onclick=open;t.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();open();}};
   });
 };
@@ -1999,6 +2005,8 @@ function shelfEditor(g, meta){
 }
 
 RENDER.add=async()=>{
+  const version=pageVersion;
+  const current=()=>version===pageVersion&&activePage==='add';
   $('#page').innerHTML=`<div class="card">
     <h3>Request a game</h3>
     <p class="help">ROMarr searches your indexers, picks the healthiest release
@@ -2009,6 +2017,8 @@ RENDER.add=async()=>{
       <div class="field" style="width:230px;margin:0"><label>Platform</label>
         <select id="g-plat"><option value="" disabled selected hidden>Select a platform</option>${PLATFORMS.map(p=>
           `<option value="${esc(p.slug)}">${esc(p.name)}</option>`).join('')}</select></div>
+      <button class="btn ghost" id="g-catalog" style="margin-top:20px">Find games</button>
+      <button class="btn ghost" id="g-wish" style="margin-top:20px">Save to wishlist</button>
       <button class="btn" id="g-go" style="margin-top:20px">Search &amp; Grab</button>
     </div>
     <div id="g-out" style="margin-top:16px"></div></div>`;
@@ -2021,12 +2031,37 @@ RENDER.add=async()=>{
     const r=await j('/api/request',{method:'POST',
       headers:{'content-type':'application/json'},
       body:JSON.stringify({game,platform})});
+    if(!current())return;
     $('#g-out').innerHTML=r.ok
       ? `<div class="card" style="margin:0"><h3>Grabbed</h3>
          <p class="help">${esc(r.release)} — ${r.seeders} seeders</p></div>`
       : `<div class="card" style="margin:0"><h3>Not grabbed</h3>
          <p class="help">${esc(r.error||'no usable release')}</p></div>`;
     refreshCounts();
+  };
+
+  $('#g-wish').onclick=async()=>{
+    const game=$('#g-name').value.trim(),platform=$('#g-plat').value;
+    if(!game||!platform){toast('Enter a title and select a platform');return;}
+    const r=await j('/api/v1/wanted/add',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({game,platform,monitored:false})});
+    if(!current())return;
+    toast(r.ok?'Saved to wishlist; automatic searches are off':r.error||'Could not save');refreshCounts();
+  };
+  let catalogRequest=0;
+  $('#g-catalog').onclick=async()=>{
+    const q=$('#g-name').value.trim(),platform=$('#g-plat').value;
+    if(q.length<2){toast('Enter at least two characters');return;}
+    const request=++catalogRequest, out=$('#g-out');
+    out.textContent='Finding games…';
+    const d=await j('/api/v1/lookup?q='+encodeURIComponent(q)+'&platform='+encodeURIComponent(platform)).catch(()=>({error:'Game search failed'}));
+    if(!current()||request!==catalogRequest)return;
+    if(d.configured===false){out.innerHTML='<p class="help">Connect IGDB in <a href="#metadata">Metadata</a> to find games by name. You can still enter an exact title and request it or save it to your wishlist.</p>';return;}
+    if(d.error){out.textContent=d.error;return;}
+    out.innerHTML=(d.items||[]).map((g,i)=>`<div class="card"><h3>${esc(g.title)} ${g.year?esc(g.year):''}</h3><p class="help">${esc(g.summary||'')}</p><div class="row">${g.options.map(o=>`<button class="btn ghost" data-catalog="${i}" data-platform="${esc(o.slug)}">${esc(o.name)}${o.state?' · '+esc(o.state):''}</button>`).join('')}</div></div>`).join('')||'<p class="help">No matching games. Try a shorter title or add the exact title yourself.</p>';
+    out.querySelectorAll('[data-catalog]').forEach(b=>b.onclick=()=>{
+      const g=d.items[Number(b.dataset.catalog)];
+      go(gameHref(b.dataset.platform,'',g.title).slice(1));
+    });
   };
 };
 
@@ -2137,30 +2172,84 @@ RENDER.search=async()=>{
   $('#s-name').onkeydown=e=>{ if(e.key==='Enter') run(); };
 };
 
+
+RENDER.game=async()=>{
+  const version=pageVersion,[slug,idOrTitle,source]=ROUTE_ARGS;
+  const current=()=>version===pageVersion&&activePage==='game';
+  const isTitle=(idOrTitle||'').startsWith('~');
+  const d=await j('/api/v1/game/detail?platform='+encodeURIComponent(slug||'')+(isTitle?'&title='+encodeURIComponent(idOrTitle.slice(1)):'&id='+encodeURIComponent(idOrTitle||''))+'&source='+encodeURIComponent(source||'')).catch(()=>null);
+  if(!current())return;
+  if(!d||!d.title){$('#page').innerHTML='<div class="empty">'+esc(d?.error||'Game not found.')+'</div>';return;}
+  const w=d.wanted,it=d.item||{};
+  $('#page').innerHTML=`<div class="card"><h2>${esc(d.title)}</h2><p class="help">${esc(d.platform_name)} · ${d.in_library?'In your library':w?(w.monitored?'Monitored':'Wishlist'):'Not added'}</p>
+    <div class="row">${d.romm_url?`<a class="btn" id="game-romm" target="_blank" rel="noopener noreferrer">Open in RomM</a>`:''}
+    ${!d.in_library?'<button class="btn" id="game-add">Monitor and search now</button><button class="btn ghost" id="game-wish">Save to wishlist</button>':''}
+    ${w?`<button class="btn ghost" id="game-monitor" aria-pressed="${w.monitored}">${w.monitored?'Pause monitoring':'Resume monitoring'}</button>`:''}
+    <button class="btn ghost" id="game-search">Interactive search</button><button class="btn ghost" id="game-notes">Status, rating and notes</button></div>
+    <p class="help">${esc(it.summary||'')}</p></div>
+    <div class="card"><h3>Downloads</h3>${(d.queue||[]).map(q=>`<p>${esc(q.release)} · ${esc(q.state)}<br><span class="help">${esc(q.detail||'')}</span></p>`).join('')||'<p class="help">No downloads for this game.</p>'}</div>
+    <div class="card"><h3>History</h3>${(d.history||[]).map(h=>`<p>${esc(h.kind)} · ${esc(h.detail||'')}</p>`).join('')||'<p class="help">No events yet.</p>'}</div>`;
+  const romm=$('#game-romm');if(romm){try{const url=new URL(d.romm_url);if(['http:','https:'].includes(url.protocol))romm.href=url.href;else romm.remove();}catch{romm.remove();}}
+  $('#game-notes').onclick=()=>shelfEditor({name:d.title,platform:it.platform||d.platform},d.meta||{});
+  $('#game-search').onclick=()=>{go('search');$('#s-name').value=d.title;$('#s-plat').value=d.platform;$('#s-plat').dispatchEvent(new Event('change'));$('#s-go').click();};
+  const save=async(monitored,search)=>{
+    const r=await j('/api/v1/wanted/add',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({game:d.title,platform:d.platform,monitored,search})});
+    refreshCounts();if(!current())return;
+    toast(r.ok?(r.search?.ok?'Download started':search?'No release yet; monitoring is on':'Saved to wishlist'):r.error||'Could not save');
+    go(ROUTE_SPEC);
+  };
+  $('#game-add')?.addEventListener('click',()=>save(true,true));
+  $('#game-wish')?.addEventListener('click',()=>save(false,false));
+  $('#game-monitor')?.addEventListener('click',async()=>{
+    const r=await j('/api/v1/wanted/monitor',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({game:d.title,platform:d.platform,monitored:!w.monitored})});
+    if(current()&&r.ok)go(ROUTE_SPEC);
+  });
+};
+let MISSING_VIEW='all';
 RENDER.missing=async()=>{
-  const d=await j('/api/v1/wanted/missing');
-  $('#page').innerHTML=`<div class="row" style="margin-bottom:14px">
+  const version=pageVersion;
+  const all=await j('/api/v1/wanted/missing');
+  if(version!==pageVersion||activePage!=='missing')return;
+  const nMon=all.items.filter(w=>w.monitored!==false).length, nWish=all.items.length-nMon;
+  const d={items:all.items.filter(w=>MISSING_VIEW==='all'||(MISSING_VIEW==='wishlist')===(w.monitored===false))};
+  const seg=(k,l,n)=>`<button class="btn ${MISSING_VIEW===k?'':'ghost'}" data-mview="${k}" style="padding:4px 12px;font-size:12.5px">${l} ${n}</button>`;
+  $('#page').innerHTML=`<div class="row" style="margin-bottom:10px">
+      ${seg('all','All',all.items.length)}${seg('monitored','Monitored',nMon)}${seg('wishlist','Wishlist',nWish)}
+      <span class="help" style="margin:0">Wishlist = on your list but not monitored, so ROMarr never searches for it.</span></div>
+    <div class="row" style="margin-bottom:14px">
       <button class="btn" id="w-all">Search All</button>
       <span style="color:var(--dim);font-size:12.5px">
         ${d.items.length} game(s) requested but not yet imported</span></div>
-    ${d.items.length?`<table><thead><tr><th>Game</th><th>Platform</th>
-      <th>Added</th><th>Attempts</th><th>Last error</th><th></th></tr></thead><tbody>
-      ${d.items.map(w=>`<tr><td>${esc(w.game)}</td><td>${esc(w.platform||'—')}</td>
+    ${d.items.length?`<div class="tablewrap"><table><thead><tr><th>Game</th><th>Platform</th>
+      <th>Monitored</th><th>Added</th><th>Attempts</th><th>Last error</th><th></th></tr></thead><tbody>
+      ${d.items.map(w=>`<tr${w.monitored===false?' style="opacity:.62"':''}><td><a href="${esc(gameHref(w.platform,'',w.game))}">${esc(w.game)}</a></td><td>${esc(w.platform||'—')}</td>
+        <td><button class="mini" data-mon-game="${esc(w.game)}" data-mon-platform="${esc(w.platform)}"
+          data-mon="${w.monitored===false?'0':'1'}" aria-pressed="${w.monitored!==false}"
+          title="Monitored games are searched by the sweep and watched in RSS">${w.monitored===false?'Off':'On'}</button></td>
         <td title="${esc(w.added)}">${esc(fmtDate(w.added))}</td><td>${w.attempts}</td>
         <td style="color:var(--dim)">${esc(w.last_error||'—')}</td>
         <td><button class="mini" data-drop-game="${esc(w.game)}"
           data-drop-platform="${esc(w.platform)}"
           title="Stop looking for this. It stays out of Wanted until you ask for it again."
           >Remove</button></td></tr>`).join('')}
-      </tbody></table>`:'<div class="empty">Nothing missing.</div>'}`;
+      </tbody></table></div>`:'<div class="empty">Nothing missing.</div>'}`;
+  $('#page').querySelectorAll('[data-mview]').forEach(x=>x.onclick=()=>{MISSING_VIEW=x.dataset.mview; go('missing');});
   const b=$('#w-all'); if(b) b.onclick=async()=>{
     b.disabled=true; b.textContent='Searching…';
     const r=await j('/api/v1/command',{method:'POST',
       headers:{'content-type':'application/json'},
       body:JSON.stringify({name:'MissingGameSearch'})});
+    if(version!==pageVersion||activePage!=='missing')return;
     toast(`Searched ${r.searched??0}, grabbed ${r.grabbed??0}`);
     go('missing'); refreshCounts();
   };
+  $('#page').querySelectorAll('button[data-mon-game]').forEach(x=>x.onclick=async()=>{
+    x.disabled=true;
+    const r=await j('/api/v1/wanted/monitor',{method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({game:x.dataset.monGame,platform:x.dataset.monPlatform,monitored:x.dataset.mon!=='1'})});
+    if(version!==pageVersion||activePage!=='missing')return;
+    if(r.ok) go('missing'); else {x.disabled=false; toast('Could not change monitoring');}
+  });
   // Dropping a request, which Wanted could not do at all: the list was only
   // ever emptied by an import, so a typo went on being searched for forever.
   $('#page').querySelectorAll('button[data-drop-game]').forEach(x=>x.onclick=async()=>{
@@ -2169,6 +2258,7 @@ RENDER.missing=async()=>{
     x.disabled=true;
     const r=await fetch('/api/v1/wanted/missing?game='+encodeURIComponent(game)
       +'&platform='+encodeURIComponent(platform),{method:'DELETE'});
+    if(version!==pageVersion||activePage!=='missing')return;
     if(r.ok){ toast(`Removed ${game}`); go('missing'); refreshCounts(); }
     else { x.disabled=false; toast('Could not remove that request'); }
   });
@@ -3149,7 +3239,7 @@ RENDER.portal=async()=>{
         $('#portal-status').innerHTML='<div class="panel-note" style="border-left-color:var(--ok)">'+esc(msg)+'</div>';
       };
       $('#portal-hashes').onclick=async()=>{
-        $('#portal-status').innerHTML='<div class="panel-note">Seeding Netplay SHA-1 hashes from library server…</div>';
+        $('#portal-status').innerHTML='<div class="panel-note">Seeding Netplay SHA-256 hashes from library server…</div>';
         const r=await fetch('/api/v1/hashes/seed',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'}).then(x=>x.json()).catch(()=>({}));
         const msg=r.detail||r.error||JSON.stringify(r);
         $('#portal-status').innerHTML='<div class="panel-note" style="border-left-color:var(--ok)"><b>Netplay Hash Seed:</b> '+esc(msg)+'</div>';
@@ -3799,6 +3889,345 @@ RENDER.stats=async()=>{
   $('#rn-preview').onclick=()=>startRenamePreview(0);
 };
 
+// ---- Soundtracks: the card on a game page, and the Duplicates page ----------------
+const SND_SOURCE={zophar:"Zophar's Domain",archive:'Internet Archive'};
+const SND_FORMAT={mp3:['Download MP3','MP3 files (plays everywhere)'],
+  original:['Download original rips','Native rips such as SPC or VGM. RomM only plays SPC, VGM, VGZ and GYM; other formats are skipped.'],
+  files:['Download audio files','The audio files from this item'],flac:['Download FLAC','Lossless files']};
+const sndBytes=n=>n>=1073741824?(n/1073741824).toFixed(1)+' GB':n>=1048576?(n/1048576).toFixed(1)+' MB':Math.max(1,Math.round((n||0)/1024))+' KB';
+const sndPost=(u,b)=>{
+  const scope=($('#snd-library')||{}).value||'';
+  b=Object.assign({library:scope},b||{});
+  if(u.includes('/dups/')){
+    if(b.keep&&!String(b.keep).includes(':')) b.keep=scope+':'+b.keep;
+    if(b.id&&!String(b.id).includes(':')) b.id=scope+':'+b.id;
+    if(b.drop) b.drop=b.drop.map(x=>String(x).includes(':')?x:scope+':'+x);
+  }
+  return j(u,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(b||{})});};
+const sndHref=value=>{try{const url=new URL(String(value));return ['https:','http:'].includes(url.protocol)&&!url.username&&!url.password?esc(url.href):'#';}catch{return '#';}};
+const SND_DOWN={error:'Could not reach ROMarr'};
+function soundtrackCard(d,epoch){
+  const box=$('#g-snd'); if(!box) return;
+  const id=encodeURIComponent(d.rom_id);
+  box.innerHTML=`<div class="card"><h3>Soundtrack</h3>
+    <div id="snd-status" role="status" aria-live="polite" class="help">Asking RomM what it has…</div>
+    <div id="snd-prog"></div>
+    <div class="gh-act" id="snd-act" style="margin-top:10px"></div>
+    <div class="field" style="margin-top:10px"><label for="snd-q">Search terms</label>
+      <input type="search" id="snd-q" value="${esc(d.title)}" autocomplete="off"></div>
+    <div id="snd-res" style="margin-top:12px"></div>
+    <div id="snd-tor" style="margin-top:12px"></div></div>`;
+  const stat=$('#snd-status'), prog=$('#snd-prog'), act=$('#snd-act'), res=$('#snd-res');
+  let timer=null;
+  const gone=()=>epoch!==pageVersion||!stat.isConnected;
+  const bar=job=>`<label class="help" for="snd-bar">${esc(job.step||'Working…')}${job.made?` (${fmt(job.made)} added)`:''}</label>
+    <progress id="snd-bar" style="width:100%" max="100" ${job.pct==null?'':`value="${Math.round(job.pct*100)}"`}></progress>`;
+  // A job is over once its state has left "running" AND `finished` is stamped:
+  // the stamp comes after the undo journal is written, so reading status earlier
+  // would show a stale "undoable" count.
+  const watch=jobId=>{
+    timer=setTimeout(async()=>{
+      const r=await j('/api/v1/soundtracks/jobs').catch(()=>({items:[]}));
+      if(gone()) return;
+      const job=(r.items||r.jobs||[]).find(x=>x.id===jobId);
+      if(!job||(job.state!=='running'&&job.finished)){ load(); return; }
+      prog.innerHTML=bar(job); watch(jobId);
+    },1500);
+  };
+  const load=async()=>{
+    if(timer){clearTimeout(timer);timer=null;}
+    const s=await j('/api/v1/soundtracks/game?id='+id).catch(()=>SND_DOWN);
+    if(gone()) return;
+    if(!s.id){ stat.textContent=s.error||'Soundtracks are not available for this game.'; act.innerHTML=''; return; }
+    const job=s.job, running=!!job&&(job.state==='running'||!job.finished);
+    stat.textContent=(s.track_count==null?(s.error||'RomM did not answer.'):
+      (s.track_count?`RomM has ${fmt(s.track_count)} soundtrack file${s.track_count===1?'':'s'} for this game.`:'No soundtrack stored for this game yet.'))
+      +(s.undoable?` ROMarr added ${fmt(s.undoable)} of them.`:'')
+      +((job&&job.state==='error')?` Last attempt failed: ${job.message}`:'')
+      +((job&&job.state==='done'&&job.message)?` ${job.message}.`:'');
+    prog.innerHTML=running?bar(job):'';
+    const wt=s.watch;
+    if(wt&&!['added','cancelled'].includes(wt.state)){
+      const active=['downloading','importing'].includes(wt.state);
+      stat.textContent+=` Torrent “${wt.release}”: ${wt.message}.`+(active?' It will be added to RomM automatically when it finishes.':'');
+      if(active&&!running){ timer=setTimeout(load,10000); }
+    } else if(wt&&wt.state==='added'&&!s.undoable&&!running){ stat.textContent+=` ${wt.message}.`; }
+    act.innerHTML=`<button class="btn" id="snd-find" ${running?'disabled':''}>Search for a soundtrack</button>
+      <button class="btn ghost" id="snd-tor-go" ${running?'disabled':''}>Search torrents</button>
+      <button class="btn ghost" id="snd-lib" ${running?'disabled':''}>Use an album from your music library</button>
+      ${(wt&&['downloading','importing'].includes(wt.state))?`<button class="btn ghost" id="snd-wcancel">Stop watching torrent</button>`:''}
+      ${s.undoable?`<button class="btn danger" id="snd-undo" ${running?'disabled':''}>Undo (remove ${fmt(s.undoable)} added)</button>`:''}`;
+    $('#snd-find').onclick=find;
+    $('#snd-tor-go').onclick=torrents;
+    $('#snd-lib').onclick=pickAlbum;
+    const u=$('#snd-undo'); if(u) u.onclick=undo;
+    const wc=$('#snd-wcancel'); if(wc) wc.onclick=async()=>{ await sndPost('/api/v1/soundtracks/torrents/cancel',{id:d.rom_id}).catch(()=>SND_DOWN); load(); };
+    if(running&&job.id) watch(job.id);
+  };
+  const undo=async()=>{
+    if(!confirm('Remove the soundtrack files ROMarr added to this game from RomM? Files you added yourself are not touched.')) return;
+    $('#snd-undo').disabled=true;
+    const r=await sndPost('/api/v1/soundtracks/undo',{id:d.rom_id}).catch(()=>SND_DOWN);
+    toast(r.error||`Removed ${fmt(r.removed)} file${r.removed===1?'':'s'}`);
+    load();
+  };
+  // Albums come from a music folder on the server; picking one uploads its audio through RomM.
+  const pickAlbum=()=>{
+    const m=document.createElement('div'); m.className='modal'; m.dataset.soundtrack='true';
+    m.innerHTML=`<div class="box" role="dialog" aria-modal="true" aria-label="Use an album from your music library">
+      <h3>Use an album from your music library</h3>
+      <div class="sub">Search your music folder. The audio RomM can play is added to ${esc(d.title)}; the folder itself is never changed.</div>
+      <div class="row" role="tablist" aria-label="How to pick" style="gap:6px;margin-bottom:8px">
+        <button class="btn" role="tab" id="alb-t-s" aria-selected="true">Search</button>
+        <button class="btn ghost" role="tab" id="alb-t-b" aria-selected="false">Browse folders</button></div>
+      <div id="alb-search"><div class="field"><label for="alb-q">Album or artist</label><input type="search" id="alb-q" autocomplete="off" placeholder="Artist or album name, e.g. Arctic Monkeys"></div>
+      <div id="alb-res" role="status" aria-live="polite" class="help"></div></div>
+      <div id="alb-browse" hidden></div>
+      <div class="foot"><button class="btn ghost sp" data-close>Close</button></div></div>`;
+    document.body.append(m);
+    window.addEventListener('hashchange',()=>m.remove(),{once:true});
+    m.addEventListener('keydown',event=>{if(event.key==='Escape'){m.remove();event.preventDefault();}});
+    m.onclick=e=>{ if(e.target===m||e.target.dataset.close!==undefined) m.remove(); };
+    const q=m.querySelector('#alb-q'), out=m.querySelector('#alb-res'); q.focus();
+    let seq=0, wait=null;
+    const run=async()=>{
+      const mine=++seq, term=q.value.trim();
+      const r=await j('/api/v1/soundtracks/library/search?q='+encodeURIComponent(term)).catch(()=>SND_DOWN);
+      if(mine!==seq||!out.isConnected) return;
+      if(r.error){ out.textContent=r.error; return; }
+      const a=r.albums||[];
+      // Suggestions: clicking one puts the name in the box, so it is clear what kind of text belongs there.
+      const sugg=term?[...new Set(a.map(x=>x.id.split('/')[0]).filter(n=>n&&n!==term))].slice(0,6):(r.samples||[]);
+      const chips=sugg.length?`<div class="row" style="gap:6px;flex-wrap:wrap;margin:6px 0">${term?'<span class="help">Artists:</span>':'<span class="help">Try:</span>'}
+        ${sugg.map(n=>`<button type="button" class="btn ghost alb-sg" style="padding:2px 10px;font-size:12px">${esc(n)}</button>`).join('')}</div>`:'';
+      const hit=()=>out.querySelectorAll('.alb-sg').forEach(b=>b.onclick=()=>{ q.value=b.textContent; q.focus(); run(); });
+      if(!term){
+        out.innerHTML=`<p class="help">Type part of an artist or album name. ${fmt(r.total||0)} albums by ${fmt(r.artists||0)} artists in the library.</p>${chips}`;
+        hit(); return;
+      }
+      out.innerHTML=chips+(a.length?`<div class="tablewrap"><table><caption class="sr-only">Albums in the music library</caption>
+        <thead><tr><th scope="col">Album</th><th scope="col">Tracks</th><th scope="col">Size</th><th scope="col"><span class="sr-only">Add</span></th></tr></thead><tbody>
+        ${a.map((x,i)=>`<tr><td>${esc(x.id)}</td><td>${fmt(x.tracks)}</td><td>${esc(sndBytes(x.bytes))}</td>
+          <td><button class="btn alb-use" data-i="${i}">Use this album</button></td></tr>`).join('')}</tbody></table></div>`:'<p class="help">No album matches.</p>');
+      hit();
+      out.querySelectorAll('.alb-use').forEach(btn=>btn.onclick=async()=>{
+        out.querySelectorAll('.alb-use').forEach(o=>o.disabled=true);
+        const g=await sndPost('/api/v1/soundtracks/library/add',{id:d.rom_id,album:a[+btn.dataset.i].id}).catch(()=>SND_DOWN);
+        if(g.error){ toast(g.error); out.querySelectorAll('.alb-use').forEach(o=>o.disabled=false); return; }
+        m.remove(); toast('Adding the album'); load();
+      });
+    };
+    q.oninput=()=>{ clearTimeout(wait); wait=setTimeout(run,150); };
+    q.onkeydown=e=>{ if(e.key==='Enter'){ e.preventDefault(); const f=out.querySelector('.alb-use'); if(f) f.click(); } };
+    run();
+    // Folder browser: walk the library one level at a time; any folder with audio beneath it can be used.
+    const bro=m.querySelector('#alb-browse'), tS=m.querySelector('#alb-t-s'), tB=m.querySelector('#alb-t-b');
+    const show=b=>{ m.querySelector('#alb-search').hidden=b; bro.hidden=!b;
+      tS.className=b?'btn ghost':'btn'; tB.className=b?'btn':'btn ghost'; tS.setAttribute('aria-selected',!b); tB.setAttribute('aria-selected',b);
+      if(b&&!bro.dataset.loaded){ bro.dataset.loaded=1; walk(''); } };
+    tS.onclick=()=>{ show(false); q.focus(); }; tB.onclick=()=>show(true);
+    const walk=async rel=>{
+      bro.innerHTML='<p class="help">Loading…</p>';
+      const r=await j('/api/v1/soundtracks/library/browse?path='+encodeURIComponent(rel)).catch(()=>SND_DOWN);
+      if(!bro.isConnected) return;
+      if(r.error){ bro.innerHTML=`<p class="help" role="alert">${esc(r.error)}</p>`; return; }
+      const parts=r.path?r.path.split('/'):[];
+      const crumbs=['<button type="button" class="btn ghost alb-go" data-p="" style="padding:2px 8px">Library</button>']
+        .concat(parts.map((n,i)=>`<button type="button" class="btn ghost alb-go" data-p="${esc(parts.slice(0,i+1).join('/'))}" style="padding:2px 8px">${esc(n)}</button>`)).join(' / ');
+      bro.innerHTML=`<div class="row" style="gap:4px;flex-wrap:wrap;margin-bottom:8px">${crumbs}</div>
+        ${r.path?`<div class="row" style="margin-bottom:8px"><span class="help sp">${r.tracks?fmt(r.tracks)+' audio files here':'Subfolders are included'}</span>
+          <button class="btn alb-here">Use this folder</button></div>`:''}
+        <div class="tablewrap" style="max-height:320px;overflow:auto"><table><caption class="sr-only">Folders</caption><tbody>
+        ${r.dirs.length?r.dirs.map(x=>`<tr><td><button type="button" class="btn ghost alb-go" data-p="${esc((r.path?r.path+'/':'')+x.name)}" style="border:0;padding:2px 6px">📁 ${esc(x.name)}</button></td>
+          <td class="help">${x.tracks?fmt(x.tracks)+' tracks':''}</td>
+          <td><button type="button" class="btn alb-use2" data-p="${esc((r.path?r.path+'/':'')+x.name)}">Use</button></td></tr>`).join(''):'<tr><td class="help">No subfolders.</td></tr>'}
+        </tbody></table></div>`;
+      bro.querySelectorAll('.alb-go').forEach(b=>b.onclick=()=>walk(b.dataset.p));
+      const use=async p=>{
+        bro.querySelectorAll('button').forEach(o=>o.disabled=true);
+        const g=await sndPost('/api/v1/soundtracks/library/add',{id:d.rom_id,album:p}).catch(()=>SND_DOWN);
+        if(g.error){ toast(g.error); bro.querySelectorAll('button').forEach(o=>o.disabled=false); return; }
+        m.remove(); toast('Adding the album'); load();
+      };
+      bro.querySelectorAll('.alb-use2').forEach(b=>b.onclick=()=>use(b.dataset.p));
+      const h=bro.querySelector('.alb-here'); if(h) h.onclick=()=>use(r.path);
+    };
+  };
+  // Manual indexer search with the typed terms. Grab hands the torrent to qBittorrent; the server then
+  // watches it and uploads the audio to RomM on completion. It is never imported as a ROM.
+  const torrents=async()=>{
+    const b=$('#snd-tor-go'), out=$('#snd-tor'); b.disabled=true; b.textContent='Searching…';
+    out.innerHTML='';
+    let q=$('#snd-q').value.trim(); if(q===d.title) q+=' soundtrack';
+    const r=await j('/api/v1/soundtracks/torrents?id='+id+'&q='+encodeURIComponent(q)).catch(()=>SND_DOWN);
+    if(gone()||!out.isConnected) return;
+    b.disabled=false; b.textContent='Search torrents';
+    if(r.error){ out.innerHTML=`<p class="help" role="alert">${esc(r.error)}</p>`; return; }
+    const it=r.items||[];
+    out.innerHTML=it.length?`<p class="help">Torrents for “${esc(r.term)}”. Grab sends the torrent to qBittorrent; when it finishes ROMarr adds its audio to this game in RomM (you can undo it).</p>
+      <div class="tablewrap"><table><caption class="sr-only">Torrent results</caption>
+      <thead><tr><th scope="col">Release</th><th scope="col">Size</th><th scope="col">Seeders</th><th scope="col">Indexer</th><th scope="col"><span class="sr-only">Grab</span></th></tr></thead><tbody>
+      ${it.map((x,i)=>`<tr><td>${esc(x.title)}${x.info_url?` <a href="${sndHref(x.info_url)}" target="_blank" rel="noopener noreferrer">Open ↗</a>`:''}</td>
+        <td style="white-space:nowrap">${esc(sndBytes(x.size))}</td><td>${fmt(x.seeders)}</td><td>${esc(x.indexer||'—')}</td>
+        <td>${x.grabbable?`<button class="btn ghost tor-grab" data-i="${i}">Grab</button>`:'<span class="help">no link</span>'}</td></tr>`).join('')}
+      </tbody></table></div>`:'<p class="help">No torrents found. Try different terms.</p>';
+    out.querySelectorAll('.tor-grab').forEach(btn=>btn.onclick=async()=>{
+      btn.disabled=true; btn.textContent='Grabbing…';
+      const g=await sndPost('/api/v1/soundtracks/torrents/grab',{id:d.rom_id,release:it[+btn.dataset.i].id}).catch(()=>SND_DOWN);
+      btn.textContent=g.ok?'Sent':'Grab'; if(!g.ok) btn.disabled=false; else load();
+      toast(g.ok?`Sent to ${g.client}; ROMarr will add it when it finishes`:(g.error||'Could not grab that release'));
+    });
+  };
+  $('#snd-q').onkeydown=e=>{ if(e.key==='Enter'){ e.preventDefault(); $('#snd-find')&&$('#snd-find').click(); } };
+  const find=async()=>{
+    const b=$('#snd-find'); b.disabled=true; b.textContent='Searching…';
+    res.innerHTML='';
+    const r=await j('/api/v1/soundtracks/search?id='+id+'&q='+encodeURIComponent($('#snd-q').value)).catch(()=>SND_DOWN);
+    if(gone()||!res.isConnected) return;
+    b.disabled=false; b.textContent='Search again';
+    if(r.error){ res.innerHTML=`<p class="help" role="alert">${esc(r.error)}</p>`; return; }
+    const c=r.candidates||[];
+    res.innerHTML=(c.length?`<div class="tablewrap"><table><caption class="sr-only">Soundtrack candidates for ${esc(d.title)}</caption>
+      <thead><tr><th scope="col">Title</th><th scope="col">Source</th><th scope="col">Platform</th><th scope="col">Match</th><th scope="col">Download</th></tr></thead><tbody>
+      ${c.map((x,i)=>`<tr><td>${esc(x.title)} ${x.year?`<span class="rc-y">${esc(x.year)}</span>`:''}
+          <a href="${sndHref(x.url)}" target="_blank" rel="noopener noreferrer">Open ↗</a></td>
+        <td>${esc(SND_SOURCE[x.provider]||x.provider)}</td>
+        <td>${x.platform_match?'<span class="pill">Same platform</span>':esc(x.console||'—')}</td>
+        <td>${Math.round((x.score||0)*100)}%</td>
+        <td>${(x.formats||[]).map(f=>`<button class="btn ghost snd-dl" data-i="${i}" data-f="${esc(f)}" title="${esc((SND_FORMAT[f]||[f,''])[1])}" style="padding:3px 10px;font-size:12px">${esc((SND_FORMAT[f]||[f])[0])}</button>`).join(' ')}</td></tr>`).join('')}
+      </tbody></table></div>`:`<p class="help">Nothing found on the enabled sources.${(r.errors||[]).length?' Some sources did not answer.':''} Try the sites below.</p>`)
+      +`<p class="help" style="margin-top:10px">Search by hand:
+        ${(r.links||[]).map(l=>`<a href="${sndHref(l.url)}" target="_blank" rel="noopener noreferrer">${esc(l.name)}</a>`).join(' · ')}</p>`;
+    res.querySelectorAll('.snd-dl').forEach(btn=>btn.onclick=async()=>{
+      const x=c[+btn.dataset.i];
+      res.querySelectorAll('.snd-dl').forEach(o=>o.disabled=true);
+      const ask=force=>sndPost('/api/v1/soundtracks/download',{id:d.rom_id,candidate:{provider:x.provider,id:x.id},format:btn.dataset.f,force})
+        .catch(()=>SND_DOWN);
+      let g=await ask(false);
+      // Another game already holds this soundtrack: a second copy is what the Duplicates page exists to clean up.
+      if(g.held_by&&confirm(String(g.error||'').replace(/; not downloaded again.*$/,'')+'.\n\nDownload it for this game as well?')) g=await ask(true);
+      if(g.error){ toast(g.error); res.querySelectorAll('.snd-dl').forEach(o=>o.disabled=false); return; }
+      toast('Download started');
+      load();
+    });
+  };
+  load();
+}
+// Duplicates: games whose stored soundtracks are byte-for-byte identical. The scan
+// and the merge both run on the server; this lists, asks, and shows progress.
+async function soundtrackDuplicates(renderEpoch,scope){
+  const page=$('#snd-duplicates');
+  page.innerHTML=`<div class="card"><div role="tablist" aria-label="Soundtracks" class="row" style="gap:6px;margin-bottom:12px">
+      <button class="btn" role="tab" id="snd-tab-dups" aria-selected="true" aria-controls="snd-panel">Duplicates</button></div>
+    <div id="snd-panel" role="tabpanel" aria-labelledby="snd-tab-dups"></div></div>`;
+  const panel=$('#snd-panel');
+  let timer=null;
+  const load=async()=>{
+    if(timer){clearTimeout(timer);timer=null;}
+    const r=await j('/api/v1/soundtracks/dups?library='+encodeURIComponent(scope)).catch(()=>SND_DOWN);
+    if(renderEpoch!==pageVersion||!panel.isConnected) return;
+    if(r.error){ panel.innerHTML=`<p class="help" role="alert">${esc(r.error)}</p>`; return; }
+    const scan=r.scan, running=scan&&scan.state==='running';
+    const groups=r.groups||[], merged=r.merged||[];
+    panel.innerHTML=`<p class="help">Games whose stored soundtracks are identical. Scanning compares the real file bytes (SHA-256) read from RomM.
+        Pick the game to keep: the others lose their copy (removed through RomM) and the merge can be undone.</p>
+      <div class="row" style="gap:10px;align-items:center;margin:10px 0"><button class="btn" id="dp-scan" ${running?'disabled':''}>Scan for duplicates</button>
+        <span class="help" role="status" aria-live="polite">${running?esc(scan.step):(scan&&scan.state==='error'?'Scan failed: '+esc(scan.message):
+          (r.scanned?'Last scan '+esc(fmtDate(new Date(r.scanned*1000).toISOString()))+': '+fmt(groups.length)+' set'+(groups.length===1?'':'s')+' of duplicates.':'Not scanned yet.'))}</span></div>
+      ${running?`<progress style="width:100%" max="100" aria-label="Scan progress" ${scan.pct==null?'':`value="${Math.round(scan.pct*100)}"`}></progress>`:''}
+      <div id="dp-job"></div>
+      ${groups.map((g,gi)=>`<fieldset class="card" style="margin:12px 0"><legend>${fmt(g.tracks)} track${g.tracks===1?'':'s'}, ${esc(sndBytes(g.bytes))} each</legend>
+        <div class="tablewrap"><table><caption class="sr-only">Games sharing one soundtrack</caption>
+        <thead><tr><th scope="col">Keep</th><th scope="col">Game</th><th scope="col">Platform</th></tr></thead><tbody>
+        ${g.games.map((x,i)=>`<tr><td><input type="radio" name="keep-${gi}" value="${esc(x.id)}" aria-label="Keep the soundtrack on ${esc(x.name)}" ${i===0?'checked':''}></td>
+          <td>${esc(x.name)}</td><td>${esc(x.platform)}</td></tr>`).join('')}</tbody></table></div>
+        <button class="btn dp-merge" data-g="${gi}">Merge into the kept game</button></fieldset>`).join('')}
+      ${(!groups.length&&r.scanned&&!running)?'<p class="help">No identical soundtracks found.</p>':''}
+      ${merged.length?`<h3 style="margin-top:18px">Merged</h3><div class="tablewrap"><table><caption class="sr-only">Merged soundtracks that can be restored</caption>
+        <thead><tr><th scope="col">Game</th><th scope="col">Soundtrack kept on</th><th scope="col"><span class="sr-only">Undo</span></th></tr></thead><tbody>
+        ${merged.map(x=>`<tr><td>${esc(x.drop_title||x.drop_id)}${x.state==='partial'?' <span class="pill">incomplete</span>':''}</td>
+          <td>${esc(x.keep_title||x.keep_id)}</td>
+          <td><button class="btn ghost dp-undo" data-id="${esc(x.drop_id)}">Undo (restore its copy)</button></td></tr>`).join('')}</tbody></table></div>`:''}`;
+    $('#dp-scan').onclick=async()=>{
+      const a=await sndPost('/api/v1/soundtracks/dups/scan').catch(()=>SND_DOWN);
+      if(a.error) toast(a.error);
+      load();
+    };
+    panel.querySelectorAll('.dp-merge').forEach(btn=>btn.onclick=async()=>{
+      const g=groups[+btn.dataset.g], keep=panel.querySelector(`input[name="keep-${btn.dataset.g}"]:checked`).value;
+      const others=g.games.filter(x=>x.id!==keep);
+      if(!confirm(`Keep the soundtrack on ${g.games.find(x=>x.id===keep).name} and remove the identical copy from ${others.map(x=>x.name).join(', ')}? This can be undone.`)) return;
+      panel.querySelectorAll('button').forEach(o=>o.disabled=true);
+      const a=await sndPost('/api/v1/soundtracks/dups/merge',{keep,drop:others.map(x=>x.id)}).catch(()=>SND_DOWN);
+      toast(a.error||'Merging…');
+      follow(a.error?null:a.id);
+    });
+    panel.querySelectorAll('.dp-undo').forEach(btn=>btn.onclick=async()=>{
+      btn.disabled=true;
+      const a=await sndPost('/api/v1/soundtracks/dups/unmerge',{id:btn.dataset.id}).catch(()=>SND_DOWN);
+      toast(a.error||'Restoring…');
+      follow(a.error?null:a.id);
+    });
+    if(running) timer=setTimeout(load,1500);
+  };
+  // Merge and restore are jobs too: follow the one we started until it ends, then show the result.
+  const follow=async id=>{
+    if(!id){ load(); return; }
+    const jobs=await j('/api/v1/soundtracks/jobs').catch(()=>({items:[]}));
+    if(renderEpoch!==pageVersion||!panel.isConnected) return;
+    const job=(jobs.items||jobs.jobs||[]).find(x=>x.id===id);
+    if(job&&(job.state==='running'||!job.finished)){ const box=$('#dp-job'); if(box) box.textContent=job.step||'Working…'; timer=setTimeout(()=>follow(id),1500); return; }
+    if(job) toast(job.message||job.state);
+    load();
+  };
+  load();
+};
+
+
+RENDER.soundtracks=async()=>{
+  const epoch=pageVersion, page=$('#page');
+  page.innerHTML='<div class="card"><h2>Soundtracks</h2><p class="help">Find audio for a game in your RomM library, use an album you own, or review identical soundtracks. Nothing is downloaded until you choose it.</p><div class="field"><label for="snd-library">Library</label><select id="snd-library"></select></div><div class="field"><label for="snd-game-filter">Find a game</label><input id="snd-game-filter" type="search" placeholder="Filter game titles" autocomplete="off"></div><div class="field"><label for="snd-game">Game</label><select id="snd-game"></select></div><p class="help" id="snd-notice" role="status"></p><details><summary>Soundtrack settings</summary><div class="field"><label for="snd-music-root">Music library folder on this ROMarr host</label><input id="snd-music-root" placeholder="/music-library"><p class="help">Optional. Mount this folder read-only. ROMarr uploads only audio you select.</p></div><label><input type="checkbox" id="snd-source-zophar"> Search Zophar</label> <label><input type="checkbox" id="snd-source-archive"> Search Internet Archive</label><p><button type="button" class="btn" id="snd-save-settings">Save settings</button></p></details></div><div id="g-snd"></div><div id="snd-duplicates"></div>';
+  const [targets,config]=await Promise.all([j('/api/v1/soundtracks/targets').catch(()=>SND_DOWN),j('/api/v1/config').catch(()=>({}))]);
+  if(epoch!==pageVersion||activePage!=='soundtracks')return;
+  const settings=config.settings||config;
+  $('#snd-music-root').value=settings.music_library_root||'';
+  for(const source of ['zophar','archive'])$('#snd-source-'+source).checked=String(settings.soundtrack_sources??'zophar,archive').split(',').includes(source);
+  $('#snd-save-settings').onclick=async()=>{
+    const values={music_library_root:$('#snd-music-root').value.trim(),soundtrack_sources:['zophar','archive'].filter(x=>$('#snd-source-'+x).checked).join(',')};
+    const result=await j('/api/v1/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(values)}).catch(()=>SND_DOWN);
+    if(epoch!==pageVersion||activePage!=='soundtracks')return;
+    toast(result.error||'Soundtrack settings saved');
+  };
+  const libraries=targets.libraries||[];
+  let games=targets.games||[],matched=targets.total||games.length,requestSeq=0,filterTimer=null;
+  const lib=$('#snd-library'), picker=$('#snd-game'),filter=$('#snd-game-filter');
+  lib.innerHTML=libraries.map(x=>`<option value="${esc(x.id)}">${esc(x.name)}</option>`).join('');
+  if(!libraries.length){$('#snd-notice').textContent=targets.error||'Add a RomM library under Settings → Libraries to use soundtracks.';picker.disabled=true;return;}
+  const fill=()=>{
+    const previous=picker.value,term=filter.value.toLocaleLowerCase();
+    const rows=games.filter(x=>x.library===lib.value);
+    picker.innerHTML='<option value="">Choose a game…</option>'+rows.map(x=>`<option value="${esc(x.id)}">${esc(x.name)} (${esc(x.platform)})</option>`).join('');
+    if(rows.some(x=>x.id===previous))picker.value=previous;
+    $('#snd-notice').textContent=rows.length+' games shown'+(matched>rows.length?' of '+matched+'. Type a title to narrow the list.':'');
+  };
+  picker.onchange=()=>{
+    document.querySelectorAll('.modal[data-soundtrack]').forEach(modal=>modal.remove());
+    $('#g-snd').innerHTML='';
+    const game=games.find(x=>x.id===picker.value&&x.library===lib.value);
+    if(game)soundtrackCard({rom_id:game.id,title:game.name},epoch);
+  };
+  const refreshGames=async()=>{
+    const sequence=++requestSeq,scope=lib.value,term=filter.value;
+    const result=await j('/api/v1/soundtracks/targets?library='+encodeURIComponent(scope)+'&q='+encodeURIComponent(term)).catch(()=>SND_DOWN);
+    if(epoch!==pageVersion||activePage!=='soundtracks'||sequence!==requestSeq||lib.value!==scope)return;
+    if(result.error){$('#snd-notice').textContent=result.error;return;}
+    games=result.games||[];matched=result.total||games.length;fill();picker.onchange();
+  };
+  lib.onchange=()=>{picker.value='';picker.onchange();refreshGames();soundtrackDuplicates(epoch,lib.value);};
+  filter.oninput=()=>{clearTimeout(filterTimer);filterTimer=setTimeout(refreshGames,150);};
+  fill();if(filter.value.trim())refreshGames();soundtrackDuplicates(epoch,lib.value);
+};
+
 RENDER.queue=async()=>{
   clearInterval(RENDER._queueTimer); RENDER._queueTimer=null;
   const ver=typeof pageVersion==='number'?pageVersion:0;
@@ -3816,6 +4245,7 @@ RENDER.queue=async()=>{
     ${d.items.map((i,n)=>`<tr><td>${esc(i.game)}</td><td>${esc(i.platform)}</td>
       <td>${esc(i.release||'—')}</td><td>${i.seeders||'—'}</td>
       <td><span class="pill ${esc(i.state)}">${esc(i.state)}</span>
+      ${Number.isFinite(i.progress)?`<div class="help">${i.progress.toFixed(1)}% · ${i.eta===null?'ETA unknown':Math.ceil(i.eta/60)+' min left'} · ${(i.speed/1048576).toFixed(1)} MB/s</div>`:''}
       ${i.detail?`<div style="color:var(--dim);font-size:11.5px">${esc(i.detail)}</div>`:''}
       </td><td style="text-align:right"><div class="rowact">
         ${['failed','import-failed'].includes(i.state)?`<button data-qretry="${n}">Retry</button>`:''}
@@ -4181,6 +4611,7 @@ RENDER.media=()=>settingsPage('Media Management',
      +'Per-library overrides live on the Libraries page.')
   +chk('rename_on_import','Use DAT names for verified single-file imports (disc-set filenames stay intact)',SETTINGS.rename_on_import)
   +chk('prefer_hardlinks','Prefer hardlinks; copy when unavailable (unchanged files only)',SETTINGS.prefer_hardlinks)
+  +chk('switch_attach_extras','File Switch updates and DLC inside their game\'s folder (update/, dlc/) when the game already has one',SETTINGS.switch_attach_extras!==false)
   +`<p class="dim">Hardlinks share file contents with the download. Editing either file changes both. Archive members are extracted normally. Shared library read permissions are required; ROMarr never changes source permissions.</p>`
   +chk('retain_downloads_after_import','Keep completed downloads for seeding after import',SETTINGS.retain_downloads_after_import)
   +chk('overwrite_existing','Overwrite an existing file',SETTINGS.overwrite_existing)
@@ -4235,14 +4666,55 @@ RENDER.media=()=>settingsPage('Media Management',
      +'an allowlist — the plan counts every title omitted for having no dump '
      +'in your regions.'));
 
+RENDER.switch=async()=>{
+  const version=pageVersion;
+  const alive=()=>activePage==='switch'&&pageVersion===version;
+  let generation=0;
+  const load=async(refresh=false)=>{
+    const request=++generation;
+    const current=()=>alive()&&request===generation;
+    $('#page').innerHTML='<p class="muted">Reading Switch inventory…</p>';
+    try{
+      const data=await j('/api/v1/switch/updates'+(refresh?'?refresh=1':''));
+      if(!current())return;
+      const summary=data.summary||{};
+      $('#page').innerHTML=`<div class="card"><h2>Switch Updates &amp; DLC <span class="badge">${Number(summary.games_with_gaps)||0} games with gaps</span></h2>
+        <p>Read-only filename inventory. No downloads, imports or file changes. Version tags can be absent or inaccurate. TitleDB regional DLC metadata is incomplete; no missing entry means no known gap, never a complete collection.</p>
+        <button class="btn" id="switch-refresh">Refresh inventory</button>
+        <p>${Number(summary.games)||0} applications · ${Number(summary.update_gaps)||0} update gaps · ${Number(summary.dlc_gaps)||0} known DLC gaps · ${Number(summary.unknown_to_titledb)||0} unknown versions</p>
+        ${summary.scan_complete?'':'<p role="status">Scan incomplete: results may omit files.</p>'}
+        ${Object.entries(data.scans||{}).map(([slug,v])=>(v.warnings||[]).map(w=>`<p role="status">${esc(slug)}: ${esc(w)}</p>`).join('')).join('')}
+        ${(data.items||[]).length?'':'<p>No tagged Switch dumps found. Supported files: NSP, NSZ, XCI, XCZ, NUP. A single [16-digit title ID] identifies each file; [v65536] supplies a version. Metadata downloads start only after a tagged file is found.</p>'}
+        <div id="switch-rows">${(data.items||[]).map(row=>`<article class="card"><h3>${esc(row.name||row.game)} <small>${esc(row.platform)}</small></h3>
+          <code>${esc(row.base_tid)}</code><p>Update: <strong>${esc(row.update)}</strong> · installed ${esc(row.installed_version??'unknown')} / latest ${esc(row.latest_version??'unknown')}${row.base_present?'':' · base file missing'}</p>
+          <p>${Number(row.dlc_installed)||0} installed DLC IDs · ${row.dlc_total===null?'catalogue coverage unknown':esc(row.dlc_total)+' known regional IDs'}${row.catalog_region?' ('+esc(row.catalog_region)+')':''}</p>
+          ${[...(row.dlc_missing||[]).map(d=>({...d,ignored:false})),...(row.dlc_ignored||[]).map(d=>({...d,ignored:true}))].map(d=>`<p>${esc(d.name||d.tid)} <code>${esc(d.tid)}</code> <button class="btn small switch-ignore" data-tid="${esc(d.tid)}" data-ignore="${d.ignored?'false':'true'}">${d.ignored?'Resume tracking':'Ignore this DLC'}</button></p>`).join('')}
+          <details><summary>Inventory files</summary><ul>${row.files.map(f=>`<li>${esc(f)}</li>`).join('')}</ul></details></article>`).join('')}</div></div>`;
+      $('#switch-refresh').onclick=()=>load(true);
+      document.querySelectorAll('.switch-ignore').forEach(button=>button.onclick=async()=>{
+        button.disabled=true;
+        try{
+          await j('/api/v1/switch/ignore',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({tid:button.dataset.tid,ignored:button.dataset.ignore==='true'})});
+          if(current())load();
+        }catch(error){if(current()){button.disabled=false;toast(error.message||'Could not save preference');}}
+      });
+    }catch(error){if(current())$('#page').innerHTML=`<p role="alert">${esc(error.message||'Switch report unavailable')}</p>`;}
+  };
+  await load();
+};
+
 RENDER.profiles=async()=>{
+  const version=pageVersion;
+  const alive=()=>activePage==='profiles'&&pageVersion===version;
   const plats=await j('/api/platforms').catch(()=>[]);
+  if(!alive())return;
   plats.sort((a,b)=>a.name.localeCompare(b.name));
 
   SETTINGS.platform_profiles=SETTINGS.platform_profiles||{};
   let currentPlat=RENDER._current_profile_platform||'';
 
   const renderProfileForm=()=>{
+    if(!alive())return;
     const isGlobal=!currentPlat;
     const platInfo=isGlobal?null:(plats.find(p=>p.slug===currentPlat)||{name:currentPlat,slug:currentPlat});
     const overrides=isGlobal?null:(SETTINGS.platform_profiles[currentPlat]||null);
@@ -4272,6 +4744,9 @@ RENDER.profiles=async()=>{
     const regionScoreLines=Object.entries(regionScores||{})
       .map(([reg,sc])=>`${reg} = ${sc}`).join('\n');
 
+    const video=getVal('video_standard','none')||'none';
+    const strict=getVal('video_standard_strict',false);
+    const formatValue=isGlobal?Object.entries(SETTINGS.preferred_formats||{}).map(([k,v])=>k+' = '+v.join(', ')).join('\n'):((overrides&&overrides.preferred_formats)||(SETTINGS.preferred_formats||{})[currentPlat]||[]).join(', ');
     const preferredTerms=getVal('preferred_terms',[]);
     const preferredTermLines=(preferredTerms||[]).map(t=>{
       if(Array.isArray(t)&&t.length===2)return `${t[0]} = ${t[1]}`;
@@ -4370,6 +4845,15 @@ RENDER.profiles=async()=>{
         </div>
       </div>
 
+      <div class="field"><label for="prof-video">Video standard</label>
+        <select id="prof-video">${[['none','No preference'],['ntsc','NTSC'],['pal','PAL']].map(([v,n])=>`<option value="${v}"${video===v?' selected':''}>${n}</option>`).join('')}</select>
+        <label class="check"><input type="checkbox" id="prof-video-strict"${strict?' checked':''}>Refuse a known opposing video standard</label>
+        <small>Explicit video tags or bracketed region tags only; unknown and mixed-region releases stay eligible.</small>
+      </div>
+      <div class="field"><label for="prof-formats">Preferred formats (best first)</label>
+        <textarea id="prof-formats" rows="3" placeholder="${isGlobal?'psx = chd, cue, bin':'chd, cue, bin'}">${esc(formatValue)}</textarea>
+        <small>${isGlobal?'One platform slug = comma-separated extensions per line.':'Comma-separated extensions. Empty disables format preference for this platform.'} Only the final filename extension or selected torrent member counts.</small>
+      </div>
       <div class="field" style="margin-top:12px">
         <label>Preferred Regions</label>
         <input type="text" id="prof-regions" value="${esc(regions.join(', '))}" placeholder="USA, World, Europe, Japan">
@@ -4436,6 +4920,7 @@ RENDER.profiles=async()=>{
           headers:{'content-type':'application/json'},
           body:JSON.stringify(patch)
         });
+        if(!alive())return;
         toast(`Reverted ${platInfo.name} to global defaults`);
         renderProfileForm();
       };
@@ -4477,8 +4962,16 @@ RENDER.profiles=async()=>{
       const beta=$('#prof-allow-beta').checked;
       const hacks=$('#prof-allow-hacks').checked;
 
+      const videoStandard=$('#prof-video').value;
+      const videoStrict=$('#prof-video-strict').checked;
+      const parseFormats=value=>[...new Set(value.split(',').map(x=>x.trim().toLowerCase().replace(/^\./,'')).filter(x=>/^[a-z0-9]{1,8}$/.test(x)))].slice(0,32);
+      const formats=isGlobal?{}:parseFormats($('#prof-formats').value);
+      if(isGlobal)$('#prof-formats').value.split('\n').forEach(line=>{const [slug,value]=line.split('=');if(slug&&/^[a-z0-9][a-z0-9-]{0,63}$/.test(slug.trim()))formats[slug.trim()]=parseFormats(value||'');});
       const patch={};
       if(isGlobal){
+        patch.video_standard=videoStandard;
+        patch.video_standard_strict=videoStrict;
+        patch.preferred_formats=formats;
         patch.min_size_mb=minSz;
         patch.max_size_mb=maxSz;
         patch.min_seeders=seeders;
@@ -4494,6 +4987,9 @@ RENDER.profiles=async()=>{
       } else {
         SETTINGS.platform_profiles=SETTINGS.platform_profiles||{};
         SETTINGS.platform_profiles[currentPlat]={
+          video_standard:videoStandard,
+          video_standard_strict:videoStrict,
+          preferred_formats:formats,
           min_size_mb:minSz,
           max_size_mb:maxSz,
           min_seeders:seeders,
@@ -4515,6 +5011,7 @@ RENDER.profiles=async()=>{
         headers:{'content-type':'application/json'},
         body:JSON.stringify(patch)
       });
+      if(!alive())return;
       toast(`Saved ${isGlobal?'global':platInfo.name} release profile`);
       renderProfileForm();
     };

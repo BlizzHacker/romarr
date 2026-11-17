@@ -39,7 +39,9 @@ def test_every_nav_entry_has_a_page_title(slug):
 def test_every_renderer_is_in_the_nav():
     """A renderer nobody can navigate to is dead code with a stylesheet."""
     rendered = set(re.findall(r"RENDER\.([a-z]+)=", SOURCE))
-    assert rendered - set(nav_pages()) == set()
+    assert rendered - set(nav_pages()) == {"game"}
+    assert "function gameHref(" in SOURCE
+    assert "go(gameHref(" in SOURCE
 
 
 def test_the_pages_added_for_the_new_backends_exist():

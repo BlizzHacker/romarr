@@ -1,10 +1,12 @@
 """A reviewable import plan. Filename hints never claim package identity."""
 from __future__ import annotations
+
 import hashlib
 import json
 from pathlib import Path
 from . import nup
 from .library import _source_for, platform_dir, _digital_set_name, _set_name
+from .switch_attach import ATTACH_PLATFORMS, attach_dir as switch_attach_dir
 
 
 def queue_identity(item):
@@ -13,20 +15,22 @@ def queue_identity(item):
             item.release, item.indexer, item.external_request_id]
 
 
-def preview_import(download, platform, library_root, *, layout="flat", platform_folders=None, queue_identity=None):
+def preview_import(download, platform, library_root, *, layout="flat", platform_folders=None, queue_identity=None,
+                   switch_extras=False):
     """Build a reviewable preview without hashing game payloads."""
     source = _source_for(download, platform)
     try:
         return _preview_import_from_source(
             source, download, platform, library_root, layout=layout,
-            platform_folders=platform_folders, queue_identity=queue_identity)
+            platform_folders=platform_folders, queue_identity=queue_identity,
+            switch_extras=switch_extras)
     finally:
         source.close()
 
 
 def _preview_import_from_source(source, download, platform, library_root, *,
                                 layout="flat", platform_folders=None,
-                                queue_identity=None):
+                                queue_identity=None, switch_extras=False):
     """Create a preview from an owned source before its scratch files close."""
     names = source.names()
     sets = source.rom_sets(platform)
@@ -74,7 +78,7 @@ def _preview_import_from_source(source, download, platform, library_root, *,
                       "evidence": evidence,
                       "confidence": confidence,
                       "bytes": sum(sizes[m] for m in members) if all(m in sizes for m in members) else None,
-                      "destination": str(target / ((_digital_set_name(download) if platform.media == "digital" else _set_name(group.primary)) if group.is_multi_file else Path(group.primary.replace("\\", "/")).name)),
+                      "destination": str(_preview_destination(download, platform, target, group, switch_extras)),
                       "selected": len(sets) == 1 and not unknown})
     return {"token": token, "items": items,
             "extras": [n for n in names if n not in used],
@@ -141,3 +145,16 @@ def choose_import(preview, choices, mode="single", existing_game=""):
     if attachment:
         intent["existing_game"] = existing_game
     return intent
+
+
+def _preview_destination(download, platform, target, group, switch_extras):
+    """The folder the importer will use, including Switch update/DLC filing."""
+    if group.is_multi_file:
+        return target / (_digital_set_name(download) if platform.media == "digital"
+                         else _set_name(group.primary))
+    name = Path(group.primary.replace("\\", "/")).name
+    if switch_extras and platform.slug in ATTACH_PLATFORMS:
+        attach = switch_attach_dir(name, target)
+        if attach is not None:
+            return attach / name
+    return target / name

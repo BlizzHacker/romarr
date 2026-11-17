@@ -219,9 +219,9 @@ def test_base_theme_rules_survive_an_unsupported_has_selector():
 
 def test_native_navigation_preserves_routes_in_requested_order():
     expected = {
-        'Library': 'library add discover search',
+        'Library': 'library add discover search soundtracks',
         'Wanted': 'missing lists calendar',
-        'Activity': 'queue history blocklist reports',
+        'Activity': 'queue history blocklist reports switch',
         'Hub': 'hub emulators portal peers ecosystem agents',
         'Settings': 'general media profiles indexers clients libraries connections metadata setup getstarted',
         'System': 'status stats update platforms collections manualimport tasks logs',
@@ -235,10 +235,10 @@ def test_native_navigation_preserves_routes_in_requested_order():
     assert [g['data-group'] for g in groups if 'open' in g] == ['library']
     assert all(g['name'] == 'romarr-groups' for g in groups)
     links = [a for t, a in nodes if t == 'a']
-    assert len(links) == len({a['data-page'] for a in links}) == 35
+    assert len(links) == len({a['data-page'] for a in links}) == 37
     assert all(a['href'] == '#' + a['data-page'] for a in links)
     assert [a['data-ct'] for _, a in nodes if 'data-ct' in a] == [
-        'games', 'missing', 'queued', 'queued']
+        'games', 'missing', 'queued', 'queued', 'switch_gaps']
     heads = [a for t, a in nodes if t == 'summary']
     assert [h['data-first-page'] for h in heads] == [p.split()[0] for p in expected.values()]
 

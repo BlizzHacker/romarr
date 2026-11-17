@@ -347,6 +347,9 @@ def test_issue_118_hub_search_filters_collection_paths(monkeypatch):
     monkeypatch.setitem(sys.modules, "rom_hub.broker.fetcher", fake_fetcher_mod)
     monkeypatch.setitem(sys.modules, "rom_hub.dispatcher", fake_disp)
 
+    # Search plumbing, not confinement: hosts without pyseccomp refuse plugins
+    # unless the operator opts in, so opt in explicitly here.
+    monkeypatch.setenv("ROMARR_ALLOW_UNSANDBOXED_PLUGINS", "1")
     rows, err = hub.search("game", platform="ps2", limit=25)
     assert err == ""
     # Only Game 2 (PS2) survives; Mega Drive and TI-82 are filtered out!

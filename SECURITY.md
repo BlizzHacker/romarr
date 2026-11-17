@@ -294,26 +294,37 @@ A seccomp filter enforces this; it needs Linux and `pyseccomp`.
 What that does **not** cover:
 
 - A plugin runs arbitrary code in its subprocess and can read any file ROMarr
-  can. Filesystem confinement needs a mount namespace and is not in place.
+  can. No filesystem access policy is installed for the worker.
 - Memory is not capped. The wall-clock timeout and output-size cap are.
 - It can reach every host it declared. Read that list before installing; a
   search plugin asking for hosts unrelated to its source is the warning sign.
 
-**If the filter cannot be installed, ROMarr falls back to running plugins with
-no confinement at all and logs a warning saying so.** It previously set that
-opt-out unconditionally, which switched off a boundary that in fact worked —
-the only thing missing was `pyseccomp`. The fallback sets
-`ROM_HUB_ALLOW_UNSANDBOXED=1`, which ROM Hub documents as no confinement
-at all; ROMarr never sets it while the filter is available. Check the
-startup log to see which state your install is in.
+**If the filter cannot be installed, ROMarr refuses plugin execution by
+default.** An operator who accepts running third-party code with no confinement
+can explicitly set `ROMARR_ALLOW_UNSANDBOXED_PLUGINS=1` and restart. Only then
+does ROMarr set the Hub's `ROM_HUB_ALLOW_UNSANDBOXED=1` fallback and log a warning.
+An inherited Hub opt-out alone does not authorize ROMarr's fallback. Linux
+kernels without usable seccomp require this explicit choice. Windows and macOS
+have no seccomp, so plugins there run unconfined with a logged warning, as in
+earlier releases.
+
+ROMarr starts search/fetch/torrent workers with Python's isolated, no-site
+startup, loading the trusted SDK and seccomp binding before the plugin directory
+can supply imports. Plugin-provided `sitecustomize.py`, SDK packages, dependency
+shadows and seccomp-binding shadows therefore cannot run before the boundary.
+This adds no filesystem allowlist: files readable by ROMarr remain readable to
+the plugin, and the worker retains ROMarr's user identity.
 
 What *is* enforced:
 
 - A plugin subprocess gets an **allowlisted** environment, not ROMarr's. It
   does not inherit `ROMARR_API_KEY`, `ROMARR_PASSWORD`, `PROWLARR_API_KEY`,
   `QBITTORRENT_PASS` or any other credential. It gets what a process needs to
-  run, proxy settings, and the library credentials it needs to import — nothing
-  else. An allowlist, because a denylist stops covering whatever is added next.
+  run. The trusted Hub CLI receives connection details, with embedded URL
+  credentials and query strings removed by default. Sharing the backend login
+  with that CLI requires `ROMARR_PLUGIN_BACKEND_CREDENTIALS=1`; this does not
+  grant ROMarr API keys or download-client credentials. The Hub separately
+  filters the worker environment. An allowlist covers future secret names.
 - Installing from a URL is checked against a host allowlist.
 - Disabling a plugin removes it from every fan-out.
 

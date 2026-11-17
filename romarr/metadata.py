@@ -284,16 +284,22 @@ def _igdb_bearer(client_id: str, secret: str, *, refresh: bool = False) -> str:
     return token
 
 
-def igdb_query(cfg: dict, endpoint: str, body: str) -> list[dict]:
+def igdb_query(cfg: dict, endpoint: str, body: str, *, strict: bool = False) -> list[dict]:
     """One Apicalypse query against IGDB, with the token handled.
 
     The body is IGDB's own query language, not JSON. Posting JSON here earns
     a 400 that reads like a field error and sends people looking in entirely
     the wrong place.
+
+    With `strict`, a failure raises RuntimeError instead of reading as an empty
+    answer, for callers (the Add New lookup) that must say "IGDB did not
+    answer" rather than "no games found".
     """
     client_id = str(cfg.get("client_id") or "")
     secret = str(cfg.get("token") or "")
     if not (client_id and secret):
+        if strict:
+            raise RuntimeError("IGDB credentials are missing")
         return []
     try:
         bearer = _igdb_bearer(client_id, secret)
@@ -306,6 +312,8 @@ def igdb_query(cfg: dict, endpoint: str, body: str) -> list[dict]:
                   "as a bearer token", exc.__class__.__name__)
         bearer = secret
     if not bearer:
+        if strict:
+            raise RuntimeError("IGDB authentication failed")
         return []
     for attempt in (1, 2):
         _igdb_wait()
@@ -327,12 +335,18 @@ def igdb_query(cfg: dict, endpoint: str, body: str) -> list[dict]:
                 try:
                     bearer = _igdb_bearer(client_id, secret, refresh=True)
                 except Exception:
+                    if strict:
+                        raise RuntimeError("IGDB authentication failed") from None
                     return []
                 continue
             log.warning("IGDB %s rejected: HTTP %s", endpoint, exc.code)
+            if strict:
+                raise RuntimeError(f"IGDB request failed with HTTP {exc.code}") from None
             return []
         except Exception as exc:
             log.warning("IGDB %s failed: %s", endpoint, exc)
+            if strict:
+                raise RuntimeError("IGDB request failed") from None
             return []
     return []
 
@@ -375,6 +389,91 @@ def _igdb_shelf_row(row: dict) -> dict:
                       for p in (row.get("platforms") or []) if p.get("name")],
         "source": "IGDB",
     }
+
+
+#: What the Add New lookup asks IGDB for: enough to draw a card and to offer
+#: each platform the game exists on.
+IGDB_CATALOG_FIELDS = (
+    "fields id,name,summary,first_release_date,total_rating,cover.url,"
+    "platforms.id,platforms.name,genres.name;"
+)
+
+
+def igdb_catalog_config(providers: list[dict]) -> dict | None:
+    """The configured IGDB credentials, or None when there are none."""
+    return next((cfg for cfg in providers
+                 if str(cfg.get("type") or "").lower() == "igdb"
+                 and cfg.get("enable", True)
+                 and cfg.get("client_id") and cfg.get("token")), None)
+
+
+def igdb_catalog_row(row: dict) -> dict:
+    """Map one IGDB search result to the shape the lookup endpoint serves."""
+    stamp = row.get("first_release_date")
+    released = ""
+    if stamp:
+        released = datetime.datetime.fromtimestamp(
+            float(stamp), datetime.timezone.utc).date().isoformat()
+    platforms = row.get("platforms") or []
+    return {
+        "igdbId": int(row.get("id") or 0),
+        "title": str(row.get("name") or ""),
+        "summary": str(row.get("summary") or ""),
+        "coverUrl": igdb_cover((row.get("cover") or {}).get("url") or ""),
+        "releaseDate": released,
+        "platforms": [str(p.get("name") or "") for p in platforms if p.get("name")],
+        "platformOptions": [{"id": int(p["id"]), "name": str(p.get("name") or "")}
+                            for p in platforms if p.get("id") and p.get("name")],
+        "genres": [str(g.get("name") or "")
+                   for g in (row.get("genres") or []) if g.get("name")],
+    }
+
+
+def igdb_catalog_platforms(cfg: dict) -> list[dict]:
+    """IGDB's platform list, so a ROMarr platform can be turned into IGDB ids."""
+    rows = igdb_query(cfg, "platforms",
+                      "fields id,name; sort name asc; limit 500;", strict=True)
+    return [{"id": int(row["id"]), "name": str(row.get("name") or "")}
+            for row in rows if row.get("id") and row.get("name")]
+
+
+# NB: no `sort` here. IGDB rejects `search` combined with `sort` (HTTP 406), and
+# its own relevance order is the right one for a title search anyway.
+def igdb_catalog_search(cfg: dict, query: str, limit: int, offset: int,
+                        platform_ids: list[int] | None = None,
+                        genre: str = "", release_year: int | None = None
+                        ) -> tuple[list[dict], int | None]:
+    """Title search over IGDB's main games; returns (rows, next offset)."""
+    escaped = str(query).replace("\\", "\\\\").replace('"', '\\"')
+    where = [IGDB_MAIN_GAMES]
+    if platform_ids:
+        where.append("platforms = (" + ",".join(str(int(i)) for i in platform_ids) + ")")
+    if release_year:
+        start = int(datetime.datetime(release_year, 1, 1, tzinfo=datetime.timezone.utc).timestamp())
+        end = int(datetime.datetime(release_year + 1, 1, 1, tzinfo=datetime.timezone.utc).timestamp()) - 1
+        where.extend((f"first_release_date >= {start}", f"first_release_date <= {end}"))
+    rows = igdb_query(
+        cfg, "games",
+        f'search "{escaped}"; {IGDB_CATALOG_FIELDS} where '
+        f'{" & ".join(where)}; limit 500; '
+        f'offset {max(0, min(int(offset), 10000))};',
+        strict=True,
+    )
+    selected = []
+    consumed = 0
+    target = _igdb_limit(limit)
+    for row in rows:
+        consumed += 1
+        game = igdb_catalog_row(row)
+        if genre and not any(value.casefold() == genre.casefold() for value in game["genres"]):
+            continue
+        selected.append(game)
+        if len(selected) >= target:
+            break
+    next_offset = None
+    if consumed < len(rows) or len(rows) >= 500:
+        next_offset = min(10000, max(0, int(offset)) + consumed)
+    return selected, next_offset
 
 
 def _igdb(cfg: dict, term: str) -> GameInfo:
