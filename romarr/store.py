@@ -310,6 +310,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "region_mode": "prefer",
     "rename_on_import": True,
     "prefer_hardlinks": False,
+    "switch_attach_extras": True,   # file Switch updates/DLC in <game>/update|dlc
     "retain_downloads_after_import": True,
     "overwrite_existing": False,
     # Profile: for ROMs the meaningful axis is region and revision, not

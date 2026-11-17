@@ -8,4 +8,12 @@ An empty shelf does not start a metadata download. Opening the page scans on dem
 
 Profiles now offer NTSC/PAL timing preferences, optionally refusing known opposing hints. Explicit timing labels or bracketed region tags supply hints; unknown and mixed-region tags stay neutral. Platform profiles override global settings. Preferred formats are ordered extensions per platform (for example `psx = chd, cue, bin` globally, or `chd, cue, bin` on a console profile). Only a parsed final extension counts; a selected torrent member takes precedence over the archive/release filename. These preferences add visible scoring reasons and never bypass normal eligibility or safety checks.
 
+## Updates and DLC go with their game
+
+When ROMarr imports a Switch update or DLC and that game already has a folder of its own, the file goes inside it: updates to `<game>/update/`, DLC to `<game>/dlc/`. RomM shows those folders as the game's extra content instead of listing each file as another game. The import preview shows the destination before anything is written.
+
+This needs exactly one bracketed title ID in the file name, such as `[01007960049A0800]`. ROMarr then looks for the one game folder holding the matching base game, using the same bounded scan as the report. If the base game is loose in the platform folder, is in two folders, or isn't there at all, the file keeps its normal destination. ROMarr never follows a link or reparse point to reach the game folder, and checks again just before writing. Files you placed into a reviewed bundle keep the route you chose.
+
+Turn it off under **Settings → Media Management → File Switch updates and DLC inside their game's folder** (`switch_attach_extras`, on by default). Files already in your library are never moved.
+
 Title ID structure reference: [Switchbrew game title list](https://switchbrew.org/w/index.php?title=Title_list%2FGames); catalogue: [blawar/TitleDB](https://github.com/blawar/titledb).

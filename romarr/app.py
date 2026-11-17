@@ -3203,7 +3203,8 @@ class ROMarr:
             preview = preview_import(path, platform, self.library_root(target[0]),
                                      layout=self.library_layout(target[0]),
                                      platform_folders=self.platform_folders(target[0]),
-                                     queue_identity=queue_identity(item))
+                                     queue_identity=queue_identity(item),
+                                     switch_extras=bool(self.store.settings.get("switch_attach_extras", True)))
             preview = decorate_preview(preview, platform, self.library_root(target[0]),
                                        kind=target[0].get("type", ""), layout=self.library_layout(target[0]),
                                        platform_folders=self.platform_folders(target[0]),
@@ -4394,6 +4395,7 @@ class ROMarr:
                                       require_verified=require_verified,
                                       rename=bool(self.store.settings.get("rename_on_import", True)),
                         prefer_hardlinks=staged_source == source and bool(self.store.settings.get("prefer_hardlinks", False)),
+                                      switch_extras=bool(self.store.settings.get("switch_attach_extras", True)),
                                       layout=self.library_layout(target_cfg),
                                       translation=is_translation(source.name),
                                       platform_folders=target_folders,
@@ -8396,7 +8398,8 @@ class ROMarr:
                     preview = preview_import(path, platform, self.library_root(target_cfg),
                                              layout=self.library_layout(target_cfg),
                                              platform_folders=target_folders,
-                                             queue_identity=queue_identity(queue_item))
+                                             queue_identity=queue_identity(queue_item),
+                                             switch_extras=bool(self.store.settings.get("switch_attach_extras", True)))
                     preview = decorate_preview(preview, platform, self.library_root(target_cfg),
                                                kind=target_cfg.get("type", ""), layout=self.library_layout(target_cfg),
                                                platform_folders=target_folders, translation=is_translation(name))
@@ -8443,6 +8446,7 @@ class ROMarr:
                 dats=self.dats,
                 rename=bool(self.store.settings.get("rename_on_import", True)),
                 prefer_hardlinks=bool(self.store.settings.get("prefer_hardlinks", False)),
+                switch_extras=bool(self.store.settings.get("switch_attach_extras", True)),
                 layout=self.library_layout(target_cfg),
                 translation=is_translation(name),
                 platform_folders=target_folders,

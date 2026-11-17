@@ -4611,6 +4611,7 @@ RENDER.media=()=>settingsPage('Media Management',
      +'Per-library overrides live on the Libraries page.')
   +chk('rename_on_import','Use DAT names for verified single-file imports (disc-set filenames stay intact)',SETTINGS.rename_on_import)
   +chk('prefer_hardlinks','Prefer hardlinks; copy when unavailable (unchanged files only)',SETTINGS.prefer_hardlinks)
+  +chk('switch_attach_extras','File Switch updates and DLC inside their game\'s folder (update/, dlc/) when the game already has one',SETTINGS.switch_attach_extras!==false)
   +`<p class="dim">Hardlinks share file contents with the download. Editing either file changes both. Archive members are extracted normally. Shared library read permissions are required; ROMarr never changes source permissions.</p>`
   +chk('retain_downloads_after_import','Keep completed downloads for seeding after import',SETTINGS.retain_downloads_after_import)
   +chk('overwrite_existing','Overwrite an existing file',SETTINGS.overwrite_existing)

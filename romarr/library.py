@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from .import_duplicates import duplicate_reason, stream_sha1
 from .tar_archive import TAR_SUFFIXES, TarSource, is_tar_name
+from .switch_attach import ATTACH_PLATFORMS, attach_dir as switch_attach_dir, is_real_directory_chain
 
 import json
 import logging
@@ -1239,7 +1240,8 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
                rename: bool = False,
                platform_folders=None, prefer_hardlinks: bool = False, selected_primaries=None, bundle_routes=None,
                requested_game: str | None = None, catalog_platforms=None,
-               hash_index=None, duplicate_roots=()) -> list[ImportResult]:
+               hash_index=None, duplicate_roots=(),
+               switch_extras: bool = False) -> list[ImportResult]:
     """Place every ROM from a finished download into the library.
 
     A cartridge zip may hold several games (a 3-in-1 collection, a bundle)
@@ -1252,6 +1254,8 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
     keep-both case where a T-En patch sits beside the original dump.
     The rename option uses verified DAT names for single-file ROMs, retaining
     the physical extension. Multi-file members keep their reference names.
+    `switch_extras` files a Switch update or DLC inside its game's folder
+    when that game already has one (see switch_attach).
     """
     if not download.exists():
         msg = (
@@ -1287,7 +1291,8 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
             platform_folders=platform_folders, prefer_hardlinks=prefer_hardlinks,
             selected_primaries=selected_primaries, bundle_routes=bundle_routes,
             requested_game=requested_game, catalog_platforms=catalog_platforms,
-            hash_index=hash_index, duplicate_roots=duplicate_roots)
+            hash_index=hash_index, duplicate_roots=duplicate_roots,
+            switch_extras=switch_extras)
     finally:
         source.close()
 
@@ -1299,7 +1304,8 @@ def _import_rom_from_source(source, candidates, chosen_sets, download, platform,
                             platform_folders=None, prefer_hardlinks=False,
                             selected_primaries=None, bundle_routes=None,
                             requested_game=None, catalog_platforms=None,
-                            hash_index=None, duplicate_roots=()):
+                            hash_index=None, duplicate_roots=(),
+                            switch_extras=False):
     """Finish import while the validated source and its scratch ZIPs remain open."""
     if selected_primaries is not None:
         selected = set(selected_primaries)
@@ -1336,6 +1342,7 @@ def _import_rom_from_source(source, candidates, chosen_sets, download, platform,
     results: list[ImportResult] = []
     published_hashes = {}
     planned = []
+    attached: dict[Path, Path] = {}
     destinations = {}
     file_destinations = {}
     destination_parents = {}
@@ -1386,6 +1393,11 @@ def _import_rom_from_source(source, candidates, chosen_sets, download, platform,
                     results.append(ImportResult(False, None, "invalid reviewed destination; review the bundle again"))
                     continue
                 destination = target_dir / relative
+            elif switch_extras and platform.slug in ATTACH_PLATFORMS:
+                attach = switch_attach_dir(Path(chosen.primary).name, target_dir)
+                if attach is not None:
+                    destination = attach / destination.name
+                    attached[destination] = target_dir
         destination_keys = {Path(str(destination).casefold())}
         if not chosen.is_multi_file and bundle_routes is not None:
             destination_keys.add(Path(str(destination.parent.resolve() / destination.name).casefold()))
@@ -1412,6 +1424,10 @@ def _import_rom_from_source(source, candidates, chosen_sets, download, platform,
             source.transfers = {}
         target_dir = destination.parent
         if not chosen.is_multi_file:
+            if destination in attached and not is_real_directory_chain(attached[destination], target_dir):
+                results.append(ImportResult(False, destination,
+                                            "the game's folder changed into a link before import; nothing published"))
+                continue
             try:
                 target_dir.mkdir(parents=True, exist_ok=True)
             except OSError as exc:
