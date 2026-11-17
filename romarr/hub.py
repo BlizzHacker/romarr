@@ -1780,6 +1780,15 @@ def run_exo2romm(cfg: dict | None = None, *, allowed_roots=None) -> dict:
         if p.is_dir():
             try:
                 found = sorted(f for f in p.iterdir() if f.is_file() and f.suffix.lower() == ".zip")
+                if allowed_roots is not None:
+                    escaping = [f for f in found if _outside_roots({"zip": str(f)}, allowed_roots)]
+                    for f in escaping:
+                        dir_results.append({
+                            "zip_path": str(f), "status": "skipped_error", "top_dir": "",
+                            "output_zip": "", "rewritten_lines": 0, "preview_conf": "",
+                            "detail": f"SKIP [{f.name}]: links outside the allowed folders",
+                        })
+                    found = [Path(os.path.realpath(str(f))) for f in found if f not in escaping]
             except OSError as exc:
                 msg = f"SKIP [{p.name or p}]: cannot list directory: {exc}"
                 if error_log and not dry_run:

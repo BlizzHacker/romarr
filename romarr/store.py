@@ -310,7 +310,6 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "region_mode": "prefer",
     "rename_on_import": True,
     "prefer_hardlinks": False,
-    "exo2romm_roots": [],          # extra folders eXo2romm may read and write
     "switch_attach_extras": True,   # file Switch updates/DLC in <game>/update|dlc
     "retain_downloads_after_import": True,
     "overwrite_existing": False,

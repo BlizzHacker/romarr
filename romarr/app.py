@@ -1708,8 +1708,10 @@ class ROMarr:
         roots += [str(self.library), str(self.store.path.parent)]
         settings = self.store.settings
         roots += [str(settings.get(key) or "") for key in ("download_path", "downloads_path", "complete_path")]
-        extra = settings.get("exo2romm_roots") or []
-        roots += [str(item) for item in extra] if isinstance(extra, list) else []
+        for client in self.store.list_items("download_clients"):
+            roots += [str(client.get(key) or "") for key in ("save_path", "savepath", "download_dir", "directory")]
+        # Extra folders come from the operator's environment only: an API
+        # client must not be able to widen its own confinement.
         roots += [part for part in str(self._env.get("EXO2ROMM_ROOTS", "")).split(os.pathsep) if part]
         roots += ["/data/eXoDOS", "/var/lib/romm/library"]   # the shipped default profile
         return [root for root in dict.fromkeys(roots) if root.strip()]

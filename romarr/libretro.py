@@ -133,7 +133,7 @@ class CoreHub:
         """Verify the native core CRC, scan it, and atomically publish one host library."""
         # The catalogue's identifier, not the request's string, names every path.
         key = str(self.entry(key)["id"])
-        if not re.fullmatch(r"[A-Za-z0-9_]+", key):
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", key):
             raise ValueError("Unknown libretro core")
         with CORE_LOCK:
             index = self.index()

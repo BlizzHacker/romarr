@@ -169,7 +169,63 @@ class _Sock:
         return -1
 
 
-def test_extra_exo2romm_folders_can_be_saved_and_are_honoured(tmp_path):
-    svc = ROMarr({"ROMARR_DATA": str(tmp_path / "romarr.json")})
-    svc.store.update_settings({"exo2romm_roots": [str(tmp_path / "eXo")]})
+def test_extra_exo2romm_folders_come_only_from_the_operator_environment(tmp_path):
+    svc = ROMarr({"ROMARR_DATA": str(tmp_path / "romarr.json"), "EXO2ROMM_ROOTS": str(tmp_path / "eXo")})
     assert str(tmp_path / "eXo") in svc.exo2romm_roots()
+    svc.store.update_settings({"exo2romm_roots": ["/"]})       # an API client tries to widen it
+    assert "/" not in svc.exo2romm_roots()
+
+
+def test_download_client_staging_folders_are_allowed(tmp_path):
+    svc = ROMarr({"ROMARR_DATA": str(tmp_path / "romarr.json")})
+    svc.store.put_item("download_clients", {"type": "hub", "name": "ROM Hub", "save_path": str(tmp_path / "rom-hub")})
+    assert str(tmp_path / "rom-hub") in svc.exo2romm_roots()
+
+
+def test_a_symlinked_zip_inside_an_allowed_folder_is_skipped(tmp_path):
+    allowed = tmp_path / "library"
+    allowed.mkdir()
+    (tmp_path / "private.zip").write_bytes(b"PK\x05\x06" + b"\0" * 18)
+    (allowed / "game.zip").symlink_to(tmp_path / "private.zip")
+    result = hub.run_exo2romm({"dos_dir": str(allowed), "output_dir": str(allowed / "dos"),
+                               "input_paths": [str(allowed)], "dry_run": True},
+                              allowed_roots=[str(allowed)])
+    details = " ".join(row.get("detail", "") for row in result.get("results", []))
+    assert "links outside the allowed folders" in details
+
+
+def test_hyphenated_libretro_core_ids_are_accepted(tmp_path, monkeypatch):
+    from romarr import libretro
+    monkeypatch.setattr(libretro, "metadata", lambda: {"items": [{"id": "bsnes-jg_libretro"}]})
+    store = libretro.CoreHub(tmp_path)
+    if store is None:
+        pytest.skip("libretro manager class not found")
+    monkeypatch.setattr(store, "index", lambda: (_ for _ in ()).throw(RuntimeError("reached the build lookup")))
+    with pytest.raises(RuntimeError, match="build lookup"):
+        store.install("bsnes-jg_libretro")
+
+
+def test_a_stricter_system_tls_minimum_is_kept(monkeypatch):
+    import ssl
+    from romarr import nntp
+    made = []
+    real = ssl.create_default_context
+
+    def strict(*args, **kwargs):
+        ctx = real(*args, **kwargs)
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_3
+        made.append(ctx)
+        return ctx
+
+    monkeypatch.setattr(nntp.ssl, "create_default_context", strict)
+    monkeypatch.setattr(nntp.socket, "create_connection", lambda *a, **k: _Sock())
+    import inspect
+    client = next(obj for obj in vars(nntp).values() if isinstance(obj, type) and hasattr(obj, "connect")
+                  and "use_ssl" in inspect.signature(obj.__init__).parameters)
+    params = inspect.signature(client.__init__).parameters
+    conn = client(**{k: v for k, v in {"host": "news.invalid", "port": 563, "use_ssl": True}.items() if k in params})
+    try:
+        conn.connect()
+    except Exception:  # noqa: BLE001 - the handshake itself is not under test
+        pass
+    assert made and made[0].minimum_version == ssl.TLSVersion.TLSv1_3
