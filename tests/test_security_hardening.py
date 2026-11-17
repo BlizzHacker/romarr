@@ -229,3 +229,51 @@ def test_a_stricter_system_tls_minimum_is_kept(monkeypatch):
     except Exception:  # noqa: BLE001 - the handshake itself is not under test
         pass
     assert made and made[0].minimum_version == ssl.TLSVersion.TLSv1_3
+
+
+def test_exo2romm_without_api_roots_still_confines_to_defaults(tmp_path, monkeypatch):
+    monkeypatch.delenv("EXO2ROMM_ROOTS", raising=False)
+    result = hub.run_exo2romm({"dos_dir": str(tmp_path), "output_dir": str(tmp_path / "out"),
+                               "input_paths": [str(tmp_path)]})
+    assert not result["ok"] and "must be inside" in result["error"]
+
+
+def test_extension_adopt_refuses_files_outside_import_folders(tmp_path):
+    from romarr.extension_downloads import ExtensionDownloadManager
+    secret = tmp_path / "secret.gba"
+    secret.write_bytes(b"x")
+    adopted = []
+
+    class Service:
+        def extension_import_roots(self):
+            return [str(tmp_path / "downloads")]
+
+        def adopt(self, path, platform):
+            adopted.append(path)
+            return {"ok": True}
+
+    out = ExtensionDownloadManager().record_completed(
+        Service(), [{"local_path": str(secret), "filename": "secret.gba"}], platform="gba", adopt=True)
+    assert adopted == [] and "outside" in out["results"][0]["adopt_error"]
+
+
+def test_extension_adopt_imports_files_in_allowed_folders(tmp_path):
+    from romarr.extension_downloads import ExtensionDownloadManager
+    downloads = tmp_path / "downloads"
+    downloads.mkdir()
+    rom = downloads / "Game.gba"
+    rom.write_bytes(b"x")
+    adopted = []
+
+    class Service:
+        def extension_import_roots(self):
+            return [str(downloads)]
+
+        def adopt(self, path, platform):
+            adopted.append(path)
+            return {"ok": True}
+
+    out = ExtensionDownloadManager().record_completed(
+        Service(), [{"local_path": str(rom)}], platform="gba", adopt=True)
+    assert adopted == [str(rom.resolve())] and out["adopted"] == 1
+

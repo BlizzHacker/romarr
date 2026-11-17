@@ -26,6 +26,10 @@ Building the same source twice produces identical ZIP bytes. The extension uses 
 
 The installed permission is `storage`. Optional HTTP/HTTPS host access is requested only when you choose a saved server. Chrome grants access by hostname; the launcher additionally matches the exact saved origin and path before reusing a tab. No global `tabs`, `cookies`, `scripting` or `webRequest` permission is requested. Server tab IDs live only in Chrome session storage and are checked before reuse. You can revoke a hostname grant in Chrome’s extension site-access settings. See [Chrome host permissions and cookies](https://developer.chrome.com/docs/extensions/develop/concepts/storage-and-cookies) and the [Tabs API](https://developer.chrome.com/docs/extensions/reference/api/tabs).
 
+### Importing files the browser downloaded
+
+When the extension reports finished downloads and asks ROMarr to import them, ROMarr only imports files that sit in your library folders, download folders (including download-client staging folders), the ROMarr data folder, or the Downloads folder of the account ROMarr runs as. To allow another folder, add it to the `ROMARR_IMPORT_ROOTS` environment variable of the ROMarr service (separate entries with `:` on Linux, `;` on Windows). Files elsewhere are recorded but not imported.
+
 ## Store listing draft and privacy disclosure
 
 **Name:** ROMarr Server Launcher

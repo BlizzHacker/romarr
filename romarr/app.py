@@ -1702,19 +1702,33 @@ class ROMarr:
                     return result
         return {"available": False}
 
-    def exo2romm_roots(self) -> list[str]:
-        """Folders eXo2romm may read and write: libraries, downloads, data and eXoDOS."""
+    def _host_roots(self) -> list[str]:
+        """Library, download, download-client and data folders the operator configured."""
         roots = [str(self.library_root(cfg)) for cfg in self.store.list_items("libraries")]
         roots += [str(self.library), str(self.store.path.parent)]
         settings = self.store.settings
         roots += [str(settings.get(key) or "") for key in ("download_path", "downloads_path", "complete_path")]
         for client in self.store.list_items("download_clients"):
             roots += [str(client.get(key) or "") for key in ("save_path", "savepath", "download_dir", "directory")]
-        # Extra folders come from the operator's environment only: an API
-        # client must not be able to widen its own confinement.
-        roots += [part for part in str(self._env.get("EXO2ROMM_ROOTS", "")).split(os.pathsep) if part]
-        roots += ["/data/eXoDOS", "/var/lib/romm/library"]   # the shipped default profile
         return [root for root in dict.fromkeys(roots) if root.strip()]
+
+    def exo2romm_roots(self) -> list[str]:
+        """Folders eXo2romm may read and write: libraries, downloads, data and eXoDOS.
+
+        Extra folders come from the operator's environment only: an API client
+        must not be able to widen its own confinement.
+        """
+        from .path_guard import env_roots
+        roots = self._host_roots() + env_roots(self._env, "EXO2ROMM_ROOTS")
+        roots += ["/data/eXoDOS", "/var/lib/romm/library"]   # the shipped default profile
+        return list(dict.fromkeys(roots))
+
+    def extension_import_roots(self) -> list[str]:
+        """Folders the browser extension may ask ROMarr to import from."""
+        from .path_guard import env_roots
+        roots = self._host_roots() + [str(Path.home() / "Downloads")]
+        roots += env_roots(self._env, "ROMARR_IMPORT_ROOTS")
+        return list(dict.fromkeys(roots))
 
     def library_root(self, cfg: dict) -> Path:
         """Where ROMs are filed for one library, falling back to the default."""
