@@ -434,12 +434,21 @@ def _steam_public_entries(cfg: dict, http) -> list[ListEntry]:
         return []
     # Accept a full profile URL, a bare vanity name, or a 64-bit id.
     handle = handle.rstrip("/")
-    if "steamcommunity.com" in handle:
-        base = handle
-    elif handle.isdigit():
-        base = f"{STEAM_COMMUNITY}/profiles/{handle}"
+    if "://" in handle or handle.lower().startswith(("steamcommunity.com", "www.steamcommunity.com")):
+        # A pasted profile URL is reduced to its id; it never chooses the host.
+        from urllib.parse import urlsplit
+        parts = urlsplit(handle if "://" in handle else "https://" + handle)
+        segments = [part for part in parts.path.split("/") if part]
+        if (parts.scheme not in ("http", "https")
+                or (parts.hostname or "").lower() not in ("steamcommunity.com", "www.steamcommunity.com")
+                or len(segments) < 2 or segments[0] not in ("id", "profiles")):
+            raise ValueError("Enter a steamcommunity.com profile URL, a vanity name or a 64-bit Steam id")
+        kind, handle = segments[0], segments[1]
     else:
-        base = f"{STEAM_COMMUNITY}/id/{handle}"
+        kind = "profiles" if handle.isdigit() else "id"
+    if not _re.fullmatch(r"[A-Za-z0-9_-]{2,64}", handle) or (kind == "profiles" and not handle.isdigit()):
+        raise ValueError("Enter a steamcommunity.com profile URL, a vanity name or a 64-bit Steam id")
+    base = f"{STEAM_COMMUNITY}/{kind}/{handle}"
     response = http.get(f"{base}/games?tab=all&xml=1", timeout=30,
                         allow_redirects=False)
     location = str(getattr(response, "headers", {}).get("Location") or "")

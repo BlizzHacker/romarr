@@ -185,7 +185,7 @@ def redact_query_credentials(value: str) -> str:
     # `api%6bey=` authenticates and therefore has to be redacted just as the
     # ordinary spelling is. Leave every non-credential parameter byte-for-byte
     # intact so the access log remains useful.
-    return re.sub(r"([?&])([^=&\s\"]+)=([^&\s\"]*)", redact, str(value))
+    return re.sub(r"([?&])([^=&?\s\"]+)=([^&\s\"]*)", redact, str(value))
 
 
 def category_for(env: dict[str, str], client: str) -> str:
@@ -1701,6 +1701,20 @@ class ROMarr:
                 if result.get("available") or result.get("reason"):
                     return result
         return {"available": False}
+
+    def exo2romm_roots(self) -> list[str]:
+        """Folders eXo2romm may read and write: libraries, downloads, data and eXoDOS."""
+        roots = [str(self.library_root(cfg)) for cfg in self.store.list_items("libraries")]
+        roots += [str(self.library), str(self.store.path.parent)]
+        settings = self.store.settings
+        roots += [str(settings.get(key) or "") for key in ("download_path", "downloads_path", "complete_path")]
+        for client in self.store.list_items("download_clients"):
+            roots += [str(client.get(key) or "") for key in ("save_path", "savepath", "download_dir", "directory")]
+        # Extra folders come from the operator's environment only: an API
+        # client must not be able to widen its own confinement.
+        roots += [part for part in str(self._env.get("EXO2ROMM_ROOTS", "")).split(os.pathsep) if part]
+        roots += ["/data/eXoDOS", "/var/lib/romm/library"]   # the shipped default profile
+        return [root for root in dict.fromkeys(roots) if root.strip()]
 
     def library_root(self, cfg: dict) -> Path:
         """Where ROMs are filed for one library, falling back to the default."""
@@ -7633,7 +7647,11 @@ class ROMarr:
         ):
             if extra:
                 register(str(extra))
-        if "moveweight.com" in str(self._env.get("GGREQUESTZ_URL", "")) or "moveweight.com" in str(self._env.get("ROMM_URL", "")):
+        def on_moveweight(url: str) -> bool:
+            host = (urlsplit(url).hostname or "") if "://" in url else ""
+            return host == "moveweight.com" or host.endswith(".moveweight.com")
+
+        if on_moveweight(str(self._env.get("GGREQUESTZ_URL", ""))) or on_moveweight(str(self._env.get("ROMM_URL", ""))):
             register("https://romm.moveweight.com")
         return targets
 
@@ -10554,7 +10572,8 @@ def make_handler(service: ROMarr):
                 res = hub.run_igir(body if isinstance(body, dict) else {})
                 return self._json(200 if res.get("ok") else 400, res)
             if route.path == "/api/v1/hub/exo2romm":
-                res = hub.run_exo2romm(body if isinstance(body, dict) else {})
+                res = hub.run_exo2romm(body if isinstance(body, dict) else {},
+                                       allowed_roots=service.exo2romm_roots())
                 return self._json(200 if res.get("ok") else 400, res)
             if route.path == "/api/v1/hub/fleet":
                 res = hub.build_fleet_sync_plan(body if isinstance(body, dict) else {})

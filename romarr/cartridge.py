@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import os
 import platform
 import subprocess
@@ -135,10 +136,15 @@ class CartridgeHub:
         if not binary:
             raise FileNotFoundError("Cartridge player is not installed yet. Call auto-install first.")
 
+        if not isinstance(port, int) or not 0 < port < 65536:
+            raise ValueError("Invalid ROMarr port")
         server_url = f"http://127.0.0.1:{port}"
         args = [str(binary)]
         if game_id:
-            args.extend(["--game", str(game_id)])
+            game = str(game_id)
+            if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}", game):
+                raise ValueError("Invalid game id")
+            args.extend(["--game", game])
 
         try:
             subprocess.Popen(args, cwd=str(self.root))

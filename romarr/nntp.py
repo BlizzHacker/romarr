@@ -327,6 +327,8 @@ class NntpConnection:
         raw = socket.create_connection((self.host, self.port), timeout=self.timeout)
         if self.use_ssl:
             ctx = ssl.create_default_context()
+            if ctx.minimum_version < ssl.TLSVersion.TLSv1_2:
+                ctx.minimum_version = ssl.TLSVersion.TLSv1_2
             if not self.verify_tls:
                 ctx.check_hostname = False
                 ctx.verify_mode = ssl.CERT_NONE

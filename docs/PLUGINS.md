@@ -48,6 +48,8 @@ These entries and their tagged source repositories were checked on **2026-10-24*
 | **Igir 1G1R Collection Manager** | Igir v5.8.0 1G1R DAT verification, patching (BPS/IPS/UPS/Xdelta3/PMSR) & cleanup for RomM, Gaseous, Retrom, ES-DE & Batocera | [rom-hub-igir v0.1.0](https://github.com/BlizzHacker/rom-hub-igir/tree/v0.1.0) |
 | **eXo2romm** | Repackage eXoDOS game zips for standalone RomM playback by rewriting pack-root `dosbox.conf` mounts (credits [derkommutator/eXo2romm](https://github.com/derkommutator/eXo2romm); inspired to assist more users) | [rom-hub-exo2romm v0.1.0](https://github.com/BlizzHacker/rom-hub-exo2romm/tree/v0.1.0) |
 
+eXo2romm only reads and writes inside your configured library folders, download folders, ROMarr data folder and the default eXoDOS paths (`/data/eXoDOS`, `/var/lib/romm/library`). Download-client staging folders count as download folders. To use another folder, add it to the `EXO2ROMM_ROOTS` environment variable of the ROMarr service or container (separate entries with `:` on Linux, `;` on Windows). It is deliberately not a web setting, so an API client cannot widen its own access.
+
 The [full catalogue](https://github.com/BlizzHacker/rom-hub/blob/master/catalog/plugins.json) also includes Archive.org, Demozoo, IF Archive and the expanded **Guides, Tutorials, Open-Source Games/Bots, and Mod Communities** plugins below.
 
 ### Expanded Ecosystem: Guides, Tutorials, Open-Source Repos, Mods & Bots

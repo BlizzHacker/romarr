@@ -131,7 +131,10 @@ class CoreHub:
 
     def install(self, key: str, scanner=None) -> dict:
         """Verify the native core CRC, scan it, and atomically publish one host library."""
-        self.entry(key)
+        # The catalogue's identifier, not the request's string, names every path.
+        key = str(self.entry(key)["id"])
+        if not re.fullmatch(r"[A-Za-z0-9_-]+", key):
+            raise ValueError("Unknown libretro core")
         with CORE_LOCK:
             index = self.index()
             name = key + index["suffix"] + ".zip"

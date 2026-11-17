@@ -231,7 +231,10 @@ class EmulatorHub:
             if not 0 < int(asset["bytes"]) <= MAX_PACKAGE:
                 raise ValueError("Package exceeds the 1 GiB download limit")
             tag = _component(str(release["tag"]))
-            _component(asset_name)
+            # From here on, names come from the verified catalogue and release
+            # metadata, never from the request.
+            slug = _component(str(release["id"]))
+            asset_name = _component(str(asset["name"]))
             parts = urlsplit(asset["url"])
             source = urlsplit(release["website"])
             if parts.scheme != "https" or parts.hostname not in ("github.com", source.hostname):
