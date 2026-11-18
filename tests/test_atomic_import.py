@@ -115,6 +115,8 @@ def test_partial_import_never_cleans_source_or_fulfils_request(tmp_path, monkeyp
             removed.append((args, kwargs))
 
     service.clients = [Client()]
+    # The first ROM really landed in the library; the import is still partial.
+    (root / "first.gb").write_bytes(b"rom")
     monkeypatch.setattr(app, "import_rom", lambda *a, **kw: [
         ImportResult(True, root / "first.gb"), ImportResult(False, None, "failed second ROM")])
     monkeypatch.setattr(service.store, "update_seerr_request", lambda *a, **kw: updated.append(kw))

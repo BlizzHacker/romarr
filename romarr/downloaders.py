@@ -3806,11 +3806,18 @@ class SiteDownloader:
         if fetched:
             self._write(rows)
         out = []
+        vanished = False
         for row in rows:
             if row.get("state") != "done" or not row.get("file"):
                 continue
             path = Path(row["file"])
             if not path.exists():
+                # Done, but the staged file is gone before import: say so on
+                # the row rather than letting it drop out of reporting (#225).
+                log.warning("%s: staged file for %r disappeared before import",
+                            getattr(self, "name", "download"), row.get("name") or path.name)
+                row.update(state="failed", detail="the downloaded file disappeared before it was imported")
+                vanished = True
                 continue
             out.append({
                 "name": row.get("name") or path.name,
@@ -3818,6 +3825,11 @@ class SiteDownloader:
                 "save_path": str(path.parent),
                 "state": "done",
             })
+        if vanished and fetch:
+            # Only the import sweep persists this. A queue preview
+            # (fetch=False) never writes the ledger, so it cannot race add()
+            # and overwrite a job accepted in the meantime.
+            self._write(rows)
         return out
 
     def _run(self, row: dict) -> None:
@@ -4096,11 +4108,18 @@ class HubDownloader:
         if fetched:
             self._write(rows)
         out = []
+        vanished = False
         for row in rows:
             if row.get("state") != "done" or not row.get("file"):
                 continue
             path = Path(row["file"])
             if not path.exists():
+                # Done, but the staged file is gone before import: say so on
+                # the row rather than letting it drop out of reporting (#225).
+                log.warning("%s: staged file for %r disappeared before import",
+                            getattr(self, "name", "download"), row.get("name") or path.name)
+                row.update(state="failed", detail="the downloaded file disappeared before it was imported")
+                vanished = True
                 continue
             out.append({
                 "name": row.get("name") or path.name,
@@ -4108,6 +4127,11 @@ class HubDownloader:
                 "save_path": str(path.parent),
                 "state": "done",
             })
+        if vanished and fetch:
+            # Only the import sweep persists this. A queue preview
+            # (fetch=False) never writes the ledger, so it cannot race add()
+            # and overwrite a job accepted in the meantime.
+            self._write(rows)
         return out
 
     def _run(self, row: dict) -> None:

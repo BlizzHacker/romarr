@@ -8804,6 +8804,7 @@ class ROMarr:
                     queue_item.release_fault = True
                 continue
 
+            outcomes = confirm_in_library(outcomes, self.library_root(target_cfg))
             all_ok = all(o.ok for o in outcomes)
             fulfils_base = not (queue_item and queue_item.import_intent.get("existing_game"))
             for outcome in outcomes:
@@ -8909,6 +8910,36 @@ def integration_view(row: SeerrRequest) -> dict:
     return {"request_id": row.external_request_id, "name": row.name or row.game,
             "platform": row.platform, "status": row.status,
             "assets": list(row.assets), "error": row.error}
+
+
+def confirm_in_library(outcomes, library_root) -> list:
+    """Keep an import's "ok" only for files that really landed in the library.
+
+    A row once recorded `imported` while its path pointed into the download
+    folder; when that file was cleaned up the game was silently gone and
+    Wanted never fetched it again (#225). An outcome whose destination is
+    missing, or resolves outside the library root, becomes a failure with a
+    reason instead.
+    """
+    from dataclasses import replace
+
+    root = Path(library_root).resolve()
+    confirmed = []
+    for outcome in outcomes:
+        if outcome.ok:
+            destination = Path(outcome.destination) if outcome.destination else None
+            if destination is None or not destination.exists():
+                outcome = replace(outcome, ok=False,
+                                  reason="imported file not found at its destination")
+            else:
+                try:
+                    destination.resolve().relative_to(root)
+                except ValueError:
+                    outcome = replace(outcome, ok=False,
+                                      reason=f"import destination {destination} is outside "
+                                             f"the library folder {root}")
+        confirmed.append(outcome)
+    return confirmed
 
 
 def has_unsafe_path_segments(path: str) -> bool:

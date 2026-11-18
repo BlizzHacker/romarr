@@ -49,6 +49,31 @@ ARG TARGETARCH
 # runtime dependency rather than builder cargo.
 RUN apk add --no-cache su-exec tzdata libarchive-tools libseccomp git
 
+# bsdtar reads one RAR volume at a time, so a release split into
+# .part1.rar/.r00/.001 volumes (the usual shape on usenet) could never import
+# (#224). Alpine has no package that joins split RAR sets -- its 7zip is built
+# without RAR -- so install 7-Zip's official static build, which reads RAR4
+# and RAR5 and is what romarr/library.py::rar_tools looks for as `7zz`.
+# Pinned by version and SHA-256 per architecture; the licence ships with it.
+RUN set -eu; \
+    case "$TARGETARCH" in \
+      amd64) a=x64;   s=22cf82fcc6eb7474f1d5bb4f02c0f8ebd573a718089d6833dc30f8350a3b232e ;; \
+      arm64) a=arm64; s=0b71f6cfc34669b3bf69f2347efd3429f77020665003a13b9cdc53b784270421 ;; \
+      arm)   a=arm;   s=fcc6744c35f5af3dda0d57de379e885626b2c0fca2ac8a33410eba17d1d94954 ;; \
+      *) echo "no 7-Zip build for $TARGETARCH; split RAR sets will not import"; exit 0 ;; \
+    esac; \
+    f="7z2605-linux-$a.tar.xz"; \
+    apk add --no-cache --virtual .sevenzip-fetch xz; \
+    wget -q -O "/tmp/$f" "https://github.com/ip7z/7zip/releases/download/26.05/$f"; \
+    echo "$s  /tmp/$f" | sha256sum -c -; \
+    mkdir /tmp/7z; \
+    xz -dc "/tmp/$f" | tar -x -C /tmp/7z 7zzs License.txt; \
+    install -m 755 /tmp/7z/7zzs /usr/local/bin/7zz; \
+    install -D -m 644 /tmp/7z/License.txt /usr/share/licenses/7zip/License.txt; \
+    rm -rf /tmp/7z "/tmp/$f"; \
+    apk del .sevenzip-fetch; \
+    7zz i | grep -q Rar5
+
 COPY --from=builder /install /usr/local
 
 # pyseccomp asks ctypes.util.find_library("seccomp") before opening the C
