@@ -3825,7 +3825,10 @@ class SiteDownloader:
                 "save_path": str(path.parent),
                 "state": "done",
             })
-        if vanished:
+        if vanished and fetch:
+            # Only the import sweep persists this. A queue preview
+            # (fetch=False) never writes the ledger, so it cannot race add()
+            # and overwrite a job accepted in the meantime.
             self._write(rows)
         return out
 
@@ -4124,7 +4127,10 @@ class HubDownloader:
                 "save_path": str(path.parent),
                 "state": "done",
             })
-        if vanished:
+        if vanished and fetch:
+            # Only the import sweep persists this. A queue preview
+            # (fetch=False) never writes the ledger, so it cannot race add()
+            # and overwrite a job accepted in the meantime.
             self._write(rows)
         return out
 
