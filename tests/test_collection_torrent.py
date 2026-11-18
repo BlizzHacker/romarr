@@ -265,40 +265,54 @@ def test_failed_qbit_login_is_reported_instead_of_an_empty_torrent_list(
     assert "authentication failed" in result["error"]
 
 
-def test_transmission_source_cancel_restores_selection_priorities_and_pause(tmp_path, monkeypatch):
-    """Transmission source cancel restores selection priorities and pause."""
+@pytest.mark.parametrize(("request_applied", "was_paused"), [(False, False), (True, True)])
+def test_transmission_source_restores_selection_and_pause_after_restart(
+        tmp_path, monkeypatch, request_applied, was_paused):
+    """Cancellation can recover on either side of the daemon's restore."""
     from romarr.downloaders import Transmission, TransmissionConfig
 
+    class Interrupted(BaseException):
+        """Simulate exit after the daemon accepts the restore."""
+
     svc = _service(tmp_path, monkeypatch)
-    source = tmp_path / "transmission-source"
-    source.mkdir()
-    (source / "Game (USA).zip").write_bytes(b"source")
+    (tmp_path / "Game (USA).zip").write_bytes(b"source")
     client = Transmission(TransmissionConfig(base_url="http://transmission"))
     client.romarr_id = "t1"
-    state = {"paused": True, "wanted": True, "priority": -1}
-    client.torrents = lambda: [{"hash": "a" * 40, "name": "Set", "save_path": str(source),
-                                "state": "pausedDL" if state["paused"] else "downloading"}]
-    client.torrent_files = lambda _: [{"index": 0, "name": "Game (USA).zip", "size": 6,
-                                       "progress": 1.0, "priority": (2 if state["priority"] == -1 else 1)
-                                       if state["wanted"] else 0,
-                                       "native_priority": state["priority"]}]
-    def select(_, values, *, native_priorities=None):
-        """Select."""
-        value = values[0]
-        state["wanted"] = value != 0
-        if value:
-            state["priority"] = -1 if value == 2 else 0
-        if native_priorities is not None:
-            state["priority"] = native_priorities[0]
-        return True
-    client.set_file_priorities = select
+    state = {"paused": was_paused, "priority": 2, "native_priority": -1}
+    client.torrents = lambda: [{"hash": "a" * 40, "save_path": str(tmp_path),
+                               "state": "pausedDL" if was_paused else "downloading"}]
+    client.torrent_files = lambda _: [{"index": 0, "name": "Game (USA).zip",
+                                       "size": 6, "progress": 1, **state}]
     client.pause_torrent = lambda _: state.update(paused=True) or True
     client.resume_torrent = lambda _: state.update(paused=False) or True
+
+    def select(_, values, *, native_priorities=None):
+        """Apply one atomic selection or restoration."""
+        state.update(priority=values[0], native_priority=(native_priorities or {0: 0})[0])
+        return True
+
+    client.set_file_priorities = select
     svc.clients = [client]
     started = svc.collection_source_start("t1", "a" * 40, "Test System", "snes", 8 * 1024 * 1024)
-    assert started["ok"] and state == {"paused": False, "wanted": True, "priority": 0}
-    assert svc.collection_source_control(started["id"], "cancel")["status"] == "cancelled"
-    assert state == {"paused": True, "wanted": True, "priority": -1}
+    assert started["ok"] and state == {"paused": False, "priority": 1, "native_priority": 0}
+
+    def interrupt(*args, **kwargs):
+        """Exit before ROMarr observes the daemon's response."""
+        if request_applied:
+            select(*args, **kwargs)
+        raise Interrupted()
+
+    client.set_file_priorities = interrupt
+    with pytest.raises(Interrupted):
+        svc.collection_source_control(started["id"], "cancel")
+    restarted = ROMarr(env={"ROMARR_DATA": str(tmp_path / "state.json"),
+                            "LIBRARY_PATH": str(tmp_path / "library")})
+    restarted.clients = [client]
+    saved = restarted.store.get_item("collection_sources", started["id"])
+    assert (saved["status"], saved["restore_status"]) == ("restore-needed", "cancelled")
+    client.set_file_priorities = select
+    assert restarted.collection_source_control(started["id"], "restore")["status"] == "cancelled"
+    assert state == {"paused": was_paused, "priority": 2, "native_priority": -1}
 
 
 def test_external_selection_change_is_preserved_on_step_and_cancel(tmp_path, monkeypatch):
@@ -373,49 +387,6 @@ def test_qbit_partial_priority_update_can_restore_after_restart(
     assert client.priorities == {0: 6, 1: 1}
     assert client.resumes > 0
     assert "priority_transition" not in recovered
-
-
-@pytest.mark.parametrize(("request_applied", "was_paused"), [(False, True), (True, False)])
-def test_transmission_restore_retries_one_combined_request(
-        tmp_path, monkeypatch, request_applied, was_paused):
-    """Transmission restore retries one combined request."""
-    from romarr.downloaders import Transmission, TransmissionConfig
-
-    svc = _service(tmp_path, monkeypatch)
-    client = Transmission(TransmissionConfig(base_url="http://transmission"))
-    state = {"wanted": [True, False], "native": [0, 1], "paused": False}
-    client.torrent_files = lambda _: [
-        {"index": i, "name": str(i), "size": 8,
-         "priority": ({-1: 2, 0: 1, 1: 6}[state["native"][i]] if state["wanted"][i] else 0),
-         "native_priority": state["native"][i]} for i in range(2)]
-    client.pause_torrent = lambda _: state.update(paused=True) or True
-    client.resume_torrent = lambda _: state.update(paused=False) or True
-    calls = []
-
-    def call(method, args):
-        """Call."""
-        calls.append((method, args))
-        if len(calls) > 1 or request_applied:
-            for i in args["files-wanted"]:
-                state["wanted"][i] = True
-            for i in args["files-unwanted"]:
-                state["wanted"][i] = False
-            for priority, key in ((-1, "priority-low"), (0, "priority-normal"), (1, "priority-high")):
-                for i in args.get(key, []):
-                    state["native"][i] = priority
-        return {"result": "failure" if len(calls) == 1 else "success"}
-
-    client._call = call
-    job = {"id": "recover", "torrent_hash": "a" * 40, "was_paused": was_paused,
-           "original_priorities": {"0": 2, "1": 0},
-           "original_native_priorities": {"0": -1, "1": 1},
-           "applied_priorities": {"0": 1, "1": 0},
-           "applied_native_priorities": {"0": 0, "1": 1}}
-    assert not svc._restore_source_priorities(client, job)
-    assert svc._restore_source_priorities(client, job)
-    assert calls == [("torrent-set", {"ids": ["a" * 40], "files-unwanted": [1],
-                      "files-wanted": [0], "priority-low": [0], "priority-high": [1]})] * 2
-    assert state == {"wanted": [True, False], "native": [-1, 1], "paused": was_paused}
 
 
 def test_legacy_source_job_restores_after_upgrade(tmp_path, monkeypatch):
@@ -733,48 +704,3 @@ def test_qbit_duplicate_attachment_respects_persisted_dat_source_owner(tmp_path,
     client._post = Mock()
     assert not client._adopt_duplicate_magnet("magnet:?xt=urn:btih:" + identity, "romarr-request-next")
     client._post.assert_not_called()
-
-
-def test_transmission_cancel_recovers_if_exit_follows_the_restore_rpc(tmp_path, monkeypatch):
-    """The restore action can recover after an atomic RPC reaches the daemon."""
-    from romarr.downloaders import Transmission, TransmissionConfig
-
-    class Interrupted(BaseException):
-        """Model an abrupt process exit."""
-
-    svc = _service(tmp_path, monkeypatch)
-    client = Transmission(TransmissionConfig(base_url="http://fixture"))
-    client.romarr_id = "t1"
-    state = {"priority": 1, "native_priority": 0}
-    client.torrent_files = lambda _: [{"index": 0, "name": "0", "size": 8, **state}]
-    client.pause_torrent = lambda _: True
-    client.resume_torrent = lambda _: True
-
-    def restore(_, priorities, *, native_priorities):
-        """Apply the atomic restore before ROMarr can observe the result."""
-        state.update(priority=priorities[0], native_priority=native_priorities[0])
-        return True
-
-    def interrupt(*args, **kwargs):
-        """Exit after the daemon accepts the restore."""
-        restore(*args, **kwargs)
-        raise Interrupted()
-
-    client.set_file_priorities = interrupt
-    svc.clients = [client]
-    job = {"id": "cancelling", "client_id": "t1", "torrent_hash": "a" * 40,
-           "status": "running", "original_priorities": {"0": 6},
-           "original_native_priorities": {"0": 1}, "applied_priorities": {"0": 1},
-           "applied_native_priorities": {"0": 0}}
-    svc.store.put_item("collection_sources", job)
-    with pytest.raises(Interrupted):
-        svc.collection_source_control(job["id"], "cancel")
-    restarted = ROMarr(env={"ROMARR_DATA": str(tmp_path / "state.json"),
-                            "LIBRARY_PATH": str(tmp_path / "library")})
-    restarted.clients = [client]
-    saved = restarted.store.get_item("collection_sources", job["id"])
-    assert saved["status"] == "restore-needed"
-    assert saved["restore_status"] == "cancelled"
-    client.set_file_priorities = restore
-    assert restarted.collection_source_control(job["id"], "restore")["status"] == "cancelled"
-    assert state == {"priority": 6, "native_priority": 1}

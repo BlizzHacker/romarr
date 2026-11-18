@@ -6,11 +6,9 @@ import threading
 
 import pytest
 
-from romarr.app import ROMarr
 from romarr.clients import QBittorrent, QbitConfig
 from romarr.downloaders import Transmission, match_queue_item
 from romarr.queue_progress import annotate
-from romarr.selection import Release
 from romarr.store import QueueItem
 from test_collection_torrent import _service
 from test_transmission_completion import HASH, client, torrent, success
@@ -87,31 +85,6 @@ def test_progress_uses_identity_category_and_shared_deadline():
     progress = c.progress()
     assert len(progress) == 2
     assert progress['b'*40]['eta'] is None and progress['b'*40]['speed'] == 0
-
-
-def test_soundtrack_grab_uploads_prowlarr_metainfo_with_separate_label():
-    """A Prowlarr metainfo upload keeps its soundtrack label and watch identity."""
-    service = ROMarr.__new__(ROMarr)
-    service._lock = threading.RLock()
-    service._collection_source_lock = threading.RLock()
-    c = client()
-    c.romarr_id = 'transmission-one'
-    c._call = Mock(return_value=success(**{'torrent-added': {'hashString': HASH}}))
-    service.clients = [c]
-    service.prowlarr = SimpleNamespace(is_prowlarr_download_url=lambda _: True,
-                                     fetch_torrent=lambda _: b'torrent')
-    pick = Release('Soundtrack', 100, 1, (), 'http://prowlarr/download', 'torrent')
-    service._snd_torrents = {'scope:42': {'release': pick}}
-    service._soundtrack_target = lambda _: ({'id': '42', 'library_scope': 'scope'}, None)
-    store = Mock()
-    service.soundtrack_store = lambda _: store
-    assert service.soundtrack_torrent_grab('scope:42', 'release')['ok']
-    arguments = c._call.call_args.args[1]
-    assert arguments['labels'] == [service.SOUNDTRACK_CATEGORY]
-    assert arguments['metainfo'] == 'dG9ycmVudA=='
-    store.add_watch.assert_called_once_with('42', 'transmission:' + HASH, 'Soundtrack', client_id=c.romarr_id)
-    c._call = Mock(return_value=success(torrents=[torrent(labels=[service.SOUNDTRACK_CATEGORY])]))
-    assert c.completed() == []
 
 
 @pytest.mark.parametrize('directory', ['relative', '/downloads/../other', '/bad\x00dir'])

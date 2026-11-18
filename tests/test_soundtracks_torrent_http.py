@@ -1,6 +1,8 @@
 """Manual torrent selection, client ownership and seeding preservation over real HTTP."""
 import json
 import time
+
+import pytest
 from types import SimpleNamespace
 from romarr.clients import QBittorrent,QbitConfig
 from romarr.selection import Release
@@ -56,7 +58,11 @@ def test_http_manual_torrent_search_grab_and_watched_import_preserves_source(env
     assert service.soundtrack_store().status({"id":"42","name":"Fixture"},service._soundtrack_target("42")[1])["undoable"]==1
 
 
-def test_transmission_http_grab_watch_and_import_preserve_payload(env, tmp_path):
+@pytest.mark.parametrize(('resolved', 'handoff'), [
+    (b'torrent', {'metainfo': 'dG9ycmVudA=='}),
+    ('magnet:?xt=urn:btih:' + 'a' * 40, {'filename': 'magnet:?xt=urn:btih:' + 'a' * 40}),
+])
+def test_transmission_http_grab_watch_and_import_preserve_payload(env, tmp_path, resolved, handoff):
     """Transmission soundtrack identity survives HTTP handoff and background polling."""
     from unittest.mock import Mock
     from romarr.downloaders import Transmission, TransmissionConfig
@@ -70,15 +76,14 @@ def test_transmission_http_grab_watch_and_import_preserve_payload(env, tmp_path)
     service.clients = [client]
     service.prowlarr = SimpleNamespace(search=lambda _: [Release('Synthetic soundtrack', 123, 1, (),
         'http://prowlarr.invalid/download', 'torrent')], is_prowlarr_download_url=lambda _: True,
-        fetch_torrent=lambda _: 'magnet:?xt=urn:btih:' + HASH)
+        fetch_torrent=lambda _: resolved)
     code, raw = call(base, '/api/v1/soundtracks/torrents?id=42&q=Synthetic')
     release = json.loads(raw)['items'][0]['id']
     assert code == 200
     code, raw = call(base, '/api/v1/soundtracks/torrents/grab', {'id': '42', 'release': release})
     assert code == 200 and json.loads(raw)['ok']
     arguments = client._call.call_args.args[1]
-    assert arguments['labels'] == ['romarr-soundtracks']
-    assert arguments['filename'] == 'magnet:?xt=urn:btih:' + HASH
+    assert arguments == {**handoff, 'download-dir': str(tmp_path), 'labels': ['romarr-soundtracks']}
     source = tmp_path / 'album'
     source.mkdir()
     track = source / '99 synthetic.mp3'
@@ -86,6 +91,7 @@ def test_transmission_http_grab_watch_and_import_preserve_payload(env, tmp_path)
     track.write_bytes(payload)
     client._call = Mock(return_value=success(torrents=[torrent(labels=['romarr-soundtracks'],
         downloadDir=str(tmp_path), files=[{'name': 'album/99 synthetic.mp3'}])]))
+    assert client.completed() == []
     assert 'queued' in service.soundtrack_watch_tick()
     for _ in range(200):
         watch = service.soundtrack_store().watch_for('42')
