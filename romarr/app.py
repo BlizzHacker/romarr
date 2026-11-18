@@ -2775,7 +2775,8 @@ class ROMarr:
             with self._collection_lock:
                 return self._grab_impl(pick, game, platform_slug, manual=manual,
                                        external_request_id=external_request_id)
-        if isinstance(pick_client(pick.protocol, self.clients), Transmission):
+        if (isinstance(platform_slug, str) and resolve(platform_slug) is not None
+                and isinstance(pick_client(pick.protocol, self.clients), Transmission)):
             with self._collection_source_lock:
                 return self._grab_impl(pick, game, platform_slug, manual=manual,
                                        external_request_id=external_request_id)
