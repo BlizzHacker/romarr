@@ -47,8 +47,22 @@ def validate_owners(row, files, owners, client, category):
              and o["selected_file"].get("hash") == torrent_hash]
     tags = {t.strip() for t in str(row.get("tags") or "").split(",") if t.strip()}
     known_tags = {_tag_from_id(o["download_id"]) for o in known}
-    if not client or not known or row.get("category") != category or not tags or tags != known_tags:
-        raise ValueError("retained torrent ownership/category/tags are missing or ambiguous")
+    # ROMarr only reuses a collection torrent it can prove it added, so it
+    # never takes over one somebody added by hand. Each refusal says which
+    # proof is missing and what to do about it (rom-hub-minerva#3).
+    if not client or not known:
+        raise ValueError(
+            "this collection torrent is already in your download client but ROMarr did not add it; "
+            "remove it from the client (keeping its data is fine) and grab again so ROMarr can manage it")
+    if row.get("category") != category:
+        raise ValueError(
+            f"the existing collection torrent is in category {row.get('category') or '(none)'!r}, "
+            f"not {category!r}; set it back to {category!r} in the client or remove it and grab again")
+    if not tags or tags != known_tags:
+        raise ValueError(
+            "the existing collection torrent's tags no longer match ROMarr's records "
+            "(another app or a manual edit changed them); restore its romarr-collection-* tags "
+            "or remove it from the client and grab again")
     indexes = [f.get("index") for f in files]
     if len(set(indexes)) != len(indexes) or any(not isinstance(i, int) or i < 0 for i in indexes):
         raise ValueError("retained collection file indexes are ambiguous")
