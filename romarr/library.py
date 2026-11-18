@@ -668,8 +668,9 @@ class _RarToolSource(_BsdtarSource):
 class _PathSource(_Source):
     """A bare ROM file, or a directory the download client already unpacked."""
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, member_paths: list[Path] | None = None):
         self.path = path
+        self.member_paths = member_paths
         self.prefer_hardlinks = False
         self.last_transfer = ("copy", "")
         self.transfers = {}
@@ -677,8 +678,9 @@ class _PathSource(_Source):
     def names(self):
         if self.path.is_file():
             return [self.path.name]
-        return [str(p.relative_to(self.path)).replace("\\", "/")
-                for p in self.path.rglob("*") if p.is_file()]
+        files = (self.member_paths if self.member_paths is not None
+                 else (p for p in self.path.rglob("*") if p.is_file()))
+        return [str(p.relative_to(self.path)).replace("\\", "/") for p in files]
 
     def read(self, name):
         target = self.path if self.path.is_file() else self.path / name
@@ -876,9 +878,9 @@ class _NestedZipSource(_Source):
 class _DirectorySource(_PathSource):
     """Index loose files and archives, keeping ROM sets within each source."""
 
-    def __init__(self, path):
+    def __init__(self, path, member_paths: list[Path] | None = None):
         """Index each archive once and keep its members tied to their source."""
-        super().__init__(path)
+        super().__init__(path, member_paths)
         self.members = {}
         self._cleanup = ExitStack()
         self._staging_budget = StagingBudget()
@@ -891,7 +893,8 @@ class _DirectorySource(_PathSource):
     def _index_sources(self, path):
         """Index a directory while sharing one temporary-staging budget."""
         root = path.resolve()
-        files = [entry for entry in sorted(path.rglob("*")) if entry.is_file()]
+        files = (self.member_paths if self.member_paths is not None
+                 else [entry for entry in sorted(path.rglob("*")) if entry.is_file()])
         # Every file passes the escape check before any is opened: grouping
         # reads the first bytes of a .001, and a set's tool reads all its volumes.
         for entry in files:
@@ -1012,18 +1015,41 @@ def _rar_source(first: Path, volumes: list[Path]) -> _Source:
     return _BsdtarSource(first, tool_path)
 
 
+def _check_scoped_rar_volumes(member_paths: list[Path]) -> None:
+    """Keep external RAR readers from discovering unreported adjacent volumes."""
+    allowed = set(member_paths)
+    families = {}
+    for member in member_paths:
+        key = _rar_volume_key(member)
+        if key is None:
+            continue
+        family, number = key
+        if family[0] == "num" and (number != 1 or not _rar_signature(member)):
+            continue
+        families.setdefault(member.parent, set()).add(family)
+    for folder, recognized in families.items():
+        for entry in folder.iterdir():
+            key = _rar_volume_key(entry)
+            if entry not in allowed and key is not None and key[0] in recognized:
+                raise ValueError(f"RAR volume is outside the reported download: {entry.name}")
+
+
 def _source_for(download: Path, platform: Platform | None = None, *,
-                staging_budget: StagingBudget | None = None) -> _Source:
+                staging_budget: StagingBudget | None = None,
+                member_paths: list[Path] | None = None) -> _Source:
     """Choose an archive, directory, or plain-file source for this platform."""
+    if member_paths is not None:
+        _check_scoped_rar_volumes(member_paths)
     # When the download is a directory whose only non-hidden file is an archive,
     # unwrap it so the import looks inside the selected archive (#115).
     if download.is_dir():
-        non_hidden = [p for p in download.iterdir() if not p.name.startswith(".")]
+        entries = (download.iterdir() if member_paths is None else
+                   {download / member.relative_to(download).parts[0] for member in member_paths})
+        non_hidden = [p for p in entries if not p.name.startswith(".")]
         if len(non_hidden) == 1 and non_hidden[0].is_file():
             single_file = non_hidden[0]
             if not single_file.resolve().is_relative_to(download.resolve()):
                 raise ValueError(f"source escapes download directory: {single_file}")
-            single_suffix = single_file.suffix.lower()
             if is_archive_name(single_file.name):
                 return _source_for(single_file, platform, staging_budget=staging_budget)
 
@@ -1038,7 +1064,7 @@ def _source_for(download: Path, platform: Platform | None = None, *,
     if (download.is_dir()
             and (platform is None or (not platform.archive_is_the_rom
                                       and platform.media != "digital"))):
-        return _DirectorySource(download)
+        return _DirectorySource(download, member_paths)
 
     if download.is_file() and is_tar_name(download.name):
         return TarSource(download)
@@ -1073,7 +1099,7 @@ def _source_for(download: Path, platform: Platform | None = None, *,
                 "libarchive-tools (Debian/Alpine) or use the official ROMarr "
                 "image, which ships it.")
         return _BsdtarSource(download, tool)
-    return _PathSource(download)
+    return _PathSource(download, member_paths)
 
 
 def list_candidates(download: Path) -> list[str]:
@@ -1241,7 +1267,8 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
                platform_folders=None, prefer_hardlinks: bool = False, selected_primaries=None, bundle_routes=None,
                requested_game: str | None = None, catalog_platforms=None,
                hash_index=None, duplicate_roots=(),
-               switch_extras: bool = False) -> list[ImportResult]:
+               switch_extras: bool = False,
+               member_paths: list[Path] | None = None) -> list[ImportResult]:
     """Place every ROM from a finished download into the library.
 
     A cartridge zip may hold several games (a 3-in-1 collection, a bundle)
@@ -1266,7 +1293,7 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
         return [ImportResult(False, None, msg)]
 
     try:
-        source = _source_for(download, platform)
+        source = _source_for(download, platform, member_paths=member_paths)
         if isinstance(source, _PathSource):
             # A request-gated import must copy into private staging; a hardlink
             # would let another process mutate already-verified staged bytes.
@@ -1641,6 +1668,22 @@ def map_remote_path(path, mappings):
     remote, local = best
     rest = text[len(remote):].lstrip("/\\")
     return _checked(Path(local) / rest if rest else Path(local), text, mapped=True)
+
+
+def mapped_download_members(download: Path, row: dict, mappings) -> list[Path] | None:
+    """Map only the reported files, rejecting redirected or missing members."""
+    if "member_paths" not in row:
+        return None
+    members = sorted({map_remote_path(path, mappings) for path in row["member_paths"]})
+    if not members or (download.is_file() and members != [download]):
+        raise ValueError("Download payload does not match its reported members")
+    root = download.resolve()
+    for member in members:
+        relative = member.relative_to(download)
+        if (".." in relative.parts or member.is_symlink()
+                or member.resolve() != root / relative or not member.is_file()):
+            raise ValueError(f"Missing or unsafe download member: {member}")
+    return members
 
 
 def _checked(result: Path, reported: str, *, mapped: bool) -> Path:

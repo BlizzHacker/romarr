@@ -97,6 +97,26 @@ def test_a_torrent_that_vanishes_is_given_up_on_and_cancel_stops_watching(store,
     assert store.active_watches() == []
 
 
+def test_equal_torrent_tags_keep_their_own_clients(store):
+    """The same hash may be monitored independently on two configured clients."""
+    tag = "transmission:" + "a" * 40
+    store.add_watch("42", tag, "Album", client_id="first")
+    store.add_watch("43", tag, "Album", client_id="second")
+    assert [w["client_id"] for w in store.active_watches()] == ["first", "second"]
+
+
+def test_watch_expiry_and_seen_use_the_snapshot_time(store, monkeypatch):
+    """A delayed pass uses when the client was polled to assess missing torrents."""
+    monkeypatch.setattr(st.time, "time", lambda: 100)
+    store.add_watch("42", "romarr-first", "Missing")
+    store.add_watch("43", "romarr-second", "Downloading")
+    monkeypatch.setattr(st.time, "time", lambda: 200 + st.WATCH_LOST_AFTER)
+    store.process_watches([row("romarr-second", 0.5, "/audio")],
+                          lambda _: pytest.fail("watch is still downloading"), str, polled_at=120)
+    assert store.watch_for("42")["state"] == "downloading"
+    assert store.watch_for("43")["seen"] == 120
+
+
 def test_choose_audio_prefers_mp3_then_flac_then_chiptune():
     f = lambda n: (n, "/p/" + n, 1)
     assert st.choose_audio([f("a.flac"), f("a.mp3")])[1] == ".mp3"

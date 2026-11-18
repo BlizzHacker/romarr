@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import time
 
-from .downloaders import torrent_queue_hash
+from .downloaders import active_torrent_queue_hash, torrent_queue_hash
 
 
 def annotate(service, rows):
@@ -42,9 +42,9 @@ def annotate(service, rows):
                 service._queue_progress_refresh = False
     owners: dict[tuple[str, str], int] = {}
     for row in rows:
-        if row.get("state") in ("grabbed", "downloading", "queued"):
-            key = (str(row.get("download_client") or ""),
-                   torrent_queue_hash(str(row.get("download_id") or ""), str(row.get("release_id") or "")))
+        client_id = str(row.get("download_client") or "")
+        if identity := active_torrent_queue_hash(row, client_id):
+            key = (client_id, identity)
             owners[key] = owners.get(key, 0) + 1
     for row in rows:
         if row.get("state") not in ("grabbed", "downloading", "queued"):

@@ -1019,17 +1019,23 @@ class QBittorrent:
 
     def delete_torrent(self, torrent_hash: str, *,
                        delete_files: bool = False) -> bool:
-        """Remove a ROMarr-tagged torrent without deleting downloaded data."""
-        response = self._post(
-            "torrents/delete",
-            data={"hashes": torrent_hash,
-                  "deleteFiles": "true" if delete_files else "false"},
-            timeout=self._config.timeout)
-        if not response.ok:
-            return False
-        for part in str(torrent_hash or "").split("|"):
-            self._resumed_at.pop(self._resumed_key(part), None)
-        return True
+        """Remove only torrents unclaimed by DAT acquisition."""
+        with self._selection_lock:
+            blocked = set(self.owned_torrents_provider()) | {"", "all"}
+            hashes = [part.strip() for part in str(torrent_hash or "").split("|")
+                      if self._resumed_key(part) not in blocked]
+            if not hashes:
+                return False
+            response = self._post(
+                "torrents/delete",
+                data={"hashes": "|".join(hashes),
+                      "deleteFiles": "true" if delete_files else "false"},
+                timeout=self._config.timeout)
+            if not response.ok:
+                return False
+            for part in hashes:
+                self._resumed_at.pop(self._resumed_key(part), None)
+            return True
 
     def remove_download(self, download_id: str, *,
                         delete_files: bool = False) -> bool:
@@ -1213,6 +1219,13 @@ class QBittorrent:
         Only a torrent with *nothing* selected is touched. A part-selected one
         is somebody's deliberate choice and is left alone.
         """
+        with self._selection_lock:
+            if self._resumed_key(row.get("hash")) in self.owned_torrents_provider():
+                return False
+            return self._reselect(row)
+
+    def _reselect(self, row: dict) -> bool:
+        """Repair an unowned torrent while holding the selection lock."""
         files = self._get("torrents/files",
                           params={"hash": row.get("hash", "")},
                           timeout=self._config.timeout)

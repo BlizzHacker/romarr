@@ -576,8 +576,22 @@ class Transmission:
         self.owned_torrents_provider = lambda: ()
         self.queued_torrents_provider = dict
         self._rpc_version = None
+        self._default_download_dir = ""
         self._rpc_version_lock = threading.Lock()
         self._selection_lock = threading.RLock()
+        self._pending_labels = {}
+
+    def endpoint_id(self):
+        """Identify the configured RPC endpoint without storing credentials."""
+        parts = urlsplit(self._config.base_url)
+        if not parts.hostname or parts.scheme not in ("http", "https"):
+            raise ValueError("invalid Transmission endpoint")
+        port = parts.port
+        if port is None:
+            port = 443 if parts.scheme == "https" else 80
+        endpoint = (parts.scheme, parts.hostname, port, parts.path.rstrip("/") + self.RPC_PATH,
+                    parts.query, parts.fragment)
+        return hashlib.sha256(json.dumps(endpoint).encode()).hexdigest()
 
     @property
     def last_job_id(self):
@@ -633,9 +647,11 @@ class Transmission:
         with self._rpc_version_lock:
             if refresh or self._rpc_version is None:
                 body = self._call("session-get", {})
-                version = (body.get("arguments") or {}).get("rpc-version")
+                settings = body.get("arguments") or {}
+                version = settings.get("rpc-version")
                 if body.get("result") != "success" or type(version) is not int or version < 1:
                     raise RuntimeError("could not discover Transmission RPC version")
+                self._default_download_dir = settings.get("download-dir", "")
                 self._rpc_version = version
             return self._rpc_version
 
@@ -691,22 +707,47 @@ class Transmission:
             # Torrents this client added for ROMarr whose RPC 16 label step
             # failed afterwards. A retry gets `torrent-duplicate` for them, and
             # finishing the label is the only way to recover the grab.
-            pending = self.__dict__.setdefault("_pending_labels", {})
-            if added.get("torrent-duplicate") and pending.get(identity) == (category, destination):
-                self._apply_v16_label(identity, category, destination)
+            pending = self._pending_labels
+            retry = pending.get(identity)
+            if added.get("torrent-duplicate") and retry:
+                if (retry[:2] != (category, destination)
+                        or not self._recover_v16_label(identity, category, retry[2])):
+                    return False
                 pending.pop(identity, None)
             elif added.get("torrent-duplicate"):
                 if not self._adopt_duplicate(arguments.get("filename", ""), identity, category):
                     return False
             elif version == 16:
-                pending[identity] = (category, destination)
-                self._apply_v16_label(identity, category, destination)
                 pending.pop(identity, None)
+                try:
+                    self._apply_v16_label(identity, category, destination)
+                except Exception:
+                    directory = destination or self._default_download_dir
+                    if not directory:
+                        rows = self._torrent_identity(identity)
+                        directory = rows and rows[0].get("downloadDir")
+                    if self._safe_download_directory(directory):
+                        pending[identity] = (category, destination, directory)
+                    raise
             self.last_job_id = identity
             return True
         except Exception as exc:
             log.warning("%s add failed; torrent left intact: %s", self.name, type(exc).__name__)
             return False
+
+    def _recover_v16_label(self, identity, category, directory):
+        """Verify pending ownership and directory before replacing any labels."""
+        if identity in self.owned_torrents_provider() or identity in self.queued_torrents_provider():
+            return False
+        rows = self._torrent_identity(identity)
+        if not rows or str(rows[0].get("downloadDir") or "").rstrip("/") != str(directory).rstrip("/"):
+            return False
+        labels = rows[0].get("labels", [])
+        if not isinstance(labels, list) or any(label != category for label in labels):
+            return False
+        if not labels:
+            self._apply_v16_label(identity, category, directory)
+        return True
 
     def _apply_v16_label(self, identity, category, destination):
         """Label a just-added torrent on RPC 16 and confirm it is ours, or raise."""
@@ -4137,9 +4178,15 @@ def torrent_queue_hash(download_id: str, release_id: str) -> str:
 
 def active_torrent_queue_hash(item, client_id: str) -> str:
     """Return the active queue item's concrete hash on this configured client."""
-    if not client_id or item.download_client != client_id or item.state in ("imported", "failed"):
+    if isinstance(item, dict):
+        owner, state = item.get("download_client"), item.get("state")
+        download_id, release_id = item.get("download_id"), item.get("release_id")
+    else:
+        owner, state = item.download_client, item.state
+        download_id, release_id = item.download_id, item.release_id
+    if not client_id or owner != client_id or state in ("imported", "failed"):
         return ""
-    return torrent_queue_hash(item.download_id, item.release_id)
+    return torrent_queue_hash(download_id or "", release_id or "")
 
 
 def match_queue_item(queue, download: dict, *,

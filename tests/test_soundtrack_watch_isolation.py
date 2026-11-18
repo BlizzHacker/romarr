@@ -46,3 +46,38 @@ def test_a_stalled_client_does_not_block_a_healthy_one(tmp_path):
         assert stalled.torrents.call_count == 1
     finally:
         release.set()
+
+
+def test_watch_admission_rotates_when_all_worker_slots_fill(tmp_path, monkeypatch):
+    """A ninth watched client gets a slot on the next tick."""
+    service = ROMarr({"ROMARR_DATA": str(tmp_path / "s.json"), "ROMARR_API_KEY": "k"})
+    service.clients = [MagicMock(spec=Transmission) for _ in range(9)]
+    for number, client in enumerate(service.clients):
+        client.romarr_id = str(number)
+        client.torrents.return_value = []
+    store = MagicMock()
+    store.active_watches.return_value = [{"client_id": str(number)} for number in range(9)]
+    service._soundtrack_libraries = lambda: [("library",)]
+    service.soundtrack_store = lambda _: store
+    deferred = []
+
+    class DeferredThread:
+        """Hold admitted workers until the scheduler has filled eight slots."""
+
+        def __init__(self, *, target, **kwargs):
+            self.target = target
+
+        def start(self):
+            deferred.append(self.target)
+
+    monkeypatch.setattr("romarr.app.threading.Thread", DeferredThread)
+    assert service.soundtrack_watch_tick() == "8 soundtrack client watches queued"
+    for run in deferred:
+        run()
+    deferred.clear()
+    service.clients[-1].torrents.assert_not_called()
+
+    assert service.soundtrack_watch_tick() == "8 soundtrack client watches queued"
+    for run in deferred:
+        run()
+    service.clients[-1].torrents.assert_called_once()

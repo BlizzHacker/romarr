@@ -4,6 +4,8 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 
+import pytest
+
 from romarr.clients import QBittorrent, QbitConfig
 from romarr.queue_progress import annotate
 
@@ -68,3 +70,22 @@ def test_client_replacement_invalidates_cached_progress():
     assert annotate(svc,[row.copy()])[0]["progress"]==20
     svc.clients=[Client(90)]
     assert annotate(svc,[row.copy()])[0]["progress"]==90
+
+
+@pytest.mark.parametrize(("other_state", "owned"), [
+    ("import-review", False), ("imported", True), ("failed", True),
+])
+def test_exact_torrent_progress_requires_one_active_queue_owner(other_state, owned):
+    """An import awaiting review owns its torrent without displaying progress."""
+    class Client:
+        romarr_id = "A"
+
+        def progress(self, *, deadline):
+            return {"a" * 40: {"_romarr_exact_torrent_owner": True, "progress": 20}}
+
+    service = SimpleNamespace(_lock=threading.RLock(), clients=[Client()])
+    visible = {"state": "grabbed", "download_client": "A", "download_id": "a" * 40}
+    other = dict(visible, state=other_state)
+    rows = annotate(service, [visible, other])
+    assert rows[0].get("progress") == (20 if owned else None)
+    assert "progress" not in rows[1]

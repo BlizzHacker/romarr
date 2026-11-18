@@ -53,6 +53,27 @@ def test_plan_refuses_a_game_larger_than_the_staging_budget():
     assert out["skipped"][0]["title"] == "Game (USA)"
 
 
+def test_qbit_dat_source_is_neither_deleted_nor_reselected():
+    """A grouped queue removal may remove only the unowned hashes."""
+    from unittest.mock import Mock
+
+    client = QBittorrent(QbitConfig(base_url="http://fixture"))
+    protected, ordinary = "a" * 40, "b" * 40
+    client.owned_torrents_provider = lambda: {protected}
+    client._authed = True
+    deselected = {"hash": protected, "size": 0, "total_size": 100}
+    client._get = Mock(return_value=Mock(ok=True, json=Mock(return_value=[deselected])))
+    client._post = Mock(return_value=Mock(ok=True))
+
+    assert client.completed() == []
+    assert [call.args[0] for call in client._get.call_args_list] == ["torrents/info"]
+    assert not client.reselect(deselected)
+    assert not client.remove_download(protected)
+    client._post.assert_not_called()
+    assert client.delete_torrent(protected.upper() + "|all|" + ordinary, delete_files=True)
+    assert client._post.call_args.kwargs["data"] == {"hashes": ordinary, "deleteFiles": "true"}
+
+
 class FakeQbit(QBittorrent):
     def __init__(self, source):
         super().__init__(QbitConfig(base_url="http://qbit"))
@@ -296,6 +317,16 @@ def test_transmission_source_restores_selection_and_pause_after_restart(
     started = svc.collection_source_start("t1", "a" * 40, "Test System", "snes", 8 * 1024 * 1024)
     assert started["ok"] and state == {"paused": False, "priority": 1, "native_priority": 0}
 
+    from unittest.mock import Mock
+    replacement = Transmission(TransmissionConfig(base_url="http://replacement"))
+    replacement.romarr_id = client.romarr_id
+    replacement._call = Mock()
+    svc.clients = [replacement]
+    assert "endpoint has changed" in svc.collection_source_step(started["id"])["error"]
+    assert "endpoint has changed" in svc.collection_source_control(started["id"], "cancel")["error"]
+    replacement._call.assert_not_called()
+    svc.clients = [client]
+
     def interrupt(*args, **kwargs):
         """Exit before ROMarr observes the daemon's response."""
         if request_applied:
@@ -307,9 +338,12 @@ def test_transmission_source_restores_selection_and_pause_after_restart(
         svc.collection_source_control(started["id"], "cancel")
     restarted = ROMarr(env={"ROMARR_DATA": str(tmp_path / "state.json"),
                             "LIBRARY_PATH": str(tmp_path / "library")})
-    restarted.clients = [client]
+    restarted.clients = [replacement]
     saved = restarted.store.get_item("collection_sources", started["id"])
     assert (saved["status"], saved["restore_status"]) == ("restore-needed", "cancelled")
+    assert "endpoint has changed" in restarted.collection_source_control(started["id"], "restore")["error"]
+    replacement._call.assert_not_called()
+    restarted.clients = [client]
     client.set_file_priorities = select
     assert restarted.collection_source_control(started["id"], "restore")["status"] == "cancelled"
     assert state == {"paused": was_paused, "priority": 2, "native_priority": -1}
@@ -334,6 +368,51 @@ def test_external_selection_change_is_preserved_on_step_and_cancel(tmp_path, mon
     assert "selection changed" in result["errors"][0]
     assert client.priorities == {0: 7}
     assert client.priority_calls == calls
+
+
+@pytest.mark.parametrize(("status", "other_status", "allowed"), [
+    ("running", "done", True), ("running", "restore-needed", False),
+    ("running", "running", False), ("done", "running", False),
+    ("cancelled", "done", False), ("restore-needed", "done", False),
+])
+def test_retry_only_resets_a_running_source_that_solely_owns_the_torrent(
+        tmp_path, monkeypatch, status, other_status, allowed):
+    """A retry preserves ownership and only resets failed groups."""
+    svc = _service(tmp_path, monkeypatch)
+    job = {"id": "first", "torrent_hash": "a" * 40, "client_id": "q1",
+           "status": status, "errors": ["failure"],
+           "batches": [{"groups": [{"status": "failed", "error": "failure"},
+                                   {"status": "imported"}]}]}
+    svc.store.put_item("collection_sources", job)
+    svc.store.put_item("collection_sources", {"id": "other", "torrent_hash": "A" * 40,
+                        "client_id": "q1", "status": other_status})
+    result = svc.collection_source_control("first", "retry")
+    saved = svc.store.get_item("collection_sources", "first")
+    if allowed:
+        assert (result["status"], result["done"], result["errors"]) == ("running", 1, [])
+        assert saved["batches"][0]["groups"] == [{"status": ""}, {"status": "imported"}]
+    else:
+        assert "error" in result
+        assert saved == job
+
+
+def test_failed_retry_write_preserves_nested_source_state(tmp_path, monkeypatch):
+    """A failed durable retry leaves the previous group state intact."""
+    svc = _service(tmp_path, monkeypatch)
+    groups = [{"status": "failed", "error": "failure"}]
+    svc.store.put_item("collection_sources", {"id": "first", "status": "running",
+                        "batches": [{"groups": groups}]})
+
+    def fail_save(*, raise_on_error):
+        """Reject the durable retry write."""
+        if raise_on_error:
+            raise OSError("disk full")
+
+    monkeypatch.setattr(svc.store, "save", fail_save)
+    with pytest.raises(OSError, match="disk full"):
+        svc.collection_source_control("first", "retry")
+    assert svc.store.get_item("collection_sources", "first")["batches"][0]["groups"] == [
+        {"status": "failed", "error": "failure"}]
 
 
 @pytest.mark.parametrize("phase", ["prepare", "restore"])
@@ -450,9 +529,21 @@ def test_selected_batch_resumes_only_an_interrupted_resume(tmp_path, monkeypatch
     restarted = ROMarr(env={"ROMARR_DATA": str(tmp_path / "state.json"),
                             "LIBRARY_PATH": str(tmp_path / "library")})
     recovered = restarted.store.get_item("collection_sources", "resume")
+    resume = client.resume_torrent
+
+    def confirm_pending(torrent_hash):
+        """Observe the durable journal before confirming the resume."""
+        reloaded = ROMarr(env={"ROMARR_DATA": str(tmp_path / "state.json"),
+                               "LIBRARY_PATH": str(tmp_path / "library")})
+        assert reloaded.store.get_item("collection_sources", "resume")["resume_pending"]
+        return resume(torrent_hash)
+
+    client.resume_torrent = confirm_pending
     assert restarted._prepare_collection_source_batch(client, recovered)
     assert client.resumes == int(resume_pending)
-    assert not recovered.get("resume_pending")
+    reloaded = ROMarr(env={"ROMARR_DATA": str(tmp_path / "state.json"),
+                           "LIBRARY_PATH": str(tmp_path / "library")})
+    assert not reloaded.store.get_item("collection_sources", "resume").get("resume_pending")
 
 
 @pytest.mark.parametrize('request_applied', [False, True])
@@ -565,6 +656,21 @@ def test_transmission_handoff_records_queue_ownership_before_source_start(tmp_pa
     from romarr.selection import Release
 
     svc = _service(tmp_path, monkeypatch)
+    contended = Event()
+    lock = svc._collection_source_lock
+
+    class ObservedLock:
+        """Signal when a competing request reaches the held source lock."""
+
+        def __enter__(self):
+            if not lock.acquire(blocking=False):
+                contended.set()
+                lock.acquire()
+
+        def __exit__(self, *_):
+            lock.release()
+
+    svc._collection_source_lock = ObservedLock()
     client = svc._build_client({"type": "transmission", "host": "fixture", "id": "t1"})
     client.romarr_id = "t1"
     client._rpc_version = 17
@@ -572,23 +678,17 @@ def test_transmission_handoff_records_queue_ownership_before_source_start(tmp_pa
         "torrent-added": {"hashString": "a" * 40}}})
     svc.clients = [client]
     svc.prowlarr = SimpleNamespace(is_prowlarr_download_url=lambda _: False)
-    attempted, finished = Event(), Event()
     enqueue = svc.store.enqueue
     future = None
     def start_source():
         """Attempt source ownership during the handoff persistence window."""
-        attempted.set()
-        try:
-            return svc.collection_source_start("t1", "a" * 40, "Test System", "snes", 8 * 1024 * 1024)
-        finally:
-            finished.set()
+        return svc.collection_source_start("t1", "a" * 40, "Test System", "snes", 8 * 1024 * 1024)
     with ThreadPoolExecutor(max_workers=1) as pool:
         def enqueue_with_competitor(item):
             """Confirm source startup waits until the queue owner exists."""
             nonlocal future
             future = pool.submit(start_source)
-            assert attempted.wait(5)
-            assert not finished.wait(.1)
+            assert contended.wait(5)
             enqueue(item)
         monkeypatch.setattr(svc.store, "enqueue", enqueue_with_competitor)
         release = Release("Game (USA).sfc", 100, 1, (), "magnet:?xt=urn:btih:" + "a" * 40, "torrent")

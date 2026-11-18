@@ -16,21 +16,21 @@ def queue_identity(item):
 
 
 def preview_import(download, platform, library_root, *, layout="flat", platform_folders=None, queue_identity=None,
-                   switch_extras=False):
+                   switch_extras=False, member_paths=None):
     """Build a reviewable preview without hashing game payloads."""
-    source = _source_for(download, platform)
+    source = _source_for(download, platform, member_paths=member_paths)
     try:
         return _preview_import_from_source(
             source, download, platform, library_root, layout=layout,
             platform_folders=platform_folders, queue_identity=queue_identity,
-            switch_extras=switch_extras)
+            switch_extras=switch_extras, member_paths=member_paths)
     finally:
         source.close()
 
 
 def _preview_import_from_source(source, download, platform, library_root, *,
                                 layout="flat", platform_folders=None,
-                                queue_identity=None, switch_extras=False):
+                                queue_identity=None, switch_extras=False, member_paths=None):
     """Create a preview from an owned source before its scratch files close."""
     names = source.names()
     sets = source.rom_sets(platform)
@@ -38,7 +38,9 @@ def _preview_import_from_source(source, download, platform, library_root, *,
     identity = []
     # Stat the archive itself or every source member. No game payload is hashed
     # just to display a preview; DAT verification remains in the actual importer.
-    paths = [download] if download.is_file() else sorted(download.rglob("*"))
+    paths = member_paths
+    if paths is None:
+        paths = [download] if download.is_file() else sorted(download.rglob("*"))
     for path in paths:
         if path.is_file():
             st = path.stat()

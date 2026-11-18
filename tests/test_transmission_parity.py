@@ -16,6 +16,22 @@ from test_transmission_completion import HASH, client, torrent, success
 MAGNET = 'magnet:?xt=urn:btih:' + HASH
 
 
+@pytest.mark.parametrize("magnet,release_fault", [(MAGNET, False), ("magnet:?xt=broken", True)])
+def test_direct_magnet_rejection_only_marks_invalid_release(tmp_path, monkeypatch, magnet, release_fault):
+    """A syntactically valid release remains eligible after a client rejection."""
+    from romarr.selection import Release
+
+    service = _service(tmp_path, monkeypatch)
+    c = client()
+    c._rpc_version = 17
+    c._call = Mock(return_value={"result": "error"})
+    service.clients = [c]
+    service.prowlarr = SimpleNamespace(is_prowlarr_download_url=lambda _: False)
+    release = Release("Demo (USA).sfc", 100, 1, (), magnet, "torrent")
+    assert not service.grab(release, "Demo", "snes")["ok"]
+    assert service.queue[-1].release_fault is release_fault
+
+
 @pytest.mark.parametrize('version', [16, 17])
 def test_attach_preserves_external_directory_and_labels(version):
     """An unowned magnet can be claimed in its existing download directory."""
