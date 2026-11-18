@@ -7867,7 +7867,10 @@ class ROMarr:
             # configures are carried over explicitly.
             session = _requests.Session()
             session.trust_env = False
-            session.proxies.update(_requests.utils.getproxies())
+            # get_environ_proxies applies NO_PROXY for this exact URL, as the
+            # environment-trusting session would have.
+            session.proxies.update(
+                _requests.utils.get_environ_proxies(origin + sub_path))
             bundle = os.environ.get("REQUESTS_CA_BUNDLE") or os.environ.get("CURL_CA_BUNDLE")
             if bundle:
                 session.verify = bundle

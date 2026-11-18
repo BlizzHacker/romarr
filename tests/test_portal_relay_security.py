@@ -125,6 +125,16 @@ def test_an_anonymous_relay_ignores_netrc(stack, tmp_path, monkeypatch):
     assert hits and all(h[1] is None for h in hits), hits
 
 
+def test_an_anonymous_relay_honours_no_proxy(stack, monkeypatch):
+    # A proxy that does not exist: if NO_PROXY were ignored the relay would
+    # try it and fail, and the asset would never reach the fake library.
+    monkeypatch.setenv("HTTP_PROXY", "http://127.0.0.1:9")
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1,localhost")
+    _, get = stack
+    get("/assets/noproxy.js")
+    assert _asset_hits("/assets/noproxy.js"), "NO_PROXY was ignored"
+
+
 def test_an_anonymous_asset_is_relayed_without_the_stored_credential(stack):
     _, get = stack
     get("/assets/anon.js")
