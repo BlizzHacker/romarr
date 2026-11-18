@@ -7861,8 +7861,16 @@ class ROMarr:
             session.auth = auth
         else:
             # A fresh session: no stored credential and none of the signed-in
-            # library session's cookies.
+            # library session's cookies. trust_env=False also stops requests
+            # from reading ~/.netrc, which would otherwise attach Basic auth
+            # for the library host; proxies and the CA bundle the environment
+            # configures are carried over explicitly.
             session = _requests.Session()
+            session.trust_env = False
+            session.proxies.update(_requests.utils.getproxies())
+            bundle = os.environ.get("REQUESTS_CA_BUNDLE") or os.environ.get("CURL_CA_BUNDLE")
+            if bundle:
+                session.verify = bundle
 
         headers: dict[str, str] = {}
         if content_type:
@@ -8991,7 +8999,9 @@ def make_handler(service: ROMarr):
             # library server it is relayed to (GHSA-rqvw-wx7h-5xq2). Nothing
             # legitimate needs one, so refuse it outright.
             if has_unsafe_path_segments(self.path):
-                self._drain()
+                # Runs before rate limiting and auth, so never wait on a body:
+                # answer and drop the connection instead of draining it.
+                self.close_connection = True
                 return self._json(400, {"error": "invalid path"})
             # Rate limit before authenticating, and key on the caller's
             # address: login is the one endpoint where guessing is the attack,

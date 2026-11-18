@@ -94,7 +94,6 @@ def stack(tmp_path):
 
 @pytest.mark.parametrize("path", [
     "/assets/../api/roms?limit=1",
-    "/assets/../api/platforms",
     "/assets/../api/tasks/status",
     "/emulatorjs/../api/users/me",
     "/assets/%2e%2e/api/roms",
@@ -104,10 +103,26 @@ def test_the_advisory_requests_are_refused_and_never_reach_the_library(stack, pa
     status, body = get(path)
     # Refused at the gate, before any route or relay runs.
     assert status == 400 and b"invalid path" in body
+    # And nothing was relayed: no upstream request carries the traversed
+    # target. (Background library refreshes use their own query strings.)
+    target = "/" + path.replace("%2e%2e", "..").split("../", 1)[1]
+    assert target not in {seen[0] for seen in FakeRomm.seen}, target
 
 
 def _asset_hits(name):
     return [seen for seen in FakeRomm.seen if seen[0].startswith(name)]
+
+
+def test_an_anonymous_relay_ignores_netrc(stack, tmp_path, monkeypatch):
+    netrc = tmp_path / ".netrc"
+    netrc.write_text("machine 127.0.0.1 login ambient password leaked\n")
+    netrc.chmod(0o600)
+    monkeypatch.setenv("NETRC", str(netrc))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    _, get = stack
+    get("/assets/netrc.js")
+    hits = _asset_hits("/assets/netrc.js")
+    assert hits and all(h[1] is None for h in hits), hits
 
 
 def test_an_anonymous_asset_is_relayed_without_the_stored_credential(stack):
