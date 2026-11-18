@@ -48,7 +48,7 @@ from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, quote, unquote_plus, urlparse, urlsplit, urlunsplit
+from urllib.parse import parse_qs, quote, unquote, unquote_plus, urlparse, urlsplit, urlunsplit
 
 import time
 import unicodedata
@@ -7738,6 +7738,7 @@ class ROMarr:
         return text.encode("utf-8")
 
     def proxy_portal(self, url: str = "", path: str = "", *,
+                     with_credentials: bool = True,
                      method: str = "GET", body: bytes | None = None,
                      content_type: str = "", accept: str = "",
                      range_header: str = "") -> tuple[int, str, bytes]:
@@ -7834,6 +7835,8 @@ class ROMarr:
                 sub_path = f"{sub_path}?{parts.query}"
         if not sub_path.startswith("/"):
             sub_path = "/" + sub_path
+        if has_unsafe_path_segments(sub_path):
+            return 400, "application/json", b'{"error":"invalid path"}'
 
         sessions = getattr(self, "_portal_sessions", None)
         if sessions is None:
@@ -7852,9 +7855,25 @@ class ROMarr:
             sessions[origin] = session
 
         auth = None
-        if creds.get("username") and creds.get("password"):
-            auth = (creds["username"], creds["password"])
-        session.auth = auth
+        if with_credentials:
+            if creds.get("username") and creds.get("password"):
+                auth = (creds["username"], creds["password"])
+            session.auth = auth
+        else:
+            # A fresh session: no stored credential and none of the signed-in
+            # library session's cookies. trust_env=False also stops requests
+            # from reading ~/.netrc, which would otherwise attach Basic auth
+            # for the library host; proxies and the CA bundle the environment
+            # configures are carried over explicitly.
+            session = _requests.Session()
+            session.trust_env = False
+            # get_environ_proxies applies NO_PROXY for this exact URL, as the
+            # environment-trusting session would have.
+            session.proxies.update(
+                _requests.utils.get_environ_proxies(origin + sub_path))
+            bundle = os.environ.get("REQUESTS_CA_BUNDLE") or os.environ.get("CURL_CA_BUNDLE")
+            if bundle:
+                session.verify = bundle
 
         headers: dict[str, str] = {}
         if content_type:
@@ -7863,10 +7882,10 @@ class ROMarr:
             headers["Accept"] = accept
         if range_header:
             headers["Range"] = range_header
-        if creds.get("api_key") and not auth:
+        if with_credentials and creds.get("api_key") and not auth:
             headers["X-Api-Key"] = creds["api_key"]
             headers["Authorization"] = f"Bearer {creds['api_key']}"
-        csrf = session.cookies.get("romm_csrftoken")
+        csrf = session.cookies.get("romm_csrftoken") if with_credentials else None
         if csrf:
             headers["X-CSRFToken"] = csrf
 
@@ -8616,6 +8635,26 @@ def integration_view(row: SeerrRequest) -> dict:
             "assets": list(row.assets), "error": row.error}
 
 
+def has_unsafe_path_segments(path: str) -> bool:
+    """Whether a request path could step outside the prefix it appears to be under.
+
+    Open prefixes such as /assets/ are matched on the raw path, but HTTP
+    clients and upstream servers resolve dot-segments, so `/assets/../api/x`
+    passes a prefix check here and arrives upstream as `/api/x`. Decode a few
+    rounds first so `%2e%2e` and `%252e` cannot hide a `..`, and treat a
+    backslash or NUL as hostile because some servers read them as separators.
+    """
+    seen = str(path or "").split("?", 1)[0].split("#", 1)[0]
+    for _ in range(3):
+        decoded = unquote(seen)
+        if decoded == seen:
+            break
+        seen = decoded
+    if "\\" in seen or "\x00" in seen:
+        return True
+    return any(segment in (".", "..") for segment in seen.split("/"))
+
+
 def is_portal_asset(path: str) -> bool:
     """Whether `path` is a static asset or manifest requested by the embedded portal shell."""
     if path.startswith(("/assets/", "/_next/", "/static/", "/emulatorjs/")):
@@ -8958,6 +8997,15 @@ def make_handler(service: ROMarr):
             downloads end up answering strangers.
             """
             path = urlparse(self.path).path
+            # A dot-segment path can satisfy an open prefix such as /assets/
+            # here and then be resolved to somewhere else entirely by the
+            # library server it is relayed to (GHSA-rqvw-wx7h-5xq2). Nothing
+            # legitimate needs one, so refuse it outright.
+            if has_unsafe_path_segments(self.path):
+                # Runs before rate limiting and auth, so never wait on a body:
+                # answer and drop the connection instead of draining it.
+                self.close_connection = True
+                return self._json(400, {"error": "invalid path"})
             # Rate limit before authenticating, and key on the caller's
             # address: login is the one endpoint where guessing is the attack,
             # so it has to be limited for callers who have not authenticated
@@ -9778,6 +9826,10 @@ def make_handler(service: ROMarr):
             res = service.proxy_portal(
                 target,
                 sub_path,
+                # Static portal assets are reachable without signing in to
+                # ROMarr. Those requests are relayed bare: the stored library
+                # credential and session belong to signed-in users only.
+                with_credentials=self._authorised(),
                 method=method,
                 body=body,
                 content_type=self.headers.get("Content-Type", ""),
