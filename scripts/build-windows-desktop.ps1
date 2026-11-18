@@ -9,7 +9,7 @@ Python, ROM Hub, MinGit, .NET and a fixed WebView2 runtime ship in the package.
 [CmdletBinding()]
 param(
     [string]$OutputDirectory,
-    [string]$Version = '1.10.2',
+    [string]$Version = '1.11.4',
     [string]$PythonPath = 'python',
     [string]$StoreIdentityName = 'MoveWeight.ROMarr.Desktop',
     [string]$StorePublisher = 'CN=MoveWeight',
