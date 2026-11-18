@@ -76,6 +76,28 @@ def test_reuse_is_additive_and_preserves_priorities_no_add_delete_resume():
     assert client.last_job_id != "qbit-tag:romarr-collection-A"
 
 
+@pytest.mark.parametrize("action", ["reuse", "resume"])
+def test_retained_actions_respect_persisted_dat_source_owner(tmp_path, action):
+    """A rebuilt client refuses retained writes while a DAT job owns the hash."""
+    service, _, session = service_with_retained(tmp_path)
+    service.queue[0].state = "imported"
+    service.store.put_item("collection_sources", {"id": "source", "client_id": "qbit-one",
+                           "torrent_hash": HASH, "status": "restore-needed"})
+    service = ROMarr({"ROMARR_DATA": str(tmp_path / "state.json")})
+    client = service._build_client({"type": "qbittorrent", "host": "fixture", "id": "qbit-one"})
+    client.romarr_id = "qbit-one"
+    client._session = session
+    service.clients = [client]
+    if action == "reuse":
+        result = service.grab(release("B"), "B", "gb")
+    else:
+        session.row["state"] = "pausedDL"
+        result = service.queue_action(0, "resume-retained")
+    assert not result["ok"]
+    assert "active DAT source job" in result["error"]
+    assert session.posts == []
+
+
 @pytest.mark.parametrize("mutation", ["category", "foreign-tag", "missing-owner", "wrong-client", "changed-file"])
 def test_uncertain_ownership_preserves_everything(mutation):
     client, session = make_client()

@@ -828,8 +828,10 @@ class QBittorrent:
         if len(fresh) != 1:
             raise ValueError("retained torrent disappeared")
         row = fresh[0]
-        files = self._collection_owners(row, owners)
         torrent_hash = str(row["hash"])
+        if self._resumed_key(torrent_hash) in self.owned_torrents_provider():
+            raise ValueError("torrent belongs to an active DAT source job")
+        files = self._collection_owners(row, owners)
         self._added.retained_hash = torrent_hash
         state = str(row.get("state") or "")
         if state in _QBITTORRENT_TRANSITIONAL_STATES or (
@@ -892,11 +894,13 @@ class QBittorrent:
     def resume_retained_collection(self, identity, owners):
         """Resume a stopped retained collection torrent and wait briefly for running state."""
         with self._selection_lock:
+            torrent_hash = str(identity["hash"])
+            if self._resumed_key(torrent_hash) in self.owned_torrents_provider():
+                raise ValueError("torrent belongs to an active DAT source job")
             rows = [r for r in self.torrents() if r.get("hash") == identity.get("hash")]
             if len(rows) != 1:
                 raise ValueError("retained collection cannot be identified")
             self._collection_owners(rows[0], owners)
-            torrent_hash = str(identity["hash"])
             if not self.resume_torrent(torrent_hash):
                 return False
             _, confirmed = self._await_resumed_row(torrent_hash)
