@@ -69,13 +69,16 @@ def test_transmission_http_grab_watch_and_import_preserve_payload(env, tmp_path)
     client._call = Mock(return_value=success(**{'torrent-added': {'hashString': HASH}}))
     service.clients = [client]
     service.prowlarr = SimpleNamespace(search=lambda _: [Release('Synthetic soundtrack', 123, 1, (),
-        'magnet:?xt=urn:btih:' + HASH, 'torrent')], is_prowlarr_download_url=lambda _: False)
+        'http://prowlarr.invalid/download', 'torrent')], is_prowlarr_download_url=lambda _: True,
+        fetch_torrent=lambda _: 'magnet:?xt=urn:btih:' + HASH)
     code, raw = call(base, '/api/v1/soundtracks/torrents?id=42&q=Synthetic')
     release = json.loads(raw)['items'][0]['id']
     assert code == 200
     code, raw = call(base, '/api/v1/soundtracks/torrents/grab', {'id': '42', 'release': release})
     assert code == 200 and json.loads(raw)['ok']
-    assert client._call.call_args.args[1]['labels'] == ['romarr-soundtracks']
+    arguments = client._call.call_args.args[1]
+    assert arguments['labels'] == ['romarr-soundtracks']
+    assert arguments['filename'] == 'magnet:?xt=urn:btih:' + HASH
     source = tmp_path / 'album'
     source.mkdir()
     track = source / '99 synthetic.mp3'

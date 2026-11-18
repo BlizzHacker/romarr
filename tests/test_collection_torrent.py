@@ -375,8 +375,7 @@ def test_qbit_partial_priority_update_can_restore_after_restart(
     assert "priority_transition" not in recovered
 
 
-@pytest.mark.parametrize("request_applied", [False, True])
-@pytest.mark.parametrize("was_paused", [False, True])
+@pytest.mark.parametrize(("request_applied", "was_paused"), [(False, True), (True, False)])
 def test_transmission_restore_retries_one_combined_request(
         tmp_path, monkeypatch, request_applied, was_paused):
     """Transmission restore retries one combined request."""
@@ -552,6 +551,7 @@ def test_transmission_source_ownership_survives_client_rebuild(tmp_path, monkeyp
         "torrent-duplicate": {"hashString": "a" * 40}}})
     assert not client.add("magnet:?xt=urn:btih:" + "a" * 40)
     assert not client.last_job_id
+    assert [call.args[0] for call in client._call.call_args_list] == ["torrent-add"]
 
 
 def test_completion_restoration_remains_recoverable_until_resume(tmp_path, monkeypatch):

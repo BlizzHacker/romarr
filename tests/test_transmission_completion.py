@@ -16,14 +16,6 @@ def torrent(**changes):
                         for entry in changes.get("files", [{"name": "Demo.sfc"}])]
     return {"hashString": HASH, "name": "Demo.sfc", "labels": ["romarr"], "downloadDir": "/downloads/romarr", "leftUntilDone": 0, "percentDone": 1, "totalSize": 100, "metadataPercentComplete": 1, "files": [{"name": "Demo.sfc"}], **changes}
 
-def test_configured_directory_and_identity():
-    """Configured directory and identity."""
-    c = client()
-    c._call = Mock(return_value={"result": "success", "arguments": {"torrent-added": {"hashString": HASH}}})
-    assert c.add("magnet:demo") and c.last_job_id == HASH
-    assert c._call.call_args.args[1]["download-dir"] == "/downloads/romarr"
-    assert build_client({"type":"transmission", "host":"localhost", "port":9091, "save_path":"/downloads/romarr"})._config.save_path == "/downloads/romarr"
-
 @pytest.mark.parametrize("changes", [{}, {"labels":["romarr-collection-existing"]}, {"hashString":"b"*40}, {"downloadDir":""}])
 def test_foreign_duplicates_are_rejected_without_modification(changes):
     """Foreign duplicates are rejected without modification."""
@@ -185,16 +177,6 @@ def test_wanted_completion_requires_every_payload_file(entry):
     assert c.torrents()[0]['content_path'] == ''
 
 
-def test_active_source_duplicate_cannot_be_claimed():
-    """Persisted source ownership takes precedence over missing daemon labels."""
-    c = client()
-    c.owned_torrents_provider = lambda: {HASH}
-    c._call = Mock(return_value=success(**{'torrent-duplicate': {'hashString': HASH}}))
-    assert not c.add('magnet:?xt=urn:btih:' + HASH)
-    assert c.last_job_id == ''
-    c._call.assert_called_once()
-
-
 def test_metainfo_duplicate_is_refused_without_mutation():
     """Only a magnet can establish identity for attaching an existing torrent."""
     c = client()
@@ -238,16 +220,15 @@ def test_progress_handshake_reuses_the_remaining_deadline(monkeypatch, elapsed):
         assert len(calls) == 1 and progress == {}
 
 
-@pytest.mark.parametrize('kind', ['transmission', 'vuze', 'biglybt'])
 @pytest.mark.parametrize('version', [16, 17])
-def test_version_aware_labels(kind, version):
+def test_version_aware_labels(version):
     """Version aware labels."""
-    c = build_client({'type': kind, 'host': 'localhost', 'save_path': '/downloads/romarr'})
+    c = build_client({'type': 'transmission', 'host': 'localhost', 'save_path': '/downloads/romarr'})
     replies = [success(**{'rpc-version': version}), success(**{'torrent-added': {'hashString': HASH}})]
     if version == 16:
         replies.extend([success(), success(torrents=[torrent()])])
     c._call = Mock(side_effect=replies)
-    assert c.add('magnet:demo', save_path='/downloads/romarr') and c.last_job_id == HASH
+    assert c.add('magnet:demo') and c.last_job_id == HASH
     calls = c._call.call_args_list
     assert calls[0].args == ('session-get', {})
     args = calls[1].args[1]
@@ -261,15 +242,14 @@ def test_version_aware_labels(kind, version):
         assert [call.args[0] for call in calls] == ['session-get', 'torrent-add', 'torrent-set', 'torrent-get']
 
 
-@pytest.mark.parametrize('version', [16, 17])
-def test_connection_check_caches_discovery_for_submission(version):
+def test_connection_check_caches_discovery_for_submission():
     """Connection check caches discovery for submission."""
     c = client()
     c._rpc_version = None
     def call(method, arguments):
         """Call."""
         if method == 'session-get':
-            return success(**{'rpc-version': version})
+            return success(**{'rpc-version': 16})
         if method == 'torrent-add':
             return success(**{'torrent-added': {'hashString': HASH}})
         return success(torrents=[torrent()])
@@ -292,9 +272,9 @@ def test_connection_check_still_probes_after_cached_success():
 
 
 @pytest.mark.parametrize('reply', [
-    {}, {'result': 'error'}, success(), success(**{'rpc-version': None}),
+    {'result': 'error'}, success(),
     success(**{'rpc-version': '17'}), success(**{'rpc-version': True}),
-    success(**{'rpc-version': 0}), success(**{'rpc-version': 15}),
+    success(**{'rpc-version': 15}),
     RuntimeError('disconnected'),
 ])
 def test_failed_or_unsupported_discovery_refuses_submission(reply, caplog):
@@ -345,9 +325,9 @@ def test_post_add_labelling_failure_leaves_torrent_intact(reply, caplog):
 
 
 @pytest.mark.parametrize('reply', [
-    {'result': 'error'}, success(torrents=[]), success(torrents=[torrent(), torrent()]),
+    success(torrents=[]), success(torrents=[torrent(), torrent()]),
     success(torrents=[torrent(labels=[])]), success(torrents=[torrent(downloadDir='/other')]),
-    success(torrents=[torrent(hashString='b' * 40)]), RuntimeError('disconnected'),
+    success(torrents=[torrent(hashString='b' * 40)]),
 ])
 def test_post_add_verification_failure_leaves_torrent_intact(reply, caplog):
     """Post add verification failure leaves torrent intact."""

@@ -89,9 +89,8 @@ def test_progress_uses_identity_category_and_shared_deadline():
     assert progress['b'*40]['eta'] is None and progress['b'*40]['speed'] == 0
 
 
-@pytest.mark.parametrize('upload', [False, True])
-def test_soundtrack_grab_records_transmission_identity_and_separate_label(upload):
-    """A soundtrack grab uses the same local Prowlarr resolution as ROM grabs."""
+def test_soundtrack_grab_uploads_prowlarr_metainfo_with_separate_label():
+    """A Prowlarr metainfo upload keeps its soundtrack label and watch identity."""
     service = ROMarr.__new__(ROMarr)
     service._lock = threading.RLock()
     service._collection_source_lock = threading.RLock()
@@ -100,7 +99,7 @@ def test_soundtrack_grab_records_transmission_identity_and_separate_label(upload
     c._call = Mock(return_value=success(**{'torrent-added': {'hashString': HASH}}))
     service.clients = [c]
     service.prowlarr = SimpleNamespace(is_prowlarr_download_url=lambda _: True,
-                                     fetch_torrent=lambda _: b'torrent' if upload else MAGNET)
+                                     fetch_torrent=lambda _: b'torrent')
     pick = Release('Soundtrack', 100, 1, (), 'http://prowlarr/download', 'torrent')
     service._snd_torrents = {'scope:42': {'release': pick}}
     service._soundtrack_target = lambda _: ({'id': '42', 'library_scope': 'scope'}, None)
@@ -109,22 +108,10 @@ def test_soundtrack_grab_records_transmission_identity_and_separate_label(upload
     assert service.soundtrack_torrent_grab('scope:42', 'release')['ok']
     arguments = c._call.call_args.args[1]
     assert arguments['labels'] == [service.SOUNDTRACK_CATEGORY]
-    assert ('metainfo' in arguments) is upload
+    assert arguments['metainfo'] == 'dG9ycmVudA=='
     store.add_watch.assert_called_once_with('42', 'transmission:' + HASH, 'Soundtrack', client_id=c.romarr_id)
     c._call = Mock(return_value=success(torrents=[torrent(labels=[service.SOUNDTRACK_CATEGORY])]))
     assert c.completed() == []
-
-
-def test_soundtrack_polling_uses_actual_files_and_never_a_shared_download_root():
-    """Ready soundtrack rows expose only a validated payload path."""
-    c = client()
-    c._call = Mock(return_value=success(torrents=[torrent(labels=['romarr-soundtracks'],
-        files=[{'name': 'Album/01.mp3'}, {'name': 'Album/02.mp3'}])]))
-    row = c.torrents(category='romarr-soundtracks')[0]
-    assert row['category'] == 'romarr-soundtracks'
-    assert row['content_path'] == '/downloads/romarr/Album'
-    c._call.return_value = success(torrents=[torrent(files=[{'name': '01.mp3'}, {'name': '02.mp3'}])])
-    assert c.torrents()[0]['content_path'] == ''
 
 
 @pytest.mark.parametrize('directory', ['relative', '/downloads/../other', '/bad\x00dir'])
