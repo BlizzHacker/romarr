@@ -49,3 +49,28 @@ def test_an_unrelated_duplicate_metainfo_is_still_refused():
 
     c._call = call
     assert c.add_torrent_file(b"d4:infod4:name1:xee") is False
+
+
+def test_a_pending_label_is_not_recovered_by_a_different_request():
+    c = make_client()
+    state = {"set_ok": False, "labels": [], "added": False}
+
+    def call(method, arguments, **kw):
+        if method == "torrent-add":
+            key = "torrent-duplicate" if state["added"] else "torrent-added"
+            state["added"] = True
+            return {"result": "success", "arguments": {key: {"hashString": HASH}}}
+        if method == "torrent-set":
+            if not state["set_ok"]:
+                return {"result": "error"}
+            state["labels"] = arguments["labels"]
+            return {"result": "success"}
+        return {"result": "success", "arguments": {"torrents": [
+            {"hashString": HASH, "labels": state["labels"], "downloadDir": "/dl"}]}}
+
+    c._call = call
+    assert c.add_torrent_file(b"d4:infod4:name1:xee") is False
+    state["set_ok"] = True
+    # Same torrent, different category: an unrelated duplicate, refused.
+    assert c.add_torrent_file(b"d4:infod4:name1:xee", category="romarr-soundtracks") is False
+    assert state["labels"] == []

@@ -582,47 +582,52 @@ class ROMarr:
         return False
 
     def soundtrack_watch_tick(self):
-        """Launch bounded library watches without blocking the shared scheduler.
+        """Launch bounded client polls without blocking the shared scheduler.
 
-        Each (library, download client) pair is polled by its own worker and
-        at most one worker per pair is in flight. A client whose RPC stalls
-        therefore only holds up its own watches; a healthy client keeps
-        advancing on every tick.
+        Each download client is polled by at most one worker, and that one
+        poll serves every library watching the client. A client whose RPC
+        stalls therefore holds one slot and only its own watches; healthy
+        clients keep advancing on every tick.
         """
-        queued = 0
         maps = self.store.settings.get("remote_path_mappings")
+        scopes = []
         for scope, *_ in self._soundtrack_libraries():
             store = self.soundtrack_store(scope)
             watches = store.active_watches()
-            if not watches:
+            if watches:
+                scopes.append((scope, store, {w.get("client_id") for w in watches}))
+        queued = 0
+        for client in self.clients:
+            if not isinstance(client, (QBittorrent, Transmission)):
                 continue
-            for client in self.clients:
-                if not isinstance(client, (QBittorrent, Transmission)):
+            client_id = str(getattr(client, "romarr_id", "") or getattr(client, "name", ""))
+            mine = [(scope, store) for scope, store, ids in scopes if client_id in ids]
+            if not mine:
+                continue
+            with self._lock:
+                running = self.__dict__.setdefault("_soundtrack_watch_running", set())
+                if client_id in running or len(running) >= 8:
                     continue
-                client_id = str(getattr(client, "romarr_id", "") or getattr(client, "name", ""))
-                if not any(watch.get("client_id") == client_id for watch in watches):
-                    continue
-                key = (scope, client_id)
-                with self._lock:
-                    running = self.__dict__.setdefault("_soundtrack_watch_running", set())
-                    if key in running or len(running) >= 8:
-                        continue
-                    running.add(key)
+                running.add(client_id)
 
-                def run(scope=scope, store=store, client=client, client_id=client_id, key=key):
-                    try:
-                        torrents = (client.torrents(category=self.SOUNDTRACK_CATEGORY)
-                                    if isinstance(client, Transmission) else client.torrents())
-                        rows = [row for row in torrents if row.get("category") == self.SOUNDTRACK_CATEGORY]
-                        store.process_watches(rows, lambda k: self._soundtrack_target(scope + ":" + k),
-                            lambda path: str(map_remote_path(path, maps)), client_id=client_id)
-                    except Exception as exc:
-                        log.warning("Soundtrack client watch failed: %s", type(exc).__name__)
-                    finally:
-                        with self._lock:
-                            self._soundtrack_watch_running.discard(key)
-                threading.Thread(target=run, name="soundtrack-watch", daemon=True).start()
-                queued += 1
+            def run(client=client, client_id=client_id, mine=mine):
+                try:
+                    torrents = (client.torrents(category=self.SOUNDTRACK_CATEGORY)
+                                if isinstance(client, Transmission) else client.torrents())
+                    rows = [row for row in torrents if row.get("category") == self.SOUNDTRACK_CATEGORY]
+                    for scope, store in mine:
+                        try:
+                            store.process_watches(rows, lambda k, scope=scope: self._soundtrack_target(scope + ":" + k),
+                                lambda path: str(map_remote_path(path, maps)), client_id=client_id)
+                        except Exception as exc:
+                            log.warning("Soundtrack watch failed: %s", type(exc).__name__)
+                except Exception as exc:
+                    log.warning("Soundtrack client watch failed: %s", type(exc).__name__)
+                finally:
+                    with self._lock:
+                        self._soundtrack_watch_running.discard(client_id)
+            threading.Thread(target=run, name="soundtrack-watch", daemon=True).start()
+            queued += 1
         return f"{queued} soundtrack client watches queued"
 
     def soundtrack_watch_cancel(self, game_id: str) -> dict:

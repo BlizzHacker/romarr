@@ -692,8 +692,8 @@ class Transmission:
             # failed afterwards. A retry gets `torrent-duplicate` for them, and
             # finishing the label is the only way to recover the grab.
             pending = self.__dict__.setdefault("_pending_labels", {})
-            if added.get("torrent-duplicate") and identity in pending:
-                self._apply_v16_label(identity, *pending[identity])
+            if added.get("torrent-duplicate") and pending.get(identity) == (category, destination):
+                self._apply_v16_label(identity, category, destination)
                 pending.pop(identity, None)
             elif added.get("torrent-duplicate"):
                 if not self._adopt_duplicate(arguments.get("filename", ""), identity, category):
