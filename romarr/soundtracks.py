@@ -1145,11 +1145,13 @@ class Soundtracks:
                 self._set_watch(w["id"], state="failed", message="Cannot resolve a safe torrent payload path", seen=now)
                 continue
             path = map_path(str(row.get("content_path") or row.get("save_path") or ""))
+            members = [map_path(str(p)) for p in row.get("member_paths") or []]
             if not self._set_watch(w["id"], pct=1.0, seen=now, state="importing",
                                    message="Download finished; choosing tracks"):
                 continue                                     # cancelled or replaced while resolving
             try:
-                done = self._import_torrent(w, game, api, path, str(row.get("name") or w["release"]))
+                done = self._import_torrent(w, game, api, path, str(row.get("name") or w["release"]),
+                                            members=members)
             except Exception as ex:  # noqa: BLE001 - recorded on the watch, never raised into the scheduler
                 msg = api._redact(str(ex)) if isinstance(ex, RommError) else (str(ex) if isinstance(ex, (ValueError, JobBusy)) else ex.__class__.__name__)
                 log.warning("soundtrack torrent import for %s failed: %s", w["key"], ex.__class__.__name__)
@@ -1161,8 +1163,16 @@ class Soundtracks:
             notes.append(f"{w['release']}: {done}")
         return notes
 
-    def _import_torrent(self, w: dict, game: dict, api: RommApi, path: str, name: str) -> str:
+    def _import_torrent(self, w: dict, game: dict, api: RommApi, path: str, name: str,
+                        members: list[str] | None = None) -> str:
         files, zips = torrent_content(path)
+        if members:
+            # Only what the torrent delivered: never an unrelated file that
+            # happens to sit in the same folder.
+            allowed = {os.path.realpath(p) for p in members}
+            files = AudioFiles([f for f in files if os.path.realpath(f[1]) in allowed],
+                               getattr(files, "identities", {}))
+            zips = [z for z in zips if os.path.realpath(z) in allowed]
         members = zip_members(zips)
         # One format family is chosen across loose files AND zip members together.
         _kept, ext = choose_audio(files + [(m[0], "", 0) for m in members])

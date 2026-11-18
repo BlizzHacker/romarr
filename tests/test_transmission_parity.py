@@ -191,6 +191,6 @@ def test_soundtrack_poll_continues_after_another_client_fails(tmp_path, monkeypa
     service.soundtrack_store = lambda _: store
     completed = threading.Event()
     store.process_watches.side_effect = lambda *args, **kwargs: completed.set()
-    assert service.soundtrack_watch_tick() == '1 soundtrack library watches queued'
+    assert service.soundtrack_watch_tick() == '2 soundtrack client watches queued'
     assert completed.wait(2)
     assert store.process_watches.call_args.kwargs['client_id'] == 'online'

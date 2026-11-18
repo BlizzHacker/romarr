@@ -613,7 +613,15 @@ class Transmission:
             if getattr(response, "status_code", 200) == 409 and attempt == 0:
                 self._session_id = response.headers.get(self.SESSION_HEADER, "")
                 continue
-            response.raise_for_status()
+            status = int(getattr(response, "status_code", 200) or 200)
+            if status >= 400:
+                # requests' own HTTPError message carries the URL, and a
+                # configured URL may embed Basic Auth credentials. Report only
+                # the RPC method and the status.
+                import requests as _requests
+                raise _requests.HTTPError(
+                    f"Transmission RPC {method} failed with HTTP {status}",
+                    response=None)
             try:
                 return response.json() or {}
             except Exception:
@@ -680,24 +688,37 @@ class Transmission:
             identity = str(job.get("hashString") or "").lower()
             if not identity:
                 return False
-            if added.get("torrent-duplicate"):
+            # Torrents this client added for ROMarr whose RPC 16 label step
+            # failed afterwards. A retry gets `torrent-duplicate` for them, and
+            # finishing the label is the only way to recover the grab.
+            pending = self.__dict__.setdefault("_pending_labels", {})
+            if added.get("torrent-duplicate") and identity in pending:
+                self._apply_v16_label(identity, *pending[identity])
+                pending.pop(identity, None)
+            elif added.get("torrent-duplicate"):
                 if not self._adopt_duplicate(arguments.get("filename", ""), identity, category):
                     return False
             elif version == 16:
-                result = self._call("torrent-set", {"ids": [identity], "labels": [category]})
-                if result.get("result") != "success":
-                    raise RuntimeError("could not apply the configured torrent label")
-                rows = self._torrent_identity(identity)
-                if (result.get("result") != "success" or len(rows) != 1
-                        or category not in (rows[0].get("labels") or [])
-                        or not rows[0].get("downloadDir")
-                        or (destination and str(rows[0]["downloadDir"]).rstrip("/") != str(destination).rstrip("/"))):
-                    raise RuntimeError("torrent hash, label or download directory does not match ROMarr")
+                pending[identity] = (category, destination)
+                self._apply_v16_label(identity, category, destination)
+                pending.pop(identity, None)
             self.last_job_id = identity
             return True
         except Exception as exc:
             log.warning("%s add failed; torrent left intact: %s", self.name, type(exc).__name__)
             return False
+
+    def _apply_v16_label(self, identity, category, destination):
+        """Label a just-added torrent on RPC 16 and confirm it is ours, or raise."""
+        result = self._call("torrent-set", {"ids": [identity], "labels": [category]})
+        if result.get("result") != "success":
+            raise RuntimeError("could not apply the configured torrent label")
+        rows = self._torrent_identity(identity)
+        if (len(rows) != 1
+                or category not in (rows[0].get("labels") or [])
+                or not rows[0].get("downloadDir")
+                or (destination and str(rows[0]["downloadDir"]).rstrip("/") != str(destination).rstrip("/"))):
+            raise RuntimeError("torrent hash, label or download directory does not match ROMarr")
 
     def _torrent_identity(self, identity):
         """Inspect exactly one returned hash without trusting a display name."""
@@ -750,7 +771,8 @@ class Transmission:
         category = self._config.category if category is None else category
         body = self._call("torrent-get", {"fields": ["hashString", "name", "downloadDir",
                           "labels", "status", "totalSize", "pieceSize", "percentDone",
-                          "files", "metadataPercentComplete", "leftUntilDone"]})
+                          "files", "metadataPercentComplete", "leftUntilDone",
+                          "rateDownload"]})
         if body.get("result") != "success":
             raise RuntimeError("Transmission could not list torrents")
         states = {0: "pausedDL", 1: "queuedDL", 2: "checkingDL", 3: "queuedDL",
@@ -760,8 +782,12 @@ class Transmission:
                  "state": states.get(row.get("status"), "unknown"),
                  "size": row.get("totalSize", 0), "piece_size": row.get("pieceSize", 0),
                  "progress": row.get("percentDone", 0),
+                 # The stall sweep retires a download that reports neither a
+                 # rate nor seeds; a trickling torrent must not look idle.
+                 "dlspeed": int(row.get("rateDownload") or 0),
                  "payload_complete": self._payload_complete(row),
                  "content_path": self._content_path(row),
+                 "member_paths": self._member_paths(row),
                  "labels": row.get("labels") or [],
                  "category": category if category in row.get("labels", []) else ""}
                 for row in body.get("arguments", {}).get("torrents", [])]
@@ -853,6 +879,20 @@ class Transmission:
                 and entry["bytesCompleted"] == entry["length"] for entry in entries)
 
     @staticmethod
+    def _member_paths(torrent) -> list[str]:
+        """Absolute paths of the files this torrent itself reports.
+
+        A multifile torrent's content path is its top folder, which can also
+        hold files the torrent never delivered. Consumers that upload or
+        import files restrict themselves to this list.
+        """
+        if not Transmission._content_path(torrent):
+            return []
+        directory = str(torrent.get("downloadDir") or "").rstrip("/\\")
+        return [directory + "/" + str(entry.get("name") or "").replace("\\", "/")
+                for entry in torrent.get("files") or []]
+
+    @staticmethod
     def _content_path(torrent):
         """Resolve a complete torrent's payload without returning a shared root."""
         directory = torrent.get("downloadDir")
@@ -905,6 +945,7 @@ class Transmission:
                 "id": info_hash, "hash": info_hash, "name": torrent.get("name") or "",
                 "save_path": torrent["downloadDir"],
                 "content_path": content_path,
+                "member_paths": self._member_paths(torrent),
                 "category": category if category in labels else "",
             })
             if not labels:

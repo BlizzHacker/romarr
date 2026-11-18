@@ -45,7 +45,7 @@ def test_concurrent_submissions_keep_their_own_identity(version):
 
     c = client()
     c._rpc_version = None
-    barrier = Barrier(2)
+    barrier = Barrier(2, timeout=10)
     def call(method, arguments):
         """Call."""
         if method == 'session-get':
@@ -58,7 +58,9 @@ def test_concurrent_submissions_keep_their_own_identity(version):
     c._call = call
     def submit(identity):
         """Submit."""
-        assert c.add(identity)
+        if not c.add(identity):
+            barrier.abort()
+            raise AssertionError(f"submission {identity[:6]} failed")
         barrier.wait()
         return c.last_job_id
     with ThreadPoolExecutor(max_workers=2) as pool:

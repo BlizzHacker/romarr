@@ -582,42 +582,48 @@ class ROMarr:
         return False
 
     def soundtrack_watch_tick(self):
-        """Launch bounded library watches without blocking the shared scheduler."""
+        """Launch bounded library watches without blocking the shared scheduler.
+
+        Each (library, download client) pair is polled by its own worker and
+        at most one worker per pair is in flight. A client whose RPC stalls
+        therefore only holds up its own watches; a healthy client keeps
+        advancing on every tick.
+        """
         queued = 0
+        maps = self.store.settings.get("remote_path_mappings")
         for scope, *_ in self._soundtrack_libraries():
             store = self.soundtrack_store(scope)
-            if not store.active_watches():
+            watches = store.active_watches()
+            if not watches:
                 continue
-            with self._lock:
-                running = self.__dict__.setdefault("_soundtrack_watch_running", set())
-                if scope in running or len(running) >= 4:
+            for client in self.clients:
+                if not isinstance(client, (QBittorrent, Transmission)):
                     continue
-                running.add(scope)
-            def run(scope=scope, store=store):
-                try:
-                    maps = self.store.settings.get("remote_path_mappings")
-                    for client in self.clients:
-                        if not isinstance(client, (QBittorrent, Transmission)):
-                            continue
-                        client_id = str(getattr(client, "romarr_id", "") or getattr(client, "name", ""))
-                        if not any(watch.get("client_id") == client_id for watch in store.active_watches()):
-                            continue
-                        try:
-                            torrents = (client.torrents(category=self.SOUNDTRACK_CATEGORY)
-                                        if isinstance(client, Transmission) else client.torrents())
-                            rows = [row for row in torrents if row.get("category") == self.SOUNDTRACK_CATEGORY]
-                            store.process_watches(rows, lambda key: self._soundtrack_target(scope + ":" + key),
-                                lambda path: str(map_remote_path(path, maps)), client_id=client_id)
-                        except Exception as exc:
-                            log.warning("Soundtrack client watch failed: %s", type(exc).__name__)
-                except Exception as exc:
-                    log.warning("Soundtrack watch failed: %s", type(exc).__name__)
-                finally:
-                    with self._lock:
-                        self._soundtrack_watch_running.discard(scope)
-            threading.Thread(target=run, name="soundtrack-watch", daemon=True).start()
-            queued += 1
-        return f"{queued} soundtrack library watches queued"
+                client_id = str(getattr(client, "romarr_id", "") or getattr(client, "name", ""))
+                if not any(watch.get("client_id") == client_id for watch in watches):
+                    continue
+                key = (scope, client_id)
+                with self._lock:
+                    running = self.__dict__.setdefault("_soundtrack_watch_running", set())
+                    if key in running or len(running) >= 8:
+                        continue
+                    running.add(key)
+
+                def run(scope=scope, store=store, client=client, client_id=client_id, key=key):
+                    try:
+                        torrents = (client.torrents(category=self.SOUNDTRACK_CATEGORY)
+                                    if isinstance(client, Transmission) else client.torrents())
+                        rows = [row for row in torrents if row.get("category") == self.SOUNDTRACK_CATEGORY]
+                        store.process_watches(rows, lambda k: self._soundtrack_target(scope + ":" + k),
+                            lambda path: str(map_remote_path(path, maps)), client_id=client_id)
+                    except Exception as exc:
+                        log.warning("Soundtrack client watch failed: %s", type(exc).__name__)
+                    finally:
+                        with self._lock:
+                            self._soundtrack_watch_running.discard(key)
+                threading.Thread(target=run, name="soundtrack-watch", daemon=True).start()
+                queued += 1
+        return f"{queued} soundtrack client watches queued"
 
     def soundtrack_watch_cancel(self, game_id: str) -> dict:
         game, _ = self._soundtrack_target(game_id)
@@ -4980,6 +4986,8 @@ class ROMarr:
                                 cap_bytes: int, **policy_kw) -> dict:
         """Serialize creation of a source acquisition job."""
         with self._collection_source_lock:
+            if getattr(self, "_import_sweeps", 0):
+                return {"error": "an import is running right now; try again in a moment"}
             return self._collection_source_start(client_id, torrent_hash,
                                                  dat_name, platform,
                                                  cap_bytes, **policy_kw)
@@ -5002,9 +5010,13 @@ class ROMarr:
         if client is None:
             return {"error": "select one configured torrent client"}
         client_key = getattr(client, "romarr_id", "")
+        from .downloaders import active_torrent_queue_hash
+        wanted = torrent_hash.lower()
         if any(q.download_client == client_key and q.state not in ("imported", "failed")
-               and torrent_hash.lower() in {q.download_id.lower(),
-                   q.release_id.removeprefix("btih:").lower(), q.retained_torrent_hash.lower()}
+               and wanted in {active_torrent_queue_hash(q, client_key).lower(),
+                              q.download_id.lower(),
+                              q.release_id.removeprefix("btih:").lower(),
+                              q.retained_torrent_hash.lower()} - {""}
                for q in self.queue):
             return {"error": "this torrent belongs to an active download request"}
         for existing in self.store.list_items("collection_sources"):
@@ -5178,7 +5190,7 @@ class ROMarr:
         import shutil
         from pathlib import PurePosixPath
 
-        job = self.store.get_item("collection_sources", job_id)
+        job = deepcopy(self.store.get_item("collection_sources", job_id))
         if not job:
             return {"error": "no such source batch"}
         if job.get("status") != "running":
@@ -5369,6 +5381,16 @@ class ROMarr:
                 return {"error": "the torrent client for this batch is unavailable"}
             self._finish_collection_source(client, job, "cancelled")
         elif action == "restore":
+            if job.get("status") != "restore-needed":
+                return {"error": "this batch is not waiting to be restored"}
+            torrent = str(job.get("torrent_hash") or "").lower()
+            for other in self.store.list_items("collection_sources"):
+                if (other.get("id") != job.get("id")
+                        and other.get("client_id") == job.get("client_id")
+                        and str(other.get("torrent_hash") or "").lower() == torrent
+                        and other.get("status") in {"running", "restore-needed"}):
+                    return {"error": "another batch now owns this torrent; "
+                                     "restore it from that batch instead"}
             client = self._source_client(job.get("client_id", ""))
             if client is None:
                 return {"error": "the torrent client for this batch is unavailable"}
@@ -8429,8 +8451,19 @@ class ROMarr:
         return platform, None
 
     def import_finished(self, *, retry_failed: bool = True) -> list[dict]:
-        with self._collection_lock, self._collection_source_lock:
-            return self._import_finished(retry_failed=retry_failed)
+        # The source lock is held only to mark the sweep as running, never for
+        # the sweep itself: a long import (client polling, copying, library
+        # rescans) must not stop ordinary grabs on other clients. New source
+        # jobs are refused while a sweep runs instead, so a sweep can never
+        # import a torrent a source job has just claimed.
+        with self._collection_lock:
+            with self._collection_source_lock:
+                self._import_sweeps = getattr(self, "_import_sweeps", 0) + 1
+            try:
+                return self._import_finished(retry_failed=retry_failed)
+            finally:
+                with self._collection_source_lock:
+                    self._import_sweeps -= 1
 
     def _import_finished(self, *, retry_failed: bool = True) -> list[dict]:
         """Import anything the download client has completed.
