@@ -601,6 +601,12 @@ offers, and it is the whole list.
 Download Station, aria2, Flood, Freebox Download, Hadouken, uTorrent /
 BitTorrent, porla, Vuze, BiglyBT.
 
+**Transmission** supports an optional download directory. Labels require RPC
+16 or later, which is available in Transmission 3.0 and later. An existing
+unlabelled download can still import when exactly one active queue entry matches
+its client and torrent hash. Completed multifile torrents must share a directory
+within the download folder and have every file downloaded.
+
 **Standalone engines (no external daemon needed)** —
 - **Standalone BitTorrent (MDM)** & **Standalone Direct HTTP (MDM)** — powered
   by the companion open-source
