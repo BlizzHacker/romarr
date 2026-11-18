@@ -6666,7 +6666,8 @@ RENDER.collections=async()=>{
        +'<div id="csrc-out" style="margin-top:10px"></div>'
       :(sourceTorrents.length
         ?'<p class="help">Load a DAT before previewing missing collection files.</p>'
-        :'<p class="help">Enable a qBittorrent or Transmission download client to use this workflow.</p>'))
+        :'<p class="help">No existing set torrents were found. Add the set torrent to qBittorrent or Transmission'
+         +' (and enable that client under Download Clients if it is off), then come back here.</p>'))
     +'<div id="csrc-jobs" style="margin-top:10px"></div></div>'
     +'<div class="card" style="margin-top:16px"><h3>Batches</h3>'
     +'<div id="cbatch"></div></div>';

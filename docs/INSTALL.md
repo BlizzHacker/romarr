@@ -601,8 +601,10 @@ offers, and it is the whole list.
 Download Station, aria2, Flood, Freebox Download, Hadouken, uTorrent /
 BitTorrent, porla, Vuze, BiglyBT.
 
-**Transmission** supports an optional download directory. Labels require RPC
-16 or later, which is available in Transmission 3.0 and later. An existing
+**Transmission** supports an optional download directory. ROMarr labels every
+grab (`romarr` when the Label field is blank), and labels require RPC 16 or
+later, so new grabs need **Transmission 3.0 or later**. Older daemons can pass
+the connection test but will refuse grabs. An existing
 unlabelled download can still import when exactly one active queue entry matches
 its client and torrent hash. Completed multifile torrents must share a directory
 within the download folder and have every file downloaded.

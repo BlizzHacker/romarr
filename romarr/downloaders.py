@@ -798,7 +798,8 @@ class Transmission:
             return False
         deadline = time.monotonic() + 10
         while time.monotonic() < deadline:
-            body = self._call("torrent-get", {"ids": [torrent_hash], "fields": ["hashString", "status"]})
+            body = self._call("torrent-get", {"ids": [torrent_hash], "fields": ["hashString", "status"]},
+                              _deadline=deadline)
             rows = body.get("arguments", {}).get("torrents", [])
             if (body.get("result") == "success" and len(rows) == 1
                     and str(rows[0].get("hashString") or "").lower() == torrent_hash.lower()
@@ -888,8 +889,10 @@ class Transmission:
         """
         if not Transmission._content_path(torrent):
             return []
-        directory = str(torrent.get("downloadDir") or "").rstrip("/\\")
-        return [directory + "/" + str(entry.get("name") or "").replace("\\", "/")
+        raw = str(torrent.get("downloadDir") or "")
+        separator = "\\" if ("\\" in raw and "/" not in raw) else "/"
+        directory = raw.rstrip("/\\")
+        return [directory + separator + str(entry.get("name") or "").replace("\\", "/").replace("/", separator)
                 for entry in torrent.get("files") or []]
 
     @staticmethod
@@ -911,7 +914,8 @@ class Transmission:
                 # Never point the importer at a shared downloads folder.
                 return ""
             relative = root
-        return directory.rstrip("/\\") + "/" + relative
+        separator = "\\" if ("\\" in directory and "/" not in directory) else "/"
+        return directory.rstrip("/\\") + separator + relative.replace("/", separator)
 
     def completed(self, timeout: float | None = None) -> list[dict]:
         """List complete categorized downloads and exact legacy queue matches."""

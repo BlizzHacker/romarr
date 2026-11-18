@@ -26,7 +26,9 @@ DAT checksums distinguish **verified**, **bad dump** and **unknown**. Every memb
 
 For an existing qBittorrent or Transmission set torrent, selective acquisition first previews matched files and sidecars. ROMarr changes file priorities for a batch within your staging budget, verifies downloaded data before importing, and saves progress across restarts. Completion or cancellation restores the original file selection, priorities and paused state. The workflow does not delete the source torrent or its original downloaded data. Account for those source files separately from the staging budget.
 
-To grab an exact file directly from Search, use qBittorrent or Standalone BitTorrent (MDM).
+If the torrent client is offline when you cancel, the batch stays in *restore needed*: reconnect the client, then use **Restore torrent priorities** in Collections. If ROMarr reports that the selection was changed outside it, restore the file selection in the client yourself before retrying.
+
+To grab an exact file directly from Search, use qBittorrent or Standalone BitTorrent (MDM). Search uses the first enabled torrent client, so put one of those first (or disable an earlier Transmission client) for exact-file grabs.
 
 ## Exact duplicates
 
