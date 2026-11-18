@@ -188,6 +188,7 @@ class QBittorrent:
         self._authed = False
         self._added = threading.local()
         self._selection_lock = threading.RLock()
+        self.owned_torrents_provider = lambda: ()
         self._selective_hashes = set()
         self._resumed_at: dict[str, float] = {}
 
@@ -286,11 +287,13 @@ class QBittorrent:
         return self._session.post(self._url(path), **req_kwargs)
 
     def _already_owned(self, row: dict) -> bool:
-        """Whether a torrent already carries a ROMarr request or collection tag."""
+        """Check request tags, retained selections and persisted DAT source ownership."""
         tags = row.get("tags", "")
         parts = tags.split(",") if isinstance(tags, str) else tags if isinstance(tags, (list, tuple, set)) else []
         selective_hashes = {str(h or "").strip().lower() for h in self._selective_hashes}
-        return (str(row.get("hash") or "").strip().lower() in selective_hashes
+        identity = str(row.get("hash") or "").strip().lower()
+        return (identity in selective_hashes
+                or identity in self.owned_torrents_provider()
                 or any(str(part).strip().startswith("romarr-") for part in parts))
 
     def _remove_torrent_tag(self, torrent_hash: str, tag: str) -> None:
@@ -825,8 +828,10 @@ class QBittorrent:
         if len(fresh) != 1:
             raise ValueError("retained torrent disappeared")
         row = fresh[0]
-        files = self._collection_owners(row, owners)
         torrent_hash = str(row["hash"])
+        if self._resumed_key(torrent_hash) in self.owned_torrents_provider():
+            raise ValueError("torrent belongs to an active DAT source job")
+        files = self._collection_owners(row, owners)
         self._added.retained_hash = torrent_hash
         state = str(row.get("state") or "")
         if state in _QBITTORRENT_TRANSITIONAL_STATES or (
@@ -889,11 +894,13 @@ class QBittorrent:
     def resume_retained_collection(self, identity, owners):
         """Resume a stopped retained collection torrent and wait briefly for running state."""
         with self._selection_lock:
+            torrent_hash = str(identity["hash"])
+            if self._resumed_key(torrent_hash) in self.owned_torrents_provider():
+                raise ValueError("torrent belongs to an active DAT source job")
             rows = [r for r in self.torrents() if r.get("hash") == identity.get("hash")]
             if len(rows) != 1:
                 raise ValueError("retained collection cannot be identified")
             self._collection_owners(rows[0], owners)
-            torrent_hash = str(identity["hash"])
             if not self.resume_torrent(torrent_hash):
                 return False
             _, confirmed = self._await_resumed_row(torrent_hash)
@@ -1012,17 +1019,23 @@ class QBittorrent:
 
     def delete_torrent(self, torrent_hash: str, *,
                        delete_files: bool = False) -> bool:
-        """Remove a ROMarr-tagged torrent without deleting downloaded data."""
-        response = self._post(
-            "torrents/delete",
-            data={"hashes": torrent_hash,
-                  "deleteFiles": "true" if delete_files else "false"},
-            timeout=self._config.timeout)
-        if not response.ok:
-            return False
-        for part in str(torrent_hash or "").split("|"):
-            self._resumed_at.pop(self._resumed_key(part), None)
-        return True
+        """Remove only torrents unclaimed by DAT acquisition."""
+        with self._selection_lock:
+            blocked = set(self.owned_torrents_provider()) | {"", "all"}
+            hashes = [part.strip() for part in str(torrent_hash or "").split("|")
+                      if self._resumed_key(part) not in blocked]
+            if not hashes:
+                return False
+            response = self._post(
+                "torrents/delete",
+                data={"hashes": "|".join(hashes),
+                      "deleteFiles": "true" if delete_files else "false"},
+                timeout=self._config.timeout)
+            if not response.ok:
+                return False
+            for part in hashes:
+                self._resumed_at.pop(self._resumed_key(part), None)
+            return True
 
     def remove_download(self, download_id: str, *,
                         delete_files: bool = False) -> bool:
@@ -1206,6 +1219,13 @@ class QBittorrent:
         Only a torrent with *nothing* selected is touched. A part-selected one
         is somebody's deliberate choice and is left alone.
         """
+        with self._selection_lock:
+            if self._resumed_key(row.get("hash")) in self.owned_torrents_provider():
+                return False
+            return self._reselect(row)
+
+    def _reselect(self, row: dict) -> bool:
+        """Repair an unowned torrent while holding the selection lock."""
         files = self._get("torrents/files",
                           params={"hash": row.get("hash", "")},
                           timeout=self._config.timeout)

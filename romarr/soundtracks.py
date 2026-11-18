@@ -866,7 +866,14 @@ class AudioFiles(list):
         self.identities = identities or {}
 
 
-def collect_album(src: str) -> list[tuple[str, str, int]]:
+def _album_paths(src: str):
+    """Walk only visible album folders and yield tracks in stable order."""
+    for dp, dns, fns in os.walk(src):
+        dns[:] = sorted(d for d in dns if not d.startswith("."))
+        yield from (os.path.join(dp, fn) for fn in sorted(fns) if _is_audio(fn))
+
+
+def collect_album(src: str, members: list[str] | None = None) -> list[tuple[str, str, int]]:
     """[(file name to store, path, size)] for the audio under `src`.
 
     Only Jukebox audio: cover art, logs and cue sheets stay behind. A subfolder's
@@ -875,21 +882,21 @@ def collect_album(src: str) -> list[tuple[str, str, int]]:
     album is skipped.
     """
     out = AudioFiles()
-    root_id = list((os.stat(src).st_dev, os.stat(src).st_ino))
-    for dp, dns, fns in os.walk(src):
-        dns[:] = sorted(d for d in dns if not d.startswith("."))
-        for fn in sorted(fns):
-            path = os.path.join(dp, fn)
-            if not _is_audio(fn) or os.path.commonpath([os.path.realpath(path), src]) != src:
-                continue
-            sub = os.path.relpath(dp, src)
-            name = fn if sub == "." else sub.replace(os.sep, " - ") + " - " + fn
-            with _open_source(Path(path).parent, Path(path).name) as source:
-                identity = _fd_identity(source)
-            out.identities[path] = (str(Path(path).parent), list((os.stat(Path(path).parent).st_dev, os.stat(Path(path).parent).st_ino)), identity)
-            if len(out) >= 10000:
-                raise ValueError("Album track limit exceeded")
-            out.append((header_safe(safe_name(name)), path, os.path.getsize(path)))
+    for path in _album_paths(src) if members is None else members:
+        entry = Path(path)
+        if not _is_audio(entry.name) or not entry.resolve().is_relative_to(src):
+            continue
+        parts = entry.relative_to(src).parts
+        if any(part.startswith(".") for part in parts[:-1]):
+            continue
+        name = " - ".join(parts)
+        if len(out) >= 10000:
+            raise ValueError("Album track limit exceeded")
+        with _open_source(entry.parent, entry.name) as source:
+            identity = _fd_identity(source)
+        parent = entry.parent.stat()
+        out.identities[path] = (str(entry.parent), [parent.st_dev, parent.st_ino], identity)
+        out.append((header_safe(safe_name(name)), path, identity[2]))
     return out
 
 
@@ -1045,16 +1052,17 @@ class Soundtracks:
 
     # -- torrent watches --
     def add_watch(self, key: str, tag: str, release: str, client_id: str = "") -> int:
-        """Start watching a torrent (identified by its qBittorrent tag) for this game."""
+        """Watch a client-scoped qBittorrent tag or prefixed Transmission hash for this game."""
         now = time.time()
         with self._lock:
             c = self._db()
             try:
                 c.execute("UPDATE watch SET state='cancelled', updated=? WHERE key=? AND state NOT IN ('added','failed','lost','cancelled')",
                           (now, key))
-                cur = c.execute("INSERT INTO watch(key,tag,release,state,message,pct,added,updated,seen) VALUES(?,?,?,?,?,?,?,?,?)",
-                                (key, tag, release[:300], "downloading", "Waiting for the torrent to start", 0.0, now, now, now))
-                c.execute("UPDATE watch SET client_id=? WHERE tag=?", (client_id, tag))
+                cur = c.execute("INSERT INTO watch(key,tag,release,state,message,pct,added,updated,seen,client_id) "
+                                "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                                (key, tag, release[:300], "downloading", "Waiting for the torrent to start",
+                                 0.0, now, now, now, client_id))
                 c.commit()
                 return int(cur.lastrowid)
             finally:
@@ -1106,18 +1114,24 @@ class Soundtracks:
                 c.close()
 
     def process_watches(self, rows: list[dict], resolve: Callable[[str], tuple[dict, RommApi]],
-                        map_path: Callable[[str], str], *, client_id: str | None = None) -> list[str]:
+                        map_path: Callable[[str], str], *, client_id: str | None = None,
+                        polled_at: float | None = None) -> list[str]:
         """One pass over the watched torrents. `rows` is the client's torrent list for the soundtrack category.
 
         `resolve(key)` returns (game, RommApi) or raises LookupError while the library is still loading.
         Returns human-readable notes about what changed, for the scheduler's log.
         """
         notes = []
+        now = time.time() if polled_at is None else polled_at
         for w in self.active_watches():
             if client_id is not None and w.get("client_id") != client_id:
                 continue
-            row = next((r for r in rows if w["tag"] in {t.strip() for t in str(r.get("tags") or "").split(",")}), None)
-            now = time.time()
+            if w["added"] > now:
+                continue
+            matches = [r for r in rows if (w["tag"] == "transmission:" + str(r.get("hash") or "")
+                       if w["tag"].startswith("transmission:") else w["tag"] in
+                       {t.strip() for t in str(r.get("tags") or "").split(",")})]
+            row = matches[0] if len(matches) == 1 else None
             if row is None:
                 if now - (w["seen"] or w["added"]) > WATCH_LOST_AFTER:
                     self._set_watch(w["id"], state="lost", message="The torrent is no longer in the download client")
@@ -1127,21 +1141,30 @@ class Soundtracks:
             if "error" in str(row.get("state") or "").lower() and "missing" in str(row.get("state") or "").lower():
                 self._set_watch(w["id"], state="failed", message="The download client reports missing files", seen=now)
                 continue
-            if pct < 1.0:
+            if pct < 1.0 or row.get("payload_complete") is False:
+                message = (f"Downloading {pct * 100:.0f}%"
+                           if pct < 1.0 else "Waiting for the complete torrent payload")
                 self._set_watch(w["id"], pct=pct, seen=now, state="downloading",
-                                message=f"Downloading {pct * 100:.0f}%" + (f", {int(row['num_seeds'])} seeders" if row.get("num_seeds") else ""))
+                                message=message + (f", {int(row['num_seeds'])} seeders" if row.get("num_seeds") else ""))
                 continue
             try:
                 game, api = resolve(w["key"])
             except (LookupError, RuntimeError, ValueError):
                 self._set_watch(w["id"], pct=1.0, seen=now, message="Finished; waiting for the RomM library to load")
                 continue
+            if w["tag"].startswith("transmission:") and not row.get("content_path"):
+                self._set_watch(w["id"], state="failed", message="Cannot resolve a safe torrent payload path", seen=now)
+                continue
             path = map_path(str(row.get("content_path") or row.get("save_path") or ""))
+            reported_members = row.get("member_paths")
+            members = ([map_path(str(p)) for p in reported_members]
+                       if reported_members is not None else None)
             if not self._set_watch(w["id"], pct=1.0, seen=now, state="importing",
                                    message="Download finished; choosing tracks"):
                 continue                                     # cancelled or replaced while resolving
             try:
-                done = self._import_torrent(w, game, api, path, str(row.get("name") or w["release"]))
+                done = self._import_torrent(w, game, api, path, str(row.get("name") or w["release"]),
+                                            members=members)
             except Exception as ex:  # noqa: BLE001 - recorded on the watch, never raised into the scheduler
                 msg = api._redact(str(ex)) if isinstance(ex, RommError) else (str(ex) if isinstance(ex, (ValueError, JobBusy)) else ex.__class__.__name__)
                 log.warning("soundtrack torrent import for %s failed: %s", w["key"], ex.__class__.__name__)
@@ -1153,23 +1176,26 @@ class Soundtracks:
             notes.append(f"{w['release']}: {done}")
         return notes
 
-    def _import_torrent(self, w: dict, game: dict, api: RommApi, path: str, name: str) -> str:
-        files, zips = torrent_content(path)
-        members = zip_members(zips)
+    def _import_torrent(self, w: dict, game: dict, api: RommApi, path: str, name: str,
+                        members: list[str] | None = None) -> str:
+        files, zips = torrent_content(path, members)
+        zipped_tracks = zip_members(zips)
         # One format family is chosen across loose files AND zip members together.
-        _kept, ext = choose_audio(files + [(m[0], "", 0) for m in members])
+        _kept, ext = choose_audio(files + [(m[0], "", 0) for m in zipped_tracks])
         key = str(game["id"])
         if not ext:
             hint = ""
             if not os.path.exists(path):
                 hint = f"; the path {path!r} is not visible to ROMarr (mount it or add a remote path mapping)"
-            elif any(f.lower().endswith((".rar", ".7z")) for _dp, _d, fns in os.walk(path) for f in fns):
+            elif any(f.lower().endswith((".rar", ".7z")) for f in (
+                    members if members is not None else
+                    (f for _dp, _d, fns in os.walk(path) for f in fns))):
                 hint = "; it only holds archives ROMarr cannot open (rar/7z)"
             self._set_watch(w["id"], state="failed", message=("No audio RomM can play was found in the torrent" + hint)[:300])
             return "no audio"
         loose = AudioFiles([f for f in files if os.path.splitext(f[0])[1].lower() == ext],
                            getattr(files, "identities", {}))
-        zipped = [m for m in members if os.path.splitext(m[0])[1].lower() == ext]
+        zipped = [m for m in zipped_tracks if os.path.splitext(m[0])[1].lower() == ext]
         made, notes = 0, []
         if loose:
             job = self._begin_job([key], game["name"], "torrent")
@@ -1180,7 +1206,7 @@ class Soundtracks:
             made += job["made"]
         if zipped:
             made += self._import_zip_members(game, api, zipped, name)
-        left = len(files) + len(members) - len(loose) - len(zipped)
+        left = len(files) + len(zipped_tracks) - len(loose) - len(zipped)
         self._set_watch(w["id"], state="added" if made else "failed",
                         message=(f"Added {made} {ext[1:].upper()} track{'s' if made != 1 else ''}" +
                                  (f"; {left} files in other formats left out" if left else "")) if made
@@ -1993,15 +2019,30 @@ def zip_members(zips: list[str]) -> list[tuple[str, str, str]]:
     return out
 
 
-def torrent_content(path: str) -> tuple[list[tuple[str, str, int]], list[str]]:
+def torrent_content(path: str, members: list[str] | None = None) -> tuple[list[tuple[str, str, int]], list[str]]:
     """Audio files in a finished torrent's content path, plus zips inside it that were not opened."""
     if not path or not os.path.exists(path):
         return [], []
     real = os.path.realpath(path)
     if os.path.isfile(real):
+        if members is not None:
+            if members != [path] or Path(path).is_symlink():
+                raise ValueError("Torrent payload does not match its reported member")
+            zips = [real] if real.lower().endswith(".zip") else []
+            return collect_album(os.path.dirname(real), [real]), zips
         if _is_audio(os.path.basename(real)):
             return [(header_safe(safe_name(os.path.basename(real))), real, os.path.getsize(real))], []
         return [], ([real] if real.lower().endswith(".zip") else [])
+    if members is not None:
+        files = []
+        for member in sorted(set(members)):
+            relative = Path(member).absolute().relative_to(Path(path).absolute())
+            entry = Path(real) / relative
+            if ".." in relative.parts or entry.resolve() != entry or entry.is_symlink():
+                raise ValueError("Torrent member escapes its content directory")
+            files.append(str(entry))
+        return collect_album(real, files), [f for f in files
+                                             if f.lower().endswith(".zip") and not Path(f).name.startswith(".")]
     files = collect_album(real)
     zips = []
     for dp, _dns, fns in os.walk(real):

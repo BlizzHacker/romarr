@@ -6601,8 +6601,12 @@ RENDER.getstarted=async()=>{
 };
 
 RENDER.collections=async()=>{
+  const version=pageVersion;
+  const current=()=>activePage==='collections'&&pageVersion===version;
   const st=await j('/api/v1/collection').catch(()=>({dats:[],batches:[]}));
+  if(!current())return;
   const sourceState=await j('/api/v1/collection/source').catch(()=>({torrents:[],jobs:[]}));
+  if(!current())return;
   const sourceTorrents=sourceState.torrents||[];
   const dats=st.dats||[];
   $('#page').innerHTML='<div class="card"><h3>Plan a set</h3>'
@@ -6656,7 +6660,7 @@ RENDER.collections=async()=>{
     +'<div class="card" style="margin-top:16px"><h3>Acquire missing files from a set torrent</h3>'
     +(sourceState.errors||[]).map(error=>'<div class="panel-note panel-warn">'+esc(error)+'</div>').join('')
     +(sourceTorrents.length&&dats.length
-      ?'<p class="help">Preview a DAT plan against one existing qBittorrent torrent. ROMarr selects only matching missing files, stages one budgeted batch at a time, verifies each staged set against the DAT, then restores the torrent’s original file priorities and paused state. The cap limits ROMarr staging copies; downloaded torrent files remain in qBittorrent and need separate source storage.</p>'
+      ?'<p class="help">Preview a DAT plan against one existing qBittorrent or Transmission torrent. ROMarr selects only matching missing files, stages one budgeted batch at a time, verifies each staged set against the DAT, then restores the torrent’s original file priorities and paused state. The cap limits ROMarr staging copies; downloaded torrent files remain in the torrent client and need separate source storage.</p>'
        +'<div class="row" style="flex-wrap:wrap">'
        +'<select id="csrc-torrent">'+sourceTorrents.map(t=>
          '<option value="'+esc(t.hash)+'" data-client="'+esc(t.client_id)+'">'
@@ -6666,14 +6670,17 @@ RENDER.collections=async()=>{
        +'<div id="csrc-out" style="margin-top:10px"></div>'
       :(sourceTorrents.length
         ?'<p class="help">Load a DAT before previewing missing collection files.</p>'
-        :'<p class="help">Enable a qBittorrent download client to use this workflow.</p>'))
+        :'<p class="help">No existing set torrents were found. Add the set torrent to qBittorrent or Transmission'
+         +' (and enable that client under Download Clients if it is off), then come back here.</p>'))
     +'<div id="csrc-jobs" style="margin-top:10px"></div></div>'
     +'<div class="card" style="margin-top:16px"><h3>Batches</h3>'
     +'<div id="cbatch"></div></div>';
 
   const drawBatches=async()=>{
+    if(!current())return;
     const s=await j('/api/v1/collection').catch(()=>({batches:[]}));
-    const cb=$('#cbatch'); if(!cb) return;   // left the Collections page
+    if(!current())return;
+    const cb=$('#cbatch');
     const b=s.batches||[];
     cb.innerHTML=b.length
       ?'<table><thead><tr><th>Set</th><th>Progress</th><th>Done</th>'
@@ -6711,14 +6718,19 @@ RENDER.collections=async()=>{
   };
   drawBatches();
 
+  let sourceJobsSeq=0;
   const drawSourceJobs=async()=>{
-    const node=$('#csrc-jobs'); if(!node)return;
+    if(!current())return;
+    const seq=++sourceJobsSeq;
     const state=await j('/api/v1/collection/source').catch(()=>({jobs:[]}));
+    if(!current()||seq!==sourceJobsSeq)return;
+    const node=$('#csrc-jobs');
     const jobs=state.jobs||[];
     node.innerHTML=jobs.length?'<h4>Selective torrent jobs</h4>'+jobs.map(x=>
       '<div class="row" style="justify-content:space-between;border-top:1px solid var(--line);padding:7px 0">'
       +'<span class="help">'+esc(x.torrent_name)+' · '+esc(x.status)+' · batch '
       +(x.batch||1)+'/'+(x.batches||1)+' · '+(x.done||0)+'/'+(x.total||0)+'</span>'
+      +(x.errors||[]).map(error=>'<div class="panel-note panel-warn">'+esc(error)+'</div>').join('')
       +(x.status==='running'?'<span class="row"><button class="btn ghost csrc-step" data-id="'
        +esc(x.id)+'">Run next</button><button class="btn ghost csrc-cancel" data-id="'
        +esc(x.id)+'">Cancel</button></span>'
@@ -6729,6 +6741,7 @@ RENDER.collections=async()=>{
       btn.disabled=true;
       const r=await j('/api/v1/collection/source/step',{method:'POST',
         headers:{'Content-Type':'application/json'},body:JSON.stringify({id:btn.dataset.id})});
+      if(!current())return;
       if(r.error)toast(r.error);
       drawSourceJobs();
     });
@@ -6737,6 +6750,7 @@ RENDER.collections=async()=>{
       const r=await j('/api/v1/collection/source/control',{method:'POST',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify({id:btn.dataset.id,action:'restore'})});
+      if(!current())return;
       if(r.error)toast(r.error);
       drawSourceJobs();
     });
@@ -6746,6 +6760,7 @@ RENDER.collections=async()=>{
       const r=await j('/api/v1/collection/source/control',{method:'POST',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify({id:btn.dataset.id,action:'cancel'})});
+      if(!current())return;
       if(r.error)toast(r.error);
       drawSourceJobs();
     });
@@ -6754,21 +6769,33 @@ RENDER.collections=async()=>{
   const sourceSelect=$('#csrc-torrent');
   const sourcePlanButton=$('#csrc-plan');
   const sourcePlatform=$('#cplat');
+  const sourceDat=$('#cdat');
+  const sourceCap=$('#csrc-cap');
+  let sourcePlanSeq=0;
   const invalidateSourcePreview=()=>{
+    sourcePlanSeq++;
     const out=$('#csrc-out');
     if(out)out.innerHTML='<p class="help">Selection changed. Preview the source plan again before starting.</p>';
   };
-  [sourcePlatform,$('#cdat'),sourceSelect,$('#csrc-cap')].filter(Boolean)
+  [sourcePlatform,sourceDat,sourceSelect].filter(Boolean)
     .forEach(input=>input.addEventListener('change',invalidateSourcePreview));
-  if(sourceSelect&&sourcePlanButton)sourcePlanButton.onclick=async()=>{
+  if(sourceCap)sourceCap.addEventListener('input',invalidateSourcePreview);
+  const sourceRequest=()=>{
     const opt=sourceSelect.selectedOptions[0];
-    const cap=Math.floor((parseFloat($('#csrc-cap').value)||0)*1024*1024*1024);
-    const request={client_id:opt.dataset.client,torrent_hash:opt.value,
-      dat:$('#cdat').value,platform:$('#cplat').value,cap_bytes:cap};
+    const cap=Math.floor((parseFloat(sourceCap.value)||0)*1024*1024*1024);
+    return {client_id:opt.dataset.client,torrent_hash:opt.value,
+      dat:sourceDat.value,platform:sourcePlatform.value.trim(),cap_bytes:cap};
+  };
+  if(sourceSelect&&sourcePlanButton)sourcePlanButton.onclick=async()=>{
+    const seq=++sourcePlanSeq;
+    const request=sourceRequest();
+    const body=JSON.stringify(request);
+    const matchesPreview=()=>seq===sourcePlanSeq&&body===JSON.stringify(sourceRequest());
     const out=$('#csrc-out');
     out.innerHTML='<div class="empty">Reading source file list…</div>';
     const d=await j('/api/v1/collection/source/plan',{method:'POST',
-      headers:{'Content-Type':'application/json'},body:JSON.stringify(request)});
+      headers:{'Content-Type':'application/json'},body});
+    if(!current()||!matchesPreview())return;
     if(d.error){out.innerHTML='<div class="panel-note panel-warn">'+esc(d.error)+'</div>';return;}
     const groups=(d.batches||[]).flatMap((b,n)=>
       (b.groups||[]).map(g=>'<li>Batch '+(n+1)+': '+esc(g.title)+' · '
@@ -6782,15 +6809,16 @@ RENDER.collections=async()=>{
         d.unmatched.length+')</summary><div class="help">'+d.unmatched.map(x=>
         esc(x.title)+' — '+esc(x.reason)).join('<br>')+'</div></details>':'')
       +'<button class="btn" id="csrc-start"'+(sourcePlatform.value.trim()?'':' disabled')+'>Start selective acquisition</button>';
-    const start=$('#csrc-start'); if(!start)return;
+    const start=$('#csrc-start');
     start.onclick=async()=>{
-      if(request.platform!==sourcePlatform.value.trim()
-          ||request.dat!==$('#cdat').value){invalidateSourcePreview();return;}
+      if(!current()||seq!==sourcePlanSeq)return;
+      if(!matchesPreview()){invalidateSourcePreview();return;}
       if(!request.platform){start.disabled=true;return;}
       if(!confirm('Start this selective torrent workflow? ROMarr will temporarily change the selected torrent’s file priorities and restore their original values when the job ends or is cancelled.'))return;
       start.disabled=true;
       const r=await j('/api/v1/collection/source/start',{method:'POST',
-        headers:{'Content-Type':'application/json'},body:JSON.stringify(request)});
+        headers:{'Content-Type':'application/json'},body});
+      if(!current())return;
       if(r.error){toast(r.error);start.disabled=!request.platform;return;}
       toast('Selective acquisition started');
       drawSourceJobs();
@@ -6804,7 +6832,6 @@ RENDER.collections=async()=>{
   planBtn.onclick=async()=>{
     const out=$('#cres');
     const seq=++cplanSeq;
-    const planVer=typeof pageVersion==='number'?pageVersion:0;
     out.innerHTML='<div class="empty">Planning…</div>';
     const ex=[...document.querySelectorAll('.cex')].filter(c=>c.checked)
       .map(c=>c.value);
@@ -6829,7 +6856,7 @@ RENDER.collections=async()=>{
       +'&preferred_languages='+encodeURIComponent(previewPolicy.preferred_languages.join(','))
       +'&exclude='+encodeURIComponent(previewPolicy.exclude.join(','));
     const d=await j('/api/v1/collection/plan?'+q).catch(()=>({error:'plan failed'}));
-    if((typeof activePage!=='undefined'&&activePage!=='collections')||(typeof pageVersion==='number'&&pageVersion!==planVer)||seq!==cplanSeq) return;
+    if(!current()||seq!==cplanSeq)return;
     if(d.error){out.innerHTML='<div class="panel-note panel-warn">'+esc(d.error)+'</div>';return;}
     const c=d.counts;
     const tile=(n,label,colour)=>'<div style="flex:1;min-width:110px;padding:10px 12px;'
@@ -6893,6 +6920,7 @@ RENDER.collections=async()=>{
         body:JSON.stringify({
           ...previewPolicy,
           per_pass:parseInt($('#cpp').value,10)||5})});
+      if(!current())return;
       toast(r.error?r.error:('Queued '+(r.queued||0)+' titles'));
       e.target.disabled=false; e.target.textContent='Request missing';
       drawBatches();
