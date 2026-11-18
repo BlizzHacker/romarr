@@ -7,9 +7,12 @@ import threading
 import pytest
 
 from romarr.app import ROMarr
-from romarr.downloaders import Transmission
+from romarr.clients import QBittorrent, QbitConfig
+from romarr.downloaders import Transmission, match_queue_item
 from romarr.queue_progress import annotate
 from romarr.selection import Release
+from romarr.store import QueueItem
+from test_collection_torrent import _service
 from test_transmission_completion import HASH, client, torrent, success
 
 MAGNET = 'magnet:?xt=urn:btih:' + HASH
@@ -151,3 +154,83 @@ def test_soundtrack_watch_refuses_shared_root_and_is_scoped_to_client(tmp_path):
     assert store.watch_for('42')['state'] == 'failed'
     assert 'safe torrent payload path' in store.watch_for('42')['message']
     store._import_torrent.assert_not_called()
+
+
+def test_unlabelled_queue_ownership_is_unique_and_client_scoped(tmp_path, monkeypatch):
+    """An unlabelled torrent needs one active, concrete match on its own client."""
+    service = _service(tmp_path, monkeypatch)
+    c = service._build_client({'type': 'transmission', 'host': 'fixture', 'id': 'owner'})
+    c.romarr_id = 'owner'
+    c._rpc_version = 16
+    row = torrent(labels=[], status=6)
+    c._call = Mock(return_value=success(torrents=[row]))
+    title_only = QueueItem('Demo', 'snes', row['name'], 1, 'grabbed', download_client='owner')
+    wrong_client = QueueItem('Demo', 'snes', row['name'], 1, 'grabbed',
+                             download_client='other', download_id=HASH)
+    service.queue = [title_only, wrong_client]
+    assert c.completed() == [] and c.progress() == {}
+
+    owner = QueueItem('Demo', 'snes', 'different title', 1, 'grabbed',
+                      download_client='owner', release_id='btih:' + HASH)
+    service.store.enqueue(owner)
+    conflicting = QueueItem('Demo', 'snes', 'different download', 1, 'grabbed',
+                            download_client='owner', release_id='btih:' + HASH, download_id='b' * 40)
+    service.store.enqueue(conflicting)
+    done, = c.completed()
+    assert match_queue_item(service.queue, done, client_id='owner') is owner
+    service.clients = [c]
+    rows = annotate(service, service.store.queue_rows())
+    assert rows[2]['progress'] == 100
+    assert 'progress' not in rows[3]
+    assert match_queue_item([title_only, wrong_client], done, client_id='owner') is None
+    assert match_queue_item([owner, owner], done, client_id='owner') is None
+
+    c._call.return_value = success(torrents=[dict(row, labels=['foreign'])])
+    assert c.completed() == [] and c.progress() == {}
+    c._call.return_value = success(**{'torrent-duplicate': {'hashString': HASH}})
+    c._call.reset_mock()
+    assert not c.add(MAGNET, category='romarr-soundtracks')
+    assert [call.args[0] for call in c._call.call_args_list] == ['torrent-add']
+
+
+@pytest.mark.parametrize('incomplete', [
+    {'metadataPercentComplete': 0}, {'status': 2},
+    {'files': [{'name': 'Album/01.mp3', 'bytesCompleted': 20}]},
+])
+def test_soundtrack_watch_waits_for_the_complete_payload(tmp_path, incomplete):
+    """A wanted percentage of 100 cannot prematurely fail an incomplete watch."""
+    from romarr.soundtracks import Soundtracks
+
+    store = Soundtracks(tmp_path / 'soundtracks.db')
+    store.add_watch('42', 'transmission:' + HASH, 'Album', client_id='owner')
+    store._import_torrent = Mock()
+    c = client()
+    c._call = Mock(return_value=success(torrents=[torrent(**incomplete)]))
+    resolve = lambda _: ({'id': '42'}, Mock())
+    store.process_watches(c.torrents(), resolve, str, client_id='owner')
+    assert store.watch_for('42')['state'] == 'downloading'
+    store._import_torrent.assert_not_called()
+    c._call.return_value = success(torrents=[torrent(files=[{'name': 'Album/01.mp3'}])])
+    store.process_watches(c.torrents(), resolve, str, client_id='owner')
+    assert store._import_torrent.call_args.args[3] == '/downloads/romarr/Album/01.mp3'
+
+
+def test_soundtrack_poll_continues_after_another_client_fails(tmp_path, monkeypatch):
+    """A disconnected qBittorrent cannot starve a live Transmission watch."""
+    service = _service(tmp_path, monkeypatch)
+    qbit = QBittorrent(QbitConfig(base_url='http://fixture'))
+    qbit.romarr_id = 'offline'
+    qbit.torrents = Mock(side_effect=RuntimeError('offline'))
+    transmission = client()
+    transmission.romarr_id = 'online'
+    transmission._call = Mock(return_value=success(torrents=[torrent(labels=['romarr-soundtracks'])]))
+    service.clients = [qbit, transmission]
+    service._soundtrack_libraries = lambda: [('scope',)]
+    store = Mock()
+    store.active_watches.return_value = [{'client_id': 'offline'}, {'client_id': 'online'}]
+    service.soundtrack_store = lambda _: store
+    completed = threading.Event()
+    store.process_watches.side_effect = lambda *args, **kwargs: completed.set()
+    assert service.soundtrack_watch_tick() == '1 soundtrack library watches queued'
+    assert completed.wait(2)
+    assert store.process_watches.call_args.kwargs['client_id'] == 'online'

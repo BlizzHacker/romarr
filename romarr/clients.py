@@ -188,6 +188,7 @@ class QBittorrent:
         self._authed = False
         self._added = threading.local()
         self._selection_lock = threading.RLock()
+        self.owned_torrents_provider = lambda: ()
         self._selective_hashes = set()
         self._resumed_at: dict[str, float] = {}
 
@@ -286,11 +287,13 @@ class QBittorrent:
         return self._session.post(self._url(path), **req_kwargs)
 
     def _already_owned(self, row: dict) -> bool:
-        """Whether a torrent already carries a ROMarr request or collection tag."""
+        """Check request tags, retained selections and persisted DAT source ownership."""
         tags = row.get("tags", "")
         parts = tags.split(",") if isinstance(tags, str) else tags if isinstance(tags, (list, tuple, set)) else []
         selective_hashes = {str(h or "").strip().lower() for h in self._selective_hashes}
-        return (str(row.get("hash") or "").strip().lower() in selective_hashes
+        identity = str(row.get("hash") or "").strip().lower()
+        return (identity in selective_hashes
+                or identity in self.owned_torrents_provider()
                 or any(str(part).strip().startswith("romarr-") for part in parts))
 
     def _remove_torrent_tag(self, torrent_hash: str, tag: str) -> None:

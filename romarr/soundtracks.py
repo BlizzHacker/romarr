@@ -1130,9 +1130,11 @@ class Soundtracks:
             if "error" in str(row.get("state") or "").lower() and "missing" in str(row.get("state") or "").lower():
                 self._set_watch(w["id"], state="failed", message="The download client reports missing files", seen=now)
                 continue
-            if pct < 1.0:
+            if pct < 1.0 or row.get("payload_complete") is False:
+                message = (f"Downloading {pct * 100:.0f}%"
+                           if pct < 1.0 else "Waiting for the complete torrent payload")
                 self._set_watch(w["id"], pct=pct, seen=now, state="downloading",
-                                message=f"Downloading {pct * 100:.0f}%" + (f", {int(row['num_seeds'])} seeders" if row.get("num_seeds") else ""))
+                                message=message + (f", {int(row['num_seeds'])} seeders" if row.get("num_seeds") else ""))
                 continue
             try:
                 game, api = resolve(w["key"])

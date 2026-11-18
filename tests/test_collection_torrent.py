@@ -649,3 +649,132 @@ def test_active_source_is_excluded_from_queue_previews_and_imports(tmp_path, mon
     assert svc.import_finished() == []
     assert svc.queue[0].state == "grabbed"
     svc.adopt.assert_not_called()
+
+
+@pytest.mark.parametrize("request_applied", [False, True])
+def test_qbit_step_recovers_interrupted_second_batch(tmp_path, monkeypatch, request_applied):
+    """Step recovers either side of a journaled priority change after restart."""
+    svc = _service(tmp_path, monkeypatch)
+    client = FakeQbit(tmp_path)
+    client.priorities = {0: 6, 1: 6}
+    client.torrent_files = lambda _: [
+        {"index": i, "name": str(i), "size": 8, "progress": 0, "priority": p}
+        for i, p in client.priorities.items()]
+    job = {"id": "second-batch", "client_id": "q1", "torrent_hash": "a" * 40,
+           "status": "running", "original_priorities": {"0": 6, "1": 6},
+           "source_files": {"0": ["0", 8], "1": ["1", 8]},
+           "batches": [{"groups": [{"files": [{"index": i, "name": str(i), "size": 8}]}]}
+                       for i in range(2)]}
+    svc._prepare_collection_source_batch(client, job, force=True)
+    job["batch"] = 1
+    apply = client.set_file_priorities
+
+    class Interrupted(BaseException):
+        """Model an abrupt process exit."""
+
+    def interrupt(identity, priorities):
+        """Exit before or after the first request reaches the daemon."""
+        if request_applied:
+            apply(identity, priorities)
+        raise Interrupted()
+
+    client.set_file_priorities = interrupt
+    with pytest.raises(Interrupted):
+        svc._prepare_collection_source_batch(client, job)
+    restarted = ROMarr(env={"ROMARR_DATA": str(tmp_path / "state.json"),
+                            "LIBRARY_PATH": str(tmp_path / "library")})
+    restarted.clients = [client]
+    client.set_file_priorities = apply
+    interrupted = dict(client.priorities)
+    client.priorities[0] = 7
+    rejected = restarted.collection_source_step(job["id"])
+    assert "selection changed" in rejected["error"]
+    client.priorities = interrupted
+    assert restarted.collection_source_step(job["id"])["waiting"]
+    assert client.priorities == {0: 0, 1: 1}
+    saved = restarted.store.get_item("collection_sources", job["id"])
+    assert "priority_transition" not in saved
+
+
+@pytest.mark.parametrize("ownership", ["soundtrack", "queue-tag"])
+def test_dat_source_rejects_qbit_soundtracks_and_tagged_rom_requests(tmp_path, monkeypatch, ownership):
+    """A qBittorrent category or exact queued tag prevents source selection."""
+    from romarr.store import QueueItem
+
+    svc = _service(tmp_path, monkeypatch)
+    (tmp_path / "Game (USA).zip").write_bytes(b"source")
+    client = FakeQbit(tmp_path)
+    row, = client.torrents()
+    if ownership == "soundtrack":
+        row["category"] = svc.SOUNDTRACK_CATEGORY
+    else:
+        row["tags"] = "unrelated, romarr-request-id"
+        svc.store.enqueue(QueueItem("Game", "snes", "a release title", 1, "grabbed",
+                                    download_id="qbit-tag:romarr-request-id", download_client="q1"))
+    client.torrents = lambda: [row]
+    svc.clients = [client]
+    result = svc.collection_source_start("q1", row["hash"], "Test System", "snes", 8 * 1024 * 1024)
+    expected = "soundtrack" if ownership == "soundtrack" else "active download"
+    assert expected in result["error"]
+    assert not client.priority_calls
+
+
+def test_qbit_duplicate_attachment_respects_persisted_dat_source_owner(tmp_path, monkeypatch):
+    """An active DAT source without a tag cannot be attached to another request."""
+    from unittest.mock import Mock
+
+    svc = _service(tmp_path, monkeypatch)
+    identity = "a" * 40
+    svc.store.put_item("collection_sources", {"id": "dat-job", "client_id": "q1",
+                       "torrent_hash": identity, "status": "running"})
+    client = svc._build_client({"type": "qbittorrent", "host": "fixture", "id": "q1"})
+    client.romarr_id = "q1"
+    client.torrents = lambda: [{"hash": identity, "tags": ""}]
+    client._post = Mock()
+    assert not client._adopt_duplicate_magnet("magnet:?xt=urn:btih:" + identity, "romarr-request-next")
+    client._post.assert_not_called()
+
+
+def test_transmission_cancel_recovers_if_exit_follows_the_restore_rpc(tmp_path, monkeypatch):
+    """The restore action can recover after an atomic RPC reaches the daemon."""
+    from romarr.downloaders import Transmission, TransmissionConfig
+
+    class Interrupted(BaseException):
+        """Model an abrupt process exit."""
+
+    svc = _service(tmp_path, monkeypatch)
+    client = Transmission(TransmissionConfig(base_url="http://fixture"))
+    client.romarr_id = "t1"
+    state = {"priority": 1, "native_priority": 0}
+    client.torrent_files = lambda _: [{"index": 0, "name": "0", "size": 8, **state}]
+    client.pause_torrent = lambda _: True
+    client.resume_torrent = lambda _: True
+
+    def restore(_, priorities, *, native_priorities):
+        """Apply the atomic restore before ROMarr can observe the result."""
+        state.update(priority=priorities[0], native_priority=native_priorities[0])
+        return True
+
+    def interrupt(*args, **kwargs):
+        """Exit after the daemon accepts the restore."""
+        restore(*args, **kwargs)
+        raise Interrupted()
+
+    client.set_file_priorities = interrupt
+    svc.clients = [client]
+    job = {"id": "cancelling", "client_id": "t1", "torrent_hash": "a" * 40,
+           "status": "running", "original_priorities": {"0": 6},
+           "original_native_priorities": {"0": 1}, "applied_priorities": {"0": 1},
+           "applied_native_priorities": {"0": 0}}
+    svc.store.put_item("collection_sources", job)
+    with pytest.raises(Interrupted):
+        svc.collection_source_control(job["id"], "cancel")
+    restarted = ROMarr(env={"ROMARR_DATA": str(tmp_path / "state.json"),
+                            "LIBRARY_PATH": str(tmp_path / "library")})
+    restarted.clients = [client]
+    saved = restarted.store.get_item("collection_sources", job["id"])
+    assert saved["status"] == "restore-needed"
+    assert saved["restore_status"] == "cancelled"
+    client.set_file_priorities = restore
+    assert restarted.collection_source_control(job["id"], "restore")["status"] == "cancelled"
+    assert state == {"priority": 6, "native_priority": 1}

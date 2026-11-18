@@ -73,7 +73,7 @@ from .switch_report import report as build_switch_report
 from .titled import classify_tid, TitleDBIndex, build_index as build_titled_index, validate_switch_rom
 from .downloaders import (
     Transmission, Blackhole, CLIENT_TYPES, DebridClient, HubDownloader, NZBGet, NzbgetConfig, SABnzbd, SabConfig, SiteDownloader, build_client,
-    hand_off_with_id, match_queue_item, merge_secrets, pick_client, redact,
+    active_torrent_queue_hash, hand_off_with_id, match_queue_item, merge_secrets, pick_client, redact,
 )
 from .indexers import INDEXER_TYPES, build_indexer, indexer_timeout, merge_indexer_secrets, redact_indexer
 from .indexers import Prowlarr, ProwlarrConfig, ProwlarrDownloadError
@@ -602,11 +602,14 @@ class ROMarr:
                         client_id = str(getattr(client, "romarr_id", "") or getattr(client, "name", ""))
                         if not any(watch.get("client_id") == client_id for watch in store.active_watches()):
                             continue
-                        torrents = (client.torrents(category=self.SOUNDTRACK_CATEGORY)
-                                    if isinstance(client, Transmission) else client.torrents())
-                        rows = [row for row in torrents if row.get("category") == self.SOUNDTRACK_CATEGORY]
-                        store.process_watches(rows, lambda key: self._soundtrack_target(scope + ":" + key),
-                            lambda path: str(map_remote_path(path, maps)), client_id=client_id)
+                        try:
+                            torrents = (client.torrents(category=self.SOUNDTRACK_CATEGORY)
+                                        if isinstance(client, Transmission) else client.torrents())
+                            rows = [row for row in torrents if row.get("category") == self.SOUNDTRACK_CATEGORY]
+                            store.process_watches(rows, lambda key: self._soundtrack_target(scope + ":" + key),
+                                lambda path: str(map_remote_path(path, maps)), client_id=client_id)
+                        except Exception as exc:
+                            log.warning("Soundtrack client watch failed: %s", type(exc).__name__)
                 except Exception as exc:
                     log.warning("Soundtrack watch failed: %s", type(exc).__name__)
                 finally:
@@ -1891,13 +1894,19 @@ class ROMarr:
             client = build_client(cfg)
         if client is not None and hasattr(client, "allowed_origins_provider"):
             client.allowed_origins_provider = self._nzb_allowed_origins
-        if isinstance(client, Transmission):
+        if isinstance(client, (QBittorrent, Transmission)):
             client._selection_lock = self._collection_source_lock
             client.owned_torrents_provider = lambda: {
                 str(job.get("torrent_hash") or "").lower()
                 for job in self.store.list_items("collection_sources")
-                if job.get("client_id") == getattr(client, "romarr_id", "")
+                if job.get("torrent_hash") and job.get("client_id") == getattr(client, "romarr_id", "")
                 and job.get("status") in ("running", "restore-needed")}
+        if isinstance(client, Transmission):
+            from collections import Counter
+
+            client.queued_torrents_provider = lambda: Counter(
+                identity for item in list(self.queue)
+                if (identity := active_torrent_queue_hash(item, getattr(client, "romarr_id", ""))))
         return client
 
     def reload_clients(self) -> None:
@@ -2775,11 +2784,6 @@ class ROMarr:
             with self._collection_lock:
                 return self._grab_impl(pick, game, platform_slug, manual=manual,
                                        external_request_id=external_request_id)
-        if (isinstance(platform_slug, str) and resolve(platform_slug) is not None
-                and isinstance(pick_client(pick.protocol, self.clients), Transmission)):
-            with self._collection_source_lock:
-                return self._grab_impl(pick, game, platform_slug, manual=manual,
-                                       external_request_id=external_request_id)
         return self._grab_impl(pick, game, platform_slug, manual=manual,
                                external_request_id=external_request_id)
 
@@ -2822,6 +2826,13 @@ class ROMarr:
                                                 error=item.detail, status="failed")
             return {"ok": False, "error": item.detail}
 
+        if isinstance(client, (QBittorrent, Transmission)):
+            with self._collection_source_lock:
+                return self._submit_grab(client, pick, game, platform_slug, manual, external_request_id)
+        return self._submit_grab(client, pick, game, platform_slug, manual, external_request_id)
+
+    def _submit_grab(self, client, pick, game, platform_slug, manual, external_request_id):
+        """Submit to the selected client and persist the queue ownership."""
         # The title travels with the release for the clients that can carry
         # it: the import sweep matches a finished download to its queue row by
         # that title, and a file named by the site it came from would never
@@ -5011,8 +5022,15 @@ class ROMarr:
             torrent = next(t for t in client.torrents()
                            if str(t.get("hash") or "").lower()
                            == torrent_hash.lower())
-            if self.SOUNDTRACK_CATEGORY in torrent.get("labels", []):
+            if (torrent.get("category") == self.SOUNDTRACK_CATEGORY
+                    or self.SOUNDTRACK_CATEGORY in (torrent.get("labels") or [])):
                 return {"error": "soundtrack torrents cannot be used as DAT sources"}
+            jobs = {"qbit-tag:" + tag.strip()
+                    for tag in str(torrent.get("tags") or "").split(",") if tag.strip()}
+            if any(q.download_client == client_key and q.state not in ("imported", "failed")
+                   and q.download_id in jobs
+                   for q in self.queue):
+                return {"error": "this torrent belongs to an active download request"}
             source_root = map_remote_path(
                 torrent.get("save_path") or torrent.get("content_path") or "",
                 self.store.settings.get("remote_path_mappings"))
@@ -5046,11 +5064,7 @@ class ROMarr:
             try:
                 self._prepare_collection_source_batch(client, job, force=True)
             except Exception:
-                restored = self._restore_source_priorities(client, job)
-                job["status"] = "cancelled" if restored else "restore-needed"
-                if not restored:
-                    job["restore_status"] = "cancelled"
-                self.store.put_item("collection_sources", deepcopy(job), require_persist=True)
+                self._finish_collection_source(client, job, "cancelled")
                 raise
             self.store.put_item("collection_sources", deepcopy(job), require_persist=True)
             return {"ok": True, **self._source_job_progress(job)}
@@ -5107,6 +5121,9 @@ class ROMarr:
                    for f in files if f.get("index") is not None}
         if not force and all(current.get(i) == p for i, p in expected.items()):
             if job.get("resume_pending"):
+                job.pop("priority_transition", None)
+                job.pop("selection_transition", None)
+                self.store.put_item("collection_sources", deepcopy(job), require_persist=True)
                 if not client.resume_torrent(job["torrent_hash"]):
                     raise RuntimeError("torrent client refused to resume selected files")
                 job.pop("resume_pending")
@@ -5127,8 +5144,8 @@ class ROMarr:
                  "native_priorities": {str(f["index"]): f["native_priority"] for f in files}},
                 {"priorities": job["applied_priorities"],
                  "native_priorities": job["applied_native_priorities"]}]
-        self.store.put_item("collection_sources", deepcopy(job), require_persist=True)
         if type(client) is Transmission:
+            self.store.put_item("collection_sources", deepcopy(job), require_persist=True)
             if not client.set_file_priorities(job["torrent_hash"], expected):
                 raise RuntimeError("Transmission refused the planned selection")
         else:
@@ -5172,10 +5189,7 @@ class ROMarr:
         batch_index = int(job.get("batch") or 0)
         batches = job.get("batches") or []
         if batch_index >= len(batches):
-            job["status"], job["restore_status"] = "restore-needed", "done"
-            if self._restore_source_priorities(client, job):
-                job["status"] = job.pop("restore_status")
-            self.store.put_item("collection_sources", deepcopy(job), require_persist=True)
+            self._finish_collection_source(client, job, "done")
             return self._source_job_progress(job)
         try:
             self._prepare_collection_source_batch(client, job)
@@ -5244,11 +5258,9 @@ class ROMarr:
             if batch_index + 1 < len(batches):
                 job["batch"] = batch_index + 1
                 self._prepare_collection_source_batch(client, job)
+                self.store.put_item("collection_sources", deepcopy(job), require_persist=True)
             else:
-                job["status"], job["restore_status"] = "restore-needed", "done"
-                if self._restore_source_priorities(client, job):
-                    job["status"] = job.pop("restore_status")
-            self.store.put_item("collection_sources", deepcopy(job), require_persist=True)
+                self._finish_collection_source(client, job, "done")
             return {"ok": True, **self._source_job_progress(job)}
         except Exception as err:  # noqa: BLE001 - persisted progress permits retry
             job["errors"] = [f"{err.__class__.__name__}: {err}"]
@@ -5289,9 +5301,18 @@ class ROMarr:
             if {"priorities": current, "native_priorities": current_native} not in allowed:
                 raise ValueError("source selection changed outside this job; review before restoring")
         elif (expected is not None and current != expected
-                and not (restoring and (current == job.get("original_priorities")
-                                        or current in job.get("priority_transition", [])))):
+                and not (restoring and current == job.get("original_priorities"))
+                and not ((restoring or job.get("resume_pending"))
+                         and current in job.get("priority_transition", []))):
             raise ValueError("source selection changed outside this job; review before restoring")
+
+    def _finish_collection_source(self, client, job: dict, status: str) -> None:
+        """Persist restoration intent before touching the daemon."""
+        job["status"], job["restore_status"] = "restore-needed", status
+        self.store.put_item("collection_sources", deepcopy(job), require_persist=True)
+        if self._restore_source_priorities(client, job):
+            job["status"] = job.pop("restore_status")
+        self.store.put_item("collection_sources", deepcopy(job), require_persist=True)
 
     def _restore_source_priorities(self, client, job: dict) -> bool:
         """Restore saved priorities and pause state without overwriting external edits."""
@@ -5346,21 +5367,12 @@ class ROMarr:
             client = self._source_client(job.get("client_id", ""))
             if client is None:
                 return {"error": "the torrent client for this batch is unavailable"}
-            restored = self._restore_source_priorities(client, job)
-            if restored:
-                job["status"] = "cancelled"
-            else:
-                job["status"] = "restore-needed"
-                job["restore_status"] = "cancelled"
-            self.store.put_item("collection_sources", deepcopy(job), require_persist=True)
+            self._finish_collection_source(client, job, "cancelled")
         elif action == "restore":
             client = self._source_client(job.get("client_id", ""))
             if client is None:
                 return {"error": "the torrent client for this batch is unavailable"}
-            restored = self._restore_source_priorities(client, job)
-            if restored:
-                job["status"] = job.pop("restore_status", "cancelled")
-            self.store.put_item("collection_sources", deepcopy(job), require_persist=True)
+            self._finish_collection_source(client, job, job.get("restore_status", "cancelled"))
         elif action == "retry":
             for batch in job.get("batches") or []:
                 for group in batch.get("groups") or []:

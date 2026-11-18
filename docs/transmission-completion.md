@@ -2,8 +2,11 @@
 
 Transmission clients accept a download directory, expose the returned torrent
 hash as the job identity and poll fully completed, nonempty torrents. Polling
-filters by the configured label before returning import paths. Soundtrack torrents
-use a separate label and never enter normal ROM completion polling.
+uses the configured label before returning import paths. An unlabelled torrent
+can report progress or complete only when exactly one active queue row matches
+its configured client and hash. This covers older RPC 16 grabs and clients
+configured without a label. Soundtrack torrents use a separate label and never
+enter normal ROM completion polling.
 Paths come from actual torrent files, which may differ from the display name.
 Multiple files must share a safe root; metadata and every file must be complete
 before import. A finished wanted subset is not a completed payload.
@@ -12,14 +15,16 @@ An unowned duplicate magnet can be attached in its existing absolute download
 directory. ROMarr verifies its hash, preserves unrelated labels, applies the
 configured label, and verifies the result. Failed verification removes only the
 attempted label. Torrents already labelled for ROMarr, another ROMarr request or
-a retained collection are refused. Metainfo duplicates are refused; attachment
+a retained collection are refused, including unlabelled torrents with an active
+queue owner. Metainfo duplicates are refused; attachment
 requires the magnet identity. Files are never moved or deleted during attachment.
 Configure remote path mappings when the existing directory differs on the ROMarr
 host. RPC failures remain visible to the importer.
 
 Queue percentage, speed and ETA use read-only RPC calls within the shared queue
-deadline. Soundtrack grabs use a separate label and client-scoped hash watch;
-completion uses the same validated payload paths as ROM imports.
+deadline. Soundtrack grabs use a separate label and client-scoped hash watch.
+The watch waits for metadata, file verification and every file's bytes before
+attempting to import from the validated payload path.
 
 Labelled submissions discover and cache the RPC version through `session-get`.
 A successful connection test supplies that cache. RPC 17 and later receive labels

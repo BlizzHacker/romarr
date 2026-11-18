@@ -574,6 +574,7 @@ class Transmission:
         self._session_id = ""
         self._added = threading.local()
         self.owned_torrents_provider = lambda: ()
+        self.queued_torrents_provider = dict
         self._rpc_version = None
         self._rpc_version_lock = threading.Lock()
         self._selection_lock = threading.RLock()
@@ -714,7 +715,7 @@ class Transmission:
 
         if not category or not str(magnet).startswith("magnet:") or magnet_hash(magnet) != identity:
             return False
-        if identity in self.owned_torrents_provider():
+        if identity in self.owned_torrents_provider() or identity in self.queued_torrents_provider():
             return False
         rows = self._torrent_identity(identity)
         if not rows or not self._safe_download_directory(rows[0].get("downloadDir")):
@@ -759,6 +760,7 @@ class Transmission:
                  "state": states.get(row.get("status"), "unknown"),
                  "size": row.get("totalSize", 0), "piece_size": row.get("pieceSize", 0),
                  "progress": row.get("percentDone", 0),
+                 "payload_complete": self._payload_complete(row),
                  "content_path": self._content_path(row),
                  "labels": row.get("labels") or [],
                  "category": category if category in row.get("labels", []) else ""}
@@ -838,18 +840,23 @@ class Transmission:
                 or PureWindowsPath(directory).is_absolute()))
 
     @staticmethod
+    def _payload_complete(torrent):
+        """Check all file bytes independently of the selected files' progress."""
+        if (torrent.get("status") in (1, 2) or torrent.get("metadataPercentComplete") != 1
+                or torrent.get("percentDone") != 1 or torrent.get("leftUntilDone", 1) != 0
+                or torrent.get("totalSize", 0) <= 0):
+            return False
+        entries = torrent.get("files") or []
+        return bool(entries) and all(isinstance(entry, dict)
+                and type(entry.get("length")) is int and entry["length"] >= 0
+                and type(entry.get("bytesCompleted")) is int
+                and entry["bytesCompleted"] == entry["length"] for entry in entries)
+
+    @staticmethod
     def _content_path(torrent):
         """Resolve a complete torrent's payload without returning a shared root."""
         directory = torrent.get("downloadDir")
-        if (not Transmission._safe_download_directory(directory) or torrent.get("metadataPercentComplete") != 1
-                or torrent.get("percentDone") != 1 or torrent.get("leftUntilDone", 1) != 0
-                or torrent.get("totalSize", 0) <= 0):
-            return ""
-        entries = torrent.get("files") or []
-        if not entries or any(not isinstance(entry, dict)
-                or type(entry.get("length")) is not int or entry["length"] < 0
-                or type(entry.get("bytesCompleted")) is not int
-                or entry["bytesCompleted"] != entry["length"] for entry in entries):
+        if not Transmission._safe_download_directory(directory) or not Transmission._payload_complete(torrent):
             return ""
         files = [str(entry.get("name") or "").replace("\\", "/").split("/")
                  for entry in torrent.get("files") or []]
@@ -867,43 +874,41 @@ class Transmission:
         return directory.rstrip("/\\") + "/" + relative
 
     def completed(self, timeout: float | None = None) -> list[dict]:
-        """Finished Transmission downloads carrying our category, bounded by `timeout`."""
+        """List complete categorized downloads and exact legacy queue matches."""
         if not self.configured:
             return []
         deadline = None if timeout is None else time.monotonic() + max(0.0, float(timeout))
         body = self._call("torrent-get", {"fields": [
             "name", "hashString", "downloadDir", "percentDone",
             "metadataPercentComplete", "files", "labels",
-            "leftUntilDone", "totalSize",
+            "leftUntilDone", "totalSize", "status",
         ]}, _deadline=deadline)
         if body.get("result") != "success":
             raise RuntimeError("Transmission could not list completed downloads")
 
         category = self._config.category
+        queued = self.queued_torrents_provider()
         completed = []
         for torrent in (body.get("arguments") or {}).get("torrents") or []:
-            if (torrent.get("percentDone") != 1 or torrent.get("metadataPercentComplete", 0) != 1
-                    or torrent.get("leftUntilDone", 1) != 0
-                    or torrent.get("totalSize", 0) <= 0):
-                continue
+            info_hash = str(torrent.get("hashString") or "").lower()
             labels = torrent.get("labels") or []
-            if (category and category not in labels) or "romarr-soundtracks" in labels:
+            if not info_hash or "romarr-soundtracks" in labels:
                 continue
-            directory = torrent.get("downloadDir")
-            if not directory:
+            if labels and category and category not in labels:
+                continue
+            if not labels and queued.get(info_hash) != 1:
                 continue
             content_path = self._content_path(torrent)
             if not content_path:
                 continue
-            info_hash = str(torrent.get("hashString") or "").lower()
-            if not info_hash:
-                continue
             completed.append({
                 "id": info_hash, "hash": info_hash, "name": torrent.get("name") or "",
-                "save_path": directory,
+                "save_path": torrent["downloadDir"],
                 "content_path": content_path,
                 "category": category if category in labels else "",
             })
+            if not labels:
+                completed[-1]["_romarr_exact_torrent_owner"] = True
         return completed
 
     def progress(self, *, deadline: float | None = None) -> dict[str, dict]:
@@ -918,12 +923,19 @@ class Transmission:
             return {}
         states = {0: "pausedDL", 1: "queuedDL", 2: "checkingDL", 3: "queuedDL",
                   4: "downloading", 5: "queuedUP", 6: "uploading"}
+        queued = self.queued_torrents_provider()
         out = {}
         for row in ((body.get("arguments") or {}).get("torrents") or [])[:10000]:
-            if not isinstance(row, dict) or (self._config.category and self._config.category not in (row.get("labels") or [])):
+            if not isinstance(row, dict):
                 continue
             identity = str(row.get("hashString") or "").lower()
             if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", identity):
+                continue
+            labels = row.get("labels") or []
+            if labels and ("romarr-soundtracks" in labels or
+                           (self._config.category and self._config.category not in labels)):
+                continue
+            if not labels and queued.get(identity) != 1:
                 continue
             try:
                 percent, eta, speed = (float(row.get(key, default)) for key, default in
@@ -935,6 +947,8 @@ class Transmission:
             out[identity] = {"progress": round(max(0, min(1, percent)) * 100, 1),
                              "eta": int(eta) if 0 <= eta < 8640000 else None,
                              "speed": max(0, int(speed)), "dl_state": states.get(row.get("status"), "unknown")}
+            if not labels:
+                out[identity]["_romarr_exact_torrent_owner"] = True
         return out
 
 class Vuze(Transmission):
@@ -4064,6 +4078,25 @@ def hand_off_with_id(client, url: str, *, name: str = "") -> tuple[bool, str]:
     return ok, (getattr(client, "last_job_id", "") or "") if ok else ""
 
 
+def torrent_queue_hash(download_id: str, release_id: str) -> str:
+    """Prefer the recorded client job ID, falling back to a legacy magnet hash."""
+    if download_id:
+        identity = download_id.lower()
+        return identity if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", identity) else ""
+    if release_id.startswith("btih:"):
+        from .retained_collection import magnet_hash
+
+        return magnet_hash(f"magnet:?xt=urn:{release_id}")
+    return ""
+
+
+def active_torrent_queue_hash(item, client_id: str) -> str:
+    """Return the active queue item's concrete hash on this configured client."""
+    if not client_id or item.download_client != client_id or item.state in ("imported", "failed"):
+        return ""
+    return torrent_queue_hash(item.download_id, item.release_id)
+
+
 def match_queue_item(queue, download: dict, *,
                      client_id: str = "", client_protocol: str = ""):
     """The queue row a finished download belongs to, or None.
@@ -4085,6 +4118,10 @@ def match_queue_item(queue, download: dict, *,
         or getattr(reporting_client, "protocol", "")
         or ""
     ).strip().lower()
+    if download.get("_romarr_exact_torrent_owner"):
+        found = str(download.get("hash") or "").lower()
+        exact = [item for item in queue if found and active_torrent_queue_hash(item, reporting_id) == found]
+        return exact[0] if len(exact) == 1 else None
 
     def client_matches(item) -> bool:
         """Return True when `item` is compatible with the reporting client and protocol."""

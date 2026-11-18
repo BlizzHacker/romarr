@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import time
 
+from .downloaders import torrent_queue_hash
+
 
 def annotate(service, rows):
     now = time.monotonic()
@@ -47,7 +49,9 @@ def annotate(service, rows):
             hits = [p for p in pool.values() if did[9:] in p.get("tags", [])]
         else:
             candidates = {did, rid[5:] if rid.startswith("btih:") else ""} - {""}
-            hits = [p for h,p in pool.items() if h in candidates]
+            exact_hash = torrent_queue_hash(did, rid)
+            hits = [p for h, p in pool.items()
+                    if (h == exact_hash if p.get("_romarr_exact_torrent_owner") else h in candidates)]
         if len(hits) == 1:
             row.update({k:hits[0][k] for k in ("progress", "eta", "speed", "dl_state") if k in hits[0]})
     return rows
