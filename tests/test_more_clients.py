@@ -93,14 +93,15 @@ def test_transmission_answers_the_409_session_challenge():
 
     session = FakeSession([
         FakeResponse(409, {}, {"X-Transmission-Session-Id": "abc123"}),
+        FakeResponse(200, {"result": "success", "arguments": {"rpc-version": 17}}),
         FakeResponse(200, {"result": "success",
-                           "arguments": {"torrent-added": {"id": 1}}}),
+                           "arguments": {"torrent-added": {"id": 1, "hashString": "a" * 40}}}),
     ])
     client = Transmission(TransmissionConfig(base_url="http://t:9091"),
                           session=session)
 
     assert client.add("magnet:?xt=urn:btih:abc")
-    assert len(session.calls) == 2, "it must retry, not give up"
+    assert len(session.calls) == 3, "it must retry discovery, then submit"
     assert session.calls[1]["headers"]["X-Transmission-Session-Id"] == "abc123"
 
 
@@ -110,24 +111,25 @@ def test_transmission_reuses_the_session_id_it_was_given():
 
     session = FakeSession([
         FakeResponse(409, {}, {"X-Transmission-Session-Id": "abc"}),
-        FakeResponse(200, {"result": "success"}),
+        FakeResponse(200, {"result": "success", "arguments": {"rpc-version": 17}}),
         FakeResponse(200, {"result": "success"}),
     ])
     client = Transmission(TransmissionConfig(base_url="http://t:9091"),
                           session=session)
     client.add("magnet:?xt=urn:btih:a")
     client.add("magnet:?xt=urn:btih:b")
-    assert len(session.calls) == 3, "only the first call should be challenged"
+    assert len(session.calls) == 4, "only the first call should be challenged"
 
 
 def test_transmission_posts_to_the_rpc_path():
     from romarr.downloaders import Transmission, TransmissionConfig
 
-    session = FakeSession([FakeResponse(200, {"result": "success"})])
+    session = FakeSession([FakeResponse(body={"result": "success", "arguments": {"rpc-version": 17}}),
+                           FakeResponse(body={"result": "success"})])
     Transmission(TransmissionConfig(base_url="http://t:9091"),
                  session=session).add("magnet:?xt=urn:btih:a")
     assert session.calls[0]["url"].endswith("/transmission/rpc")
-    body = json.loads(session.calls[0]["data"])
+    body = json.loads(session.calls[1]["data"])
     assert body["method"] == "torrent-add"
     assert body["arguments"]["filename"] == "magnet:?xt=urn:btih:a"
 
@@ -137,20 +139,29 @@ def test_transmission_reports_a_non_success_result_as_failure():
     only the status code calls every rejection a success."""
     from romarr.downloaders import Transmission, TransmissionConfig
 
-    session = FakeSession([FakeResponse(200, {"result": "invalid or corrupt"})])
+    session = FakeSession([FakeResponse(body={"result": "success", "arguments": {"rpc-version": 17}}),
+                           FakeResponse(200, {"result": "invalid or corrupt"})])
     assert not Transmission(TransmissionConfig(base_url="http://t:9091"),
                             session=session).add("magnet:?xt=urn:btih:a")
 
 
-def test_transmission_treats_a_duplicate_as_added():
-    """`torrent-duplicate` means it is already there, which is the outcome
-    the caller wanted. Calling it a failure makes a re-run look broken."""
+def test_transmission_refuses_an_already_owned_duplicate():
+    """A second request cannot adopt a torrent already labelled for ROMarr."""
     from romarr.downloaders import Transmission, TransmissionConfig
 
-    session = FakeSession([FakeResponse(
-        200, {"result": "success", "arguments": {"torrent-duplicate": {"id": 3}}})])
-    assert Transmission(TransmissionConfig(base_url="http://t:9091"),
-                        session=session).add("magnet:?xt=urn:btih:a")
+    session = FakeSession([
+        FakeResponse(body={"result": "success", "arguments": {"rpc-version": 17}}),
+        FakeResponse(200, {"result": "success", "arguments": {
+            "torrent-duplicate": {"id": 3, "hashString": "a" * 40}}}),
+        FakeResponse(200, {"result": "success", "arguments": {"torrents": [{
+            "hashString": "a" * 40, "labels": ["romarr"],
+            "downloadDir": "/downloads/romarr"}]}}),
+    ])
+    assert not Transmission(TransmissionConfig(base_url="http://t:9091",
+                            save_path="/downloads/romarr"),
+                            session=session).add("magnet:?xt=urn:btih:" + "a" * 40)
+    assert [json.loads(call["data"])["method"] for call in session.calls] == [
+        "session-get", "torrent-add", "torrent-get"]
 
 
 # --- Deluge: log in first, and check the daemon is attached ----------------
@@ -257,12 +268,13 @@ def test_transmission_imports_a_completed_job_by_hash_and_mapped_file(tmp_path):
     info_hash = "a" * 40
     torrent = {"hashString": info_hash, "name": "Different client title",
                "downloadDir": r"D:\completed", "percentDone": 1,
-               "metadataPercentComplete": 1, "files": [{"name": rom.name}],
-               "labels": ["romarr"], "isFinished": False}
+               "metadataPercentComplete": 1, "files": [{"name": rom.name, "length": 14, "bytesCompleted": 14}],
+               "labels": ["romarr"], "isFinished": False, "leftUntilDone": 0, "totalSize": 14}
     session = FakeSession([
         FakeResponse(409, {}, {"X-Transmission-Session-Id": "fixture"}),
+        FakeResponse(body={"result": "success", "arguments": {"rpc-version": 17}}),
         FakeResponse(body={"result": "success", "arguments": {
-            "torrent-duplicate": {"hashString": info_hash.upper()},
+            "torrent-added": {"hashString": info_hash.upper()},
         }}),
         FakeResponse(body={"result": "success", "arguments": {"torrents": [torrent]}}),
     ])
@@ -291,7 +303,8 @@ def test_transmission_only_returns_completed_torrent_content_paths():
 
     row = {"name": "Display name", "downloadDir": "/downloads",
            "percentDone": 1, "metadataPercentComplete": 1,
-           "files": [{"name": "Folder/A.cue"}, {"name": "Folder/A.bin"}]}
+           "files": [{"name": "Folder/A.cue", "length": 7, "bytesCompleted": 7}, {"name": "Folder/A.bin", "length": 7, "bytesCompleted": 7}],
+           "hashString": "a" * 40, "labels": ["romarr"], "leftUntilDone": 0, "totalSize": 14}
     session = FakeSession([FakeResponse(body={"result": "success", "arguments": {
         "torrents": [
             row, {**row, "percentDone": 0.9}, {**row, "metadataPercentComplete": 0},

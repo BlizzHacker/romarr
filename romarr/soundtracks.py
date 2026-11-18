@@ -1045,7 +1045,7 @@ class Soundtracks:
 
     # -- torrent watches --
     def add_watch(self, key: str, tag: str, release: str, client_id: str = "") -> int:
-        """Start watching a torrent (identified by its qBittorrent tag) for this game."""
+        """Watch a client-scoped qBittorrent tag or prefixed Transmission hash for this game."""
         now = time.time()
         with self._lock:
             c = self._db()
@@ -1116,7 +1116,10 @@ class Soundtracks:
         for w in self.active_watches():
             if client_id is not None and w.get("client_id") != client_id:
                 continue
-            row = next((r for r in rows if w["tag"] in {t.strip() for t in str(r.get("tags") or "").split(",")}), None)
+            matches = [r for r in rows if (w["tag"] == "transmission:" + str(r.get("hash") or "")
+                       if w["tag"].startswith("transmission:") else w["tag"] in
+                       {t.strip() for t in str(r.get("tags") or "").split(",")})]
+            row = matches[0] if len(matches) == 1 else None
             now = time.time()
             if row is None:
                 if now - (w["seen"] or w["added"]) > WATCH_LOST_AFTER:
@@ -1135,6 +1138,9 @@ class Soundtracks:
                 game, api = resolve(w["key"])
             except (LookupError, RuntimeError, ValueError):
                 self._set_watch(w["id"], pct=1.0, seen=now, message="Finished; waiting for the RomM library to load")
+                continue
+            if w["tag"].startswith("transmission:") and not row.get("content_path"):
+                self._set_watch(w["id"], state="failed", message="Cannot resolve a safe torrent payload path", seen=now)
                 continue
             path = map_path(str(row.get("content_path") or row.get("save_path") or ""))
             if not self._set_watch(w["id"], pct=1.0, seen=now, state="importing",

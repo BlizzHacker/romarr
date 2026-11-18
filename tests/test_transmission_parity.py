@@ -1,0 +1,153 @@
+"""Transmission attachment, progress and soundtrack identity boundaries."""
+from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
+from unittest.mock import Mock
+import threading
+
+import pytest
+
+from romarr.app import ROMarr
+from romarr.downloaders import Transmission
+from romarr.queue_progress import annotate
+from romarr.selection import Release
+from test_transmission_completion import HASH, client, torrent, success
+
+MAGNET = 'magnet:?xt=urn:btih:' + HASH
+
+
+@pytest.mark.parametrize('version', [16, 17])
+def test_attach_preserves_external_directory_and_labels(version):
+    """An unowned magnet can be claimed in its existing download directory."""
+    c = client()
+    c._rpc_version = version
+    before = torrent(labels=['personal'], downloadDir='/existing')
+    after = dict(before, labels=['personal', 'romarr'])
+    c._call = Mock(side_effect=[success(**{'torrent-duplicate': {'hashString': HASH}}),
+                               success(torrents=[before]), success(), success(torrents=[after])])
+    assert c.add(MAGNET)
+    assert c.last_job_id == HASH
+    assert c._call.call_args_list[2].args == ('torrent-set', {'ids': [HASH], 'labels': ['personal', 'romarr']})
+    c._call = Mock(return_value=success(torrents=[after]))
+    assert c.completed()[0]['content_path'] == '/existing/Demo.sfc'
+
+
+@pytest.mark.parametrize('confirmation', ['wrong-directory', 'missing-label', 'error', 'exception'])
+def test_failed_attach_rolls_back_only_its_label(confirmation):
+    """Failure preserves unrelated labels, including concurrently added labels."""
+    c = client()
+    before = torrent(labels=['personal'])
+    reply = {'wrong-directory': success(torrents=[torrent(downloadDir='/moved')]),
+             'missing-label': success(torrents=[before]), 'error': {'result': 'error'},
+             'exception': RuntimeError('disconnected')}[confirmation]
+    c._call = Mock(side_effect=[success(**{'torrent-duplicate': {'hashString': HASH}}),
+                               success(torrents=[before]), success(), reply,
+                               success(torrents=[torrent(labels=['personal', 'new', 'romarr'])]), success()])
+    assert not c.add(MAGNET)
+    assert not c.last_job_id
+    assert c._call.call_args.args == ('torrent-set', {'ids': [HASH], 'labels': ['personal', 'new']})
+
+
+def test_two_requests_cannot_attach_the_same_torrent():
+    """Concurrent submissions through one client claim a torrent once."""
+    c = client()
+    labels = []
+    def call(method, arguments):
+        """Model the daemon's current labels across serialized requests."""
+        if method == 'torrent-add':
+            return success(**{'torrent-duplicate': {'hashString': HASH}})
+        if method == 'torrent-set':
+            labels[:] = arguments['labels']
+            return success()
+        return success(torrents=[torrent(labels=list(labels))])
+    c._call = call
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda _: c.add(MAGNET), range(2)))
+    assert sorted(results) == [False, True]
+    assert labels == ['romarr']
+
+
+def test_progress_uses_identity_category_and_shared_deadline():
+    """Progress cannot leak from another category or malformed RPC values."""
+    c = client()
+    c.romarr_id = 'transmission-one'
+    c._call = Mock(return_value=success(torrents=[
+        torrent(percentDone=.42, eta=90, rateDownload=2048, status=4),
+        torrent(hashString='b'*40, percentDone=2, eta=-2, rateDownload=-10),
+        torrent(hashString='c'*40, percentDone=float('nan')),
+        torrent(hashString='d'*40, labels=['other']), None]))
+    service = SimpleNamespace(_lock=threading.RLock(), clients=[c])
+    row = {'state': 'grabbed', 'download_client': c.romarr_id, 'download_id': HASH}
+    annotated = annotate(service, [row])[0]
+    assert annotated['progress'] == 42
+    assert annotated['speed'] == 2048 and annotated['eta'] == 90
+    assert isinstance(c._call.call_args.kwargs['_deadline'], float)
+    progress = c.progress()
+    assert len(progress) == 2
+    assert progress['b'*40]['eta'] is None and progress['b'*40]['speed'] == 0
+
+
+@pytest.mark.parametrize('upload', [False, True])
+def test_soundtrack_grab_records_transmission_identity_and_separate_label(upload):
+    """A soundtrack grab uses the same local Prowlarr resolution as ROM grabs."""
+    service = ROMarr.__new__(ROMarr)
+    service._lock = threading.RLock()
+    service._collection_source_lock = threading.RLock()
+    c = client()
+    c.romarr_id = 'transmission-one'
+    c._call = Mock(return_value=success(**{'torrent-added': {'hashString': HASH}}))
+    service.clients = [c]
+    service.prowlarr = SimpleNamespace(is_prowlarr_download_url=lambda _: True,
+                                     fetch_torrent=lambda _: b'torrent' if upload else MAGNET)
+    pick = Release('Soundtrack', 100, 1, (), 'http://prowlarr/download', 'torrent')
+    service._snd_torrents = {'scope:42': {'release': pick}}
+    service._soundtrack_target = lambda _: ({'id': '42', 'library_scope': 'scope'}, None)
+    store = Mock()
+    service.soundtrack_store = lambda _: store
+    assert service.soundtrack_torrent_grab('scope:42', 'release')['ok']
+    arguments = c._call.call_args.args[1]
+    assert arguments['labels'] == [service.SOUNDTRACK_CATEGORY]
+    assert ('metainfo' in arguments) is upload
+    store.add_watch.assert_called_once_with('42', 'transmission:' + HASH, 'Soundtrack', client_id=c.romarr_id)
+    c._call = Mock(return_value=success(torrents=[torrent(labels=[service.SOUNDTRACK_CATEGORY])]))
+    assert c.completed() == []
+
+
+def test_soundtrack_polling_uses_actual_files_and_never_a_shared_download_root():
+    """Ready soundtrack rows expose only a validated payload path."""
+    c = client()
+    c._call = Mock(return_value=success(torrents=[torrent(labels=['romarr-soundtracks'],
+        files=[{'name': 'Album/01.mp3'}, {'name': 'Album/02.mp3'}])]))
+    row = c.torrents(category='romarr-soundtracks')[0]
+    assert row['category'] == 'romarr-soundtracks'
+    assert row['content_path'] == '/downloads/romarr/Album'
+    c._call.return_value = success(torrents=[torrent(files=[{'name': '01.mp3'}, {'name': '02.mp3'}])])
+    assert c.torrents()[0]['content_path'] == ''
+
+
+@pytest.mark.parametrize('directory', ['relative', '/downloads/../other', '/bad\x00dir'])
+def test_unsafe_download_directory_cannot_be_adopted_or_imported(directory):
+    """Remote paths are validated before ownership or import changes."""
+    c = client()
+    row = torrent(downloadDir=directory, labels=[])
+    c._call = Mock(side_effect=[success(**{'torrent-duplicate': {'hashString': HASH}}),
+                               success(torrents=[row])])
+    assert not c.add(MAGNET)
+    assert [call.args[0] for call in c._call.call_args_list] == ['torrent-add', 'torrent-get']
+    assert c._content_path(row) == ''
+
+
+def test_soundtrack_watch_refuses_shared_root_and_is_scoped_to_client(tmp_path):
+    """A completed hash cannot import another client's files or a shared root."""
+    from romarr.soundtracks import Soundtracks
+
+    store = Soundtracks(tmp_path / 'soundtracks.db')
+    store.add_watch('42', 'transmission:' + HASH, 'Album', client_id='owner')
+    store._import_torrent = Mock()
+    row = {'hash': HASH, 'progress': 1, 'save_path': str(tmp_path), 'content_path': ''}
+    resolve = lambda _: ({'id': '42'}, Mock())
+    store.process_watches([row], resolve, lambda path: path, client_id='other')
+    assert store.watch_for('42')['state'] == 'downloading'
+    store.process_watches([row], resolve, lambda path: path, client_id='owner')
+    assert store.watch_for('42')['state'] == 'failed'
+    assert 'safe torrent payload path' in store.watch_for('42')['message']
+    store._import_torrent.assert_not_called()

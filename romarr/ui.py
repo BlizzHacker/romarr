@@ -6656,7 +6656,7 @@ RENDER.collections=async()=>{
     +'<div class="card" style="margin-top:16px"><h3>Acquire missing files from a set torrent</h3>'
     +(sourceState.errors||[]).map(error=>'<div class="panel-note panel-warn">'+esc(error)+'</div>').join('')
     +(sourceTorrents.length&&dats.length
-      ?'<p class="help">Preview a DAT plan against one existing qBittorrent torrent. ROMarr selects only matching missing files, stages one budgeted batch at a time, verifies each staged set against the DAT, then restores the torrent’s original file priorities and paused state. The cap limits ROMarr staging copies; downloaded torrent files remain in qBittorrent and need separate source storage.</p>'
+      ?'<p class="help">Preview a DAT plan against one existing qBittorrent or Transmission torrent. ROMarr selects only matching missing files, stages one budgeted batch at a time, verifies each staged set against the DAT, then restores the torrent’s original file priorities and paused state. The cap limits ROMarr staging copies; downloaded torrent files remain in the torrent client and need separate source storage.</p>'
        +'<div class="row" style="flex-wrap:wrap">'
        +'<select id="csrc-torrent">'+sourceTorrents.map(t=>
          '<option value="'+esc(t.hash)+'" data-client="'+esc(t.client_id)+'">'
@@ -6666,7 +6666,7 @@ RENDER.collections=async()=>{
        +'<div id="csrc-out" style="margin-top:10px"></div>'
       :(sourceTorrents.length
         ?'<p class="help">Load a DAT before previewing missing collection files.</p>'
-        :'<p class="help">Enable a qBittorrent download client to use this workflow.</p>'))
+        :'<p class="help">Enable a qBittorrent or Transmission download client to use this workflow.</p>'))
     +'<div id="csrc-jobs" style="margin-top:10px"></div></div>'
     +'<div class="card" style="margin-top:16px"><h3>Batches</h3>'
     +'<div id="cbatch"></div></div>';

@@ -1,4 +1,4 @@
-"""Plan selective collection acquisition from an existing qBittorrent set."""
+"""Plan selective collection acquisition from an existing torrent set."""
 from __future__ import annotations
 
 import re
@@ -26,7 +26,7 @@ def plan_source(titles: list[str], dat, files: list[dict], cap_bytes: int,
     """Match missing DAT names to source files and pack indivisible games.
 
     The cap is a staging budget. Two torrent pieces are reserved for boundary
-    overhead, with a 4 MiB floor when qBittorrent does not report piece size.
+    overhead, with a 4 MiB floor when the client does not report piece size.
     """
     cap = max(0, int(cap_bytes))
     reserve = max(4 * 1024 * 1024, max(0, int(piece_size)) * 2)

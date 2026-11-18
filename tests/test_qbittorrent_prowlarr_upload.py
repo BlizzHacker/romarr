@@ -243,6 +243,60 @@ def test_remote_qbittorrent_never_receives_prowlarr_url_or_key(tmp_path, caplog)
     assert "SUPERSECRET" not in caplog.text
 
 
+@pytest.mark.parametrize("magnet_redirect", [True, False])
+def test_transmission_receives_resolved_prowlarr_release(tmp_path, magnet_redirect):
+    """Transmission receives resolved prowlarr release."""
+    import base64
+    from unittest.mock import Mock
+    from romarr.downloaders import Transmission, TransmissionConfig
+
+    magnet = "magnet:?xt=urn:btih:" + "a" * 40 + "&dn=Metroid"
+    response = (Response(302, headers={"Location": magnet + "&apikey=SUPERSECRET"})
+                if magnet_redirect else Response(chunks=[TORRENT]))
+    service = ROMarr({"ROMARR_DATA": str(tmp_path / "state.json")})
+    service.prowlarr = prowlarr(FetchSession([response]))
+    client = Transmission(TransmissionConfig("http://transmission:9091", category="romarr", save_path="/downloads/romarr"))
+    client._rpc_version = 17
+    client._call = Mock(return_value={"result": "success", "arguments": {"torrent-added": {"hashString": "a" * 40}}})
+    service.clients = [client]
+    release = Release("Super Metroid (USA).smc", 3_000_000, 20, (1030,),
+                      "http://prowlarr:9696/1/download?apikey=SUPERSECRET", "torrent", indexer="Prowlarr")
+
+    result = service.grab(release, "Super Metroid", "snes")
+
+    assert result["ok"] is True
+    arguments = client._call.call_args.args[1]
+    assert arguments["download-dir"] == "/downloads/romarr"
+    assert arguments["labels"] == ["romarr"]
+    if magnet_redirect:
+        assert arguments["filename"] == magnet
+    else:
+        assert base64.b64decode(arguments["metainfo"]) == TORRENT
+    assert "SUPERSECRET" not in repr(client._call.call_args_list)
+    assert service.queue[-1].download_id == "a" * 40
+
+
+def test_prowlarr_failure_does_not_submit_to_transmission(tmp_path):
+    """Prowlarr failure does not submit to transmission."""
+    from unittest.mock import Mock
+    from romarr.downloaders import Transmission, TransmissionConfig
+
+    service = ROMarr({"ROMARR_DATA": str(tmp_path / "state.json")})
+    service.prowlarr = prowlarr(FetchSession([Response(500)]))
+    client = Transmission(TransmissionConfig("http://transmission:9091"))
+    client._call = Mock()
+    service.clients = [client]
+    release = Release("Super Metroid", 3_000_000, 20, (1030,),
+                      "http://prowlarr:9696/1/download?apikey=SUPERSECRET", "torrent", indexer="Prowlarr")
+
+    result = service.grab(release, "Super Metroid", "snes")
+
+    assert result["ok"] is False
+    client._call.assert_not_called()
+    assert service.queue[-1].state == "failed"
+    assert "SUPERSECRET" not in repr(result)
+
+
 @pytest.fixture
 def debrid_service(tmp_path, monkeypatch):
     """Use the real grab and Real-Debrid add path with isolated external calls."""

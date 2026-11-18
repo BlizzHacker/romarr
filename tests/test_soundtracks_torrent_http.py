@@ -54,3 +54,43 @@ def test_http_manual_torrent_search_grab_and_watched_import_preserves_source(env
     assert "99 synthetic.mp3" in romm.tracks[42].values()
     assert len(posts)==1                         # no torrent delete, pause or source cleanup
     assert service.soundtrack_store().status({"id":"42","name":"Fixture"},service._soundtrack_target("42")[1])["undoable"]==1
+
+
+def test_transmission_http_grab_watch_and_import_preserve_payload(env, tmp_path):
+    """Transmission soundtrack identity survives HTTP handoff and background polling."""
+    from unittest.mock import Mock
+    from romarr.downloaders import Transmission, TransmissionConfig
+    from test_transmission_completion import HASH, success, torrent
+
+    base, service, romm, _ = env
+    client = Transmission(TransmissionConfig('http://fixture.invalid', save_path=str(tmp_path)))
+    client._rpc_version = 17
+    client.romarr_id = 'transmission-soundtracks'
+    client._call = Mock(return_value=success(**{'torrent-added': {'hashString': HASH}}))
+    service.clients = [client]
+    service.prowlarr = SimpleNamespace(search=lambda _: [Release('Synthetic soundtrack', 123, 1, (),
+        'magnet:?xt=urn:btih:' + HASH, 'torrent')], is_prowlarr_download_url=lambda _: False)
+    code, raw = call(base, '/api/v1/soundtracks/torrents?id=42&q=Synthetic')
+    release = json.loads(raw)['items'][0]['id']
+    assert code == 200
+    code, raw = call(base, '/api/v1/soundtracks/torrents/grab', {'id': '42', 'release': release})
+    assert code == 200 and json.loads(raw)['ok']
+    assert client._call.call_args.args[1]['labels'] == ['romarr-soundtracks']
+    source = tmp_path / 'album'
+    source.mkdir()
+    track = source / '99 synthetic.mp3'
+    payload = b'synthetic fixture audio'
+    track.write_bytes(payload)
+    client._call = Mock(return_value=success(torrents=[torrent(labels=['romarr-soundtracks'],
+        downloadDir=str(tmp_path), files=[{'name': 'album/99 synthetic.mp3'}])]))
+    assert 'queued' in service.soundtrack_watch_tick()
+    for _ in range(200):
+        watch = service.soundtrack_store().watch_for('42')
+        if watch['state'] in ('added', 'failed'):
+            break
+        time.sleep(.025)
+    assert watch['state'] == 'added', watch
+    assert watch['tag'] == 'transmission:' + HASH and watch['client_id'] == client.romarr_id
+    assert track.read_bytes() == payload
+    assert '99 synthetic.mp3' in romm.tracks[42].values()
+    assert {call.args[0] for call in client._call.call_args_list} == {'torrent-get'}

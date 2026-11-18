@@ -188,3 +188,8 @@ Upload receipts are matched to the bytes later read from RomM before a file beco
 Soundtrack torrent watches are bound to the download-client identity as well as the library. Existing unbound watches are not automatically imported. Stopping a watch leaves the torrent seeding. The music library is disabled until an explicit root is configured in the Soundtrack settings; disabling both catalogue sources is supported. Only use audio you own or are authorized to obtain; no audio is bundled with ROMarr. See [CREDITS.md](../CREDITS.md) for source attribution.
 
 Game selection is bounded to500 rows per response. The targets endpoint accepts `q` and `library` so every matching title in a large library remains reachable without a huge dropdown. Existing enabled antivirus scanning applies to all staged audio uploads, including album, catalogue, torrent and restore uploads; a scan failure or finding blocks the upload.
+
+Transmission soundtrack torrents use the separate `romarr-soundtracks` label.
+ROMarr watches their client-scoped hash, imports only the validated payload path,
+and leaves the original torrent files available for seeding. Remote path mappings
+apply when Transmission and ROMarr see different filesystem paths.
