@@ -15,8 +15,12 @@ runtime, so the manifest declares no dependencies.
 
 ## Validation (2026-11-15)
 
+This record is for the 1.10.0 manifest. The manifest moved to 1.11.4 on 2026-11-18
+(new ZIP and SHA-256 from that release) and has not been revalidated locally;
+the winget-pkgs bot validates and installs it on the PR.
+
 ```powershell
-winget validate --manifest packaging\winget\manifests\m\MoveWeight\ROMarr\1.11.4
+winget validate --manifest packaging\winget\manifests\m\MoveWeight\ROMarr\1.10.0
 # Manifest validation succeeded.
 ```
 
