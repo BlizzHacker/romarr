@@ -853,6 +853,9 @@ class ROMarr:
         self._dats_loader_ident = None
         self._dats_constructor_ident = None
         self._deferred_dat_dir = ""
+        # Bumped by every DAT selection that reaches the reload lock, so a
+        # deferred startup load can tell it has been overtaken.
+        self._dat_generation = 0
         self._titled_lock = threading.RLock()
         self._switch_lock = threading.Lock()
         self._switch_cache = None
@@ -1056,6 +1059,8 @@ class ROMarr:
             # /api/health must not wait for it. load_dats_in_background()
             # does the work once the server is listening.
             self._deferred_dat_dir = dat_dir
+            # Any selection published after this point wins over the load.
+            self._deferred_dat_generation = self._dat_generation
             self._dats_constructor_ident = threading.get_ident()
             self._dats_ready.clear()
         else:
@@ -3636,6 +3641,9 @@ class ROMarr:
     @dats.setter
     def dats(self, value: DatIndex) -> None:
         self._dats = value
+        # Every published selection counts; a rejected setup candidate is
+        # never assigned, so it cannot cancel the startup load.
+        self._dat_generation = self.__dict__.get("_dat_generation", 0) + 1
 
     def _dats_now(self) -> DatIndex:
         """The DAT index as it is right now, never waiting for a load."""
@@ -3657,12 +3665,19 @@ class ROMarr:
         if self._dats_ready.is_set():
             return None
         directory = self._deferred_dat_dir
+        generation = self._deferred_dat_generation
 
         def run():
             self._dats_loader_ident = threading.get_ident()
             started = time.monotonic()
             try:
-                result = self.reload_dats(directory)
+                with self._dat_reload_lock:
+                    if self._dat_generation != generation:
+                        # Setup chose DATs while this load waited its turn;
+                        # that newer selection stands.
+                        log.info("startup DAT load skipped: a newer DAT selection is active")
+                        return
+                    result = self._reload_dats(directory)
                 log.info("DATs ready: %d loaded in %.1fs", result.get("loaded", 0),
                          time.monotonic() - started)
             except Exception:

@@ -197,10 +197,32 @@ def test_a_failed_background_load_does_not_leave_readers_waiting(tmp_path, monke
     def broken(directory=""):
         raise RuntimeError("disk vanished")
 
-    monkeypatch.setattr(svc, "reload_dats", broken)
+    monkeypatch.setattr(svc, "_reload_dats", broken)
     svc.load_dats_in_background().join(5)
     assert svc.dats_status()["loading"] is False
     assert svc.dats.dats == []
+
+
+def test_a_selection_made_during_startup_is_not_undone_by_the_startup_load(tmp_path):
+    startup = _dat_dir(tmp_path)
+    chosen = tmp_path / "chosen"
+    chosen.mkdir()
+    (chosen / "md.dat").write_text(CMP, encoding="utf-8")
+    svc = _service(tmp_path, startup, defer_dats=True)
+    # Setup picks another folder before the deferred load gets the lock.
+    assert svc.setup_dats(str(chosen))["ok"]
+    svc.load_dats_in_background().join(5)
+    assert [d.name for d in svc.dats.dats] == ["Sega - Mega Drive"]
+    assert svc.store.settings["dat_path"] == str(chosen)
+
+
+def test_a_rejected_setup_candidate_does_not_cancel_the_startup_load(tmp_path):
+    svc = _service(tmp_path, _dat_dir(tmp_path), defer_dats=True)
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    assert not svc.setup_dats(str(empty))["ok"]
+    svc.load_dats_in_background().join(5)
+    assert len(svc.dats.dats) == 3
 
 
 def test_direct_construction_still_loads_dats_synchronously(tmp_path):
