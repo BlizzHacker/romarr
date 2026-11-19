@@ -5382,6 +5382,18 @@ RENDER.status=async()=>{
     &&(typeof activePage!=='string'||activePage==='status')
     &&(viewVersion===null||pageVersion===viewVersion);
   const h=await j('/api/v1/system/status');
+  if(h.dats_loading){
+    // Update only the DAT tiles: re-rendering the page would reset its forms.
+    const poll=async()=>{
+      if(!current()||!$('#status-dats'))return;
+      const s=await j('/api/v1/system/status').catch(()=>null);
+      if(!current()||!$('#status-dats'))return;
+      if(!s||s.dats_loading){setTimeout(poll,3000);return;}
+      $('#status-dats').innerHTML='<b>'+(s.dats||0)+'</b><span>DATs loaded</span>';
+      $('#status-dat-games').innerHTML='<b>'+(s.dat_games||0)+'</b><span>Known dumps</span>';
+    };
+    setTimeout(poll,3000);
+  }
   if(!current())return;
   const row=(l,ok,extra='')=>`<tr><td>${l}</td>
     <td><span class="dot ${ok?'up':'down'}"></span>${ok?'OK':'Not available'}</td>
@@ -5444,8 +5456,8 @@ RENDER.status=async()=>{
     <div class="card"><h3>About</h3><div class="st">
       <div><b>${esc(h.version||"unknown")}</b><span>Version</span></div>
       <div><b>${h.platforms}</b><span>Platforms</span></div>
-      <div><b>${h.dats||0}</b><span>DATs loaded</span></div>
-      <div><b>${h.dat_games||0}</b><span>Known dumps</span></div>
+      <div id="status-dats"><b>${h.dats_loading?"…":(h.dats||0)}</b><span>${h.dats_loading?"Loading DATs":"DATs loaded"}</span></div>
+      <div id="status-dat-games"><b>${h.dat_games||0}</b><span>Known dumps</span></div>
       <div><b>${h.events}</b><span>History events</span></div>
       <div><b>${esc(h.uptime)}</b><span>Uptime</span></div>
     </div>${buildIdentityLine(h.build)}<p class="help"><a href="https://romarr.app/privacy" target="_blank" rel="noopener noreferrer">Privacy policy</a> · <a href="mailto:me@romarr.app">Contact support</a> · <a href="https://discord.gg/ywNFceuAd" target="_blank" rel="noopener noreferrer">Discord</a> · <a href="https://opencollective.com/romarr" target="_blank" rel="noopener noreferrer">Open Collective</a> · <a href="https://github.com/BlizzHacker/romarr" target="_blank" rel="noopener noreferrer">GitHub</a></p></div>
@@ -6369,11 +6381,26 @@ RENDER.reports=async()=>{
 
 // The optional guide uses the same editors and connection checks as Settings.
 const SETUP={step:0,mode:'organize',initialized:false};
+const setupDatState=state=>state.dat_loading
+  ?'<p class="help"><b>Loading DATs…</b> Verification starts when they are ready.</p>'
+  :(state.dat_loaded?'<p class="help"><b>'+fmt(state.dat_loaded)+' DAT(s) loaded</b> · '+fmt(state.dat_games)+' games</p>':'');
 RENDER.setup=async()=>{
   const version=typeof pageVersion==='number'?pageVersion:null;
   const current=()=>version===null||(version===pageVersion&&activePage==='setup');
   const state=await j('/api/v1/setup/status').catch(()=>null);
   if(!current())return;
+  if(state&&state.dat_loading){
+    // Refresh only the DAT line, so a half-typed form keeps its input.
+    const poll=async()=>{
+      if(!current())return;
+      const s=await j('/api/v1/setup/status').catch(()=>null);
+      if(!current())return;
+      if(!s||s.dat_loading){setTimeout(poll,3000);return;}
+      Object.assign(state,{dat_loading:false,dat_loaded:s.dat_loaded,dat_games:s.dat_games});
+      const el=$('#setup-dat-state'); if(el) el.innerHTML=setupDatState(state);
+    };
+    setTimeout(poll,3000);
+  }
   if(!state||state.error){
     $('#page').innerHTML='<div class="card"><h3>Setup Guide</h3><p class="help">We could not read your setup. Refresh this page to try again.</p></div>';
     return;
@@ -6418,7 +6445,7 @@ RENDER.setup=async()=>{
   }else if(active===4){
     content='<h3>Add confidence and more sources</h3><p class="help">Both of these are optional. You can start with your existing files and return later.</p>'
       +'<h4>Verify with DATs</h4><p class="help">A No-Intro or Redump DAT is a checklist of known file hashes. It lets ROMarr verify a dump and compare your collection with a complete set.</p>'
-      +(state.dat_loaded?'<p class="help"><b>'+fmt(state.dat_loaded)+' DAT(s) loaded</b> · '+fmt(state.dat_games)+' games</p>':'')
+      +'<div id="setup-dat-state">'+setupDatState(state)+'</div>'
       +'<div class="field"><label for="setup-dat-path">Folder containing your DAT files</label><input id="setup-dat-path" value="'+esc(state.dat_path)+'" placeholder="/dats"></div>'
       +action('setup-dats','Check and load DATs')+'<div id="setup-dat-result" role="status" class="testline"></div>'
       +'<h4 style="margin-top:22px">Explore ROM Hub</h4><p class="help">ROM Hub is the plugin catalogue. Plugins can add supported search sources and download tools. Open a plugin’s details to check what it needs before installing.</p>'

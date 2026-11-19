@@ -9,7 +9,7 @@ Python, ROM Hub, MinGit, .NET and a fixed WebView2 runtime ship in the package.
 [CmdletBinding()]
 param(
     [string]$OutputDirectory,
-    [string]$Version = '1.11.4',
+    [string]$Version = '1.11.5',
     [string]$PythonPath = 'python',
     [string]$StoreIdentityName = 'MoveWeight.ROMarr.Desktop',
     [string]$StorePublisher = 'CN=MoveWeight',
@@ -66,7 +66,12 @@ function Get-VerifiedDownload([string]$Url, [string]$Destination, [string]$Sha25
 
 & $PythonPath -c 'import sys; assert sys.version_info[:2] == (3,13), "Build with Python 3.13 to match the bundled interpreter"'
 if ($LASTEXITCODE -ne 0) { throw 'Python 3.13 build environment is required.' }
-$dotnetVersion = & dotnet --version
+# A fresh runner's first dotnet call can print a welcome banner first; an
+# array result made -notmatch truthy and failed the check with the SDK present.
+$env:DOTNET_NOLOGO = '1'
+$env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1'
+$dotnetVersion = [string](& dotnet --version | Select-Object -Last 1)
+$dotnetVersion = $dotnetVersion.Trim()
 if ($LASTEXITCODE -ne 0 -or $dotnetVersion -notmatch '^10\.') { throw '.NET 10 SDK is required.' }
 
 # Read the official fixed-runtime API, then retain the verified pinned runtime.

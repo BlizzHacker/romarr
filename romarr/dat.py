@@ -40,7 +40,7 @@ BAD_DUMP = "bad-dump"
 UNKNOWN = "unknown"
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Rom:
     """One file inside a DAT entry.
 
@@ -56,7 +56,7 @@ class Rom:
     sha1: str = ""
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class Game:
     name: str
     roms: tuple[Rom, ...] = ()
@@ -508,9 +508,44 @@ def _regions_in(name: str) -> set[str]:
 _CMP_BLOCK = re.compile(r"^\s*(game|machine|resource)\s*\(\s*$", re.M)
 #: `name "Some Game (USA)"` or `name Some_Game` -- quoted or bare.
 _CMP_FIELD = re.compile(r'(\w+)\s+(?:"([^"]*)"|(\S+))')
+# Compiled once: these run per block across hundreds of thousands of blocks,
+# and re's compile cache lookup alone was a measurable share of startup.
+_CMP_HEADER = re.compile(r"clrmamepro\s*\((.*?)\n\)", re.S)
+_CMP_NAME = re.compile(r'^\s*name\s+(?:"([^"]*)"|(\S+))', re.M)
+_CMP_CLONE = re.compile(r'^\s*cloneof\s+(?:"([^"]*)"|(\S+))', re.M)
+_CMP_LANG = re.compile(r'^\s*languages?\s+(?:"([^"]*)"|(\S+))', re.M)
+_CMP_ROM = re.compile(r"^\s*rom\s*\((.*?)\)\s*$", re.M)
+
+#: Bumped whenever the record layout below changes, so an old cache is
+#: re-parsed rather than misread.
+DAT_RECORD_FORMAT = 1
 
 
-def _parse_clrmamepro(body: str) -> Dat:
+def _cmp_fields(text: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for m in _CMP_FIELD.finditer(text):
+        value = m.group(2)
+        out[m.group(1)] = value if value is not None else m.group(3)
+    return out
+
+
+def _cmp_value(pattern, block: str) -> str:
+    m = pattern.search(block)
+    if not m:
+        return ""
+    return (m.group(1) if m.group(1) is not None else m.group(2)).strip()
+
+
+def _rom_tuple(name: str, size, crc: str, md5: str, sha1: str) -> tuple:
+    try:
+        size = int(size or 0)
+    except ValueError:
+        size = 0
+    return ((name or "").strip(), size, (crc or "").strip().lower(),
+            (md5 or "").strip().lower(), (sha1 or "").strip().lower())
+
+
+def _clrmamepro_record(body: str) -> tuple:
     """The other DAT format, which is not XML at all.
 
     libretro-database ships the largest freely downloadable corpus of
@@ -520,155 +555,153 @@ def _parse_clrmamepro(body: str) -> Dat:
     verification answered UNKNOWN for the whole library and looked like it
     was working.
     """
-    dat = Dat()
-    header = re.search(r"clrmamepro\s*\((.*?)\n\)", body or "", re.S)
+    body = body or ""
+    name = version = ""
+    header = _CMP_HEADER.search(body)
     if header:
-        fields = dict((m.group(1), m.group(2) if m.group(2) is not None
-                       else m.group(3))
-                      for m in _CMP_FIELD.finditer(header.group(1)))
-        dat.name = (fields.get("name") or "").strip()
-        dat.version = (fields.get("version") or "").strip()
+        fields = _cmp_fields(header.group(1))
+        name = (fields.get("name") or "").strip()
+        version = (fields.get("version") or "").strip()
 
-    for match in _CMP_BLOCK.finditer(body or ""):
+    entries = []
+    for match in _CMP_BLOCK.finditer(body):
         # A block runs to the first `)` alone on a line. Nested `rom (...)`
         # entries close on the same line, so they never end the block early.
         end = body.find("\n)", match.end())
         if end == -1:
             continue
         block = body[match.end():end]
-
-        name = ""
-        head = re.search(r'^\s*name\s+(?:"([^"]*)"|(\S+))', block, re.M)
-        if head:
-            name = (head.group(1) if head.group(1) is not None
-                    else head.group(2)).strip()
-        if not name:
+        game = _cmp_value(_CMP_NAME, block)
+        if not game:
             continue
-        clone = ""
-        cl = re.search(r'^\s*cloneof\s+(?:"([^"]*)"|(\S+))', block, re.M)
-        if cl:
-            clone = (cl.group(1) if cl.group(1) is not None
-                     else cl.group(2)).strip()
-        raw_lang = ""
-        lg = re.search(r'^\s*languages?\s+(?:"([^"]*)"|(\S+))', block, re.M)
-        if lg:
-            raw_lang = (lg.group(1) if lg.group(1) is not None
-                        else lg.group(2)).strip()
-
         roms = []
-        for line in re.finditer(r"^\s*rom\s*\((.*?)\)\s*$", block, re.M):
-            f = dict((m.group(1), m.group(2) if m.group(2) is not None
-                      else m.group(3))
-                     for m in _CMP_FIELD.finditer(line.group(1)))
-            try:
-                size = int(f.get("size") or 0)
-            except ValueError:
-                size = 0
-            rom = Rom(name=(f.get("name") or "").strip(), size=size,
-                      crc=(f.get("crc") or "").strip().lower(),
-                      md5=(f.get("md5") or "").strip().lower(),
-                      sha1=(f.get("sha1") or "").strip().lower())
+        for line in _CMP_ROM.finditer(block):
+            f = _cmp_fields(line.group(1))
+            roms.append(_rom_tuple(f.get("name"), f.get("size"), f.get("crc"),
+                                   f.get("md5"), f.get("sha1")))
+        entries.append((game, _cmp_value(_CMP_CLONE, block),
+                        parse_dat_languages(_cmp_value(_CMP_LANG, block)),
+                        tuple(roms)))
+    return (name, version, entries)
+
+
+def _parse_clrmamepro(body: str) -> Dat:
+    return dat_from_record(_clrmamepro_record(body))
+
+
+def _logiqx_record(xml_text: str):
+    """Logiqx XML as a record, streamed rather than built as one tree.
+
+    A full DAT tree is several times the size of its text; each `game` is
+    read and released as it closes, so peak memory follows the largest game,
+    not the whole file. Returns None when the text is not well-formed XML.
+    """
+    import xml.etree.ElementTree as ET
+
+    parser = ET.XMLPullParser(events=("start", "end"))
+    name = version = ""
+    raw = []  # (name, cloneof, cloneofid, languages, roms)
+    ids: dict[str, str] = {}
+    root = None
+    chunk = 1 << 20
+    try:
+        for offset in range(0, len(xml_text), chunk):
+            parser.feed(xml_text[offset:offset + chunk])
+            for event, node in parser.read_events():
+                if event == "start":
+                    if root is None:
+                        root = node
+                    continue
+                if node.tag == "header" and not name and not version:
+                    name = (node.findtext("name") or "").strip()
+                    version = (node.findtext("version") or "").strip()
+                elif node.tag == "game":
+                    game = (node.get("name") or "").strip()
+                    node_id = (node.get("id") or "").strip()
+                    if node_id and game:
+                        ids[node_id] = game
+                    if game:
+                        roms = tuple(
+                            _rom_tuple(r.get("name"), r.get("size"), r.get("crc"),
+                                       r.get("md5"), r.get("sha1"))
+                            for r in node.findall("rom"))
+                        raw_lang = (node.get("language") or node.findtext("language")
+                                    or node.get("languages") or node.findtext("languages")
+                                    or "").strip()
+                        raw.append((game, (node.get("cloneof") or "").strip(),
+                                    (node.get("cloneofid") or "").strip(),
+                                    parse_dat_languages(raw_lang), roms))
+                    if root is not None:
+                        root.clear()  # drop every finished child
+        parser.close()
+    except (ET.ParseError, ValueError):
+        return None
+    if root is None:
+        return None
+    entries = [(game, parent or ids.get(parent_id, ""), langs, roms)
+               for game, parent, parent_id, langs, roms in raw]
+    return (name, version, entries)
+
+
+def dat_from_record(record) -> Dat:
+    """Build a Dat from its record: (name, version, entries).
+
+    Each entry is (game, cloneof, languages, roms) with roms as
+    (name, size, crc, md5, sha1) tuples, in DAT order and including
+    duplicate game names -- the indexes keep the first hit for every hash,
+    so rebuilding from the record gives exactly what parsing gave.
+    """
+    name, version, entries = record
+    dat = Dat(name=name, version=version)
+    games = dat.games
+    by_crc, by_sha1, by_md5, sizes = dat._by_crc, dat._by_sha1, dat._by_md5, dat._sizes
+    for game, clone, langs, rom_rows in entries:
+        roms = []
+        for rom_name, size, crc, md5, sha1 in rom_rows:
+            rom = Rom(name=rom_name, size=size, crc=crc, md5=md5, sha1=sha1)
             roms.append(rom)
-            if rom.crc:
-                dat._by_crc.setdefault((rom.crc, rom.size), (name, rom))
-            if rom.sha1:
-                dat._by_sha1.setdefault(rom.sha1, (name, rom))
-            if rom.md5:
-                dat._by_md5.setdefault(rom.md5, (name, rom))
-            if rom.size:
-                dat._sizes.setdefault(rom.size, name)
-        if name in dat.games:
-            dat._ambiguous_game_names.add(name)
-        dat.games[name] = Game(
-            name=name,
-            roms=tuple(roms),
-            cloneof=clone,
-            languages=parse_dat_languages(raw_lang),
-        )
+            if crc:
+                by_crc.setdefault((crc, size), (game, rom))
+            if sha1:
+                by_sha1.setdefault(sha1, (game, rom))
+            if md5:
+                by_md5.setdefault(md5, (game, rom))
+            if size:
+                sizes.setdefault(size, game)
+        if game in games:
+            dat._ambiguous_game_names.add(game)
+        games[game] = Game(name=game, roms=tuple(roms), cloneof=clone,
+                           languages=tuple(langs))
     return dat
 
 
-def parse_dat(body: str) -> Dat:
-    """A DAT in either format publishers actually use.
+def parse_dat_record(body: str):
+    """The record for a DAT in either format publishers actually use.
 
     Logiqx XML is what No-Intro and Redump publish directly. ClrMamePro is
     what most mirrors carry, including libretro-database -- so accepting only
     the first meant the DATs an operator can actually download without
     solving a captcha all parsed to nothing.
     """
-    import xml.etree.ElementTree as ET
-
     text = body or ""
-    xml_text = text.lstrip("\ufeff").lstrip()
+    xml_text = text.lstrip("﻿").lstrip()
     looks_xml = (xml_text.startswith("<?xml")
                  or re.search(r"<datafile(?:\s|>)", xml_text[:4096], re.I))
-    root = None
-    if looks_xml:
-        try:
-            root = ET.fromstring(xml_text)
-        except (ET.ParseError, ValueError):
-            root = None
-    if root is None:
-        parsed = _parse_clrmamepro(text)
-        if parsed.games:
-            return parsed
-        try:
-            root = ET.fromstring(xml_text)
-        except (ET.ParseError, ValueError):
+    record = _logiqx_record(xml_text) if looks_xml else None
+    if record is None:
+        record = _clrmamepro_record(text)
+        if record[2]:
+            return record
+        record = _logiqx_record(xml_text)
+        if record is None:
             log.warning("DAT is neither valid XML nor ClrMamePro; ignoring it")
-            return Dat()
+            return ("", "", [])
+    return record
 
-    dat = Dat()
-    header = root.find("header")
-    if header is not None:
-        dat.name = (header.findtext("name") or "").strip()
-        dat.version = (header.findtext("version") or "").strip()
 
-    game_nodes = list(root.iter("game"))
-    ids = {(node.get("id") or "").strip(): (node.get("name") or "").strip()
-           for node in game_nodes if (node.get("id") or "").strip()
-           and (node.get("name") or "").strip()}
-    for node in game_nodes:
-        name = (node.get("name") or "").strip()
-        if not name:
-            continue
-        roms = []
-        for rom_node in node.findall("rom"):
-            rom = Rom(
-                name=(rom_node.get("name") or "").strip(),
-                size=int(rom_node.get("size") or 0),
-                crc=(rom_node.get("crc") or "").strip().lower(),
-                md5=(rom_node.get("md5") or "").strip().lower(),
-                sha1=(rom_node.get("sha1") or "").strip().lower(),
-            )
-            roms.append(rom)
-            if rom.crc:
-                dat._by_crc.setdefault((rom.crc, rom.size), (name, rom))
-            if rom.sha1:
-                dat._by_sha1.setdefault(rom.sha1, (name, rom))
-            if rom.md5:
-                dat._by_md5.setdefault(rom.md5, (name, rom))
-            if rom.size:
-                dat._sizes.setdefault(rom.size, name)
-        parent = (node.get("cloneof") or "").strip()
-        if not parent:
-            parent = ids.get((node.get("cloneofid") or "").strip(), "")
-        raw_lang = (
-            node.get("language")
-            or node.findtext("language")
-            or node.get("languages")
-            or node.findtext("languages")
-            or ""
-        ).strip()
-        if name in dat.games:
-            dat._ambiguous_game_names.add(name)
-        dat.games[name] = Game(
-            name=name,
-            roms=tuple(roms),
-            cloneof=parent,
-            languages=parse_dat_languages(raw_lang),
-        )
-    return dat
+def parse_dat(body: str) -> Dat:
+    """A DAT in either format publishers actually use."""
+    return dat_from_record(parse_dat_record(body))
 
 
 class DatIndex:
