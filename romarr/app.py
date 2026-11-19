@@ -9178,9 +9178,12 @@ def make_handler(service: ROMarr):
                 return self._json(502, {"error": f"could not reach the source or RomM ({exc.__class__.__name__})"})
 
 
-        def _send(self, code: int, body: bytes, content_type: str):
+        def _send(self, code: int, body: bytes, content_type: str, headers=()):
+            """Answer with `body`; `headers` are extra (name, value) pairs."""
             self.send_response(code)
             self.send_header("Content-Type", content_type)
+            for name, value in headers:
+                self.send_header(name, value)
             self.send_header("Content-Length", str(len(body)))
             try:
                 self.end_headers()
@@ -9272,21 +9275,23 @@ def make_handler(service: ROMarr):
                       "/api/v1/peer/accept", "/api/v1/peer/shelf",
                       "/api/v1/peer/netplay")
 
-        def _send_session(self, token: str, payload: dict):
-            """Answer with a session cookie set.
+        @staticmethod
+        def _session_cookie(token: str) -> str:
+            """The session Set-Cookie value, its flags stated once.
 
-            Shared by login and first-run setup so the cookie's flags are
-            stated once. HttpOnly so a script cannot read it; SameSite=Strict
-            so another site cannot ride it; Path=/ so it covers the API. Not
-            Secure: ROMarr is normally plain http on a LAN, and a Secure
-            cookie would simply never be stored there.
+            HttpOnly so a script cannot read it; SameSite=Strict so another
+            site cannot ride it; Path=/ so it covers the API. Not Secure:
+            ROMarr is normally plain http on a LAN, and a Secure cookie would
+            simply never be stored there.
             """
+            return (f"{SESSION_COOKIE}={token}; HttpOnly; SameSite=Strict; "
+                    f"Path=/; Max-Age={service.auth.session_seconds}")
+
+        def _send_session(self, token: str, payload: dict):
+            """Answer with a session cookie set (login and first-run setup)."""
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header(
-                "Set-Cookie",
-                f"{SESSION_COOKIE}={token}; HttpOnly; SameSite=Strict; "
-                f"Path=/; Max-Age={service.auth.session_seconds}")
+            self.send_header("Set-Cookie", self._session_cookie(token))
             raw = json.dumps(payload).encode()
             self.send_header("Content-Length", str(len(raw)))
             self.end_headers()
@@ -9362,21 +9367,25 @@ def make_handler(service: ROMarr):
             # In. The session is the same signed cookie a password login gets;
             # who the person is rides inside it, so every later request knows
             # the account without asking the IdP again.
+            #
+            # Not a 303 to "/": the IdP started this navigation, so browsers
+            # treat a redirect from here as cross-site and withhold the
+            # SameSite=Strict cookie just set, and "/" serves the login page
+            # again (#235). A page of our own that refreshes to "/" makes the
+            # next request same-site, so the session cookie goes with it. The
+            # Steam return (/api/v1/connect/steam/return) answers a page for
+            # the same reason. A meta refresh needs no inline script.
             token = service.auth.issue_session(subject=identity.user)
-            self.send_response(303)
-            self.send_header("Location", "/")
-            self.send_header(
-                "Set-Cookie",
-                f"{SESSION_COOKIE}={token}; HttpOnly; SameSite=Strict; "
-                f"Path=/; Max-Age={service.auth.session_seconds}")
+            body = (b"<!doctype html><meta charset='utf-8'>"
+                    b"<meta http-equiv='refresh' content='0;url=/'>"
+                    b"<title>Signed in</title><a href='/'>Continue to ROMarr</a>")
             # Clear the flow cookies: they are single-use and a stale verifier
             # left in the jar would only ever confuse the next login.
-            for name in (COOKIE_VERIFIER, COOKIE_STATE, COOKIE_NONCE):
-                self.send_header("Set-Cookie",
-                                 f"{name}=; HttpOnly; SameSite=Lax; Path=/; "
-                                 "Max-Age=0")
-            self.send_header("Content-Length", "0")
-            self.end_headers()
+            cleared = [("Set-Cookie", f"{name}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0")
+                       for name in (COOKIE_VERIFIER, COOKIE_STATE, COOKIE_NONCE)]
+            self._send(200, body, "text/html; charset=utf-8",
+                       [("Cache-Control", "no-store"),
+                        ("Set-Cookie", self._session_cookie(token)), *cleared])
             log.info("oidc sign-in: %s", identity.user)
             return None
 
@@ -10190,6 +10199,9 @@ def make_handler(service: ROMarr):
                 out = service.connect_steam(steam_id)
                 body = (f"<h2>Steam connected</h2><p>{out['message']}</p>"
                         "<p><a href='/#lists'>Back to Lists</a></p>"
+                        # A page, not a redirect: Steam started this
+                        # navigation, so only a hop our page starts carries
+                        # the Strict session cookie (as /oidc/callback, #235).
                         "<script>location.replace('/#lists')</script>")
                 return self._send(200, body.encode(),
                                   "text/html; charset=utf-8")

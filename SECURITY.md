@@ -228,6 +228,13 @@ cookies on cross-site *subresource* and *POST* requests. The session cookie
 stays `Strict`; only these three transient, single-use, non-credential values
 are `Lax`, and the callback clears all three on success.
 
+Because the IdP started that navigation, a redirect from the callback is
+still cross-site, and the browser would withhold the `Strict` session cookie
+it had just been given (#235). So on success the callback answers `200`
+with the cookies and a minimal page that refreshes to `/`: that refresh is
+started by ROMarr's own page, so it is same-site and the session cookie
+goes with it. The page is `Cache-Control: no-store`.
+
 Then the id_token itself is validated claim by claim — `iss` equals the
 configured issuer, `aud` contains our client_id, `exp`/`iat` are sane, `azp`
 (if present) is us — and its **signature is verified against the IdP's JWKS**
