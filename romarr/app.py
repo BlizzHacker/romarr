@@ -38,6 +38,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager
 from copy import copy, deepcopy
 import logging
+from typing import NamedTuple
 import os
 import pathlib
 import re
@@ -134,6 +135,21 @@ from .sidecars import read_nfo
 from .build_info import get_build_info
 
 log = logging.getLogger(__name__)
+
+
+class PendingParts(NamedTuple):
+    """The package parts an import should settle, and whether Wanted watches them."""
+
+    asked: set
+    monitored: bool
+
+
+def _asked(parts) -> set:
+    """A stored part selection as a set; empty means the game itself."""
+    try:
+        return set(normalise_parts(parts or None))
+    except ValueError:   # a hand-edited state file
+        return {BASE}
 
 # Derived, never typed here. A number that has to be retyped on every release is
 # how v1.7.0 shipped calling itself 1.6.0 while the Update page offered an
@@ -3377,7 +3393,7 @@ class ROMarr:
                                             self.store.settings.get("remote_path_mappings"))
             else:
                 members = mapped_download_members(path, torrent, self.store.settings.get("remote_path_mappings"))
-            def build_preview(roles=None):
+            def build_preview(roles=None, selected=None):
                 """The import preview, with package destinations from reviewed roles."""
                 return preview_import(path, platform, self.library_root(target[0]),
                                       layout=self.library_layout(target[0]),
@@ -3386,7 +3402,8 @@ class ROMarr:
                                       member_paths=members,
                                       switch_extras=bool(self.store.settings.get("switch_attach_extras", True)),
                                       package_folders=self._package_folders(target[0]),
-                                      game_title=item.game, package_roles=roles)
+                                      game_title=item.game, package_roles=roles,
+                                      selected_primaries=selected)
 
             preview = build_preview()
             preview = decorate_preview(preview, platform, self.library_root(target[0]),
@@ -3401,12 +3418,15 @@ class ROMarr:
                     intent["routes"] = routes
                     preview["planned_destinations"] = {primary: str(Path(preview["platform_root"]) / route) for primary, route in routes.items()}
                 elif preview.get("package_routing"):
-                    from .import_intent import package_destinations, reviewed_roles
+                    from .import_intent import package_destinations, reviewed_roles, reviewed_selection
                     roles = reviewed_roles(intent)
-                    # Rebuild only when the review changed a role the preview showed.
+                    chosen = reviewed_selection(intent) or []
+                    # Rebuild unless the review kept every package and every role shown.
                     shown = {i["primary"]: i["role"] for i in preview["items"]}
-                    unchanged = all(shown.get(k) == v for k, v in roles.items())
-                    planned = package_destinations(preview if unchanged else build_preview(roles), intent)
+                    unchanged = (len(chosen) == len(shown)
+                                 and all(shown.get(k) == v for k, v in roles.items()))
+                    planned = package_destinations(
+                        preview if unchanged else build_preview(roles, chosen), intent)
                     intent["package_destinations"] = planned
                     preview["planned_destinations"] = planned
 
@@ -4987,34 +5007,38 @@ class ROMarr:
         return (bool(self.store.settings.get("game_package_folders", True))
                 and str((cfg or {}).get("type", "")) in GAME_FOLDER_LIBRARIES)
 
-    def _pending_parts(self, queue_item, platform) -> set[str]:
-        """The package parts still asked for: the queued request's plus Wanted's.
+    def _pending_parts(self, queue_item, platform) -> "PendingParts":
+        """The package parts still asked for, and whether Wanted watches them.
 
-        Read before an import fulfils anything, so a part requested while the
-        download was running is not lost.
+        The queued request's parts plus the Wanted entry's, read before an
+        import fulfils anything, so a part requested while the download was
+        running is not lost. An empty selection means the game itself; a
+        release grabbed by hand with no parts named asks for nothing more.
         """
         if queue_item is None or platform.slug not in PACKAGE_PLATFORMS:
-            return set()
-        pending = set(queue_item.parts)
+            return PendingParts(set(), True)
+        pending = _asked(queue_item.parts) if queue_item.parts or not queue_item.manual else set()
+        monitored = True
         key = queue_item.game.casefold()
         for item in list(self.store.wanted):
             if item.platform == platform.slug and item.game.casefold() == key:
-                pending |= set(item.parts)
-        return pending
+                pending |= _asked(item.parts)
+                monitored = item.monitored
+        return PendingParts(pending, monitored)
 
-    def _settle_parts(self, queue_item, platform, outcomes, pending: set[str]) -> None:
+    def _settle_parts(self, queue_item, platform, outcomes, pending: "PendingParts") -> None:
         """Leave on Wanted exactly the asked-for package parts the import did not bring.
 
         What arrived is read from the imported files (header, RomM folder,
         name), never from the release title. A request answered in full is
         dropped from Wanted even when its title did not match the download.
         """
-        if not pending:
+        if not pending.asked:
             return
         arrived = {imported_role(o.destination, queue_item.game, platform.slug)
                    for o in outcomes if o.ok and o.destination}
-        missing = tuple(p for p in PARTS if p in pending and p not in arrived)
-        self.store.settle_parts(queue_item.game, platform.slug, missing)
+        missing = tuple(p for p in PARTS if p in pending.asked and p not in arrived)
+        self.store.settle_parts(queue_item.game, platform.slug, missing, monitored=pending.monitored)
         if missing:
             self.store.record(Event(kind="wanted", game=queue_item.game, platform=platform.slug,
                                     detail=f"still wanted: {describe_parts(missing)}"))
@@ -8985,7 +9009,7 @@ class ROMarr:
             bundle_routes = None
             if queue_item is not None and path.exists():
                 from .import_intent import (package_destinations, preview_import, queue_identity,
-                                            reviewed_roles)
+                                            reviewed_roles, reviewed_selection)
                 from .romm_bundle import decorate_preview, route_selection
                 from .library import MissingArchiveTool
                 import zipfile
@@ -8999,7 +9023,8 @@ class ROMarr:
                                              switch_extras=bool(self.store.settings.get("switch_attach_extras", True)),
                                              package_folders=self._package_folders(target_cfg),
                                              game_title=getattr(queue_item, "game", "") or "",
-                                             package_roles=reviewed_roles(queue_item.import_intent) or None)
+                                             package_roles=reviewed_roles(queue_item.import_intent) or None,
+                                             selected_primaries=reviewed_selection(queue_item.import_intent))
                     preview = decorate_preview(preview, platform, self.library_root(target_cfg),
                                                kind=target_cfg.get("type", ""), layout=self.library_layout(target_cfg),
                                                platform_folders=target_folders, translation=is_translation(name))

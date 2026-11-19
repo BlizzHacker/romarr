@@ -711,3 +711,83 @@ def test_a_lone_package_names_its_folder_without_the_extension(tmp_path):
     download = make(tmp_path / "downloads", "Bayonetta 2 [01007960049A0000][v0].nsp", b"base")
     result, = import_rom(download, resolve("switch"), tmp_path / "library", package_folders=True)
     assert result.ok and result.destination.parent.name == "Bayonetta 2 [01007960049A0000][v0]"
+
+
+# -- CodeRabbit round 2 ------------------------------------------------------
+
+def test_a_game_request_that_only_got_an_update_keeps_wanting_the_game(tmp_path):
+    store = Store(tmp_path / "s.json")
+    store.want("Bloodborne", "ps4")
+    item = QueueItem("Bloodborne", "ps4", "Bloodborne PS4", 5, "grabbed")   # parts [] = the game
+    assert settle(tmp_path, store, item, [("ps4/Bloodborne/update/p.pkg", PATCH_PKG)]) == [("Bloodborne", [])]
+
+
+def test_a_manual_grab_without_parts_asks_for_nothing_more(tmp_path):
+    store = Store(tmp_path / "s.json")
+    item = QueueItem("Bloodborne", "ps4", "Bloodborne Update", 5, "grabbed", manual=True)
+    assert settle(tmp_path, store, item, [("ps4/Bloodborne/update/p.pkg", PATCH_PKG)]) == []
+
+
+def test_restored_parts_keep_the_entry_unmonitored(tmp_path):
+    store = Store(tmp_path / "s.json")
+    store.want("Bloodborne", "ps4", monitored=False, parts=("base", "dlc"))
+    item = QueueItem("Bloodborne", "ps4", "Bloodborne PS4", 5, "grabbed", parts=["base", "dlc"])
+    assert settle(tmp_path, store, item, [("ps4/Bloodborne/base.pkg", BASE_PKG)]) == [("Bloodborne", ["dlc"])]
+    assert store.wanted[0].monitored is False
+
+
+def test_preview_routes_only_the_reviewed_selection(tmp_path):
+    other = header(content_id="UP9000-CUSA99999_00-OTHERGAME0000000")
+    download = download_with(tmp_path, {"a.pkg": BASE_PKG, "a-patch.pkg": PATCH_PKG, "b.pkg": other})
+    library = tmp_path / "library"
+    whole = preview_import(download, PS4, library, package_folders=True, game_title="Game")
+    assert {Path(i["destination"]).parent.name for i in whole["items"]} == {"ps4"}   # two games: flat
+    chosen = ["a.pkg", "a-patch.pkg"]
+    reviewed = preview_import(download, PS4, library, package_folders=True, game_title="Game",
+                              package_roles={"a.pkg": "base", "a-patch.pkg": "update"},
+                              selected_primaries=chosen)
+    shown = sorted(i["destination"] for i in reviewed["items"] if i["primary"] in chosen)
+    results = import_rom(download, PS4, library, package_folders=True, game_title="Game",
+                         package_roles={"a.pkg": "base", "a-patch.pkg": "update"},
+                         selected_primaries=chosen)
+    assert shown == destinations(results)
+
+
+def test_a_reviewed_import_keeps_the_confirmed_filename(tmp_path, monkeypatch):
+    import romarr.library as library_module
+    monkeypatch.setattr(library_module, "_import_name", lambda primary, verdict, rename: "Canonical.pkg")
+    download = download_with(tmp_path, {"source.pkg": BASE_PKG})
+    library = tmp_path / "library"
+    result, = import_rom(download, PS4, library, package_folders=True, game_title="Game",
+                         package_roles={"source.pkg": "base"}, rename=True)
+    assert result.ok and result.destination == library / "ps4" / "Game" / "source.pkg"
+    unreviewed, = import_rom(download_with(tmp_path / "again", {"other.pkg": BASE_PKG}), PS4, library,
+                             package_folders=True, game_title="Other", rename=True)
+    assert unreviewed.ok and unreviewed.destination.name == "Canonical.pkg"
+
+
+def test_an_occupied_title_folder_holding_another_game_is_not_reused(tmp_path):
+    make(tmp_path, "Game/base.pkg", header(content_id="UP9000-CUSA00552_00-THELASTOFUS00000"))
+    assert plan_ps4([("u.pkg", "update", "CUSA99999")], tmp_path, "Game") is None
+    assert plan_ps4([("u.pkg", "update", "CUSA00552")], tmp_path, "Game") == {"u.pkg": "Game/update"}
+
+
+def test_a_second_game_joined_by_plus_is_a_compilation():
+    verdict = judge(rel("Bloodborne + Update 1.09 + Dark Souls III PS4"), "Bloodborne", PS4)
+    assert verdict.verdict == "title does not match 'Bloodborne'"
+    assert judge(rel("Bloodborne + Update 1.09 + DLC PS4"), "Bloodborne", PS4).accepted
+
+
+def test_a_title_id_says_what_a_release_is():
+    threeds = resolve("3ds")
+    update = rel("Fire Emblem Fates [0004000E001B4000] 3DS", GB)
+    assert package_class(update, "Fire Emblem Fates", threeds) == "update"
+    assert not judge(update, "Fire Emblem Fates", threeds).accepted
+    assert judge(update, "Fire Emblem Fates", threeds, parts=["update"]).accepted
+
+
+@pytest.mark.parametrize("slug, accepted", [("ps4", True), ("ps3", False), ("ps5", False)])
+def test_a_playstation_serial_is_evidence_for_its_own_console_only(slug, accepted):
+    release = Release("The Last of Us Remastered [CUSA00552]", 0, 0, (1000,), "https://nzb.example/get/1", "usenet")
+    verdict = judge(release, GAME, resolve(slug))
+    assert verdict.accepted is accepted, verdict.why()

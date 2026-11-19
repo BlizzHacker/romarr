@@ -18,7 +18,7 @@ def queue_identity(item):
 
 def preview_import(download, platform, library_root, *, layout="flat", platform_folders=None, queue_identity=None,
                    switch_extras=False, member_paths=None, package_folders=False, game_title="",
-                   package_roles=None):
+                   package_roles=None, selected_primaries=None):
     """Build a reviewable preview without hashing game payloads.
 
     `package_roles` (from a review) changes the package destinations shown, so a
@@ -30,7 +30,8 @@ def preview_import(download, platform, library_root, *, layout="flat", platform_
             source, download, platform, library_root, layout=layout,
             platform_folders=platform_folders, queue_identity=queue_identity,
             switch_extras=switch_extras, member_paths=member_paths,
-            package_folders=package_folders, game_title=game_title, package_roles=package_roles)
+            package_folders=package_folders, game_title=game_title, package_roles=package_roles,
+            selected_primaries=selected_primaries)
     finally:
         source.close()
 
@@ -38,7 +39,8 @@ def preview_import(download, platform, library_root, *, layout="flat", platform_
 def _preview_import_from_source(source, download, platform, library_root, *,
                                 layout="flat", platform_folders=None,
                                 queue_identity=None, switch_extras=False, member_paths=None,
-                                package_folders=False, game_title="", package_roles=None):
+                                package_folders=False, game_title="", package_roles=None,
+                                selected_primaries=None):
     """Create a preview from an owned source before its scratch files close."""
     names = source.names()
     sets = source.rom_sets(platform)
@@ -70,7 +72,11 @@ def _preview_import_from_source(source, download, platform, library_root, *,
     ambiguous_packages = {".nsp", ".xci", ".pkg", ".cia"}
     target = platform_dir(library_root, platform, layout=layout, platform_folders=platform_folders)
     package_routing = bool(package_folders and platform.slug in game_packages.PACKAGE_PLATFORMS)
-    folder_routes = (package_routes(source, sets, platform, target, package_title(download, game_title),
+    # Route the sets the importer will import: a review that leaves a second
+    # base game out plans the folders without it, exactly as the import does.
+    keep = None if selected_primaries is None else set(selected_primaries)
+    routed = [s for s in sets if keep is None or s.primary in keep]
+    folder_routes = (package_routes(source, routed, platform, target, package_title(download, game_title),
                                     roles=package_roles)
                      if package_routing else None)
     items = []
@@ -190,6 +196,12 @@ def reviewed_roles(intent):
     """
     return {c["primary"]: c["role"] for c in (intent or {}).get("choices", [])
             if isinstance(c, dict) and c.get("role") in (*game_packages.PARTS, "additional-game")}
+
+
+def reviewed_selection(intent):
+    """The packages a saved review chose, or None when there is no review."""
+    chosen = [c["primary"] for c in (intent or {}).get("choices", []) if isinstance(c, dict)]
+    return chosen or None
 
 
 def package_destinations(preview, intent):

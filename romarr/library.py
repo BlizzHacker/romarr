@@ -1494,7 +1494,10 @@ def _import_rom_from_source(source, candidates, chosen_sets, download, platform,
                     continue
                 destination = target_dir / relative
             elif folder_routes is not None:
-                destination = target_dir / folder_routes[chosen.primary] / destination.name
+                # A reviewed import keeps the name the person confirmed; a DAT
+                # rename would write somewhere the review never showed.
+                name = Path(chosen.primary).name if package_roles else destination.name
+                destination = target_dir / folder_routes[chosen.primary] / name
                 attached[destination] = target_dir
             # Libraries without RomM game folders still attach Switch extras
             # to a game folder that already exists.

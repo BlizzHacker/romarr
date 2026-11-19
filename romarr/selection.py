@@ -16,8 +16,8 @@ from dataclasses import dataclass
 
 from .platforms import DISC, PLATFORMS, Platform, all_extensions, by_slug, resolve, same_machine
 from .game_packages import (BASE, DLC, PACKAGE_PLATFORMS, UPDATE, describe_parts,
-                           PLATFORM_CATEGORIES, identify, normalise_parts, release_parts,
-                           title_before_parts)
+                           PLATFORM_CATEGORIES, extras_are_parts, held_parts, names_platform,
+                           normalise_parts, title_before_parts)
 
 log = logging.getLogger(__name__)
 
@@ -753,6 +753,8 @@ def _package_title_matches(title: str, wanted: str) -> bool:
     "Game". Console scene releases are dot-separated, so the spaced reading of
     the title is tried as well.
     """
+    if not extras_are_parts(title):
+        return False   # "+ Another Game" is a compilation, never truncated away
     spaced = _scene_spaced(title)
     candidates = {spaced, title_before_parts(title, wanted), title_before_parts(spaced, wanted)}
     return any(title_matches(candidate, wanted) for candidate in candidates if candidate.strip())
@@ -766,7 +768,7 @@ def _package_step(release: Release, wanted: str, platform: Platform,
     holds. `parts` is what the request wants (default: the game itself).
     """
     asked = set(normalise_parts(parts))
-    held = release_parts(release.title, wanted)
+    held = held_parts(release.title, wanted, platform.slug)
     covered = held & asked
     label = f"{platform.name} package: {describe_parts(held)}"
     if not covered:
@@ -1100,7 +1102,7 @@ def judge(release: Release, wanted: str,
         or has_native_marker
     )
     if packaged and not digital and not (
-            has_platform_evidence or identify(release.title, platform.slug)[0]
+            has_platform_evidence or names_platform(release.title, platform.slug)
             or set(PLATFORM_CATEGORIES.get(platform.slug, ())) & set(release.categories)):
         # Package points must never make an unmarked console release usable:
         # the grab needs the platform's name, its extension, a title ID, the
@@ -1283,7 +1285,7 @@ def package_class(release: Release, wanted: str, platform: Platform | None) -> s
     """"base game + update" style label on platforms with updates and DLC; "" elsewhere."""
     if platform is None or platform.slug not in PACKAGE_PLATFORMS:
         return ""
-    return describe_parts(release_parts(release.title, wanted))
+    return describe_parts(held_parts(release.title, wanted, platform.slug))
 
 
 def best_release(releases: list[Release], wanted: str,

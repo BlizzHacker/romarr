@@ -4328,7 +4328,12 @@ RENDER.queue=async()=>{
     if(plan.romm_routing) $('#q-plan-existing').value=saved.existing_game||'';
     plan.items.forEach((i,n)=>document.querySelector(`[data-plan-role="${n}"]`).value=selected.get(i.primary)||i.role);
     $('#q-plan-back').onclick=()=>go('queue');
+    // Bumped whenever the selection changes, so a review answer that arrives
+    // after a change is dropped instead of binding confirmation to old roles.
+    let reviewGen=0;
+    const pageAt=typeof pageVersion==='number'?pageVersion:0;
     $('#q-plan-save').onclick=async()=>{
+      const gen=++reviewGen;
       const choices=plan.items.flatMap((i,n)=>document.querySelector(`[data-plan-check="${n}"]`).checked?[{primary:i.primary,role:document.querySelector(`[data-plan-role="${n}"]`).value}]:[]);
       const selection={token:plan.token,choices,mode:$('#q-plan-mode').value,existing_game:plan.romm_routing?$('#q-plan-existing').value:''};
       const save=async extra=>{
@@ -4338,12 +4343,14 @@ RENDER.queue=async()=>{
       };
       if(!plan.romm_routing&&!plan.package_routing){await save({});return;}
       const reviewed=await post({review:true,...selection});
+      if(gen!==reviewGen||(typeof activePage!=='undefined'&&activePage!=='queue')
+         ||(typeof pageVersion==='number'&&pageVersion!==pageAt))return;
       if(reviewed.error){toast(reviewed.error);return;}
       const destinations=reviewed.preview.planned_destinations||{};
       $('#q-plan-review').innerHTML=`<h3>Confirm destination tree</h3><p class="help">Files are organized for RomM scanning; updates/DLC are not installed or applied to an emulator. Sources stay intact.</p><ul>${Object.entries(destinations).map(([primary,destination])=>`<li>${esc(primary)} → <code>${esc(destination)}</code></li>`).join('')}</ul><button class="btn" id="q-plan-confirm">Confirm these destinations</button>`;
       $('#q-plan-confirm').onclick=()=>save({reviewed_destinations:destinations});
     };
-    document.querySelectorAll('[data-plan-check],[data-plan-role],#q-plan-mode,#q-plan-existing').forEach(c=>c.onchange=()=>{$('#q-plan-review').innerHTML='';});
+    document.querySelectorAll('[data-plan-check],[data-plan-role],#q-plan-mode,#q-plan-existing').forEach(c=>c.onchange=()=>{reviewGen++;$('#q-plan-review').innerHTML='';});
   });
   document.querySelectorAll('[data-qresume]').forEach(b=>b.onclick=()=>act(b.dataset.qresume,'resume-retained'));
   document.querySelectorAll('[data-qretry]').forEach(b=>b.onclick=()=>act(b.dataset.qretry,'retry'));

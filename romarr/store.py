@@ -561,11 +561,12 @@ class Store:
         self.save()
         return item
 
-    def settle_parts(self, game: str, platform: str, missing) -> None:
+    def settle_parts(self, game: str, platform: str, missing, monitored: bool = True) -> None:
         """Leave exactly the `missing` package parts of a game on Wanted, in one change.
 
         Nothing missing drops the entry; otherwise the entry (re-added when an
-        import already fulfilled it) asks for just those parts.
+        import already fulfilled it, keeping its `monitored` choice) asks for
+        just those parts.
         """
         stored = [] if tuple(missing) == ("base",) else list(missing)
         with self._lock:
@@ -576,7 +577,8 @@ class Store:
                     return
                 self.wanted.remove(item)
             elif item is None:
-                self.wanted.append(WantedItem(game=game, platform=platform, parts=stored))
+                self.wanted.append(WantedItem(game=game, platform=platform, parts=stored,
+                                              monitored=monitored))
             else:
                 item.parts = stored
         self.save()

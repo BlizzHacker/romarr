@@ -231,12 +231,20 @@ _TYPE_GAME, _TYPE_ADDON, _TYPE_ADDON_LICENSE, _TYPE_DELTA_PATCH = 0x1A, 0x1B, 0x
 #: cumulative patches set the subsequent bit as well.
 _PATCH_FLAGS = 0x00100000 | 0x40000000
 _CONTENT_ID_RE = re.compile(r"[A-Z]{2}\d{4}-(?P<tid>[A-Z]{4}\d{5})_\d{2}-[A-Z0-9_]{16}")
+#: Which console each PlayStation serial prefix belongs to, so a serial is
+#: evidence for that console only (a CUSA serial is no proof of PS3).
+_SERIAL_PLATFORMS = {
+    **dict.fromkeys(("CUSA", "PCAS", "PCJS", "PCKS", "PLAS", "PLJS", "PLJM"), "ps4"),
+    "PPSA": "ps5",
+    **dict.fromkeys(("BLUS", "BLES", "BLJM", "BLJS", "BLAS", "BLKS", "BCUS", "BCES", "BCJS",
+                     "BCAS", "BCKS", "NPUB", "NPEB", "NPJB", "NPUA", "NPEA", "NPJA", "NPHA"), "ps3"),
+    **dict.fromkeys(("PCSE", "PCSB", "PCSA", "PCSG", "PCSH", "PCSF", "PCSD"), "psvita"),
+    **dict.fromkeys(("ULUS", "ULES", "ULJM", "ULJS", "UCUS", "UCES", "UCJS", "NPUH", "NPEH",
+                     "NPJH", "NPUG", "NPEG", "NPUZ", "NPEZ"), "psp"),
+}
 #: PlayStation serials: PS4/PS5, PS3, Vita and PSP disc and digital prefixes.
 _TITLE_ID_RE = re.compile(
-    r"(?<![A-Za-z0-9])(?P<tid>(?:CUSA|PPSA|PCAS|PCJS|PCKS|PLAS|PLJS|PLJM"
-    r"|BLUS|BLES|BLJM|BLJS|BLAS|BLKS|BCUS|BCES|BCJS|BCAS|BCKS|NPUB|NPEB|NPJB|NPUA|NPEA|NPJA|NPHA"
-    r"|PCSE|PCSB|PCSA|PCSG|PCSH|PCSF|PCSD"
-    r"|ULUS|ULES|ULJM|ULJS|UCUS|UCES|UCJS|NPUH|NPEH|NPJH|NPUG|NPEG|NPUZ|NPEZ)[-_]?\d{5})(?![0-9])",
+    r"(?<![A-Za-z0-9])(?P<tid>(?:" + "|".join(_SERIAL_PLATFORMS) + r")[-_]?\d{5})(?![0-9])",
     re.IGNORECASE)
 _SWITCH_TID_RE = re.compile(r"\[([0-9a-fA-F]{16})\]")
 _HIGH_WORD_TID_RE = re.compile(r"(?<![0-9a-fA-F])(000[45][0-9a-fA-F]{4})([0-9a-fA-F]{8})(?![0-9a-fA-F])")
@@ -352,6 +360,47 @@ def identify(text: str, platform_slug: str) -> tuple[str, str]:
     return "", ""
 
 
+def names_platform(text: str, platform_slug: str) -> bool:
+    """Whether a title ID in `text` is proof of this platform specifically.
+
+    A PlayStation serial names one console; a Switch title ID is shared by
+    Switch and Switch 2; 3DS and Wii U IDs differ by their high word.
+    """
+    family = identify(text, platform_slug)[0]
+    if not family:
+        return False
+    if platform_slug in _PLAYSTATION:
+        return _SERIAL_PLATFORMS.get(family[:4]) == platform_slug
+    return True
+
+
+@functools.lru_cache(maxsize=4096)
+def held_parts(title: str, wanted: str, platform_slug: str) -> frozenset[str]:
+    """Which parts a release holds, trusting an unambiguous title ID first.
+
+    "Game [0004000E001B4000]" is a 3DS update whatever its words say; a
+    combined pack ("Game + Update + DLC") keeps every part its words name.
+    """
+    parts = release_parts(title, wanted)
+    by_id = identify(title, platform_slug)[1]
+    return frozenset({by_id}) if by_id and len(parts) == 1 else parts
+
+
+_JOIN_RE = re.compile(r"\s*\+\s*|\s+&\s+")
+
+
+def extras_are_parts(title: str) -> bool:
+    """Whether everything joined to the game by "+" or "&" is an update or DLC.
+
+    "Bloodborne + Update 1.09 + Dark Souls III" holds a second game, so it is
+    a compilation, not a package of one game.
+    """
+    title = str(title or "")
+    if "+" not in title and "&" not in title:
+        return True
+    return all(_MARKER_RE.search(part.lower()) for part in _JOIN_RE.split(title)[1:])
+
+
 def file_role(relative: str, header: PackageHeader | None = None, wanted: str = "",
               platform_slug: str = "") -> str:
     """BASE, UPDATE or DLC for one package file inside a download.
@@ -417,7 +466,6 @@ def existing_game_folder(platform_dir: Path, family: str, platform_slug: str,
     """
     if not family:
         return ""
-    suffixes = tuple(e.lower() for e in extensions)
     found: set[str] = set()
     try:
         folders = sorted(os.scandir(platform_dir), key=lambda e: e.name)[:MAX_SCAN_FOLDERS]
@@ -426,19 +474,28 @@ def existing_game_folder(platform_dir: Path, family: str, platform_slug: str,
     for entry in folders:
         if entry.name.startswith(".") or entry.is_symlink() or not entry.is_dir(follow_symlinks=False):
             continue
-        try:
-            files = [f for f in os.scandir(entry.path)
-                     if f.name.lower().endswith(suffixes) and f.is_file(follow_symlinks=False)]
-        except OSError:
-            continue
-        for package in files:
-            header = read_header(Path(package.path)) if platform_slug in HEADER_PLATFORMS else None
-            if describe_package(package.name, platform_slug, header) == (BASE, family):
-                found.add(entry.name)
-                break
+        if family in _folder_families(Path(entry.path), platform_slug, extensions):
+            found.add(entry.name)
         if len(found) > 1:
             return ""
     return found.pop() if found else ""
+
+
+def _folder_families(folder: Path, platform_slug: str, extensions) -> set[str]:
+    """Title ID families of the base packages directly inside `folder`."""
+    suffixes = tuple(e.lower() for e in extensions)
+    try:
+        files = [f for f in os.scandir(folder)
+                 if f.name.lower().endswith(suffixes) and f.is_file(follow_symlinks=False)]
+    except OSError:
+        return set()
+    found = set()
+    for package in files:
+        header = read_header(Path(package.path)) if platform_slug in HEADER_PLATFORMS else None
+        role, family = describe_package(package.name, platform_slug, header)
+        if role == BASE and family:
+            found.add(family)
+    return found
 
 
 def plan_game_folder(packages: list[tuple[str, str, str]], platform_dir: Path,
@@ -462,9 +519,16 @@ def plan_game_folder(packages: list[tuple[str, str, str]], platform_dir: Path,
     ids = {tid for _, _, tid in packages if tid}
     if len(bases) > 1 or len(ids) > 1:
         return None
-    folder = (existing_game_folder(Path(platform_dir), ids.pop(), platform_slug, extensions)
+    folder = (existing_game_folder(Path(platform_dir), next(iter(ids)), platform_slug, extensions)
               if ids else "")
-    folder = folder or game_folder_name(title)
+    if not folder:
+        folder = game_folder_name(title)
+        # A folder of that name may already hold another game: never file an
+        # update for one title ID beside the base of another.
+        if folder and ids and (Path(platform_dir) / folder).is_dir():
+            present = _folder_families(Path(platform_dir) / folder, platform_slug, extensions)
+            if present and not present & ids:
+                return None
     if not folder:
         return None
     return {primary: (folder if role == BASE else f"{folder}/{PART_FOLDERS[role]}")
