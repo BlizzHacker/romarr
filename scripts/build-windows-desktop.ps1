@@ -66,13 +66,19 @@ function Get-VerifiedDownload([string]$Url, [string]$Destination, [string]$Sha25
 
 & $PythonPath -c 'import sys; assert sys.version_info[:2] == (3,13), "Build with Python 3.13 to match the bundled interpreter"'
 if ($LASTEXITCODE -ne 0) { throw 'Python 3.13 build environment is required.' }
-# A fresh runner's first dotnet call can print a welcome banner first; an
-# array result made -notmatch truthy and failed the check with the SDK present.
+# Ask which SDKs are installed rather than parsing `dotnet --version`, whose
+# output intermittently failed the check on CI runners with the .NET 10 SDK
+# present. On failure, print what dotnet said so the next one is diagnosable.
 $env:DOTNET_NOLOGO = '1'
 $env:DOTNET_SKIP_FIRST_TIME_EXPERIENCE = '1'
-$dotnetVersion = [string](& dotnet --version | Select-Object -Last 1)
-$dotnetVersion = $dotnetVersion.Trim()
-if ($LASTEXITCODE -ne 0 -or $dotnetVersion -notmatch '^10\.') { throw '.NET 10 SDK is required.' }
+$dotnetSdks = @(& dotnet --list-sdks 2>&1 | ForEach-Object { "$_" })
+$dotnetExit = $LASTEXITCODE
+if ($dotnetExit -ne 0 -or -not ($dotnetSdks | Where-Object { $_ -match '^10\.' })) {
+    Write-Host "dotnet --list-sdks exited $dotnetExit with:"
+    $dotnetSdks | ForEach-Object { Write-Host "  $_" }
+    Write-Host ("dotnet --version: " + ((& dotnet --version 2>&1 | ForEach-Object { "$_" }) -join ' | '))
+    throw '.NET 10 SDK is required.'
+}
 
 # Read the official fixed-runtime API, then retain the verified pinned runtime.
 # Older fixed builds may age out of the API while their official URL remains.
