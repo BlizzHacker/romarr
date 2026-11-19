@@ -116,8 +116,9 @@ def test_authenticated_guide_can_be_skipped_and_reopened(server):
 def test_explicit_loopback_preserves_container_default(monkeypatch, env, host):
     calls = []
     svc = SimpleNamespace(
-        store=SimpleNamespace(recover_seerr_dispatches=lambda: None), library="/roms")
-    monkeypatch.setattr(app, "ROMarr", lambda env: svc)
+        store=SimpleNamespace(recover_seerr_dispatches=lambda: None), library="/roms",
+        load_dats_in_background=lambda: None)
+    monkeypatch.setattr(app, "ROMarr", lambda env, **kw: svc)
     monkeypatch.setattr(app, "ThreadingHTTPServer",
                         lambda address, handler: calls.append(address)
                         or SimpleNamespace(serve_forever=lambda: None))

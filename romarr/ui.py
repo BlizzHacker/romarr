@@ -5444,7 +5444,7 @@ RENDER.status=async()=>{
     <div class="card"><h3>About</h3><div class="st">
       <div><b>${esc(h.version||"unknown")}</b><span>Version</span></div>
       <div><b>${h.platforms}</b><span>Platforms</span></div>
-      <div><b>${h.dats||0}</b><span>DATs loaded</span></div>
+      <div><b>${h.dats_loading?"…":(h.dats||0)}</b><span>${h.dats_loading?"Loading DATs":"DATs loaded"}</span></div>
       <div><b>${h.dat_games||0}</b><span>Known dumps</span></div>
       <div><b>${h.events}</b><span>History events</span></div>
       <div><b>${esc(h.uptime)}</b><span>Uptime</span></div>
@@ -6418,7 +6418,7 @@ RENDER.setup=async()=>{
   }else if(active===4){
     content='<h3>Add confidence and more sources</h3><p class="help">Both of these are optional. You can start with your existing files and return later.</p>'
       +'<h4>Verify with DATs</h4><p class="help">A No-Intro or Redump DAT is a checklist of known file hashes. It lets ROMarr verify a dump and compare your collection with a complete set.</p>'
-      +(state.dat_loaded?'<p class="help"><b>'+fmt(state.dat_loaded)+' DAT(s) loaded</b> · '+fmt(state.dat_games)+' games</p>':'')
+      +(state.dat_loading?'<p class="help"><b>Loading DATs…</b> Verification starts when they are ready.</p>':state.dat_loaded?'<p class="help"><b>'+fmt(state.dat_loaded)+' DAT(s) loaded</b> · '+fmt(state.dat_games)+' games</p>':'')
       +'<div class="field"><label for="setup-dat-path">Folder containing your DAT files</label><input id="setup-dat-path" value="'+esc(state.dat_path)+'" placeholder="/dats"></div>'
       +action('setup-dats','Check and load DATs')+'<div id="setup-dat-result" role="status" class="testline"></div>'
       +'<h4 style="margin-top:22px">Explore ROM Hub</h4><p class="help">ROM Hub is the plugin catalogue. Plugins can add supported search sources and download tools. Open a plugin’s details to check what it needs before installing.</p>'

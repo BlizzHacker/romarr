@@ -67,7 +67,7 @@ from .emulators import EmulatorHub
 from .libretro import CoreHub
 from .cartridge import CartridgeHub
 from .emulator_catalog import resource_catalog
-from .dat import DatIndex, parse_dat
+from .dat import DatIndex, dat_from_record, parse_dat
 from .decompress import run_batch as run_decompress_batch, scan_compressed
 from .switch_report import report as build_switch_report
 from .titled import classify_tid, TitleDBIndex, build_index as build_titled_index, validate_switch_rom
@@ -761,7 +761,7 @@ class ROMarr:
         game, api = self._soundtrack_target(game_id)
         return self.soundtrack_store(game["library_scope"]).undo(game, api)
 
-    def __init__(self, env: dict[str, str] | None = None):
+    def __init__(self, env: dict[str, str] | None = None, *, defer_dats: bool = False):
         """Initialize the service state, download/library clients, and persistent store."""
         e = env if env is not None else os.environ
         # Kept so reload_libraries can seed from the environment on first run
@@ -843,6 +843,16 @@ class ROMarr:
         # over after the handoff.
         self._automatic_grab_reservations: set[tuple[str, str]] = set()
         self._dat_reload_lock = threading.Lock()
+        # DAT readiness. A server loads its DATs after it starts listening
+        # (see serve()); until then readers wait, so no import is verified
+        # against a half-loaded index. Set from the start in the synchronous
+        # case, which is what every direct construction gets.
+        self._dats = DatIndex()
+        self._dats_ready = threading.Event()
+        self._dats_ready.set()
+        self._dats_loader_ident = None
+        self._dats_constructor_ident = None
+        self._deferred_dat_dir = ""
         self._titled_lock = threading.RLock()
         self._switch_lock = threading.Lock()
         self._switch_cache = None
@@ -1040,8 +1050,16 @@ class ROMarr:
         self.limiter = RateLimiter()
         # The environment seeds a new install. An explicit saved selection
         # (including the Setup Guide) must survive the next restart.
-        self.reload_dats(self.store.settings.get("dat_path", "")
-                         or e.get("DAT_PATH", ""))
+        dat_dir = self.store.settings.get("dat_path", "") or e.get("DAT_PATH", "")
+        if defer_dats and dat_dir:
+            # Parsing a large DAT collection takes minutes; the web UI and
+            # /api/health must not wait for it. load_dats_in_background()
+            # does the work once the server is listening.
+            self._deferred_dat_dir = dat_dir
+            self._dats_constructor_ident = threading.get_ident()
+            self._dats_ready.clear()
+        else:
+            self.reload_dats(dat_dir)
         self.reload_metadata()
         self.reload_policy()
         self.sso = None
@@ -2108,8 +2126,10 @@ class ROMarr:
             "download_clients": clients,
             "indexers": indexers,
             "dat_path": str(self.store.settings.get("dat_path") or ""),
-            "dat_loaded": len(self.dats.dats),
-            "dat_games": sum(len(dat.games) for dat in self.dats.dats),
+            # Status pages never wait for a DAT load still in progress.
+            "dat_loaded": len(self._dats_now().dats),
+            "dat_games": sum(len(dat.games) for dat in self._dats_now().dats),
+            "dat_loading": self.dats_status()["loading"],
             "hub_available": hub.available(),
         }
 
@@ -2427,6 +2447,7 @@ class ROMarr:
             "libraries_total": len(libraries),
             "platforms": len(PLATFORMS),
             "queued": len(self.queue),
+            "dats": self.dats_status(),
         }
 
     def search(self, game: str, platform_name: str = "") -> dict:
@@ -3578,9 +3599,10 @@ class ROMarr:
             # format it cannot open -- which is how the disc platforms ship.
             # The live install this was found on had been missing it silently.
             "archive_tool": _archive_tool_path(),
-            "dats": len(self.dats.dats),
-            "dat_names": [d.name for d in self.dats.dats if d.name],
-            "dat_games": sum(len(d.games) for d in self.dats.dats),
+            "dats": len(self._dats_now().dats),
+            "dat_names": [d.name for d in self._dats_now().dats if d.name],
+            "dat_games": sum(len(d.games) for d in self._dats_now().dats),
+            "dats_loading": self.dats_status()["loading"],
             "titled": getattr(self, 'titled', None) and len(getattr(self, 'titled', TitleDBIndex()).titles) or 0,
             "play_routes": self.play_route_counts(),
             "stream_url": self.store.settings.get("_stream_url", ""),
@@ -3595,6 +3617,100 @@ class ROMarr:
     def _dat_scan_limits() -> tuple[int, int]:
         """How far the DAT scan is allowed to go. Overridable for testing."""
         return DAT_SCAN_DEPTH, DAT_SCAN_MAX_ENTRIES
+
+    @property
+    def dats(self) -> DatIndex:
+        """The loaded DAT index; waits while a background load is running.
+
+        The loader itself and the constructing thread never wait (the loader
+        has not started yet while the constructor runs), so neither can
+        deadlock on it.
+        """
+        ready = self.__dict__.get("_dats_ready")
+        if ready is not None and not ready.is_set():
+            me = threading.get_ident()
+            if me not in (self._dats_loader_ident, self._dats_constructor_ident):
+                ready.wait()
+        return self._dats
+
+    @dats.setter
+    def dats(self, value: DatIndex) -> None:
+        self._dats = value
+
+    def _dats_now(self) -> DatIndex:
+        """The DAT index as it is right now, never waiting for a load."""
+        return self.__dict__.get("_dats") or DatIndex()
+
+    def dats_status(self) -> dict:
+        """DAT state without waiting for it: for health and status pages."""
+        ready = self.__dict__.get("_dats_ready")
+        loading = ready is not None and not ready.is_set()
+        index = self.__dict__.get("_dats")
+        return {"loading": loading,
+                "loaded": 0 if loading or index is None else len(index.dats)}
+
+    def load_dats_in_background(self):
+        """Load the DATs deferred by `ROMarr(defer_dats=True)` off-thread.
+
+        Returns the thread, or None when there was nothing deferred.
+        """
+        if self._dats_ready.is_set():
+            return None
+        directory = self._deferred_dat_dir
+
+        def run():
+            self._dats_loader_ident = threading.get_ident()
+            started = time.monotonic()
+            try:
+                result = self.reload_dats(directory)
+                log.info("DATs ready: %d loaded in %.1fs", result.get("loaded", 0),
+                         time.monotonic() - started)
+            except Exception:
+                log.exception("DAT loading failed; verification answers unknown "
+                              "until the DATs are reloaded")
+            finally:
+                self._dats_loader_ident = None
+                self._dats_ready.set()
+
+        self._dats_constructor_ident = None
+        thread = threading.Thread(target=run, name="romarr-dat-load", daemon=True)
+        thread.start()
+        return thread
+
+    def _dat_cache_dir(self) -> Path:
+        return self.store.path.parent / "cache" / "dats"
+
+    def _dat_record(self, cache_dir: Path, used: set, key: str, read) -> tuple:
+        """One DAT's parsed record, from the cache when its source is unchanged.
+
+        `key` names the source exactly (path, archive member, size, mtime), so
+        an edited, replaced or re-downloaded DAT misses the cache and is parsed
+        again. The cache is ROMarr's own data under its config directory; an
+        unreadable or stale entry is simply re-parsed.
+        """
+        import hashlib
+        import marshal
+
+        from .dat import DAT_RECORD_FORMAT, parse_dat_record
+
+        name = hashlib.sha256(key.encode("utf-8", "surrogatepass")).hexdigest()[:40] + ".bin"
+        used.add(name)
+        target = cache_dir / name
+        try:
+            fmt, cached_key, record = marshal.loads(target.read_bytes())
+            if fmt == DAT_RECORD_FORMAT and cached_key == key:
+                return record
+        except (OSError, EOFError, ValueError, TypeError):
+            pass
+        record = parse_dat_record(read())
+        try:
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            tmp = target.with_suffix(".tmp")
+            tmp.write_bytes(marshal.dumps((DAT_RECORD_FORMAT, key, record)))
+            os.replace(tmp, target)
+        except (OSError, ValueError):
+            pass  # a read-only config only costs the next start its speed
+        return record
 
     def reload_dats(self, directory: str = "") -> dict:
         with self._dat_reload_lock:
@@ -3634,40 +3750,54 @@ class ROMarr:
                     "error": f"{root} is not a directory"}
         found, stopped = _find_dats(root)
         loaded_by_name = {}
+        cache_dir = self._dat_cache_dir()
+        used: set = set()
+
+        def keep(parsed, label: str) -> None:
+            if parsed.games:
+                key = parsed.name.casefold() or label.casefold()
+                previous = loaded_by_name.get(key)
+                if previous is None or _dat_version_key(parsed.version) > _dat_version_key(previous.version):
+                    loaded_by_name[key] = parsed
+
         for path in found:
             try:
+                st = path.stat()
+                stamp = f"{path.resolve()}\0{st.st_size}\0{st.st_mtime_ns}"
                 # Handle ZIP archives containing DAT files
                 if path.suffix.lower() == ".zip":
                     try:
                         with zipfile.ZipFile(path, 'r') as zf:
                             # Look for .dat or .xml files inside the zip
-                            dat_names = [n for n in zf.namelist() 
-                                        if n.lower().endswith(('.dat', '.xml'))
-                                        and not n.startswith('__MACOSX/')
-                                        and not n.startswith('.')]
+                            dat_names = [n for n in zf.namelist()
+                                         if n.lower().endswith(('.dat', '.xml'))
+                                         and not n.startswith('__MACOSX/')
+                                         and not n.startswith('.')]
                             for dat_name in dat_names:
-                                with zf.open(dat_name) as dat_file:
-                                    content = dat_file.read().decode('utf-8', errors='replace')
-                                    parsed = parse_dat(content)
-                                    if parsed.games:
-                                        key = parsed.name.casefold() or dat_name.casefold()
-                                        previous = loaded_by_name.get(key)
-                                        if previous is None or _dat_version_key(parsed.version) > _dat_version_key(previous.version):
-                                            loaded_by_name[key] = parsed
+                                def read(zf=zf, dat_name=dat_name):
+                                    with zf.open(dat_name) as dat_file:
+                                        return dat_file.read().decode('utf-8', errors='replace')
+                                record = self._dat_record(cache_dir, used,
+                                                          f"{stamp}\0{dat_name}", read)
+                                keep(dat_from_record(record), dat_name)
                     except (zipfile.BadZipFile, OSError) as zip_err:
                         log.warning("could not read zip %s: %s", path, zip_err)
                         continue
                 else:
                     # Regular .dat or .xml file
-                    parsed = parse_dat(path.read_text(encoding="utf-8",
-                                                      errors="replace"))
-                    if parsed.games:
-                        key = parsed.name.casefold() or path.name.casefold()
-                        previous = loaded_by_name.get(key)
-                        if previous is None or _dat_version_key(parsed.version) > _dat_version_key(previous.version):
-                            loaded_by_name[key] = parsed
+                    record = self._dat_record(
+                        cache_dir, used, stamp,
+                        lambda path=path: path.read_text(encoding="utf-8", errors="replace"))
+                    keep(dat_from_record(record), path.name)
             except (OSError, ValueError) as exc:
                 log.warning("could not read %s: %s", path, exc)
+        # Entries for DATs that are gone or changed would only grow the cache.
+        try:
+            for stale in cache_dir.glob("*.bin"):
+                if stale.name not in used:
+                    stale.unlink(missing_ok=True)
+        except OSError:
+            pass
         index = DatIndex()
         for parsed in loaded_by_name.values():
             index.add(parsed)
@@ -11331,7 +11461,7 @@ def make_handler(service: ROMarr):
 
 
 def serve(port: int = 6868, env: dict[str, str] | None = None):
-    service = ROMarr(env)
+    service = ROMarr(env, defer_dats=True)
     # Reconcile integration rows that were mid-dispatch when the server
     # died: if the external platform still wants them, reset to searching
     # and re-dispatch; if it doesn't, mark them cancelled.
@@ -11366,4 +11496,6 @@ def serve(port: int = 6868, env: dict[str, str] | None = None):
 
     log.info("ROMarr listening on %s://%s:%d, library=%s",
              scheme, host, port, service.library)
+    if service.load_dats_in_background():
+        log.info("loading DATs in the background; verification waits for them")
     httpd.serve_forever()
