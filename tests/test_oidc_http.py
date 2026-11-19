@@ -238,3 +238,12 @@ def test_open_paths_include_the_oidc_round_trip(tmp_path):
     Real = make_handler(svc)
     assert "/oidc/login" in Real.OPEN_PATHS
     assert "/oidc/callback" in Real.OPEN_PATHS
+
+
+def test_send_refuses_a_header_with_a_line_break(tmp_path):
+    """No caller may smuggle a second header (or a body) through `headers`."""
+    import pytest
+    _, handler, sent = _callback_handler(tmp_path, "S")
+    with pytest.raises(ValueError):
+        handler._send(200, b"x", "text/plain", [("Set-Cookie", "a=b\r\nX-Evil: 1")])
+    assert not [k for k, _ in sent if k == "X-Evil"]

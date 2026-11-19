@@ -9147,6 +9147,19 @@ def is_portal_subpath(path: str) -> bool:
     return False
 
 
+def _session_cookie(token: str, seconds: int) -> str:
+    """The session Set-Cookie value, its flags stated once.
+
+    `token` is what `Auth.issue_session` signed: base64url claims and a hex
+    signature, so it never holds a separator or a line break. HttpOnly so a
+    script cannot read it; SameSite=Strict so another site cannot ride it;
+    Path=/ so it covers the API. Not Secure: ROMarr is normally plain http
+    on a LAN, and a Secure cookie would simply never be stored there.
+    """
+    return (f"{SESSION_COOKIE}={token}; HttpOnly; SameSite=Strict; "
+            f"Path=/; Max-Age={seconds}")
+
+
 def make_handler(service: ROMarr):
     """Build the HTTP request handler class bound to `service`."""
     class Handler(BaseHTTPRequestHandler):
@@ -9183,6 +9196,8 @@ def make_handler(service: ROMarr):
             self.send_response(code)
             self.send_header("Content-Type", content_type)
             for name, value in headers:
+                if "\r" in value or "\n" in value:
+                    raise ValueError(f"line break in the {name} header")
                 self.send_header(name, value)
             self.send_header("Content-Length", str(len(body)))
             try:
@@ -9275,23 +9290,11 @@ def make_handler(service: ROMarr):
                       "/api/v1/peer/accept", "/api/v1/peer/shelf",
                       "/api/v1/peer/netplay")
 
-        @staticmethod
-        def _session_cookie(token: str) -> str:
-            """The session Set-Cookie value, its flags stated once.
-
-            HttpOnly so a script cannot read it; SameSite=Strict so another
-            site cannot ride it; Path=/ so it covers the API. Not Secure:
-            ROMarr is normally plain http on a LAN, and a Secure cookie would
-            simply never be stored there.
-            """
-            return (f"{SESSION_COOKIE}={token}; HttpOnly; SameSite=Strict; "
-                    f"Path=/; Max-Age={service.auth.session_seconds}")
-
         def _send_session(self, token: str, payload: dict):
             """Answer with a session cookie set (login and first-run setup)."""
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Set-Cookie", self._session_cookie(token))
+            self.send_header("Set-Cookie", _session_cookie(token, service.auth.session_seconds))
             raw = json.dumps(payload).encode()
             self.send_header("Content-Length", str(len(raw)))
             self.end_headers()
@@ -9385,7 +9388,7 @@ def make_handler(service: ROMarr):
                        for name in (COOKIE_VERIFIER, COOKIE_STATE, COOKIE_NONCE)]
             self._send(200, body, "text/html; charset=utf-8",
                        [("Cache-Control", "no-store"),
-                        ("Set-Cookie", self._session_cookie(token)), *cleared])
+                        ("Set-Cookie", _session_cookie(token, service.auth.session_seconds)), *cleared])
             log.info("oidc sign-in: %s", identity.user)
             return None
 
