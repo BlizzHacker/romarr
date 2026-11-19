@@ -87,6 +87,17 @@
   </keywords>
 
   <releases>
+    <release version="1.11.4" date="2026-11-18">
+      <url type="details">https://github.com/BlizzHacker/romarr/releases/tag/v1.11.4</url>
+      <description>
+        <ul>
+          <li>Split RAR releases (.part1.rar, .r00, .001) now import in the Docker image.</li>
+          <li>An import only counts once the file is really inside the library folder.</li>
+          <li>Clearer messages when ROMarr will not reuse an existing collection torrent.</li>
+          <li>Includes the 1.11.3 security fix for the library relay.</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.10.0" date="2026-11-15">
       <url type="details">https://github.com/BlizzHacker/romarr/releases/tag/v1.10.0</url>
       <description>

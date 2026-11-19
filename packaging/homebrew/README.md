@@ -25,6 +25,9 @@ it is pure Python, so it needs no compiler.
 
 ## Validation (2026-11-15)
 
+This record is for the 1.10.0 formula. The formula moved to the 1.11.4 tarball on
+2026-11-18 and has not been revalidated since.
+
 In the `homebrew/brew` container after `brew update`, with the formula in a local tap:
 
 ```bash
