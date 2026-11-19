@@ -1,9 +1,9 @@
 # Windows Package Manager (winget)
 
-`manifests/m/MoveWeight/ROMarr/1.10.0/` is a multi-file manifest (schema 1.28.0)
+`manifests/m/MoveWeight/ROMarr/1.11.4/` is a multi-file manifest (schema 1.28.0)
 for [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs), at the
 exact path that repository uses. It installs the release's **portable ZIP**
-(`ROMarr-1.10.0-win-x64.zip`, SHA-256 from the release's `SHA256SUMS.txt`) and
+(`ROMarr-1.11.4-win-x64.zip`, SHA-256 from the release's `SHA256SUMS.txt`) and
 puts a `romarr` command on the PATH that opens the desktop app:
 
 ```powershell
@@ -16,7 +16,7 @@ runtime, so the manifest declares no dependencies.
 ## Validation (2026-11-15)
 
 ```powershell
-winget validate --manifest packaging\winget\manifests\m\MoveWeight\ROMarr\1.10.0
+winget validate --manifest packaging\winget\manifests\m\MoveWeight\ROMarr\1.11.4
 # Manifest validation succeeded.
 ```
 
@@ -32,11 +32,11 @@ check that the pipeline's run starts the app.
 Either with Microsoft's tool (it forks, branches and opens the PR for you):
 
 ```powershell
-wingetcreate submit --prtitle "New package: MoveWeight.ROMarr version 1.10.0" packaging\winget\manifests\m\MoveWeight\ROMarr\1.10.0
+wingetcreate submit --prtitle "New package: MoveWeight.ROMarr version 1.11.4" packaging\winget\manifests\m\MoveWeight\ROMarr\1.11.4
 ```
 
-or by hand: fork `microsoft/winget-pkgs`, copy the `1.10.0` folder to
-`manifests/m/MoveWeight/ROMarr/1.10.0/`, and open a PR. A bot validates, installs
+or by hand: fork `microsoft/winget-pkgs`, copy the `1.11.4` folder to
+`manifests/m/MoveWeight/ROMarr/1.11.4/`, and open a PR. A bot validates, installs
 and scans it; a moderator merges.
 
 Updates: `wingetcreate update MoveWeight.ROMarr --version <v> --urls <zip-url> --submit`.

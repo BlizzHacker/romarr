@@ -34,7 +34,7 @@ brew install --build-from-source local/romarr/romarr     # installed
 brew test local/romarr/romarr                            # server up, /api/health ok
 ```
 
-The installed tree reported version `1.10.0`. Linux only; macOS was not available
+The installed tree reported version `1.11.4`. Linux only; macOS was not available
 to test, and the formula has no macOS-specific code paths beyond the state directory.
 
 ## Submit
