@@ -121,6 +121,9 @@ class WantedItem:
     # for months is retried weekly rather than hourly.
     searched_at: str = ""
     monitored: bool = True
+    # The parts of a PS4 game this request wants ("base", "update", "dlc").
+    # Empty means the game itself. See ps4_packages.normalise_parts.
+    parts: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -184,6 +187,9 @@ class QueueItem:
     retained_torrent_hash: str = ""
     import_preview: dict = field(default_factory=dict)
     import_intent: dict = field(default_factory=dict)
+    # The PS4 parts the request asked for when this row was grabbed, so an
+    # import that brings only some of them can leave the rest on Wanted.
+    parts: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -311,6 +317,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "rename_on_import": True,
     "prefer_hardlinks": False,
     "switch_attach_extras": True,   # file Switch updates/DLC in <game>/update|dlc
+    "ps4_game_folders": True,       # file PS4 packages in <Title>/, update/, dlc/
     "retain_downloads_after_import": True,
     "overwrite_existing": False,
     # Profile: for ROMs the meaningful axis is region and revision, not
@@ -530,17 +537,26 @@ class Store:
 
     # -- wanted ------------------------------------------------------------
 
-    def want(self, game: str, platform: str, monitored: bool = True) -> WantedItem:
+    def want(self, game: str, platform: str, monitored: bool = True,
+             parts=None) -> WantedItem:
         """Add to Wanted, or return the existing entry.
 
         Requesting the same game twice is a retry, not a second entry.
+        `parts` (validated by the caller) replaces the PS4 parts the entry
+        wants; None leaves them as they are. The game alone is stored empty.
         """
+        stored = None if parts is None else ([] if tuple(parts) == ("base",) else list(parts))
         with self._lock:
-            for item in self.wanted:
-                if item.game.lower() == game.lower() and item.platform == platform:
-                    return item
-            item = WantedItem(game=game, platform=platform, monitored=monitored)
-            self.wanted.append(item)
+            item = next((w for w in self.wanted
+                         if w.game.lower() == game.lower() and w.platform == platform), None)
+            if item is not None and (stored is None or item.parts == stored):
+                return item
+            if item is None:
+                item = WantedItem(game=game, platform=platform, monitored=monitored,
+                                  parts=stored or [])
+                self.wanted.append(item)
+            else:
+                item.parts = stored
         self.save()
         return item
 

@@ -15,6 +15,8 @@ import unicodedata
 from dataclasses import dataclass
 
 from .platforms import DISC, PLATFORMS, Platform, all_extensions, by_slug, resolve, same_machine
+from .ps4_packages import (BASE, DLC, PACKAGE_PLATFORMS, UPDATE, describe_parts,
+                           normalise_parts, release_parts, title_before_parts)
 
 log = logging.getLogger(__name__)
 
@@ -148,6 +150,22 @@ _JUNK_MARKERS = (
 _JUNK_MARKERS_DIGITAL = (
     "beta", "demo", "sample", "trainer", "update only", "dlc only",
 )
+
+#: Markers the PS4 package step answers instead (see `_package_step`). On a
+#: PS4 search "Game + Update v1.05 + DLC" is the best release on offer, and
+#: these would have rejected it as a PC patch or docked it as junk.
+_PACKAGE_HANDLED_MARKERS = frozenset({
+    "update only", "dlc only", "dlc", "update v", "patch v", "hotfix",
+})
+_JUNK_MARKERS_PACKAGED = tuple(m for m in _JUNK_MARKERS if m not in _PACKAGE_HANDLED_MARKERS)
+_PC_RELEASE_MARKERS_PACKAGED = tuple(m for m in PC_RELEASE_MARKERS if m not in _PACKAGE_HANDLED_MARKERS)
+#: Points for each requested part a PS4 release holds, and for each optional
+#: part (update, DLC) it carries beyond the request when the game is wanted.
+#: A combined pack outranks the bare game; a lone update never stands in for
+#: a game.
+_PACKAGE_PART_POINTS = 30
+_PACKAGE_EXTRA_POINTS = 10
+_PACKAGE_REDUNDANT_BASE_PENALTY = 15
 
 #: Repack groups with long, consistent track records. The bonus exists so a
 #: FitGirl repack outranks an anonymous upload of the same game -- the same
@@ -710,9 +728,63 @@ class Judgement:
         return [f"{self.points:+d} no positive platform, region, or seeder score"]
 
 
+def _scene_spaced(title: str) -> str:
+    """A dot- or underscore-separated scene name read with spaces.
+
+    `title_matches` itself never reads "The.Game.PS4" as "The Game" (its
+    article and separator rules expect spaces). Fixing that there would
+    change every platform's matching, so only the PS4/PS5 path uses this.
+    """
+    return re.sub(r"[._]+", " ", title) if " " not in title.strip() else title
+
+
+def _package_title_matches(title: str, wanted: str) -> bool:
+    """Title match for a PS4 release: the name before its package words.
+
+    "Game + Update 1.05 + 3 DLC" and "Game.Update.v1.05.PS4-DUPLEX" name
+    "Game". PS4 scene releases are dot-separated, so the spaced reading of
+    the title is tried as well.
+    """
+    spaced = _scene_spaced(title)
+    candidates = {spaced, title_before_parts(title, wanted), title_before_parts(spaced, wanted)}
+    return any(title_matches(candidate, wanted) for candidate in candidates if candidate.strip())
+
+
+def _package_step(release: Release, wanted: str, platform: Platform,
+                  parts) -> tuple[Judgement | None, list[tuple[int, str]], frozenset[str]]:
+    """Score which parts of a PS4 game a release holds against what was asked.
+
+    Returns a refusal, or the reasons to add, plus the parts the release
+    holds. `parts` is what the request wants (default: the game itself).
+    """
+    asked = set(normalise_parts(parts))
+    held = release_parts(release.title, wanted)
+    covered = held & asked
+    label = f"{platform.name} package: {describe_parts(held)}"
+    if not covered:
+        return (Judgement(-260, verdict=f"{label}, not the requested {describe_parts(asked)}"),
+                [], held)
+    if BASE in asked and BASE not in held:
+        # The extras alone cannot satisfy a request for the game; once the
+        # game is in, the parts still missing are requested on their own.
+        return Judgement(-260, verdict=f"{label}; the request needs the base game"), [], held
+    missing = asked - held
+    reasons = [(_PACKAGE_PART_POINTS * len(covered),
+                label + (f" (lacks {describe_parts(missing)})" if missing else ""))]
+    if BASE in asked:
+        extras = (held - asked) & {UPDATE, DLC}
+        if extras:
+            reasons.append((_PACKAGE_EXTRA_POINTS * len(extras),
+                            f"also includes {describe_parts(extras)}"))
+    elif BASE in held:
+        reasons.append((-_PACKAGE_REDUNDANT_BASE_PENALTY,
+                        "includes the base game again"))
+    return None, reasons, held
+
+
 def judge(release: Release, wanted: str,
           platform: Platform | None = None, *,
-          profile=None, blocklist=None) -> Judgement:
+          profile=None, blocklist=None, parts=None) -> Judgement:
     """Rank a release and record why. Higher is better; negative means no.
 
     `profile` and `blocklist` are operator policy and are applied before any
@@ -720,6 +792,9 @@ def judge(release: Release, wanted: str,
     highly: somebody who preferred a term and then blocked a specific release
     meant the block, and reading it the other way round is the worst available
     interpretation.
+
+    `parts` is what a PS4 request wants (base, update, DLC); see
+    `ps4_packages.normalise_parts`. Other platforms ignore it.
     """
     content_refusal = collection_content_refusal(release)
     if content_refusal:
@@ -737,7 +812,9 @@ def judge(release: Release, wanted: str,
     if platform is not None and platform.media != "digital" and release.categories:
         if all(4000 <= c < 5000 for c in release.categories):
             return Judgement(-300, verdict="a PC release (PC categories)")
-    if not title_matches(release.title, wanted):
+    packaged = platform is not None and platform.slug in PACKAGE_PLATFORMS
+    if not (title_matches(release.title, wanted)
+            or (packaged and _package_title_matches(release.title, wanted))):
         return Judgement(-500, verdict=f"title does not match {wanted!r}")
 
     points = 0
@@ -823,7 +900,8 @@ def judge(release: Release, wanted: str,
         add(_GOOD_DUMP_BONUS, "verified good dump [!]")
 
     _digital = platform is not None and platform.media == "digital"
-    junk = _JUNK_MARKERS_DIGITAL if _digital else _JUNK_MARKERS
+    junk = (_JUNK_MARKERS_DIGITAL if _digital
+            else _JUNK_MARKERS_PACKAGED if packaged else _JUNK_MARKERS)
     hit = next((m for m in junk if m in lowered), "")
     if hit:
         add(-120, f"looks like a hack, beta or repack ({hit!r})")
@@ -899,13 +977,24 @@ def judge(release: Release, wanted: str,
     # or repack name is the normal shipping form, not a wrong turn.
     digital = platform is not None and platform.media == "digital"
     if not digital:
-        for marker in PC_RELEASE_MARKERS:
+        for marker in (_PC_RELEASE_MARKERS_PACKAGED if packaged else PC_RELEASE_MARKERS):
             if _mentions(lowered, marker):
                 return Judgement(-300, verdict=f"a PC release ({marker})")
     else:
         repacker = next((g for g in _TRUSTED_REPACKERS if g in lowered), "")
         if repacker:
             add(40, f"trusted repacker ({repacker})")
+
+    # Base game, update or DLC: a PS4 request for the game must not settle
+    # for a lone patch, and a pack holding the game with its update and DLC
+    # is the better grab. A request may ask for the extras too.
+    held_parts: frozenset[str] = frozenset()
+    if packaged:
+        refusal, package_reasons, held_parts = _package_step(release, wanted, platform, parts)
+        if refusal is not None:
+            return refusal
+        for delta, text in package_reasons:
+            add(delta, text)
 
     # A compilation is not a cartridge dump, and cannot be imported as one.
     #
@@ -1030,7 +1119,7 @@ def judge(release: Release, wanted: str,
                 verdict=f"too big for a {platform.name} {medium} "
                         f"({release.size // 1048576}MB, ceiling "
                         f"{ceiling // 1048576}MB)")
-        if 0 < release.size < _size_floor(platform):
+        if 0 < release.size < _size_floor(platform) and held_parts != {DLC}:
             # The floor is per medium for the same reason the ceiling is. Four
             # kilobytes is a real floor for an Atari cartridge and no floor at
             # all for a disc: a few hundred KB offered for a PlayStation
@@ -1042,6 +1131,8 @@ def judge(release: Release, wanted: str,
             # every one of their releases was rejected as "too small", however
             # good the title match was. Absent evidence is not evidence of
             # absence; the title and extension checks still decide those.
+            # A PS4 DLC can be a license-only package of a few kilobytes,
+            # so DLC asked for on its own is exempt.
             return Judgement(
                 -400,
                 verdict=f"too small to be a {platform.name} {medium}")
@@ -1154,24 +1245,33 @@ def _size_floor(platform: Platform) -> int:
 
 
 def score(release: Release, wanted: str, platform: Platform | None = None,
-          *, profile=None, blocklist=None) -> int:
+          *, profile=None, blocklist=None, parts=None) -> int:
     """Rank a release. Higher is better; negative means "do not take this"."""
-    return judge(release, wanted, platform, profile=profile, blocklist=blocklist).points
+    return judge(release, wanted, platform, profile=profile, blocklist=blocklist,
+                 parts=parts).points
 
 
 def explain(release: Release, wanted: str,
             platform: Platform | None = None,
-            *, profile=None, blocklist=None) -> list[str]:
+            *, profile=None, blocklist=None, parts=None) -> list[str]:
     """Why this release scored what it did, worst reason first."""
-    return judge(release, wanted, platform, profile=profile, blocklist=blocklist).why()
+    return judge(release, wanted, platform, profile=profile, blocklist=blocklist,
+                 parts=parts).why()
+
+
+def package_class(release: Release, wanted: str, platform: Platform | None) -> str:
+    """"base game + update" style label for a PS4 release; "" elsewhere."""
+    if platform is None or platform.slug not in PACKAGE_PLATFORMS:
+        return ""
+    return describe_parts(release_parts(release.title, wanted))
 
 
 def best_release(releases: list[Release], wanted: str,
                  platform: Platform | None = None, *,
-                 profile=None, blocklist=None) -> Release | None:
+                 profile=None, blocklist=None, parts=None) -> Release | None:
     """The highest-scoring usable release, or None if nothing qualifies."""
     ranked = [(judge(r, wanted, platform, profile=profile,
-                     blocklist=blocklist).points, r) for r in releases]
+                     blocklist=blocklist, parts=parts).points, r) for r in releases]
     ranked = [(s, r) for s, r in ranked if s > 0]
     if not ranked:
         return None

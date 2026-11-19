@@ -2021,8 +2021,22 @@ RENDER.add=async()=>{
       <button class="btn ghost" id="g-wish" style="margin-top:20px">Save to wishlist</button>
       <button class="btn" id="g-go" style="margin-top:20px">Search &amp; Grab</button>
     </div>
+    <div class="row" id="g-parts" style="display:none;margin-top:10px;gap:14px">
+      <span class="help" style="margin:0">PlayStation packages:</span>
+      <label><input type="checkbox" data-part="base" checked> Base game</label>
+      <label><input type="checkbox" data-part="update"> Update</label>
+      <label><input type="checkbox" data-part="dlc"> DLC</label>
+    </div>
     <div id="g-out" style="margin-top:16px"></div></div>`;
   enhancePlatformSelect($('#g-plat'), 'Select a platform');
+  // PS4/PS5 games ship as base game, update and DLC packages. A combined
+  // pack is preferred; whatever an import does not bring stays on Wanted.
+  const PART_PLATFORMS=['ps4','ps5'];
+  const syncParts=()=>{$('#g-parts').style.display=PART_PLATFORMS.includes($('#g-plat').value)?'flex':'none';};
+  $('#g-plat').addEventListener('change',syncParts);
+  const chosenParts=platform=>PART_PLATFORMS.includes(platform)
+    ?[...document.querySelectorAll('#g-parts [data-part]')].filter(c=>c.checked).map(c=>c.dataset.part):null;
+  const withParts=(body,platform)=>{const parts=chosenParts(platform);return parts&&parts.length?{...body,parts}:body;};
   $('#g-go').onclick=async()=>{
     const game=$('#g-name').value.trim(), platform=$('#g-plat').value;
     if(!game){toast('Enter a game name');return;}
@@ -2030,7 +2044,7 @@ RENDER.add=async()=>{
     $('#g-out').innerHTML='<div class="empty">Searching indexers…</div>';
     const r=await j('/api/request',{method:'POST',
       headers:{'content-type':'application/json'},
-      body:JSON.stringify({game,platform})});
+      body:JSON.stringify(withParts({game,platform},platform))});
     if(!current())return;
     $('#g-out').innerHTML=r.ok
       ? `<div class="card" style="margin:0"><h3>Grabbed</h3>
@@ -2043,7 +2057,7 @@ RENDER.add=async()=>{
   $('#g-wish').onclick=async()=>{
     const game=$('#g-name').value.trim(),platform=$('#g-plat').value;
     if(!game||!platform){toast('Enter a title and select a platform');return;}
-    const r=await j('/api/v1/wanted/add',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({game,platform,monitored:false})});
+    const r=await j('/api/v1/wanted/add',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(withParts({game,platform,monitored:false},platform))});
     if(!current())return;
     toast(r.ok?'Saved to wishlist; automatic searches are off':r.error||'Could not save');refreshCounts();
   };
@@ -2137,6 +2151,7 @@ RENDER.search=async()=>{
             style="text-decoration:none">&#8599;</a>`:''}
           ${r.torrent_file_path?`<div class="help" title="Only this path is selected from the collection">File: <code>${esc(r.torrent_file_path)}</code></div>`:''}
           ${r.platform?` <span class="pill" title="Target platform">${esc(r.platform)}</span>`:''}
+          ${r.package?` <span class="pill" title="What this PlayStation release holds">${esc(r.package)}</span>`:''}
           ${r.private?' <span class="pill">private</span>':''}
           ${r.protocol==='usenet'?' <span class="pill">usenet</span>':''}</td>
         <td style="white-space:nowrap">${mb(r.size)}</td>
@@ -4612,6 +4627,7 @@ RENDER.media=()=>settingsPage('Media Management',
   +chk('rename_on_import','Use DAT names for verified single-file imports (disc-set filenames stay intact)',SETTINGS.rename_on_import)
   +chk('prefer_hardlinks','Prefer hardlinks; copy when unavailable (unchanged files only)',SETTINGS.prefer_hardlinks)
   +chk('switch_attach_extras','File Switch updates and DLC inside their game\'s folder (update/, dlc/) when the game already has one',SETTINGS.switch_attach_extras!==false)
+  +chk('ps4_game_folders','File PS4 and PS5 packages as one game folder: base game in &lt;Title&gt;/, update in update/, DLC in dlc/',SETTINGS.ps4_game_folders!==false)
   +`<p class="dim">Hardlinks share file contents with the download. Editing either file changes both. Archive members are extracted normally. Shared library read permissions are required; ROMarr never changes source permissions.</p>`
   +chk('retain_downloads_after_import','Keep completed downloads for seeding after import',SETTINGS.retain_downloads_after_import)
   +chk('overwrite_existing','Overwrite an existing file',SETTINGS.overwrite_existing)
