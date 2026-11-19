@@ -15,8 +15,9 @@ import unicodedata
 from dataclasses import dataclass
 
 from .platforms import DISC, PLATFORMS, Platform, all_extensions, by_slug, resolve, same_machine
-from .ps4_packages import (BASE, DLC, PACKAGE_PLATFORMS, UPDATE, describe_parts,
-                           normalise_parts, release_parts, title_before_parts)
+from .game_packages import (BASE, DLC, PACKAGE_PLATFORMS, UPDATE, describe_parts,
+                           PLATFORM_CATEGORIES, identify, normalise_parts, release_parts,
+                           title_before_parts)
 
 log = logging.getLogger(__name__)
 
@@ -151,15 +152,18 @@ _JUNK_MARKERS_DIGITAL = (
     "beta", "demo", "sample", "trainer", "update only", "dlc only",
 )
 
-#: Markers the PS4 package step answers instead (see `_package_step`). On a
-#: PS4 search "Game + Update v1.05 + DLC" is the best release on offer, and
-#: these would have rejected it as a PC patch or docked it as junk.
+#: Markers the package step answers instead (see `_package_step`). On a
+#: PS4, Switch or PC search "Game + Update v1.05 + DLC" is the best release
+#: on offer, and these would have rejected it as a PC patch or docked it as
+#: junk. Platforms without updates or DLC keep them.
 _PACKAGE_HANDLED_MARKERS = frozenset({
     "update only", "dlc only", "dlc", "update v", "patch v", "hotfix",
 })
 _JUNK_MARKERS_PACKAGED = tuple(m for m in _JUNK_MARKERS if m not in _PACKAGE_HANDLED_MARKERS)
+_JUNK_MARKERS_DIGITAL_PACKAGED = tuple(m for m in _JUNK_MARKERS_DIGITAL
+                                       if m not in _PACKAGE_HANDLED_MARKERS)
 _PC_RELEASE_MARKERS_PACKAGED = tuple(m for m in PC_RELEASE_MARKERS if m not in _PACKAGE_HANDLED_MARKERS)
-#: Points for each requested part a PS4 release holds, and for each optional
+#: Points for each requested part a release holds, and for each optional
 #: part (update, DLC) it carries beyond the request when the game is wanted.
 #: A combined pack outranks the bare game; a lone update never stands in for
 #: a game.
@@ -733,16 +737,20 @@ def _scene_spaced(title: str) -> str:
 
     `title_matches` itself never reads "The.Game.PS4" as "The Game" (its
     article and separator rules expect spaces). Fixing that there would
-    change every platform's matching, so only the PS4/PS5 path uses this.
+    change every platform's matching, so only the package-platform path uses this.
+    The scene name is the first space-free chunk; trailing metadata such as
+    " [USA]" may carry spaces of its own.
     """
-    return re.sub(r"[._]+", " ", title) if " " not in title.strip() else title
+    head, sep, tail = title.strip().partition(" ")
+    return re.sub(r"[._]+", " ", head) + sep + tail
+
 
 
 def _package_title_matches(title: str, wanted: str) -> bool:
-    """Title match for a PS4 release: the name before its package words.
+    """Title match for a package release: the name before its package words.
 
     "Game + Update 1.05 + 3 DLC" and "Game.Update.v1.05.PS4-DUPLEX" name
-    "Game". PS4 scene releases are dot-separated, so the spaced reading of
+    "Game". Console scene releases are dot-separated, so the spaced reading of
     the title is tried as well.
     """
     spaced = _scene_spaced(title)
@@ -752,7 +760,7 @@ def _package_title_matches(title: str, wanted: str) -> bool:
 
 def _package_step(release: Release, wanted: str, platform: Platform,
                   parts) -> tuple[Judgement | None, list[tuple[int, str]], frozenset[str]]:
-    """Score which parts of a PS4 game a release holds against what was asked.
+    """Score which parts of a game a release holds against what was asked.
 
     Returns a refusal, or the reasons to add, plus the parts the release
     holds. `parts` is what the request wants (default: the game itself).
@@ -793,8 +801,9 @@ def judge(release: Release, wanted: str,
     meant the block, and reading it the other way round is the worst available
     interpretation.
 
-    `parts` is what a PS4 request wants (base, update, DLC); see
-    `ps4_packages.normalise_parts`. Other platforms ignore it.
+    `parts` is what a request wants (base, update, DLC) on a platform whose
+    games have updates and DLC; see `game_packages.normalise_parts`.
+    Platforms without them ignore it.
     """
     content_refusal = collection_content_refusal(release)
     if content_refusal:
@@ -900,8 +909,10 @@ def judge(release: Release, wanted: str,
         add(_GOOD_DUMP_BONUS, "verified good dump [!]")
 
     _digital = platform is not None and platform.media == "digital"
-    junk = (_JUNK_MARKERS_DIGITAL if _digital
-            else _JUNK_MARKERS_PACKAGED if packaged else _JUNK_MARKERS)
+    if packaged:
+        junk = _JUNK_MARKERS_DIGITAL_PACKAGED if _digital else _JUNK_MARKERS_PACKAGED
+    else:
+        junk = _JUNK_MARKERS_DIGITAL if _digital else _JUNK_MARKERS
     hit = next((m for m in junk if m in lowered), "")
     if hit:
         add(-120, f"looks like a hack, beta or repack ({hit!r})")
@@ -985,7 +996,7 @@ def judge(release: Release, wanted: str,
         if repacker:
             add(40, f"trusted repacker ({repacker})")
 
-    # Base game, update or DLC: a PS4 request for the game must not settle
+    # Base game, update or DLC: a request for the game must not settle
     # for a lone patch, and a pack holding the game with its update and DLC
     # is the better grab. A request may ask for the extras too.
     held_parts: frozenset[str] = frozenset()
@@ -1088,6 +1099,15 @@ def judge(release: Release, wanted: str,
         or names_explicit_name
         or has_native_marker
     )
+    if packaged and not digital and not (
+            has_platform_evidence or identify(release.title, platform.slug)[0]
+            or set(PLATFORM_CATEGORIES.get(platform.slug, ())) & set(release.categories)):
+        # Package points must never make an unmarked console release usable:
+        # the grab needs the platform's name, its extension, a title ID, the
+        # platform's indexer category or a path. PC releases never name their
+        # platform, so PC keeps its category rules instead.
+        return Judgement(-300, verdict=f"no {platform.name} evidence "
+                                       "(platform name, extension, title ID, category or path)")
     if has_platform_evidence:
         add(10, "title matches")
     if release.protocol == "hub":
@@ -1131,7 +1151,7 @@ def judge(release: Release, wanted: str,
             # every one of their releases was rejected as "too small", however
             # good the title match was. Absent evidence is not evidence of
             # absence; the title and extension checks still decide those.
-            # A PS4 DLC can be a license-only package of a few kilobytes,
+            # A DLC can be a license-only package of a few kilobytes,
             # so DLC asked for on its own is exempt.
             return Judgement(
                 -400,
@@ -1260,7 +1280,7 @@ def explain(release: Release, wanted: str,
 
 
 def package_class(release: Release, wanted: str, platform: Platform | None) -> str:
-    """"base game + update" style label for a PS4 release; "" elsewhere."""
+    """"base game + update" style label on platforms with updates and DLC; "" elsewhere."""
     if platform is None or platform.slug not in PACKAGE_PLATFORMS:
         return ""
     return describe_parts(release_parts(release.title, wanted))

@@ -16,7 +16,7 @@ from __future__ import annotations
 from .import_duplicates import duplicate_reason, stream_sha1
 from .tar_archive import TAR_SUFFIXES, TarSource, is_tar_name
 from .switch_attach import ATTACH_PLATFORMS, attach_dir as switch_attach_dir, is_real_directory_chain
-from . import ps4_packages
+from . import game_packages
 
 import json
 import logging
@@ -700,7 +700,7 @@ class _PathSource(_Source):
 
     def head(self, name, size):
         """Read the start of a regular file without following a link."""
-        return ps4_packages.read_head(self.path if self.path.is_file() else self.path / name, size)
+        return game_packages.read_head(self.path if self.path.is_file() else self.path / name, size)
 
     def hash(self, name, suffix=""):
         """Hash the file a chunk at a time; None if it can't be opened."""
@@ -1228,28 +1228,32 @@ def _digital_set_name(download: Path) -> str:
 
 def package_routes(source, sets, platform, target_dir: Path, title: str,
                    roles: dict[str, str] | None = None) -> dict[str, str] | None:
-    """Game-folder destinations for one download's PS4 packages, or None.
+    """Game-folder destinations for one download's game packages, or None.
 
-    Each package's role (base, update, DLC) comes from its header when the
-    file is on disk and from its name otherwise; `ps4_packages` then picks
+    Each package's role (base, update, DLC) comes from the best evidence the
+    platform has (a PS4 header, a Switch/3DS/Wii U title ID) and from its
+    name otherwise; `game_packages` then picks
     `<Title>/`, `<Title>/update/` or `<Title>/dlc/`. None keeps the flat
     destination: not a package platform, a multi-file set, more than one base,
     or a link anywhere between the platform folder and the game folder.
     `roles` holds the roles a person chose in review, which win.
     """
-    if platform.slug not in ps4_packages.PACKAGE_PLATFORMS or not sets:
+    if platform.slug not in game_packages.PACKAGE_PLATFORMS or not sets:
         return None
     if any(group.is_multi_file for group in sets):
         return None
     packages = []
     for group in sets:
-        header = ps4_packages.header_of(source, platform.slug, group.primary)
-        role = (roles or {}).get(group.primary) or ps4_packages.file_role(group.primary, header)
-        if role not in ps4_packages.PARTS:
+        header = game_packages.header_of(source, platform.slug, group.primary)
+        role, family = game_packages.describe_package(group.primary, platform.slug, header)
+        role = (roles or {}).get(group.primary) or role
+        if role == "additional-game":
+            role = game_packages.BASE   # a second game: never grouped with the first
+        if role not in game_packages.PARTS:
             return None
-        packages.append((group.primary, role,
-                         ps4_packages.title_id(header.content_id if header else group.primary)))
-    routes = ps4_packages.plan_game_folder(packages, target_dir, title)
+        packages.append((group.primary, role, family))
+    routes = game_packages.plan_game_folder(packages, target_dir, title, platform.slug,
+                                            platform.extensions)
     if routes is None:
         return None
     if not all(is_real_directory_chain(target_dir, target_dir / relative)
@@ -1263,7 +1267,8 @@ def package_title(download: Path, game_title: str = "") -> str:
     if game_title.strip():
         return game_title
     name = _digital_set_name(download)
-    return name[:-4] if name.lower().endswith(".pkg") else name
+    # A lone package file names its game without the extension.
+    return download.stem if download.is_file() and name == download.name else name
 
 
 def platform_dir(library_root: Path, platform: "Platform | str", *,
@@ -1322,7 +1327,7 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
                hash_index=None, duplicate_roots=(),
                switch_extras: bool = False,
                member_paths: list[Path] | None = None,
-               ps4_folders: bool = False, game_title: str = "",
+               package_folders: bool = False, game_title: str = "",
                package_roles: dict[str, str] | None = None) -> list[ImportResult]:
     """Place every ROM from a finished download into the library.
 
@@ -1338,7 +1343,8 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
     the physical extension. Multi-file members keep their reference names.
     `switch_extras` files a Switch update or DLC inside its game's folder
     when that game already has one (see switch_attach).
-    `ps4_folders` files PS4 packages as one game folder named `game_title`,
+    `package_folders` files a game's base, update and DLC packages as one
+    game folder named `game_title`,
     with `update/` and `dlc/` inside it, the layout RomM reads (see
     `package_routes`). `package_roles` carries roles chosen in review.
     """
@@ -1377,7 +1383,7 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
             selected_primaries=selected_primaries, bundle_routes=bundle_routes,
             requested_game=requested_game, catalog_platforms=catalog_platforms,
             hash_index=hash_index, duplicate_roots=duplicate_roots,
-            switch_extras=switch_extras, ps4_folders=ps4_folders,
+            switch_extras=switch_extras, package_folders=package_folders,
             game_title=game_title, package_roles=package_roles)
     finally:
         source.close()
@@ -1391,7 +1397,7 @@ def _import_rom_from_source(source, candidates, chosen_sets, download, platform,
                             selected_primaries=None, bundle_routes=None,
                             requested_game=None, catalog_platforms=None,
                             hash_index=None, duplicate_roots=(),
-                            switch_extras=False, ps4_folders=False, game_title="",
+                            switch_extras=False, package_folders=False, game_title="",
                             package_roles=None):
     """Finish import while the validated source and its scratch ZIPs remain open."""
     if selected_primaries is not None:
@@ -1431,7 +1437,7 @@ def _import_rom_from_source(source, candidates, chosen_sets, download, platform,
     planned = []
     attached: dict[Path, Path] = {}
     folder_routes = None
-    if ps4_folders and bundle_routes is None:
+    if package_folders and bundle_routes is None:
         folder_routes = package_routes(
             source, chosen_sets, platform,
             platform_dir(library_root, platform, layout=layout, translation=translation,
@@ -1490,6 +1496,8 @@ def _import_rom_from_source(source, candidates, chosen_sets, download, platform,
             elif folder_routes is not None:
                 destination = target_dir / folder_routes[chosen.primary] / destination.name
                 attached[destination] = target_dir
+            # Libraries without RomM game folders still attach Switch extras
+            # to a game folder that already exists.
             elif switch_extras and platform.slug in ATTACH_PLATFORMS:
                 attach = switch_attach_dir(Path(chosen.primary).name, target_dir)
                 if attach is not None:

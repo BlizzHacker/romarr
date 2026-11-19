@@ -121,8 +121,8 @@ from .scheduler import Scheduler, next_search_due
 from .selection import (Release, best_release, infer_platform, judge, score,
                         collection_content_kind, collection_content_refusal,
                         package_class)
-from .ps4_packages import (BASE, DEFAULT_PARTS, PACKAGE_PLATFORMS, describe_parts,
-                           normalise_parts, release_parts)
+from .game_packages import (BASE, DEFAULT_PARTS, GAME_FOLDER_LIBRARIES, PACKAGE_PLATFORMS, PARTS,
+                            describe_parts, imported_role, normalise_parts)
 from .store import Event, QueueItem, SeerrRequest, Store
 from .ui import favicon_svg as ui_favicon_svg
 from .ui import web_manifest, service_worker, app_icon
@@ -2710,7 +2710,7 @@ class ROMarr:
         return merged
 
     def _request_parts(self, game: str, platform, parts=None):
-        """What a PS4 request wants (base, update, DLC); None elsewhere.
+        """What a request wants (base, update, DLC) on a package platform; None elsewhere.
 
         Explicit `parts` win (and raise ValueError when invalid). Otherwise
         the Wanted entry's parts count, and failing that the game alone.
@@ -3122,7 +3122,7 @@ class ROMarr:
                 # browser may have.
                 "info_url": getattr(r, "info_url", ""),
                 "torrent_file_path": getattr(r, "torrent_file_path", ""),
-                # Base game, update, DLC or a combined pack, for PS4 results.
+                # Base game, update, DLC or a combined pack, where games have them.
                 "package": package_class(r, game, inferred),
                 "score": verdict.points,
                 "accepted": verdict.accepted,
@@ -3377,14 +3377,18 @@ class ROMarr:
                                             self.store.settings.get("remote_path_mappings"))
             else:
                 members = mapped_download_members(path, torrent, self.store.settings.get("remote_path_mappings"))
-            preview = preview_import(path, platform, self.library_root(target[0]),
-                                     layout=self.library_layout(target[0]),
-                                     platform_folders=self.platform_folders(target[0]),
-                                     queue_identity=queue_identity(item),
-                                     member_paths=members,
-                                     switch_extras=bool(self.store.settings.get("switch_attach_extras", True)),
-                                     ps4_folders=bool(self.store.settings.get("ps4_game_folders", True)),
-                                     game_title=item.game)
+            def build_preview(roles=None):
+                """The import preview, with package destinations from reviewed roles."""
+                return preview_import(path, platform, self.library_root(target[0]),
+                                      layout=self.library_layout(target[0]),
+                                      platform_folders=self.platform_folders(target[0]),
+                                      queue_identity=queue_identity(item),
+                                      member_paths=members,
+                                      switch_extras=bool(self.store.settings.get("switch_attach_extras", True)),
+                                      package_folders=self._package_folders(target[0]),
+                                      game_title=item.game, package_roles=roles)
+
+            preview = build_preview()
             preview = decorate_preview(preview, platform, self.library_root(target[0]),
                                        kind=target[0].get("type", ""), layout=self.library_layout(target[0]),
                                        platform_folders=self.platform_folders(target[0]),
@@ -3396,13 +3400,23 @@ class ROMarr:
                 if routes:
                     intent["routes"] = routes
                     preview["planned_destinations"] = {primary: str(Path(preview["platform_root"]) / route) for primary, route in routes.items()}
+                elif preview.get("package_routing"):
+                    from .import_intent import package_destinations, reviewed_roles
+                    roles = reviewed_roles(intent)
+                    # Rebuild only when the review changed a role the preview showed.
+                    shown = {i["primary"]: i["role"] for i in preview["items"]}
+                    unchanged = all(shown.get(k) == v for k, v in roles.items())
+                    planned = package_destinations(preview if unchanged else build_preview(roles), intent)
+                    intent["package_destinations"] = planned
+                    preview["planned_destinations"] = planned
 
             if body.get("confirm"):
                 if body.get("token") != preview["token"]:
                     return {"error": "download changed; refresh the preview before importing"}
                 if intent is None:
                     raise ValueError("Select payloads before confirmation")
-                if intent.get("routes") and body.get("reviewed_destinations") != preview.get("planned_destinations"):
+                if ((intent.get("routes") or intent.get("package_destinations"))
+                        and body.get("reviewed_destinations") != preview.get("planned_destinations")):
                     raise ValueError("Review the final destination tree before confirming")
                 with self._lock:
                     item.import_intent = intent
@@ -4105,7 +4119,7 @@ class ROMarr:
                    search: bool = False, parts=None) -> dict:
         """Add a game the way Radarr's Add dialog does: monitor it, maybe search now.
 
-        `parts` asks a PS4 request for the update and DLC as well as (or
+        `parts` asks a request for the update and DLC as well as (or
         instead of) the game; a request for extras alone may own the game.
         """
         platform = resolve(platform_name)
@@ -4704,7 +4718,7 @@ class ROMarr:
                                       rename=bool(self.store.settings.get("rename_on_import", True)),
                         prefer_hardlinks=staged_source == source and bool(self.store.settings.get("prefer_hardlinks", False)),
                                       switch_extras=bool(self.store.settings.get("switch_attach_extras", True)),
-                                      ps4_folders=bool(self.store.settings.get("ps4_game_folders", True)),
+                                      package_folders=self._package_folders(target_cfg),
                                       layout=self.library_layout(target_cfg),
                                       translation=is_translation(source.name),
                                       platform_folders=target_folders,
@@ -4964,23 +4978,46 @@ class ROMarr:
                 "verified": len(verified_titles), "dropped": dropped,
                 "count": len(dropped)}
 
-    def _keep_missing_parts(self, queue_item, platform, name: str) -> None:
-        """Leave the PS4 parts an import did not bring on Wanted.
+    def _package_folders(self, cfg) -> bool:
+        """Whether imports into this library file packages as RomM game folders.
 
-        A request for the game, its update and DLC is often answered by the
-        base game alone. Whatever the imported release did not hold goes back
-        on Wanted as a request for just those parts.
+        `<Title>/update/` and `<Title>/dlc/` are RomM's convention. Frontend
+        libraries such as RetroBat expect flat system folders, so they keep it.
         """
-        asked = set(queue_item.parts) if queue_item is not None else set()
-        if not asked or platform.slug not in PACKAGE_PLATFORMS:
+        return (bool(self.store.settings.get("game_package_folders", True))
+                and str((cfg or {}).get("type", "")) in GAME_FOLDER_LIBRARIES)
+
+    def _pending_parts(self, queue_item, platform) -> set[str]:
+        """The package parts still asked for: the queued request's plus Wanted's.
+
+        Read before an import fulfils anything, so a part requested while the
+        download was running is not lost.
+        """
+        if queue_item is None or platform.slug not in PACKAGE_PLATFORMS:
+            return set()
+        pending = set(queue_item.parts)
+        key = queue_item.game.casefold()
+        for item in list(self.store.wanted):
+            if item.platform == platform.slug and item.game.casefold() == key:
+                pending |= set(item.parts)
+        return pending
+
+    def _settle_parts(self, queue_item, platform, outcomes, pending: set[str]) -> None:
+        """Leave on Wanted exactly the asked-for package parts the import did not bring.
+
+        What arrived is read from the imported files (header, RomM folder,
+        name), never from the release title. A request answered in full is
+        dropped from Wanted even when its title did not match the download.
+        """
+        if not pending:
             return
-        arrived = release_parts(queue_item.release or name, queue_item.game)
-        missing = tuple(p for p in normalise_parts(sorted(asked)) if p not in arrived)
-        if not missing or missing == DEFAULT_PARTS:
-            return
-        self.store.want(queue_item.game, platform.slug, parts=missing)
-        self.store.record(Event(kind="wanted", game=queue_item.game, platform=platform.slug,
-                                detail=f"still wanted: {describe_parts(missing)}"))
+        arrived = {imported_role(o.destination, queue_item.game, platform.slug)
+                   for o in outcomes if o.ok and o.destination}
+        missing = tuple(p for p in PARTS if p in pending and p not in arrived)
+        self.store.settle_parts(queue_item.game, platform.slug, missing)
+        if missing:
+            self.store.record(Event(kind="wanted", game=queue_item.game, platform=platform.slug,
+                                    detail=f"still wanted: {describe_parts(missing)}"))
 
     def collection_plan(self, dat_name: str = "", platform: str = "",
                         **policy_kw) -> dict:
@@ -5914,6 +5951,8 @@ class ROMarr:
                 "slug": platform.slug,
                 "name": platform.name,
                 "media": platform.media,
+                # Games here ship as base game, update and DLC packages.
+                "parts": platform.slug in PACKAGE_PLATFORMS,
                 "extensions": list(platform.extensions),
                 "max_size_mb": platform.max_size // (1024 * 1024),
                 "play_routes": list(routes.kinds),
@@ -8945,7 +8984,8 @@ class ROMarr:
             selected_primaries = None
             bundle_routes = None
             if queue_item is not None and path.exists():
-                from .import_intent import preview_import, queue_identity
+                from .import_intent import (package_destinations, preview_import, queue_identity,
+                                            reviewed_roles)
                 from .romm_bundle import decorate_preview, route_selection
                 from .library import MissingArchiveTool
                 import zipfile
@@ -8957,8 +8997,9 @@ class ROMarr:
                                              queue_identity=queue_identity(queue_item),
                                              member_paths=members,
                                              switch_extras=bool(self.store.settings.get("switch_attach_extras", True)),
-                                             ps4_folders=bool(self.store.settings.get("ps4_game_folders", True)),
-                                             game_title=getattr(queue_item, "game", "") or "")
+                                             package_folders=self._package_folders(target_cfg),
+                                             game_title=getattr(queue_item, "game", "") or "",
+                                             package_roles=reviewed_roles(queue_item.import_intent) or None)
                     preview = decorate_preview(preview, platform, self.library_root(target_cfg),
                                                kind=target_cfg.get("type", ""), layout=self.library_layout(target_cfg),
                                                platform_folders=target_folders, translation=is_translation(name))
@@ -8979,6 +9020,13 @@ class ROMarr:
                     queue_item.detail = "Review bundle contents in Queue before importing"
                     results.append({"name": name, "ok": False, "reason": queue_item.detail})
                     continue
+                if intent and intent.get("package_destinations") and (
+                        package_destinations(preview, intent) != intent["package_destinations"]):
+                    queue_item.import_preview = preview
+                    queue_item.state = "import-review"
+                    queue_item.detail = "Reviewed destinations changed; review the bundle again"
+                    results.append({"name": name, "ok": False, "reason": queue_item.detail})
+                    continue
                 if intent:
                     selected_primaries = [c["primary"] for c in intent["choices"]]
                     if intent.get("routes"):
@@ -8994,7 +9042,6 @@ class ROMarr:
 
             package_roles = None
             if selected_primaries is not None and queue_item is not None:
-                from .import_intent import reviewed_roles
                 package_roles = reviewed_roles(queue_item.import_intent)
             if selected_primaries is not None:
                 platform, held = self._nup_gate(
@@ -9010,7 +9057,7 @@ class ROMarr:
                 rename=bool(self.store.settings.get("rename_on_import", True)),
                 prefer_hardlinks=bool(self.store.settings.get("prefer_hardlinks", False)),
                 switch_extras=bool(self.store.settings.get("switch_attach_extras", True)),
-                ps4_folders=bool(self.store.settings.get("ps4_game_folders", True)),
+                package_folders=self._package_folders(target_cfg),
                 game_title=getattr(queue_item, "game", "") or "",
                 package_roles=package_roles,
                 layout=self.library_layout(target_cfg),
@@ -9101,6 +9148,7 @@ class ROMarr:
                                 queue_item.external_request_id,
                                 assets=imported_paths,
                                 status="available")
+                pending = self._pending_parts(queue_item, platform)
                 for w in (list(self.store.wanted) if fulfils_base else []):
                     if w.platform != platform.slug:
                         continue
@@ -9116,7 +9164,7 @@ class ROMarr:
                     if any(_titles_are_same(w.game, identity)
                            for identity in _fulfil_identities(name, outcomes)):
                         self.store.fulfil(w.game, w.platform)
-                self._keep_missing_parts(queue_item, platform, name)
+                self._settle_parts(queue_item, platform, outcomes, pending)
                 # Close the aliasing gap on this platform: drop wanted titles
                 # that are already present and verified in the library but were
                 # never fulfilled (word-order/alias titles, pre-existing stale

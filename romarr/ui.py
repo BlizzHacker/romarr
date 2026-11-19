@@ -2022,19 +2022,20 @@ RENDER.add=async()=>{
       <button class="btn" id="g-go" style="margin-top:20px">Search &amp; Grab</button>
     </div>
     <div class="row" id="g-parts" style="display:none;margin-top:10px;gap:14px">
-      <span class="help" style="margin:0">PlayStation packages:</span>
+      <span class="help" style="margin:0">Game packages:</span>
       <label><input type="checkbox" data-part="base" checked> Base game</label>
       <label><input type="checkbox" data-part="update"> Update</label>
       <label><input type="checkbox" data-part="dlc"> DLC</label>
     </div>
     <div id="g-out" style="margin-top:16px"></div></div>`;
   enhancePlatformSelect($('#g-plat'), 'Select a platform');
-  // PS4/PS5 games ship as base game, update and DLC packages. A combined
-  // pack is preferred; whatever an import does not bring stays on Wanted.
-  const PART_PLATFORMS=['ps4','ps5'];
-  const syncParts=()=>{$('#g-parts').style.display=PART_PLATFORMS.includes($('#g-plat').value)?'flex':'none';};
+  // Platforms whose games ship as base game, update and DLC packages (the
+  // server marks them "parts"). A combined pack is preferred; whatever an
+  // import does not bring stays on Wanted.
+  const hasParts=slug=>PLATFORMS.some(p=>p.slug===slug&&p.parts);
+  const syncParts=()=>{$('#g-parts').style.display=hasParts($('#g-plat').value)?'flex':'none';};
   $('#g-plat').addEventListener('change',syncParts);
-  const chosenParts=platform=>PART_PLATFORMS.includes(platform)
+  const chosenParts=platform=>hasParts(platform)
     ?[...document.querySelectorAll('#g-parts [data-part]')].filter(c=>c.checked).map(c=>c.dataset.part):null;
   const withParts=(body,platform)=>{const parts=chosenParts(platform);return parts&&parts.length?{...body,parts}:body;};
   $('#g-go').onclick=async()=>{
@@ -2151,7 +2152,7 @@ RENDER.search=async()=>{
             style="text-decoration:none">&#8599;</a>`:''}
           ${r.torrent_file_path?`<div class="help" title="Only this path is selected from the collection">File: <code>${esc(r.torrent_file_path)}</code></div>`:''}
           ${r.platform?` <span class="pill" title="Target platform">${esc(r.platform)}</span>`:''}
-          ${r.package?` <span class="pill" title="What this PlayStation release holds">${esc(r.package)}</span>`:''}
+          ${r.package?` <span class="pill" title="What this release holds: base game, update, DLC or a pack">${esc(r.package)}</span>`:''}
           ${r.private?' <span class="pill">private</span>':''}
           ${r.protocol==='usenet'?' <span class="pill">usenet</span>':''}</td>
         <td style="white-space:nowrap">${mb(r.size)}</td>
@@ -4322,7 +4323,7 @@ RENDER.queue=async()=>{
         <td>${esc(i.primary)}<div class="help">${esc(i.evidence)} (${esc(i.confidence)})<br>${i.bytes==null?'Expanded size unknown':esc(String(i.bytes))+' bytes'}<br>${i.members.map(esc).join('<br>')}</div></td>
         <td><select data-plan-role="${n}"><option value="unknown">Needs review</option><option value="base">Base game</option><option value="update">Update for this base</option><option value="dlc">DLC for this base</option><option value="additional-game">Additional game</option></select></td><td>${esc(i.destination)}</td></tr>`).join('')}</tbody></table>
       <details><summary>${plan.extras.length} excluded files</summary>${plan.extras.map(esc).join('<br>')||'None'}</details>
-      <p><button class="btn" id="q-plan-save">${plan.romm_routing?"Review destinations":"Save selection"}</button> <button class="btn ghost" id="q-plan-back">Back</button></p><div id="q-plan-review"></div>`;
+      <p><button class="btn" id="q-plan-save">${plan.romm_routing||plan.package_routing?"Review destinations":"Save selection"}</button> <button class="btn ghost" id="q-plan-back">Back</button></p><div id="q-plan-review"></div>`;
     $('#q-plan-mode').value=saved.mode||'single';
     if(plan.romm_routing) $('#q-plan-existing').value=saved.existing_game||'';
     plan.items.forEach((i,n)=>document.querySelector(`[data-plan-role="${n}"]`).value=selected.get(i.primary)||i.role);
@@ -4335,7 +4336,7 @@ RENDER.queue=async()=>{
         if(result.error){toast(result.error);return;}
         toast('Selection saved. The next import sweep will use it and retain the source.');go('queue');
       };
-      if(!plan.romm_routing){await save({});return;}
+      if(!plan.romm_routing&&!plan.package_routing){await save({});return;}
       const reviewed=await post({review:true,...selection});
       if(reviewed.error){toast(reviewed.error);return;}
       const destinations=reviewed.preview.planned_destinations||{};
@@ -4627,7 +4628,7 @@ RENDER.media=()=>settingsPage('Media Management',
   +chk('rename_on_import','Use DAT names for verified single-file imports (disc-set filenames stay intact)',SETTINGS.rename_on_import)
   +chk('prefer_hardlinks','Prefer hardlinks; copy when unavailable (unchanged files only)',SETTINGS.prefer_hardlinks)
   +chk('switch_attach_extras','File Switch updates and DLC inside their game\'s folder (update/, dlc/) when the game already has one',SETTINGS.switch_attach_extras!==false)
-  +chk('ps4_game_folders','File PS4 and PS5 packages as one game folder: base game in &lt;Title&gt;/, update in update/, DLC in dlc/',SETTINGS.ps4_game_folders!==false)
+  +chk('game_package_folders','In RomM libraries, file games with updates and DLC (PlayStation, 3DS, Wii U, Switch) as one game folder: base game in &lt;Title&gt;/, update in update/, DLC in dlc/',SETTINGS.game_package_folders!==false)
   +`<p class="dim">Hardlinks share file contents with the download. Editing either file changes both. Archive members are extracted normally. Shared library read permissions are required; ROMarr never changes source permissions.</p>`
   +chk('retain_downloads_after_import','Keep completed downloads for seeding after import',SETTINGS.retain_downloads_after_import)
   +chk('overwrite_existing','Overwrite an existing file',SETTINGS.overwrite_existing)

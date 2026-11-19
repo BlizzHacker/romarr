@@ -1,7 +1,8 @@
-"""PS4 game packages: tell the base game from its update and DLC, and file them.
+"""Game packages: tell a base game from its update and DLC, and file them.
 
-A PS4 game usually arrives as several ``.pkg`` files: the base game, an update
-(patch) and any DLC (additional content). Indexers carry all three kinds as
+Games on platforms with online updates and add-ons (PlayStation 3/4/5, PSP,
+Vita, 3DS, Wii U, Switch, Xbox 360, PC) arrive as several packages: the base
+game, an update (patch) and any DLC. Indexers carry all three kinds as
 separate uploads, plus combined packs that hold the game with its update and
 DLC. Two decisions depend on telling them apart:
 
@@ -12,11 +13,21 @@ DLC. Two decisions depend on telling them apart:
 * Import. RomM files a multi-file game as one folder per game and reads a
   file's category from the first folder inside it, so the base package goes
   in ``<Title>/``, the update in ``<Title>/update/`` and DLC in
-  ``<Title>/dlc/``. ``file_role`` reads the package header where the file is
-  on disk, and falls back to its name; ``plan_game_folder`` picks the folder.
+  ``<Title>/dlc/``. ``file_role`` reads what a file is from the best
+  evidence the platform offers (``identify``), and ``plan_game_folder``
+  picks the folder.
 
-PS5 packages use the same names on indexers but a different container, so
-PS5 gets the title classification and the folder layout, never the header.
+What identifies a package, per platform:
+
+* PS4: the ``.pkg`` header (content type and patch flags).
+* Switch and Switch 2: the bracketed title ID's family bits.
+* 3DS and Wii U: the title ID's high word (base, update or DLC).
+* PlayStation serials and content IDs (``CUSA00552``, ``BLUS30001``) say
+  which game a package belongs to, but not what it is.
+* Everything else: the file and release names.
+
+Retro and cartridge systems have no updates or DLC, and there "patch" means
+a ROM hack, so they are not package platforms.
 """
 from __future__ import annotations
 
@@ -28,11 +39,30 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .library_rename import _safe_basename
+from .titled import base_tid_of, classify_tid   # stdlib only, no cycle
 
 #: Platforms whose releases and packages are split into base, update and DLC.
-PACKAGE_PLATFORMS = ("ps4", "ps5")
+PACKAGE_PLATFORMS = ("ps3", "ps4", "ps5", "psp", "psvita", "3ds", "wiiu",
+                     "switch", "switch-2", "xbox360", "win")
+#: Library types whose servers read ``<Title>/update/`` and ``<Title>/dlc/``
+#: as one game (RomM). Frontend folders such as RetroBat stay flat.
+GAME_FOLDER_LIBRARIES = ("romm",)
 #: Platforms whose ``.pkg`` header layout ``read_header`` understands.
 HEADER_PLATFORMS = ("ps4",)
+#: Platforms whose packages carry a PlayStation serial or content ID.
+_PLAYSTATION = ("ps3", "ps4", "ps5", "psp", "psvita")
+#: Platforms whose packages carry a bracketed 16-digit Switch title ID.
+_SWITCH = ("switch", "switch-2")
+#: 3DS and Wii U title IDs: the high word says base, update or DLC.
+_HIGH_WORD_ROLES = {
+    "3ds": {"00040000": "base", "0004000e": "update", "0004008c": "dlc"},
+    "wiiu": {"00050000": "base", "0005000e": "update", "0005000c": "dlc"},
+}
+#: Newznab console categories that name one of these platforms outright.
+PLATFORM_CATEGORIES = {
+    "ps3": (1080,), "ps4": (1180,), "psp": (1020,), "psvita": (1120,),
+    "3ds": (1110,), "wiiu": (1130,), "xbox360": (1050, 1070),
+}
 
 BASE, UPDATE, DLC = "base", "update", "dlc"
 #: Every part a request may ask for, in display order.
@@ -41,6 +71,7 @@ PARTS = (BASE, UPDATE, DLC)
 DEFAULT_PARTS = (BASE,)
 #: RomM's folder for each optional part, inside the game's own folder.
 PART_FOLDERS = {UPDATE: "update", DLC: "dlc"}
+_FOLDER_PARTS = {folder: part for part, folder in PART_FOLDERS.items()}
 
 _LABELS = {BASE: "base game", UPDATE: "update", DLC: "DLC"}
 
@@ -48,7 +79,8 @@ _LABELS = {BASE: "base game", UPDATE: "update", DLC: "DLC"}
 
 _B = r"(?<![a-z0-9])"   # left word boundary that treats "_" and "." as breaks
 _E = r"(?![a-z0-9])"    # right word boundary, same rule
-_UPDATE_WORDS = ("update", "updates", "upd", "patch", "patches", "hotfix")
+_UPDATE_WORDS = ("update", "updates", "upd", "patch", "patches", "hotfix",
+                 "title update", "title updates")   # Xbox 360 calls them Title Updates
 _DLC_WORDS = ("dlc", "dlcs", "addon", "addons", "add-on", "add-ons",
               "add on", "add ons", "additional content", "season pass")
 _MARKER_RE = re.compile(
@@ -131,7 +163,7 @@ def title_before_parts(title: str, wanted: str = "") -> str:
 
 @functools.lru_cache(maxsize=4096)
 def release_parts(title: str, wanted: str = "") -> frozenset[str]:
-    """Which parts of a PS4 game a release title says it holds.
+    """Which parts of a game a release title says it holds.
 
     ``{"base"}`` is a plain game upload, ``{"update"}`` or ``{"dlc"}`` an
     extra on its own, and a mix such as ``{"base", "update", "dlc"}`` a
@@ -199,13 +231,23 @@ _TYPE_GAME, _TYPE_ADDON, _TYPE_ADDON_LICENSE, _TYPE_DELTA_PATCH = 0x1A, 0x1B, 0x
 #: cumulative patches set the subsequent bit as well.
 _PATCH_FLAGS = 0x00100000 | 0x40000000
 _CONTENT_ID_RE = re.compile(r"[A-Z]{2}\d{4}-(?P<tid>[A-Z]{4}\d{5})_\d{2}-[A-Z0-9_]{16}")
-_TITLE_ID_RE = re.compile(r"(?<![A-Za-z0-9])(?P<tid>(?:CUSA|PPSA|PCAS|PCJS|PCKS|PLAS|PLJS|PLJM)\d{5})(?![0-9])",
-                          re.IGNORECASE)
+#: PlayStation serials: PS4/PS5, PS3, Vita and PSP disc and digital prefixes.
+_TITLE_ID_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?P<tid>(?:CUSA|PPSA|PCAS|PCJS|PCKS|PLAS|PLJS|PLJM"
+    r"|BLUS|BLES|BLJM|BLJS|BLAS|BLKS|BCUS|BCES|BCJS|BCAS|BCKS|NPUB|NPEB|NPJB|NPUA|NPEA|NPJA|NPHA"
+    r"|PCSE|PCSB|PCSA|PCSG|PCSH|PCSF|PCSD"
+    r"|ULUS|ULES|ULJM|ULJS|UCUS|UCES|UCJS|NPUH|NPEH|NPJH|NPUG|NPEG|NPUZ|NPEZ)[-_]?\d{5})(?![0-9])",
+    re.IGNORECASE)
+_SWITCH_TID_RE = re.compile(r"\[([0-9a-fA-F]{16})\]")
+_HIGH_WORD_TID_RE = re.compile(r"(?<![0-9a-fA-F])(000[45][0-9a-fA-F]{4})([0-9a-fA-F]{8})(?![0-9a-fA-F])")
 
 
 @dataclass(frozen=True)
 class PackageHeader:
-    """The few PS4 package header fields that say what a package is."""
+    """The few PS4 package header fields that say what a package is.
+
+    PS5 packages use a different container, so only PS4 headers are read.
+    """
 
     content_id: str
     content_type: int
@@ -257,29 +299,81 @@ def header_of(source, platform_slug: str, name: str) -> PackageHeader | None:
     return parse_header(source.head(name, HEADER_SIZE))
 
 
+def imported_role(path: Path, game: str = "", platform_slug: str = "") -> str:
+    """BASE, UPDATE or DLC for a package already filed in the library.
+
+    The header decides when it can be read, then a title ID; otherwise the
+    RomM folder it was filed in ("update/", "dlc/"), and last its name. The
+    game folder's own name is never read, and the words of `game` are not
+    markers, so a game called "Patch Quest" stays a base game.
+    """
+    path = Path(path)
+    header = read_header(path) if platform_slug in ("", *HEADER_PLATFORMS) else None
+    known = (header.role if header is not None else "") or identify(path.name, platform_slug)[1]
+    if known:
+        return known
+    by_folder = _FOLDER_PARTS.get(path.parent.name.lower())
+    if by_folder:
+        return by_folder
+    return file_role(path.name, wanted=game, platform_slug=platform_slug)
+
+
 def title_id(text: str) -> str:
-    """The PS4/PS5 title ID (``CUSA12345``) in a content ID or file name, or ""."""
+    """The PlayStation serial (``CUSA12345``, ``BLUS30001``) in a content ID
+    or file name, or ""."""
     text = str(text or "")
     found = _CONTENT_ID_RE.search(text.upper()) or _TITLE_ID_RE.search(text)
-    return found.group("tid").upper() if found else ""
+    return re.sub(r"[-_]", "", found.group("tid").upper()) if found else ""
 
 
-def file_role(relative: str, header: PackageHeader | None = None) -> str:
+def identify(text: str, platform_slug: str) -> tuple[str, str]:
+    """(family, role) a platform's own IDs give a file or release name.
+
+    `family` names the game the package belongs to, so an update can find
+    its base; `role` is BASE, UPDATE or DLC when the ID itself says so.
+    Either is "" when the name carries no such ID.
+    """
+    text = str(text or "")
+    if platform_slug in _PLAYSTATION:
+        return title_id(text), ""
+    if platform_slug in _SWITCH:
+        found = {tid.lower() for tid in _SWITCH_TID_RE.findall(text)}
+        if len(found) != 1:
+            return "", ""
+        tid = found.pop()
+        kind = classify_tid(tid)
+        return base_tid_of(tid), kind if kind in PARTS else ""
+    roles = _HIGH_WORD_ROLES.get(platform_slug)
+    if roles:
+        for high, low in _HIGH_WORD_TID_RE.findall(text):
+            role = roles.get(high.lower())
+            if role:
+                return f"{high[:4]}0000{low}".lower(), role
+    return "", ""
+
+
+def file_role(relative: str, header: PackageHeader | None = None, wanted: str = "",
+              platform_slug: str = "") -> str:
     """BASE, UPDATE or DLC for one package file inside a download.
 
-    The header decides when there is one. Otherwise the file's folders count
-    first ("Update/", "DLC/"), then its name, read the same way as a release
-    title. A merged package ("Game + Update") holds the game, so it is BASE.
+    The header decides when there is one, then a title ID that says what the
+    file is (Switch, 3DS, Wii U). Otherwise the file's folders count first
+    ("Update/", "DLC/"), then its name, read the same way as a release title.
+    A merged package ("Game + Update") holds the game, so it is BASE. Words
+    of the game's own title (`wanted`) are not read as markers.
     """
     if header is not None and header.role:
         return header.role
     parts = [p for p in re.split(r"[\\/]+", str(relative or "")) if p]
+    by_id = identify(parts[-1] if parts else "", platform_slug)[1]
+    if by_id:
+        return by_id
     for folder in reversed(parts[:-1]):
         found = release_parts(folder)
         if found in ({UPDATE}, {DLC}):
             return next(iter(found))
     name = parts[-1] if parts else ""
-    found = release_parts(Path(name).stem)
+    found = release_parts(Path(name).stem, wanted)
     return BASE if BASE in found else (UPDATE if UPDATE in found else DLC)
 
 
@@ -300,15 +394,30 @@ def game_folder_name(title: str) -> str:
         return ""
 
 
-def existing_game_folder(platform_dir: Path, tid: str) -> str:
-    """The one game folder whose base package carries title ID ``tid``, or "".
+def package_family(name: str, platform_slug: str, header: PackageHeader | None = None) -> str:
+    """Which game a package belongs to: its title ID family, or ""."""
+    return identify(header.content_id if header else name, platform_slug)[0]
 
-    Looks only at packages directly inside each folder (where a base lives),
-    skips links, and reads headers before names. Two matching folders are as
-    good as none: guessing would scatter the game.
+
+def describe_package(name: str, platform_slug: str, header: PackageHeader | None = None,
+                     wanted: str = "") -> tuple[str, str]:
+    """(role, family) for one package: what it is and which game it belongs to."""
+    return (file_role(name, header, wanted=wanted, platform_slug=platform_slug),
+            package_family(name, platform_slug, header))
+
+
+def existing_game_folder(platform_dir: Path, family: str, platform_slug: str,
+                         extensions) -> str:
+    """The one game folder whose base package belongs to ``family``, or "".
+
+    Looks only at packages (files with one of the platform's `extensions`)
+    directly inside each folder, where a base lives; skips links, and reads
+    headers before names. Two matching folders are as good as none:
+    guessing would scatter the game.
     """
-    if not tid:
+    if not family:
         return ""
+    suffixes = tuple(e.lower() for e in extensions)
     found: set[str] = set()
     try:
         folders = sorted(os.scandir(platform_dir), key=lambda e: e.name)[:MAX_SCAN_FOLDERS]
@@ -319,13 +428,12 @@ def existing_game_folder(platform_dir: Path, tid: str) -> str:
             continue
         try:
             files = [f for f in os.scandir(entry.path)
-                     if f.name.lower().endswith(".pkg") and f.is_file(follow_symlinks=False)]
+                     if f.name.lower().endswith(suffixes) and f.is_file(follow_symlinks=False)]
         except OSError:
             continue
         for package in files:
-            header = read_header(Path(package.path))
-            role = file_role(package.name, header)
-            if role == BASE and title_id(header.content_id if header else package.name) == tid:
+            header = read_header(Path(package.path)) if platform_slug in HEADER_PLATFORMS else None
+            if describe_package(package.name, platform_slug, header) == (BASE, family):
                 found.add(entry.name)
                 break
         if len(found) > 1:
@@ -334,24 +442,28 @@ def existing_game_folder(platform_dir: Path, tid: str) -> str:
 
 
 def plan_game_folder(packages: list[tuple[str, str, str]], platform_dir: Path,
-                     title: str) -> dict[str, str] | None:
+                     title: str, platform_slug: str, extensions) -> dict[str, str] | None:
     """Relative folder (under the platform folder) for each package, or None.
 
-    ``packages`` holds ``(primary, role, title_id)`` for every package in one
+    ``packages`` holds ``(primary, role, family)`` for every package in one
     download. The base goes in ``<Title>``, updates in ``<Title>/update`` and
     DLC in ``<Title>/dlc``. ``<Title>`` is the existing folder whose base has
-    the same title ID when there is exactly one, else the request's title.
+    the same title ID family when there is exactly one, else the request's
+    title.
 
     None means "keep the normal flat destination": no packages, more than one
-    base (a bundle of games is not one game), or no usable folder name.
+    base (a bundle of games is not one game), packages naming different title
+    IDs (an update for another game must not join this one), or no usable
+    folder name.
     """
     if not packages:
         return None
     bases = [p for p in packages if p[1] == BASE]
-    if len(bases) > 1:
-        return None
     ids = {tid for _, _, tid in packages if tid}
-    folder = existing_game_folder(Path(platform_dir), ids.pop()) if len(ids) == 1 else ""
+    if len(bases) > 1 or len(ids) > 1:
+        return None
+    folder = (existing_game_folder(Path(platform_dir), ids.pop(), platform_slug, extensions)
+              if ids else "")
     folder = folder or game_folder_name(title)
     if not folder:
         return None

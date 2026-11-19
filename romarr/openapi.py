@@ -104,7 +104,7 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
                                       "it."),
     "/api/v1/lookup": ("GET", "Find games by IGDB title, with per-platform library, download and monitoring state. Requires q; optional platform."),
     "/api/v1/game/detail": ("GET", "Read one game and its cached metadata, wanted entry, queue and history; platform plus id or title."),
-    "/api/v1/wanted/add": ("POST", "Save a game/platform with boolean monitored (default true) and search (default false). Wishlist entries use monitored=false and are skipped by automatic searches. PS4/PS5 entries may add parts, a list of base, update and dlc (default: the game)."),
+    "/api/v1/wanted/add": ("POST", "Save a game/platform with boolean monitored (default true) and search (default false). Wishlist entries use monitored=false and are skipped by automatic searches. On platforms whose games have updates and DLC (PlayStation 3/4/5, PSP, Vita, 3DS, Wii U, Switch, Xbox 360, PC), entries may add parts, a list of base, update and dlc (default: the game)."),
     "/api/v1/wanted/monitor": ("POST", "Set boolean monitored for an existing game/platform; false pauses automatic searches without removing the entry."),
     "/api/v1/queue": ("GET", "Active downloads, import-preview availability and client-scoped progress/ETA when available."),
     "/api/queue": ("GET", "Active downloads (legacy path)."),
@@ -233,7 +233,7 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
                                             "downloads from the browser extension "
                                             "and optionally adopt them."),
     "/api/v1/webhook": ("POST", "Inbound game request from a front-end."),
-    "/api/request": ("POST", "Request a game. PS4/PS5 requests may add parts, a list of base, update and dlc (default: the game); parts an import does not bring stay on Wanted."),
+    "/api/request": ("POST", "Request a game. On platforms whose games have updates and DLC, requests may add parts, a list of base, update and dlc (default: the game); parts an import does not bring stay on Wanted."),
     "/api/v1/integration/info": ("GET", "Integration service info: name, version, capabilities."),
     "/api/v1/integration/requests": ("POST", "Accept a game request from an external platform "
         "(Cartridge). Starts the same search + grab pipeline; "
