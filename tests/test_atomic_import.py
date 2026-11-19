@@ -143,10 +143,10 @@ def test_destination_without_hardlink_support_still_publishes_safely(tmp_path, m
     monkeypatch.setattr(library.os, "link", unsupported)
     if collision:
         with pytest.raises(FileExistsError):
-            library._publish_staged(staged, dest, False)
+            library.publish_staged(staged, dest, False)
         assert dest.read_bytes() == b"previous"
     else:
-        library._publish_staged(staged, dest, False)
+        library.publish_staged(staged, dest, False)
         assert dest.read_bytes() == b"complete"
 
 

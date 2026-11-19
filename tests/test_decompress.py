@@ -55,7 +55,7 @@ def test_scan_finds_only_decompressable_files(tmp_path):
                  "notes.txt", "F.rvz", "G.cci"):
         (tmp_path / name).write_bytes(b"x")
 
-    found = {p.name for p in decompress.scan_compressed(tmp_path)}
+    found = {p.name for p in [w.source for w in decompress.scan_work(tmp_path)]}
 
     assert found == {"A.chd", "B.7z", "D.nkit.iso", "F.rvz"}
 
@@ -65,7 +65,7 @@ def test_scan_walks_subdirectories(tmp_path):
     (tmp_path / "gba").mkdir()
     (tmp_path / "gba" / "game.gba.zip").write_bytes(b"x")
 
-    assert [p.name for p in decompress.scan_compressed(tmp_path)] == \
+    assert [p.name for p in [w.source for w in decompress.scan_work(tmp_path)]] == \
         ["game.gba.zip"]
 
 
@@ -82,14 +82,18 @@ class FakeClient:
 
     name = "FakeCompressatorium"
 
-    def __init__(self, outputs=None, remote_matches=()):
+    def __init__(self, outputs=None, remote_matches=(), tools=None):
         self.outputs = outputs or {}
+        self.tools = tools
         self.remote_matches = set(remote_matches)
         self.submitted: list[dict] = []
         self._jobs: dict[str, JobResult] = {}
 
     def reachable(self):
         return True
+
+    def available_tools(self):
+        return self.tools
 
     def submit_job(self, *, file_path, mode, output_dir=None,
                    duplicate_action="skip", delete_on_verify=False):
@@ -353,4 +357,4 @@ def test_a_nup_is_never_decompression_work(tmp_path):
     assert mode_for("Game.nup") == ""
     (tmp_path / "Game.nup").write_bytes(b"NUP\x01")
 
-    assert decompress.scan_compressed(tmp_path) == []
+    assert [w.source for w in decompress.scan_work(tmp_path)] == []

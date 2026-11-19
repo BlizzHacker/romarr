@@ -1377,6 +1377,23 @@ RENDER.hub=async()=>{
           +(ia.configured?'<button class="mini" id="ia-auth-clear" type="button">Clear login</button>':'')
           +'</div></form>')
         +'</div>' : '';
+    const cm=hs.compressatorium||{};
+    const cmForm=(pl.slug==='compressatorium'&&pl.installed)
+      ?'<div style="margin-top:12px"><b>Compressatorium connection</b>'
+        +'<p class="help">'+(cm.source==='env'
+          ?'Set by COMPRESSATORIUM_URL ('+esc(cm.url||'')+'); the environment wins over these fields.'
+          :cm.configured?'Batch decompression sends disc images to '+esc(cm.url||'')+'.'
+          :'Set the address of your Compressatorium container to let batch decompression use it.')
+        +' Mount your library into it at the same path ROMarr uses.</p>'
+        +'<form id="cm-form" autocomplete="off">'
+        +'<div class="row"><input id="cm-url" type="url" placeholder="http://compressatorium:8080" '
+        +'maxlength="2048" value="'+esc(cm.source==='plugin'?(cm.url||''):'')+'">'
+        +'<input id="cm-key" type="password" placeholder="'+(cm.api_key_set?'API key saved':'API key (optional)')+'" '
+        +'autocomplete="new-password" maxlength="4096"></div>'
+        +'<div class="row"><button class="mini accent" type="submit">Save</button>'
+        +(cm.api_key_set&&cm.source!=='env'?'<button class="mini" id="cm-clear" type="button">Clear API key</button>':'')
+        +'</div></form>'
+        +'<p class="help">'+esc(cm.credit||'')+'</p></div>' : '';
     return '<div class="pcard'+(pl.installed?' installed':'')+'">'
       +'<h4>'+esc(pl.name)+(pl.author?'<span class="by">by '+esc(pl.author)+'</span>':'')+'</h4>'
       +'<div class="desc">'+esc(pl.description||'No description supplied.')+'</div>'
@@ -1386,7 +1403,7 @@ RENDER.hub=async()=>{
       +(pl.key_required?'<div class="help">Requires an account or key. Check the instructions before installing.</div>':'')
       +'<div class="foot">'+action
       +(net?'<span class="net">reaches '+esc(net)+'</span>':'')+'</div>'
-      +authForm+'</div>';
+      +authForm+cmForm+'</div>';
   };
 
   const render=d=>{
@@ -1653,6 +1670,46 @@ RENDER.hub=async()=>{
     };
     if(iaClear) iaClear.onclick=async()=>{
       await submitIaAuth({clear:true},'Could not clear Archive.org login','Archive.org credentials cleared');
+    };
+
+    const cmF=$('#cm-form');
+    const cmClear=$('#cm-clear');
+    const submitCm=async(payload,okToast)=>{
+      const opVer=typeof pageVersion==='number'?pageVersion:0;
+      const btn=cmF?cmF.querySelector('button[type="submit"]'):null;
+      if(btn)btn.disabled=true; if(cmClear)cmClear.disabled=true;
+      try{
+        try{
+          const response=await fetch('/api/v1/hub/compressatorium',{
+            method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify(payload)});
+          const result=await response.json();
+          if(!isCurrentHub(opVer)) return;
+          actionError=result.ok?'':(result.error||'Could not save the Compressatorium settings');
+          if(result.ok)toast(okToast);
+        }catch(e){
+          if(!isCurrentHub(opVer)) return;
+          actionError='Could not save the Compressatorium settings';
+        }
+        const nextHs=await j('/api/v1/hub/status').catch(()=>hs);
+        if(!isCurrentHub(opVer)) return;
+        hs=nextHs;
+        const nextData=await load();
+        if(!isCurrentHub(opVer)) return;
+        render(nextData);
+      }finally{
+        if(isCurrentHub(opVer)){if(btn)btn.disabled=false; if(cmClear)cmClear.disabled=false;}
+      }
+    };
+    if(cmF) cmF.onsubmit=async e=>{
+      e.preventDefault();
+      const payload={url:$('#cm-url').value.trim()};
+      const key=$('#cm-key').value;
+      if(key)payload.api_key=key;
+      await submitCm(payload,'Compressatorium settings saved');
+    };
+    if(cmClear) cmClear.onclick=async()=>{
+      await submitCm({clear_api_key:true},'Compressatorium API key cleared');
     };
 
     p.querySelectorAll('button[data-act]').forEach(b=>b.onclick=async()=>{
@@ -7096,11 +7153,12 @@ RENDER.tasks=async()=>{
     :s%60===0?`every ${s/60} min`:`every ${s} s`;
   const scheduled=(d.items||[]).map(t=>[t.name,t.label,t]);
   const manualOnly=[['RefreshLibrary','Re-read the library from RomM',null],
-    ['Decompress','Batch decompress the library: extract via Compressatorium, '
-     +'verify every output against the DATs. Originals are deleted only when '
-     +'they verified AND the API call asked for deletion — this button never '
-     +'deletes. Needs COMPRESSATORIUM_URL and decompress_path set in '
-     +'settings.',null]];
+    ['Decompress','Batch decompress the library: CHD, RVZ, NSZ and the other '
+     +'compressed images go to Compressatorium (COMPRESSATORIUM_URL); RAR sets '
+     +'and multi-file archives are extracted by ROMarr itself. Every output is '
+     +'verified against the DATs. Originals are deleted only when they verified '
+     +'AND the API call asked for deletion — this button never deletes. Needs '
+     +'decompress_path set in settings.',null]];
   $('#page').innerHTML=`<div class="card"><h3>Tasks</h3>
     <p class="help">The service runs these on its own clock &mdash; intervals live
       under Settings &rarr; General. Run starts one now regardless.</p>

@@ -200,6 +200,7 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "/api/v1/hub/plugins": ("GET", "The plugin catalogue, unfiltered."),
     "/api/v1/hub/igir": ("GET", "Igir v5.8.0 1G1R front-end status, default profile, and CLI execution (POST runs or previews an Igir 1G1R job with {romm} output tokens)."),
     "/api/v1/hub/exo2romm": ("GET", "eXo2romm eXoDOS-to-RomM ZIP repackager status, attribution to derkommutator, and defaults (POST previews or repackages eXoDOS game zips)."),
+    "/api/v1/hub/compressatorium": ("GET", "Compressatorium plugin status: whether it is installed and enabled, the service address batch decompression uses and where it comes from (env or plugin), whether an API key is saved, and credit to pacnpal/Compressatorium. Never returns the key (POST saves the address or key)."),
     "/api/v1/hub/fleet": ("GET", "Multi-device and network library sync profiles for ES-DE, RetroPie/ArcadePunks, Batocera, Argosy, Grout, Steam Deck, and RetroArch WebDAV (POST builds a 1G1R + gamelist.xml sync plan)."),
     "/api/v1/mcp": ("GET", "MCP connection manifest (GET), or authenticated stateless JSON-RPC MCP transport (POST). GET text/event-stream returns 405; no standalone SSE stream is offered."),
     "/api/v1/hub/archive-org/auth": ("POST", "Save or clear host-managed Archive.org credentials; returns status without credentials."),
@@ -576,6 +577,28 @@ def spec(version: str = "0.0.0", *, base_url: str = "") -> dict:
     }
     paths["/api/v1/hub/exo2romm"]["post"]["responses"]["400"] = {
         "description": "Invalid request payload or all input archives failed processing.",
+    }
+    paths["/api/v1/hub/compressatorium"].update(_operation(
+        "/api/v1/hub/compressatorium", "POST",
+        "Save the Compressatorium plugin's service address and/or API key. "
+        "The key goes to ROM Hub's secret store; COMPRESSATORIUM_URL still wins when set."))
+    paths["/api/v1/hub/compressatorium"]["post"]["requestBody"] = {
+        "required": True,
+        "content": {"application/json": {"schema": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string",
+                        "description": "http(s) base address, for example http://compressatorium:8080. "
+                                       "An empty string clears it; omit to leave it unchanged."},
+                "api_key": {"type": "string", "format": "password",
+                            "description": "Replaces the saved key; omit to leave it unchanged."},
+                "clear_api_key": {"type": "boolean", "default": False,
+                                  "description": "Delete the saved key."},
+            },
+        }}},
+    }
+    paths["/api/v1/hub/compressatorium"]["post"]["responses"]["400"] = {
+        "description": "The plugin is not installed, or the address cannot be used.",
     }
     _guide_contracts(paths)
 

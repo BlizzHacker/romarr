@@ -187,6 +187,40 @@ def _installed_slugs(registry) -> dict:
     return out
 
 
+def _uncatalogued(registry, installed: dict, seen: set) -> list[dict]:
+    """Installed plugins no loaded catalogue lists, described by their manifests.
+
+    A plugin ROMarr preinstalls, or one installed from a URL, can be newer
+    than the catalogue a pinned ROM Hub ships. Without this it is installed,
+    enabled and invisible: no card to configure or disable it from.
+    """
+    extra = []
+    try:
+        plugins = registry.Registry(HOME).installed()
+    except Exception:
+        return extra
+    for plugin in plugins:
+        slug = getattr(plugin, "slug", None)
+        if not slug or slug in seen or slug not in installed:
+            continue
+        manifest = getattr(plugin, "manifest", None)
+        extra.append({
+            "slug": slug,
+            "name": getattr(manifest, "name", "") or slug,
+            "author": "",
+            "version": getattr(manifest, "version", "") or "",
+            "repository": "",
+            "capabilities": sorted(getattr(manifest, "capabilities", None) or {}),
+            "network": list(getattr(manifest, "network", None) or []),
+            "description": "Installed; not listed in the plugin catalogue.",
+            "key_required": False,
+            "platforms": [],
+            "installed": True,
+            "enabled": installed[slug]["enabled"],
+        })
+    return extra
+
+
 def plugins() -> dict:
     """The whole plugin catalogue, annotated with install/enabled state.
 
@@ -224,6 +258,8 @@ def plugins() -> dict:
             "installed": inst is not None,
             "enabled": inst["enabled"] if inst else False,
         })
+    seen = {item["slug"] for item in items}
+    items.extend(_uncatalogued(registry, installed, seen))
     items.sort(key=lambda x: (not x["installed"], x["slug"]))
     return {
         "items": items,

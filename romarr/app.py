@@ -69,7 +69,7 @@ from .libretro import CoreHub
 from .cartridge import CartridgeHub
 from .emulator_catalog import resource_catalog
 from .dat import DatIndex, dat_from_record, parse_dat
-from .decompress import run_batch as run_decompress_batch, scan_compressed
+from .decompress import run_batch as run_decompress_batch
 from .switch_report import report as build_switch_report
 from .titled import classify_tid, TitleDBIndex, build_index as build_titled_index, validate_switch_rom
 from .downloaders import (
@@ -8650,10 +8650,13 @@ class ROMarr:
         """Batch decompression: extract, validate against DATs, then delete.
 
         The workflow issue #22 asked for. Compressatorium does the extraction
-        (CHD, RVZ, Z3DS, NSZ, CSO, 7z, zip -- every format it speaks); ROMarr
+        it has a tool for (CHD, RVZ, Z3DS, NSZ, CSO, single-cartridge 7z/zip);
+        ROMarr extracts RAR sets and multi-file archives itself (#224), and
         does the verification, because ROMarr holds the DAT index and the
         question "is this the published dump" is answered here, not by the
-        extractor.
+        extractor. The service is found through COMPRESSATORIUM_URL or the
+        preinstalled Compressatorium plugin's `url`; without either, the local
+        work still runs and the report says which files were skipped.
 
         Deletion is off by default and gated on verification: a file is
         deleted only when every output it produced matched a DAT entry.
@@ -8664,16 +8667,12 @@ class ROMarr:
         if not root:
             return {"error": "no directory given -- pass 'directory' in the "
                              "request body or set decompress_path in settings"}
-        url = self._env.get("COMPRESSATORIUM_URL", "")
-        if not url and not dry_run:
-            return {"error": "COMPRESSATORIUM_URL is not configured. Start a "
-                             "compressatorium container (pacnpal/compressatorium) "
-                             "and set the variable, or run with dry_run=true "
-                             "to see what would be processed."}
+        from . import compressatorium_plugin
+        url, api_key, _source = compressatorium_plugin.connection(self._env)
         report = run_decompress_batch(
             root,
             compressatorium_url=url,
-            compressatorium_api_key=self._env.get("COMPRESSATORIUM_API_KEY", ""),
+            compressatorium_api_key=api_key,
             dats=self.dats,
             delete_originals=bool(delete_originals),
             dry_run=bool(dry_run),
@@ -10408,6 +10407,8 @@ def make_handler(service: ROMarr):
                 return self._json(200, hub.igir_status())
             if route.path == "/api/v1/hub/exo2romm":
                 return self._json(200, hub.exo2romm_status())
+            if route.path == "/api/v1/hub/compressatorium":
+                return self._json(200, _compressatorium_status(service))
             if route.path == "/api/v1/hub/fleet":
                 return self._json(200, hub.fleet_profiles())
             if route.path == "/api/v1/mcp":
@@ -10428,6 +10429,7 @@ def make_handler(service: ROMarr):
                                         "sandboxed": confined,
                                         "sandbox_detail": why,
                                         "archive_org_auth": hub.archive_org_auth_status(),
+                                        "compressatorium": _compressatorium_status(service),
                                         "flaresolverr_configured": bool(hub.flaresolverr_url()),
                                         "searchable_plugins": searchable,
                                         # The Plugins page says out loud what
@@ -11253,6 +11255,19 @@ def make_handler(service: ROMarr):
                     "ok": got.ok, "url": got.url, "host": got.host,
                     "reason": got.reason,
                 })
+            if route.path == "/api/v1/hub/compressatorium":
+                from . import compressatorium_plugin
+                payload = body if isinstance(body, dict) else {}
+                url = payload.get("url")
+                api_key = payload.get("api_key")
+                if (url is not None and not isinstance(url, str)) or \
+                        (api_key is not None and not isinstance(api_key, str)):
+                    return self._json(400, {"ok": False,
+                                            "error": "url and api_key must be strings"})
+                result = compressatorium_plugin.configure(
+                    url=url, api_key=api_key,
+                    clear_api_key=payload.get("clear_api_key") is True)
+                return self._json(200 if result.get("ok") else 400, result)
             if route.path == "/api/v1/hub/archive-org/auth":
                 payload = body if isinstance(body, dict) else {}
                 result = hub.archive_org_auth_configure(
@@ -11655,6 +11670,12 @@ def make_handler(service: ROMarr):
     return Handler
 
 
+def _compressatorium_status(service) -> dict:
+    """The Compressatorium card's state; never the API key itself."""
+    from . import compressatorium_plugin
+    return compressatorium_plugin.status(service._env)
+
+
 def serve(port: int = 6868, env: dict[str, str] | None = None):
     service = ROMarr(env, defer_dats=True)
     # Reconcile integration rows that were mid-dispatch when the server
@@ -11664,6 +11685,14 @@ def serve(port: int = 6868, env: dict[str, str] | None = None):
         service.store.recover_seerr_dispatches()
     except Exception:
         log.exception("integration recovery skipped (non-fatal)")
+
+    # Plugins ROMarr ships with are installed once, the first time ROM Hub is
+    # available; never again, so one the operator disabled stays disabled.
+    try:
+        from . import compressatorium_plugin
+        compressatorium_plugin.preinstall_in_background()
+    except Exception:
+        log.exception("plugin preinstall skipped (non-fatal)")
 
     bind_env = env if env is not None else os.environ
     host = str(bind_env.get("ROMARR_HOST") or "0.0.0.0")

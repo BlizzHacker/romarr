@@ -7,10 +7,16 @@ ones that passed validation.
 
 Division of labour:
 
-  * **Compressatorium** does the extraction. It speaks CHD, RVZ/WIA/GCZ,
-    Z3DS, NSZ, CSO/ZSO/DAX, WUX, NKit and plain 7z/zip, each through the
-    right tool (chdman, dolphin-tool, maxcso, nsz...). ROMarr does not
-    reimplement any of that; it submits jobs to a running service.
+  * **Compressatorium** does the extraction it has a tool for. It speaks
+    CHD, RVZ/WIA/GCZ, Z3DS, NSZ, CSO/ZSO/DAX, WUX, NKit and single-cartridge
+    7z/zip, each through the right tool (chdman, dolphin-tool, maxcso,
+    nsz...). ROMarr does not reimplement any of that; it submits jobs to a
+    running service, after asking it which of its tools are ready.
+  * **ROMarr** extracts the archives the service has no mode for: RAR
+    archives and split RAR sets (#224), and any .7z/.zip that is not one
+    cartridge ROM (a zipped cue/bin, a multi-disc set). `decompress_local`
+    does that with the importer's own archive readers, so those run even
+    with no service configured.
   * **ROMarr** does the verdict. The DAT index lives here, and "is this the
     published dump" is answered by hash against that index -- the same
     question `dat.lookup` answers on every import. The service's own
@@ -21,7 +27,8 @@ Division of labour:
 Safety model, because the last step deletes files:
 
   * Originals are deleted only when `delete_originals=True` is passed
-    explicitly AND every output of that original matched a DAT entry.
+    explicitly AND every output of that original matched a DAT entry. For a
+    split RAR set the original is every volume of the set.
   * An output that is `unknown` -- no DAT claims it -- keeps its original.
     No DAT does not mean bad file: homebrew, translations and anything an
     out-of-date DAT has not seen yet all land there, and deleting on
@@ -32,9 +39,9 @@ Safety model, because the last step deletes files:
   * Every step is logged: scan, submit, completion, per-file verdict, and
     each deletion. The log is the audit trail for a 500-file batch.
 
-Dry run is a first-class mode: it scans and reports what would be processed
-without submitting a single job, so an operator can see the blast radius
-before authorising a destructive one.
+Dry run is a first-class mode: it scans and reports what would be processed,
+and by which engine, without submitting a job or writing a file, so an
+operator can see the blast radius before authorising a destructive one.
 """
 
 from __future__ import annotations
@@ -45,11 +52,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from . import decompress_local
 from .compressatorium import (
-    CANCELLED, COMPLETED, FAILED, CompressatoriumClient,
-    CompressatoriumConfig, JobResult, mode_for,
+    CANCELLED, COMPLETED, FAILED, TOOL_BY_MODE, UNAVAILABLE_REASON,
+    CompressatoriumClient, CompressatoriumConfig, JobResult, mode_for,
+    mode_for_file, romz_accepts,
 )
 from .dat import BAD_DUMP, UNKNOWN, VERIFIED, DatIndex, hash_file
+from .library import rar_sets
 
 log = logging.getLogger(__name__)
 
@@ -57,7 +67,9 @@ log = logging.getLogger(__name__)
 # Extensions that count as "compressed" for the purposes of batch
 # decompression. Kept in sync with compressatorium.mode_for: anything the
 # client cannot name a mode for is not scanned, so the two lists agreeing is
-# what makes the scan honest about what it can actually do.
+# what makes the scan honest about what it can actually do. RAR is not here:
+# RAR volumes are found by `library.rar_sets`, which knows all three volume
+# namings, and they are always extracted locally.
 COMPRESSED_EXTENSIONS: frozenset[str] = frozenset({
     # General-purpose archives
     ".7z", ".zip",
@@ -76,12 +88,24 @@ COMPRESSED_EXTENSIONS: frozenset[str] = frozenset({
     ".nkit.iso", ".nkit.gcz",
 })
 
+#: Engines an item can be planned to.
+SERVICE = "compressatorium"
+LOCAL = "local"
+
 # How long to wait for the whole batch, and how often to poll. A CHD of a
 # dual-layer DVD decompresses in minutes on spinning rust; a hundred of them
 # queue behind one another on the service, so the batch budget is generous
 # and the poll interval short enough that small jobs are not held up.
 DEFAULT_JOB_TIMEOUT = 3 * 3600
 DEFAULT_POLL_INTERVAL = 5
+
+
+@dataclass(frozen=True)
+class Work:
+    """One unit the scan found: a file, or the first volume of a RAR set."""
+
+    source: Path
+    volumes: tuple[Path, ...] = ()
 
 
 @dataclass
@@ -94,6 +118,9 @@ class DecompressItem:
     # deleted | kept
     job_id: str = ""
     mode: str = ""
+    engine: str = ""             # compressatorium | local
+    plan_note: str = ""          # why a file is extracted locally
+    volumes: list[str] = field(default_factory=list)
     output_files: list[str] = field(default_factory=list)
     dat_match: str = ""          # verified | bad-dump | unknown | ""
     dat_detail: str = ""
@@ -107,6 +134,7 @@ class DecompressReport:
 
     scanned: int = 0
     submitted: int = 0
+    extracted_locally: int = 0
     decompressed: int = 0
     verified: int = 0
     failed: int = 0
@@ -121,6 +149,7 @@ class DecompressReport:
         return {
             "scanned": self.scanned,
             "submitted": self.submitted,
+            "extracted_locally": self.extracted_locally,
             "decompressed": self.decompressed,
             "verified": self.verified,
             "failed": self.failed,
@@ -135,6 +164,9 @@ class DecompressReport:
                     "status": it.status,
                     "job_id": it.job_id,
                     "mode": it.mode,
+                    "engine": it.engine,
+                    "plan_note": it.plan_note,
+                    "volumes": it.volumes,
                     "output_files": it.output_files,
                     "dat_match": it.dat_match,
                     "dat_detail": it.dat_detail,
@@ -146,36 +178,83 @@ class DecompressReport:
         }
 
 
-def scan_compressed(directory: str | Path, *,
-                    extensions: frozenset[str] | None = None) -> list[Path]:
-    """Walk `directory` and return every file ROMarr knows how to decompress.
+# ------------------------------------------------------------------ scan --
 
-    Recursive, but only files whose extension has a decompression mode are
-    returned -- a directory walk that pulled in `.iso` or `.n64` would queue
-    jobs the service cannot do anything with.
+def _is_compressed_name(name: str, exts: frozenset[str]) -> bool:
+    # Endswith rather than suffix: NKit images carry compound extensions
+    # (`game.nkit.iso`) that `Path.suffix` reduces to `.iso`, and `.iso`
+    # is NOT compressed -- matching on the suffix alone would either miss
+    # every NKit file or, worse, pull in plain disc images. And the client
+    # must actually know a mode for it, so the scan and the job submission
+    # can never disagree.
+    lowered = name.lower()
+    return any(lowered.endswith(ext) for ext in exts) and bool(mode_for(lowered))
+
+
+def scan_work(directory: str | Path, *,
+              extensions: frozenset[str] | None = None) -> list[Work]:
+    """Walk `directory` and return everything ROMarr knows how to decompress.
+
+    Recursive. A RAR set is one unit, found through its first volume; its
+    later volumes are never units of their own, because they can only be
+    read through the first. Files with no decompression mode (`.iso`,
+    `.n64`...) are not returned.
     """
     exts = extensions if extensions is not None else COMPRESSED_EXTENSIONS
     root = Path(directory)
     if not root.is_dir():
         log.warning("decompress: %s is not a directory", root)
         return []
-    found: list[Path] = []
-    for entry in root.rglob("*"):
-        if not entry.is_file():
+    files = sorted(p for p in root.rglob("*") if p.is_file()
+                   and not _in_staging(p, root))
+    sets, later = rar_sets(files)
+    work: list[Work] = []
+    for entry in files:
+        if entry in later:
             continue
-        name = entry.name.lower()
-        # Endswith rather than suffix: NKit images carry compound extensions
-        # (`game.nkit.iso`) that `Path.suffix` reduces to `.iso`, and `.iso`
-        # is NOT compressed -- matching on the suffix alone would either miss
-        # every NKit file or, worse, pull in plain disc images.
-        if any(name.endswith(ext) for ext in exts):
-            # And the client must actually know a mode for it, so the scan
-            # and the job submission can never disagree.
-            if mode_for(name):
-                found.append(entry)
-    found.sort(key=lambda p: p.name.lower())
-    return found
+        if entry in sets:
+            work.append(Work(entry, tuple(sets[entry])))
+        elif _is_compressed_name(entry.name, exts):
+            work.append(Work(entry))
+    work.sort(key=lambda w: w.source.name.lower())
+    return work
 
+
+def _in_staging(path: Path, root: Path) -> bool:
+    """Whether `path` sits in a local extraction's unfinished staging folder."""
+    return any(part.startswith(decompress_local.STAGING_PREFIX)
+               for part in path.relative_to(root).parts[:-1])
+
+
+# -------------------------------------------------------------- planning --
+
+def plan(work: Work) -> DecompressItem:
+    """Which engine decompresses `work`, with which mode, and why.
+
+    A local plan says why in `plan_note`, which a dry run shows.
+    """
+    item = DecompressItem(source=str(work.source),
+                          volumes=[str(v) for v in work.volumes])
+    if work.volumes:
+        item.engine, item.mode = LOCAL, "extract"
+        count = len(work.volumes)
+        item.plan_note = (f"split RAR set of {count} volumes" if count > 1
+                          else "RAR archive")
+        item.plan_note += "; Compressatorium has no RAR mode"
+        return item
+    mode = mode_for_file(work.source)
+    if mode == "romz_extract":
+        members = decompress_local.archive_members(work.source)
+        if members is not None and not romz_accepts(members):
+            item.engine, item.mode = LOCAL, "extract"
+            item.plan_note = (f"holds {len(members)} file(s), not one "
+                              "cartridge ROM; romz_extract takes only that")
+            return item
+    item.engine, item.mode = SERVICE, mode
+    return item
+
+
+# ----------------------------------------------------------- verification --
 
 def _output_files(output_path: str) -> list[str]:
     """Every regular file a job produced.
@@ -194,15 +273,29 @@ def _output_files(output_path: str) -> list[str]:
     return []
 
 
+def _second_opinion(fpath: str,
+                    client: CompressatoriumClient | None) -> tuple[bool, str]:
+    """Ask the service's DAT store about one file: (matched, detail)."""
+    if client is None:
+        return False, ""
+    remote = client.match_file(fpath)
+    if remote.matched:
+        return True, f"{remote.game or 'matched'} ({remote.dat or 'server DAT'})"
+    if remote.error:
+        return False, f"Compressatorium could not match it: {remote.error}"
+    return False, remote.detail
+
+
 def _verify_outputs(files: list[str], dats: DatIndex,
-                    client: CompressatoriumClient) -> tuple[str, str]:
+                    client: CompressatoriumClient | None) -> tuple[str, str]:
     """Check every decompressed file against the DATs.
 
     Returns (status, detail) where status is "verified", "bad-dump" or
     "unknown". Verified means EVERY output matched a DAT entry. The service's
-    own /api/dat/match is consulted as a second opinion for each file, which
-    is what catches CHD and Dolphin outputs whose hashes are embedded in the
-    container rather than being a plain file hash.
+    own /api/dat/match, when a service is in use, is consulted as a second
+    opinion for each file, which is what catches CHD and Dolphin outputs
+    whose hashes are embedded in the container rather than being a plain
+    file hash. A match the service could not work out stays unknown.
     """
     if not files:
         return UNKNOWN, "no output files produced"
@@ -232,14 +325,11 @@ def _verify_outputs(files: list[str], dats: DatIndex,
             details.append(f"could not hash {p.name}: {err}")
             continue
         if not matched:
-            # Second opinion: the service's embedded-hash matching answers
-            # for CHD/Dolphin containers what a file hash cannot.
-            remote = client.match_file(fpath)
-            if remote.matched:
-                matched = True
-                detail = f"{remote.game or 'matched'} ({remote.dat or 'server DAT'})"
-            elif remote.detail:
-                detail = detail or remote.detail
+            matched, remote_detail = _second_opinion(fpath, client)
+            if matched:
+                detail = remote_detail
+            else:
+                detail = detail or remote_detail
         if matched:
             details.append(f"{p.name}: verified {detail}".rstrip())
         elif file_bad:
@@ -253,6 +343,220 @@ def _verify_outputs(files: list[str], dats: DatIndex,
     # extraction is suspect even if its siblings verified.
     return worst, "; ".join(details)
 
+
+# ----------------------------------------------------------------- engines --
+
+def _skip(item: DecompressItem, report: DecompressReport, reason: str) -> None:
+    item.status = "skipped"
+    item.error = reason
+    report.skipped += 1
+    log.info("decompress: skipped %s: %s", Path(item.source).name, reason)
+
+
+def _connect(url: str, api_key: str, service_items: list[DecompressItem],
+             report: DecompressReport) -> CompressatoriumClient | None:
+    """A client for the service, or None with every service item skipped.
+
+    No URL or no answer used to end the whole batch. Now it ends only the
+    work that needs the service: the RAR sets and multi-file archives ROMarr
+    extracts itself still run.
+    """
+    if not url:
+        if service_items:
+            report.error = "no compressatorium URL configured"
+        for item in service_items:
+            _skip(item, report, "needs Compressatorium: set COMPRESSATORIUM_URL")
+        return None
+    client = CompressatoriumClient(CompressatoriumConfig(
+        base_url=url, api_key=api_key))
+    if not client.reachable():
+        report.error = f"compressatorium at {url} is not reachable"
+        for item in service_items:
+            _skip(item, report, report.error)
+        return None
+    return client
+
+
+def _gate_on_tools(client: CompressatoriumClient,
+                   service_items: list[DecompressItem],
+                   report: DecompressReport) -> list[DecompressItem]:
+    """Skip the items whose tool the service reports unavailable."""
+    available = client.available_tools()
+    if available is None:
+        return service_items
+    ready = []
+    for item in service_items:
+        tool = TOOL_BY_MODE.get(item.mode, "")
+        if tool and tool not in available:
+            why = UNAVAILABLE_REASON.get(tool, "its prerequisites are missing")
+            _skip(item, report, f"Compressatorium's {tool} tool is unavailable: {why}")
+        else:
+            ready.append(item)
+    return ready
+
+
+def _submit_jobs(client: CompressatoriumClient, items: list[DecompressItem],
+                 output_dir: str | Path | None, report: DecompressReport) -> None:
+    """Submit one job per item; the service works on them in the background."""
+    # Per-file jobs rather than /api/jobs/batch: the batch route takes ONE
+    # mode for every file in the call, and a real library mixes CHD, RVZ,
+    # 7z and NSZ in one directory. Grouping by mode to use the batch route
+    # would buy one HTTP call per group and cost the per-file error
+    # reporting that makes a failed batch diagnosable.
+    for item in items:
+        result: JobResult = client.submit_job(
+            file_path=item.source,
+            mode=item.mode,
+            output_dir=str(output_dir) if output_dir else None,
+            duplicate_action="skip",
+        )
+        if not result.job_id:
+            item.status = "failed"
+            item.error = result.error or "submission failed"
+            report.failed += 1
+            log.warning("decompress: submit failed for %s: %s",
+                        Path(item.source).name, item.error)
+            continue
+        item.status = "submitted"
+        item.job_id = result.job_id
+        report.submitted += 1
+        log.info("decompress: submitted %s as job %s (%s)",
+                 Path(item.source).name, result.job_id, item.mode)
+
+
+def _wait_for_jobs(client: CompressatoriumClient, items: list[DecompressItem],
+                   job_timeout: int, poll_interval: int,
+                   report: DecompressReport) -> None:
+    """Wait for every submitted job and record each outcome."""
+    job_ids = [it.job_id for it in items if it.job_id]
+    final = client.wait_for_jobs(job_ids, timeout=job_timeout,
+                                 poll_interval=poll_interval)
+    for item in items:
+        if item.status == "submitted":
+            _record_job(item, final.get(item.job_id), job_timeout, report)
+
+
+def _record_job(item: DecompressItem, status: JobResult | None,
+                job_timeout: int, report: DecompressReport) -> None:
+    if status is None:
+        item.status = "failed"
+        item.error = "job vanished from the service"
+        report.failed += 1
+    elif status.status == COMPLETED:
+        item.status = "decompressed"
+        item.output_files = _output_files(status.output_path)
+        report.decompressed += 1
+        log.info("decompress: job %s completed -> %d file(s)",
+                 item.job_id, len(item.output_files))
+    elif status.status == FAILED:
+        item.status = "failed"
+        item.error = status.error or "job failed"
+        report.failed += 1
+        log.warning("decompress: job %s failed: %s", item.job_id, item.error)
+    else:
+        # cancelled, or still running at the deadline
+        item.status = "failed"
+        item.error = (f"job ended as {status.status!r}"
+                      if status.status == CANCELLED else
+                      f"still {status.status} after {job_timeout}s")
+        report.failed += 1
+        log.warning("decompress: job %s: %s", item.job_id, item.error)
+
+
+def _run_local(items: list[DecompressItem], output_dir: str | Path | None,
+               report: DecompressReport) -> None:
+    """Extract each item with ROMarr's own archive readers."""
+    for item in items:
+        source = Path(item.source)
+        volumes = [Path(v) for v in item.volumes] or None
+        root = Path(output_dir) if output_dir else source.parent
+        result = decompress_local.extract_archive(source, volumes, root)
+        if result.error:
+            item.status = "failed"
+            item.error = result.error
+            report.failed += 1
+            log.warning("decompress: could not extract %s: %s",
+                        source.name, result.error)
+            continue
+        item.status = "decompressed"
+        item.output_files = result.output_files
+        report.extracted_locally += 1
+        report.decompressed += 1
+        log.info("decompress: extracted %s locally -> %d file(s)",
+                 source.name, len(result.output_files))
+
+
+def _verify_all(items: list[DecompressItem], dats: DatIndex | None,
+                client: CompressatoriumClient | None,
+                report: DecompressReport) -> None:
+    """Give every decompressed item its DAT verdict."""
+    if dats is None or not dats.dats:
+        for item in items:
+            if item.status == "decompressed" and item.output_files:
+                item.status = "kept"
+                item.dat_match = UNKNOWN
+                item.dat_detail = ("no DATs loaded -- verification skipped, "
+                                   "originals kept")
+                report.kept += 1
+                log.warning("decompress: %s decompressed but no DATs loaded "
+                            "for verification", Path(item.source).name)
+        return
+    for item in items:
+        if item.status != "decompressed":
+            continue
+        status, detail = _verify_outputs(item.output_files, dats, client)
+        item.dat_match = status
+        item.dat_detail = detail
+        name = Path(item.source).name
+        if status == VERIFIED:
+            item.status = "verified"
+            report.verified += 1
+            log.info("decompress: %s verified against DAT", name)
+        elif status == BAD_DUMP:
+            item.status = "failed"
+            item.error = f"DAT verification: {detail}"
+            report.failed += 1
+            log.warning("decompress: %s is a BAD DUMP: %s", name, detail)
+        else:
+            # Unknown: extracted fine, but no DAT claims it. Kept, never
+            # deleted -- see the module docstring for why.
+            item.status = "kept"
+            report.kept += 1
+            log.info("decompress: %s extracted but unknown to the DATs; "
+                     "original kept", name)
+
+
+def _delete_originals(items: list[DecompressItem],
+                      report: DecompressReport) -> None:
+    """Delete each verified item's original: its file, or every RAR volume."""
+    for item in items:
+        if item.status != "verified" or item.dat_match != VERIFIED:
+            continue
+        originals = [Path(v) for v in item.volumes] or [Path(item.source)]
+        failures = []
+        removed = 0
+        for path in originals:
+            if not path.is_file():
+                continue
+            try:
+                path.unlink()
+                removed += 1
+            except OSError as err:
+                failures.append(f"{path.name}: {err}")
+                log.warning("decompress: could not delete %s: %s", path.name, err)
+        if failures:
+            item.error = "could not delete original: " + "; ".join(failures)
+        if removed and not failures:
+            item.deleted = True
+            item.status = "deleted"
+            report.deleted += 1
+            log.info("decompress: deleted original %s%s (verified: %s)",
+                     Path(item.source).name,
+                     f" and its {removed - 1} other volume(s)" if removed > 1 else "",
+                     item.dat_detail)
+
+
+# ---------------------------------------------------------------- the batch --
 
 def run_batch(
     directory: str | Path,
@@ -273,7 +577,9 @@ def run_batch(
     directory
         Root to scan for compressed files.
     compressatorium_url
-        Base URL of the service. Required unless dry_run.
+        Base URL of the service. Without it, only the work ROMarr extracts
+        itself (RAR sets, multi-file archives) runs; the rest is skipped and
+        `error` says why.
     compressatorium_api_key
         Bearer token, when the service has auth enabled.
     dats
@@ -291,188 +597,69 @@ def run_batch(
     poll_interval
         Seconds between status polls.
     dry_run
-        Scan and report without submitting anything.
+        Scan and report without submitting or writing anything.
     """
     report = DecompressReport()
     t0 = time.monotonic()
 
-    # -- scan -----------------------------------------------------------
-    files = scan_compressed(directory)
-    report.scanned = len(files)
+    work = scan_work(directory)
+    report.scanned = len(work)
     log.info("decompress: scanned %s, found %d compressed file(s)",
-             directory, len(files))
+             directory, len(work))
+    items = [plan(w) for w in work]
+    report.items = items
 
-    if not files:
+    if not items:
         report.elapsed_seconds = time.monotonic() - t0
         return report
 
     if dry_run:
-        for fpath in files:
-            item = DecompressItem(source=str(fpath), status="skipped",
-                                  mode=mode_for(fpath.name))
-            item.dat_detail = "dry run -- no jobs submitted"
-            report.items.append(item)
+        for item in items:
+            item.status = "skipped"
+            if item.engine == LOCAL:
+                item.dat_detail = f"dry run -- would extract locally ({item.plan_note})"
+            else:
+                item.dat_detail = f"dry run -- would run {item.mode} on Compressatorium"
             report.skipped += 1
         report.elapsed_seconds = time.monotonic() - t0
-        log.info("decompress: dry run, %d file(s) would be processed",
-                 len(files))
+        log.info("decompress: dry run, %d file(s) would be processed", len(items))
         return report
 
-    # -- the deletion gate ----------------------------------------------
-    #
-    # Decided once, here, rather than at each deletion site: deleting an
-    # original is only ever justified by a DAT match, and with no index
-    # loaded there is nothing that could produce one.
+    # The deletion gate. Decided once, here, rather than at each deletion
+    # site: deleting an original is only ever justified by a DAT match, and
+    # with no index loaded there is nothing that could produce one.
     can_delete = bool(delete_originals) and dats is not None and bool(dats.dats)
     if delete_originals and not can_delete:
         log.warning("decompress: delete_originals requested but no DATs are "
                     "loaded -- originals will be KEPT regardless of outcome")
 
-    # -- set up client --------------------------------------------------
-    if not compressatorium_url:
-        report.error = "no compressatorium URL configured"
-        report.elapsed_seconds = time.monotonic() - t0
-        return report
+    service_items = [it for it in items if it.engine == SERVICE]
+    local_items = [it for it in items if it.engine == LOCAL]
+    client = _connect(compressatorium_url, compressatorium_api_key,
+                      service_items, report)
+    ready: list[DecompressItem] = []
+    if client is not None and service_items:
+        ready = _gate_on_tools(client, service_items, report)
+        _submit_jobs(client, ready, output_dir, report)
+    # The service works through its queue while ROMarr extracts its own share.
+    _run_local(local_items, output_dir, report)
+    if ready:
+        _wait_for_jobs(client, ready, job_timeout, poll_interval, report)
 
-    client = CompressatoriumClient(CompressatoriumConfig(
-        base_url=compressatorium_url,
-        api_key=compressatorium_api_key,
-    ))
+    _verify_all(items, dats, client, report)
 
-    if not client.reachable():
-        report.error = (f"compressatorium at {compressatorium_url} is not "
-                        f"reachable")
-        report.elapsed_seconds = time.monotonic() - t0
-        return report
-
-    # -- submit, one job per file ---------------------------------------
-    #
-    # Per-file jobs rather than /api/jobs/batch: the batch route takes ONE
-    # mode for every file in the call, and a real library mixes CHD, RVZ,
-    # 7z and NSZ in one directory. Grouping by mode to use the batch route
-    # would buy one HTTP call per group and cost the per-file error
-    # reporting that makes a failed batch diagnosable.
-    items: list[DecompressItem] = []
-    for fpath in files:
-        item = DecompressItem(source=str(fpath), mode=mode_for(fpath.name))
-        result: JobResult = client.submit_job(
-            file_path=str(fpath),
-            mode=item.mode,
-            output_dir=str(output_dir) if output_dir else None,
-            duplicate_action="skip",
-        )
-        if not result.job_id:
-            item.status = "failed"
-            item.error = result.error or "submission failed"
-            report.failed += 1
-            log.warning("decompress: submit failed for %s: %s",
-                        fpath.name, item.error)
-        else:
-            item.status = "submitted"
-            item.job_id = result.job_id
-            report.submitted += 1
-            log.info("decompress: submitted %s as job %s (%s)",
-                     fpath.name, result.job_id, item.mode)
-        items.append(item)
-
-    # -- wait for completion --------------------------------------------
-    job_ids = [it.job_id for it in items if it.job_id]
-    final = client.wait_for_jobs(job_ids, timeout=job_timeout,
-                                 poll_interval=poll_interval)
-    for item in items:
-        if item.status != "submitted":
-            continue
-        status = final.get(item.job_id)
-        if status is None:
-            item.status = "failed"
-            item.error = "job vanished from the service"
-            report.failed += 1
-        elif status.status == COMPLETED:
-            item.status = "decompressed"
-            item.output_files = _output_files(status.output_path)
-            report.decompressed += 1
-            log.info("decompress: job %s completed -> %d file(s)",
-                     item.job_id, len(item.output_files))
-        elif status.status == FAILED:
-            item.status = "failed"
-            item.error = status.error or "job failed"
-            report.failed += 1
-            log.warning("decompress: job %s failed: %s",
-                        item.job_id, item.error)
-        else:
-            # cancelled, or still running at the deadline
-            item.status = "failed"
-            item.error = (f"job ended as {status.status!r}"
-                          if status.status == CANCELLED else
-                          f"still {status.status} after {job_timeout}s")
-            report.failed += 1
-            log.warning("decompress: job %s: %s", item.job_id, item.error)
-
-    # -- verify against DATs --------------------------------------------
-    if dats is not None and dats.dats:
-        for item in items:
-            if item.status != "decompressed":
-                continue
-            status, detail = _verify_outputs(item.output_files, dats, client)
-            item.dat_match = status
-            item.dat_detail = detail
-            if status == VERIFIED:
-                item.status = "verified"
-                report.verified += 1
-                log.info("decompress: %s verified against DAT",
-                         Path(item.source).name)
-            elif status == BAD_DUMP:
-                item.status = "failed"
-                item.error = f"DAT verification: {detail}"
-                report.failed += 1
-                log.warning("decompress: %s is a BAD DUMP: %s",
-                            Path(item.source).name, detail)
-            else:
-                # Unknown: extracted fine, but no DAT claims it. Kept, never
-                # deleted -- see the module docstring for why.
-                item.status = "kept"
-                report.kept += 1
-                log.info("decompress: %s extracted but unknown to the DATs; "
-                         "original kept", Path(item.source).name)
-    else:
-        for item in items:
-            if item.status == "decompressed" and item.output_files:
-                item.status = "kept"
-                item.dat_match = UNKNOWN
-                item.dat_detail = ("no DATs loaded -- verification skipped, "
-                                   "originals kept")
-                report.kept += 1
-                log.warning("decompress: %s decompressed but no DATs loaded "
-                            "for verification", Path(item.source).name)
-
-    # -- delete originals (only when gated open AND this item verified) --
     if can_delete:
-        for item in items:
-            if item.status != "verified" or item.dat_match != VERIFIED:
-                continue
-            source_path = Path(item.source)
-            if not source_path.is_file():
-                continue
-            try:
-                source_path.unlink()
-                item.deleted = True
-                item.status = "deleted"
-                report.deleted += 1
-                log.info("decompress: deleted original %s (verified: %s)",
-                         source_path.name, item.dat_detail)
-            except OSError as err:
-                item.error = f"could not delete original: {err}"
-                log.warning("decompress: could not delete %s: %s",
-                            source_path.name, err)
+        _delete_originals(items, report)
     elif any(it.status == "verified" for it in items):
         log.info("decompress: %d file(s) verified but originals kept "
                  "(deletion not authorised)",
                  sum(1 for it in items if it.status == "verified"))
 
-    report.items = items
     report.elapsed_seconds = time.monotonic() - t0
     log.info("decompress: batch complete -- %d scanned, %d submitted, "
-             "%d verified, %d kept, %d failed, %d deleted in %.1fs",
-             report.scanned, report.submitted, report.verified, report.kept,
-             report.failed, report.deleted, report.elapsed_seconds)
+             "%d extracted locally, %d verified, %d kept, %d failed, "
+             "%d deleted in %.1fs",
+             report.scanned, report.submitted, report.extracted_locally,
+             report.verified, report.kept, report.failed, report.deleted,
+             report.elapsed_seconds)
     return report

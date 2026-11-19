@@ -18,6 +18,12 @@ DAT checksums distinguish **verified**, **bad dump** and **unknown**. Every memb
 
 **Settings → Media Management → Rename on import** controls canonical naming for verified single-file imports. With it enabled, a verified file can use the DAT's canonical name while retaining its source extension. Disable it to preserve the source filename. Unknown files preserve their names. Importing preserves the source, and an existing destination is not overwritten. This does not rename a library in place or migrate its platform folders; those need a separate preview and are [planned](../ROADMAP.md).
 
+### Batch decompression
+
+**System → Tasks → Decompress** (or `POST /api/v1/command` with `{"name": "Decompress"}`, plus `dry_run` and `delete_originals`) decompresses a library that was compressed. Compressed disc and console images (CHD, RVZ/WIA/GCZ, NKit, Z3DS, NSZ/XCZ, CSO/ZSO/DAX, WUX) and a `.7z`/`.zip` holding one cartridge ROM go to a [Compressatorium](https://github.com/pacnpal/compressatorium) sidecar. Set its address on the preinstalled **Compressatorium** plugin's card in **Hub → Plugins** (the API key is kept in ROM Hub's secret store), or with `COMPRESSATORIUM_URL` and `COMPRESSATORIUM_API_KEY`, which take precedence. Mount the library into Compressatorium at the same path ROMarr uses. ROMarr reads each CHD's header to ask for the right chdman mode (CD, DVD, hard disk, LaserDisc or raw), and it skips work for a tool the service reports unavailable, such as NSZ without `prod.keys`, instead of queueing a job that can only fail.
+
+RAR archives, split RAR sets (`.part01.rar`, `.rar` + `.r00`, `.001`) and any other `.7z`/`.zip` (a zipped cue/bin, a multi-disc set) have no Compressatorium mode, so ROMarr extracts them itself with the same readers the importer uses. These run without the sidecar. One file lands beside its archive; several land in a folder named after it. Nothing is overwritten, and partly extracted output is never left under a final name. Every output is checked against the loaded DATs. An original (for a RAR set, every volume) is deleted only when deletion was asked for and every output verified. A dry run lists which engine would handle each file.
+
 ## Collections and existing set torrents
 
 ![Collections 1G1R comparison and set torrent planner](img/collections.png)
