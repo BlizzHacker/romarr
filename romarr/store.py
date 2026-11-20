@@ -121,6 +121,10 @@ class WantedItem:
     # for months is retried weekly rather than hourly.
     searched_at: str = ""
     monitored: bool = True
+    # The parts of a game this request wants ("base", "update", "dlc"), on
+    # platforms whose games have updates and DLC.
+    # Empty means the game itself. See game_packages.normalise_parts.
+    parts: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -184,6 +188,9 @@ class QueueItem:
     retained_torrent_hash: str = ""
     import_preview: dict = field(default_factory=dict)
     import_intent: dict = field(default_factory=dict)
+    # The parts the request asked for when this row was grabbed, so an
+    # import that brings only some of them can leave the rest on Wanted.
+    parts: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -311,6 +318,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "rename_on_import": True,
     "prefer_hardlinks": False,
     "switch_attach_extras": True,   # file Switch updates/DLC in <game>/update|dlc
+    "game_package_folders": True,   # RomM libraries: base/update/DLC in <Title>/, update/, dlc/
     "retain_downloads_after_import": True,
     "overwrite_existing": False,
     # Profile: for ROMs the meaningful axis is region and revision, not
@@ -530,19 +538,50 @@ class Store:
 
     # -- wanted ------------------------------------------------------------
 
-    def want(self, game: str, platform: str, monitored: bool = True) -> WantedItem:
+    def want(self, game: str, platform: str, monitored: bool = True,
+             parts=None) -> WantedItem:
         """Add to Wanted, or return the existing entry.
 
         Requesting the same game twice is a retry, not a second entry.
+        `parts` (validated by the caller) replaces the package parts the entry
+        wants; None leaves them as they are. The game alone is stored empty.
         """
+        stored = None if parts is None else ([] if tuple(parts) == ("base",) else list(parts))
         with self._lock:
-            for item in self.wanted:
-                if item.game.lower() == game.lower() and item.platform == platform:
-                    return item
-            item = WantedItem(game=game, platform=platform, monitored=monitored)
-            self.wanted.append(item)
+            item = next((w for w in self.wanted
+                         if w.game.lower() == game.lower() and w.platform == platform), None)
+            if item is not None and (stored is None or item.parts == stored):
+                return item
+            if item is None:
+                item = WantedItem(game=game, platform=platform, monitored=monitored,
+                                  parts=stored or [])
+                self.wanted.append(item)
+            else:
+                item.parts = stored
         self.save()
         return item
+
+    def settle_parts(self, game: str, platform: str, missing, monitored: bool = True) -> None:
+        """Leave exactly the `missing` package parts of a game on Wanted, in one change.
+
+        Nothing missing drops the entry; otherwise the entry (re-added when an
+        import already fulfilled it, keeping its `monitored` choice) asks for
+        just those parts.
+        """
+        stored = [] if tuple(missing) == ("base",) else list(missing)
+        with self._lock:
+            item = next((w for w in self.wanted
+                         if w.game.lower() == game.lower() and w.platform == platform), None)
+            if not missing:
+                if item is None:
+                    return
+                self.wanted.remove(item)
+            elif item is None:
+                self.wanted.append(WantedItem(game=game, platform=platform, parts=stored,
+                                              monitored=monitored))
+            else:
+                item.parts = stored
+        self.save()
 
     def set_monitored(self, game: str, platform: str, monitored: bool) -> bool:
         """Turn watching on or off for one Wanted entry; False if it is not there."""

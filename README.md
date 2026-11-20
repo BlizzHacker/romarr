@@ -198,6 +198,7 @@ The image includes archive tools. **ROM Hub is included on amd64/arm64; it is un
 - Game pages, a wishlist that saves games without searching, and monitoring you can switch on or off later. [Monitoring guide](docs/MONITORING.md).
 - Game soundtracks found by title or picked from your music folder, uploaded into RomM's Jukebox with exact undo. [Soundtracks guide](docs/SOUNDTRACKS.md).
 - A Switch Updates & DLC report; new updates and DLC are filed inside their game's folder where RomM finds them; plus NTSC/PAL and preferred-format release preferences. [Switch guide](docs/SWITCH-INVENTORY.md).
+- Base game, update and DLC handling for PlayStation 3/4/5, PSP, Vita, 3DS, Wii U, Switch, Xbox 360 and PC: search tells packs, updates and DLC apart, requests can ask for the update and DLC too, and imports file `<Title>/`, `update/` and `dlc/` the way RomM reads them. [Updates and DLC guide](docs/UPDATES-AND-DLC.md).
 - ZIP, 7z, RAR and compressed TAR downloads, read without extracting unsafe paths.
 - PS4, PS5 and PS Vita search/import formats, with [explicit playback and installation limits](docs/MODERN-CONSOLES.md).
 

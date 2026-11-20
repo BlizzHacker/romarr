@@ -14,5 +14,6 @@ Use your existing download client and library importer. DAT verification is
 only possible when a matching DAT is loaded; an imported file without a DAT
 match remains unknown, never automatically verified. Console installation
 and external playback depend on the user's own device and software.
-Folder dumps, split packages, updates/DLC relationships and installation on
-hardware are not implemented by these platform declarations.
+Folder dumps, split packages and installation on hardware are not
+implemented by these platform declarations. Base game, update and DLC
+handling is described in [Base games, updates and DLC](UPDATES-AND-DLC.md).

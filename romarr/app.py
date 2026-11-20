@@ -38,6 +38,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager
 from copy import copy, deepcopy
 import logging
+from typing import NamedTuple
 import os
 import pathlib
 import re
@@ -119,7 +120,10 @@ LIST_SECRETS = ("api_key", "openxbl_key", "npsso", "itchio_key",
                 "battlenet_cookie", "humble_cookie")
 from .scheduler import Scheduler, next_search_due
 from .selection import (Release, best_release, infer_platform, judge, score,
-                        collection_content_kind, collection_content_refusal)
+                        collection_content_kind, collection_content_refusal,
+                        package_class)
+from .game_packages import (BASE, DEFAULT_PARTS, GAME_FOLDER_LIBRARIES, PACKAGE_PLATFORMS, PARTS,
+                            describe_parts, imported_role, normalise_parts)
 from .store import Event, QueueItem, SeerrRequest, Store
 from .ui import favicon_svg as ui_favicon_svg
 from .ui import web_manifest, service_worker, app_icon
@@ -131,6 +135,21 @@ from .sidecars import read_nfo
 from .build_info import get_build_info
 
 log = logging.getLogger(__name__)
+
+
+class PendingParts(NamedTuple):
+    """The package parts an import should settle, and whether Wanted watches them."""
+
+    asked: set
+    monitored: bool
+
+
+def _asked(parts) -> set:
+    """A stored part selection as a set; empty means the game itself."""
+    try:
+        return set(normalise_parts(parts or None))
+    except ValueError:   # a hand-edited state file
+        return {BASE}
 
 # Derived, never typed here. A number that has to be retyped on every release is
 # how v1.7.0 shipped calling itself 1.6.0 while the Update page offered an
@@ -2487,10 +2506,13 @@ class ROMarr:
             # The hub lane joins here too, or this endpoint answers a
             # different question than the request path it claims to mirror.
             releases = releases + self._hub_releases(game, None)
+        asked = self._request_parts(game, platform)
         pick = best_release(releases, game, platform,
-                           profile=self.profile_for(platform), blocklist=self.blocklist)
+                           profile=self.profile_for(platform), blocklist=self.blocklist,
+                           parts=asked)
         scored = sorted(
-            ((score(r, game, platform, profile=self.profile_for(platform)), r) for r in releases),
+            ((score(r, game, platform, profile=self.profile_for(platform), parts=asked), r)
+             for r in releases),
             key=lambda pair: -pair[0])
         # Which indexers actually contributed, and how many of their results
         # survived scoring. This is the question you have when a tracker you
@@ -2703,7 +2725,28 @@ class ROMarr:
                     merged.append(release)
         return merged
 
-    def request(self, game: str, platform_name: str, external_request_id: str = "") -> dict:
+    def _request_parts(self, game: str, platform, parts=None):
+        """What a request wants (base, update, DLC) on a package platform; None elsewhere.
+
+        Explicit `parts` win (and raise ValueError when invalid). Otherwise
+        the Wanted entry's parts count, and failing that the game alone.
+        """
+        if platform is None or platform.slug not in PACKAGE_PLATFORMS:
+            return None
+        if parts is not None:
+            return normalise_parts(parts)
+        key = game.casefold()
+        item = next((w for w in list(self.store.wanted)
+                     if w.platform == platform.slug and w.game.casefold() == key and w.parts), None)
+        if item is None:
+            return DEFAULT_PARTS
+        try:
+            return normalise_parts(item.parts)
+        except ValueError:   # a hand-edited state file
+            return DEFAULT_PARTS
+
+    def request(self, game: str, platform_name: str, external_request_id: str = "",
+                parts=None) -> dict:
         """Request a game. If external_request_id is set, the row is tracked.
 
         The same search, scoring, and handoff pipeline answers an internal
@@ -2715,16 +2758,23 @@ class ROMarr:
         platform = resolve(platform_name)
         if platform is None:
             return {"ok": False, "error": f"unknown platform: {platform_name!r}"}
+        try:
+            asked = self._request_parts(game, platform, parts)
+        except ValueError as err:
+            return {"ok": False, "error": str(err)}
+        # Only a request that named its parts rewrites the Wanted entry's.
+        keep = asked if parts is not None else None
 
         releases = self._search_releases(game, platform)
         pick = best_release(releases, game, platform,
-                           profile=self.profile_for(platform), blocklist=self.blocklist)
+                           profile=self.profile_for(platform), blocklist=self.blocklist,
+                           parts=asked)
         if pick is None:
             item = QueueItem(game, platform.slug, "", 0, "failed",
                              f"no usable release among {len(releases)} result(s)",
                              external_request_id=external_request_id)
             self.store.enqueue(item)
-            self.store.want(game, platform.slug)
+            self.store.want(game, platform.slug, parts=keep)
             self.store.note_failure(game, platform.slug, item.detail)
             self.store.record(Event(kind="failed", game=game, platform=platform.slug,
                                     detail=item.detail))
@@ -2745,7 +2795,7 @@ class ROMarr:
                              release_fault=True,
                              external_request_id=external_request_id)
             self.store.enqueue(item)
-            self.store.want(game, platform.slug)
+            self.store.want(game, platform.slug, parts=keep)
             self.store.note_failure(game, platform.slug, item.detail)
             self.store.record(Event(kind="failed", game=game, platform=platform.slug,
                                     release=pick.title, detail=item.detail))
@@ -2755,7 +2805,7 @@ class ROMarr:
             return {"ok": False, "error": item.detail}
 
         return self.grab(pick, game, platform.slug,
-                          external_request_id=external_request_id)
+                          external_request_id=external_request_id, parts=asked)
 
     def _reserve_automatic_grab(self, game: str, platform_slug: str):
         """Reserve one game's automatic handoff without holding the lock over
@@ -2832,17 +2882,17 @@ class ROMarr:
         return list(self.store.settings.get("retained_collection_owners", []))
 
     def grab(self, pick, game: str, platform_slug: str, *, manual: bool = False,
-             external_request_id: str = "") -> dict:
+             external_request_id: str = "", parts=None) -> dict:
         # Serialize collection mutations through durable queue persistence.
         if getattr(pick, "file_selection_required", False):
             with self._collection_lock:
                 return self._grab_impl(pick, game, platform_slug, manual=manual,
-                                       external_request_id=external_request_id)
+                                       external_request_id=external_request_id, parts=parts)
         return self._grab_impl(pick, game, platform_slug, manual=manual,
-                               external_request_id=external_request_id)
+                               external_request_id=external_request_id, parts=parts)
 
     def _grab_impl(self, pick, game: str, platform_slug: str, *, manual: bool = False,
-                   external_request_id: str = "") -> dict:
+                   external_request_id: str = "", parts=None) -> dict:
         """Hand one release to a download client and record what happened.
 
         Shared by the automatic path and the Search page, deliberately: a
@@ -2859,6 +2909,10 @@ class ROMarr:
         refusal = collection_content_refusal(pick)
         if refusal:
             return {"ok": False, "error": refusal}
+        try:
+            asked = self._request_parts(game, platform, parts)
+        except ValueError as err:
+            return {"ok": False, "error": str(err)}
         client = pick_client(pick.protocol, self.clients)
         if client is None:
             # Not the release's fault -- blocklisting it here would punish a
@@ -2882,10 +2936,10 @@ class ROMarr:
 
         if isinstance(client, (QBittorrent, Transmission)):
             with self._collection_source_lock:
-                return self._submit_grab(client, pick, game, platform_slug, manual, external_request_id)
-        return self._submit_grab(client, pick, game, platform_slug, manual, external_request_id)
+                return self._submit_grab(client, pick, game, platform_slug, manual, external_request_id, asked)
+        return self._submit_grab(client, pick, game, platform_slug, manual, external_request_id, asked)
 
-    def _submit_grab(self, client, pick, game, platform_slug, manual, external_request_id):
+    def _submit_grab(self, client, pick, game, platform_slug, manual, external_request_id, asked=None):
         """Submit to the selected client and persist the queue ownership."""
         # The title travels with the release for the clients that can carry
         # it: the import sweep matches a finished download to its queue row by
@@ -2974,6 +3028,7 @@ class ROMarr:
                          download_id=download_id,
                          download_client=getattr(client, "romarr_id", ""),
                          manual=manual,
+                         parts=list(asked) if asked and asked != DEFAULT_PARTS else [],
                          file_selection_required=required_file,
                          selected_file=(getattr(client, "last_selected_file", {})
                                         if required_file and ok else {}),
@@ -2995,7 +3050,7 @@ class ROMarr:
             # A failure to explain must never fail the grab it explains.
             try:
                 reasons = judge(pick, game, resolve(platform_slug),
-                                profile=self.profile_for(platform_slug)).why()
+                                profile=self.profile_for(platform_slug), parts=asked).why()
             except Exception:
                 reasons = ()
             self.notify(grabbed(pick.title, platform_slug,
@@ -3049,11 +3104,16 @@ class ROMarr:
                     "items": []}
 
         judged = []
+        parts_for = {}   # one Wanted lookup per platform, not per release
         for r in releases:
             inferred = platform or infer_platform(r)
             plat_prof = self.profile_for(inferred)
+            slug = inferred.slug if inferred is not None else ""
+            if slug not in parts_for:
+                parts_for[slug] = self._request_parts(game, inferred)
             judged.append((judge(r, game, inferred,
-                                 profile=plat_prof, blocklist=self.blocklist), r))
+                                 profile=plat_prof, blocklist=self.blocklist,
+                                 parts=parts_for[slug]), r))
         judged.sort(key=lambda pair: (-pair[0].points, pair[1].size))
 
         key = f"{game}|{platform.slug if platform else ''}"
@@ -3078,6 +3138,8 @@ class ROMarr:
                 # browser may have.
                 "info_url": getattr(r, "info_url", ""),
                 "torrent_file_path": getattr(r, "torrent_file_path", ""),
+                # Base game, update, DLC or a combined pack, where games have them.
+                "package": package_class(r, game, inferred),
                 "score": verdict.points,
                 "accepted": verdict.accepted,
                 "reasons": verdict.why(),
@@ -3331,12 +3393,19 @@ class ROMarr:
                                             self.store.settings.get("remote_path_mappings"))
             else:
                 members = mapped_download_members(path, torrent, self.store.settings.get("remote_path_mappings"))
-            preview = preview_import(path, platform, self.library_root(target[0]),
-                                     layout=self.library_layout(target[0]),
-                                     platform_folders=self.platform_folders(target[0]),
-                                     queue_identity=queue_identity(item),
-                                     member_paths=members,
-                                     switch_extras=bool(self.store.settings.get("switch_attach_extras", True)))
+            def build_preview(roles=None, selected=None):
+                """The import preview, with package destinations from reviewed roles."""
+                return preview_import(path, platform, self.library_root(target[0]),
+                                      layout=self.library_layout(target[0]),
+                                      platform_folders=self.platform_folders(target[0]),
+                                      queue_identity=queue_identity(item),
+                                      member_paths=members,
+                                      switch_extras=bool(self.store.settings.get("switch_attach_extras", True)),
+                                      package_folders=self._package_folders(target[0]),
+                                      game_title=item.game, package_roles=roles,
+                                      selected_primaries=selected)
+
+            preview = build_preview()
             preview = decorate_preview(preview, platform, self.library_root(target[0]),
                                        kind=target[0].get("type", ""), layout=self.library_layout(target[0]),
                                        platform_folders=self.platform_folders(target[0]),
@@ -3348,13 +3417,26 @@ class ROMarr:
                 if routes:
                     intent["routes"] = routes
                     preview["planned_destinations"] = {primary: str(Path(preview["platform_root"]) / route) for primary, route in routes.items()}
+                elif preview.get("package_routing"):
+                    from .import_intent import package_destinations, reviewed_roles, reviewed_selection
+                    roles = reviewed_roles(intent)
+                    chosen = reviewed_selection(intent) or []
+                    # Rebuild unless the review kept every package and every role shown.
+                    shown = {i["primary"]: i["role"] for i in preview["items"]}
+                    unchanged = (len(chosen) == len(shown)
+                                 and all(shown.get(k) == v for k, v in roles.items()))
+                    planned = package_destinations(
+                        preview if unchanged else build_preview(roles, chosen), intent)
+                    intent["package_destinations"] = planned
+                    preview["planned_destinations"] = planned
 
             if body.get("confirm"):
                 if body.get("token") != preview["token"]:
                     return {"error": "download changed; refresh the preview before importing"}
                 if intent is None:
                     raise ValueError("Select payloads before confirmation")
-                if intent.get("routes") and body.get("reviewed_destinations") != preview.get("planned_destinations"):
+                if ((intent.get("routes") or intent.get("package_destinations"))
+                        and body.get("reviewed_destinations") != preview.get("planned_destinations")):
                     raise ValueError("Review the final destination tree before confirming")
                 with self._lock:
                     item.import_intent = intent
@@ -4054,15 +4136,24 @@ class ROMarr:
         return {"configured": True, "items": items}
 
     def add_wanted(self, game: str, platform_name: str, *, monitored: bool = True,
-                   search: bool = False) -> dict:
-        """Add a game the way Radarr's Add dialog does: monitor it, maybe search now."""
+                   search: bool = False, parts=None) -> dict:
+        """Add a game the way Radarr's Add dialog does: monitor it, maybe search now.
+
+        `parts` asks a request for the update and DLC as well as (or
+        instead of) the game; a request for extras alone may own the game.
+        """
         platform = resolve(platform_name)
         if platform is None:
             return {"ok": False, "error": f"unknown platform: {platform_name!r}"}
+        try:
+            asked = self._request_parts(game, platform, parts)
+        except ValueError as err:
+            return {"ok": False, "error": str(err)}
         state = self._game_state(game, platform.slug)
-        if state == "library":
+        if state == "library" and (asked is None or BASE in asked):
             return {"ok": False, "error": "already in the library", "state": state}
-        self.store.want(game, platform.slug, monitored=monitored)
+        self.store.want(game, platform.slug, monitored=monitored,
+                        parts=asked if parts is not None else None)
         self.store.set_monitored(game, platform.slug, monitored)
         self.store.record(Event(kind="wanted", game=game, platform=platform.slug,
                                 detail="added to Wanted" + ("" if monitored else " (unmonitored)")))
@@ -4647,6 +4738,7 @@ class ROMarr:
                                       rename=bool(self.store.settings.get("rename_on_import", True)),
                         prefer_hardlinks=staged_source == source and bool(self.store.settings.get("prefer_hardlinks", False)),
                                       switch_extras=bool(self.store.settings.get("switch_attach_extras", True)),
+                                      package_folders=self._package_folders(target_cfg),
                                       layout=self.library_layout(target_cfg),
                                       translation=is_translation(source.name),
                                       platform_folders=target_folders,
@@ -4905,6 +4997,51 @@ class ROMarr:
         return {"ok": True, "platform": platform_slug,
                 "verified": len(verified_titles), "dropped": dropped,
                 "count": len(dropped)}
+
+    def _package_folders(self, cfg) -> bool:
+        """Whether imports into this library file packages as RomM game folders.
+
+        `<Title>/update/` and `<Title>/dlc/` are RomM's convention. Frontend
+        libraries such as RetroBat expect flat system folders, so they keep it.
+        """
+        return (bool(self.store.settings.get("game_package_folders", True))
+                and str((cfg or {}).get("type", "")) in GAME_FOLDER_LIBRARIES)
+
+    def _pending_parts(self, queue_item, platform) -> "PendingParts":
+        """The package parts still asked for, and whether Wanted watches them.
+
+        The queued request's parts plus the Wanted entry's, read before an
+        import fulfils anything, so a part requested while the download was
+        running is not lost. An empty selection means the game itself; a
+        release grabbed by hand with no parts named asks for nothing more.
+        """
+        if queue_item is None or platform.slug not in PACKAGE_PLATFORMS:
+            return PendingParts(set(), True)
+        pending = _asked(queue_item.parts) if queue_item.parts or not queue_item.manual else set()
+        monitored = True
+        key = queue_item.game.casefold()
+        for item in list(self.store.wanted):
+            if item.platform == platform.slug and item.game.casefold() == key:
+                pending |= _asked(item.parts)
+                monitored = item.monitored
+        return PendingParts(pending, monitored)
+
+    def _settle_parts(self, queue_item, platform, outcomes, pending: "PendingParts") -> None:
+        """Leave on Wanted exactly the asked-for package parts the import did not bring.
+
+        What arrived is read from the imported files (header, RomM folder,
+        name), never from the release title. A request answered in full is
+        dropped from Wanted even when its title did not match the download.
+        """
+        if not pending.asked:
+            return
+        arrived = {imported_role(o.destination, queue_item.game, platform.slug)
+                   for o in outcomes if o.ok and o.destination}
+        missing = tuple(p for p in PARTS if p in pending.asked and p not in arrived)
+        self.store.settle_parts(queue_item.game, platform.slug, missing, monitored=pending.monitored)
+        if missing:
+            self.store.record(Event(kind="wanted", game=queue_item.game, platform=platform.slug,
+                                    detail=f"still wanted: {describe_parts(missing)}"))
 
     def collection_plan(self, dat_name: str = "", platform: str = "",
                         **policy_kw) -> dict:
@@ -5838,6 +5975,8 @@ class ROMarr:
                 "slug": platform.slug,
                 "name": platform.name,
                 "media": platform.media,
+                # Games here ship as base game, update and DLC packages.
+                "parts": platform.slug in PACKAGE_PLATFORMS,
                 "extensions": list(platform.extensions),
                 "max_size_mb": platform.max_size // (1024 * 1024),
                 "play_routes": list(routes.kinds),
@@ -7515,7 +7654,9 @@ class ROMarr:
             if platform is None:
                 continue
             pick = best_release(releases, item.game, platform,
-                               profile=self.profile_for(platform), blocklist=self.blocklist)
+                               profile=self.profile_for(platform), blocklist=self.blocklist,
+                               parts=(self._request_parts(item.game, platform, item.parts)
+                                      if item.parts else None))
             if pick is None or not pick.download_url:
                 continue
             result = self._automatic_grab(pick, item.game, platform.slug)
@@ -8867,7 +9008,8 @@ class ROMarr:
             selected_primaries = None
             bundle_routes = None
             if queue_item is not None and path.exists():
-                from .import_intent import preview_import, queue_identity
+                from .import_intent import (package_destinations, preview_import, queue_identity,
+                                            reviewed_roles, reviewed_selection)
                 from .romm_bundle import decorate_preview, route_selection
                 from .library import MissingArchiveTool
                 import zipfile
@@ -8878,7 +9020,11 @@ class ROMarr:
                                              platform_folders=target_folders,
                                              queue_identity=queue_identity(queue_item),
                                              member_paths=members,
-                                             switch_extras=bool(self.store.settings.get("switch_attach_extras", True)))
+                                             switch_extras=bool(self.store.settings.get("switch_attach_extras", True)),
+                                             package_folders=self._package_folders(target_cfg),
+                                             game_title=getattr(queue_item, "game", "") or "",
+                                             package_roles=reviewed_roles(queue_item.import_intent) or None,
+                                             selected_primaries=reviewed_selection(queue_item.import_intent))
                     preview = decorate_preview(preview, platform, self.library_root(target_cfg),
                                                kind=target_cfg.get("type", ""), layout=self.library_layout(target_cfg),
                                                platform_folders=target_folders, translation=is_translation(name))
@@ -8899,6 +9045,13 @@ class ROMarr:
                     queue_item.detail = "Review bundle contents in Queue before importing"
                     results.append({"name": name, "ok": False, "reason": queue_item.detail})
                     continue
+                if intent and intent.get("package_destinations") and (
+                        package_destinations(preview, intent) != intent["package_destinations"]):
+                    queue_item.import_preview = preview
+                    queue_item.state = "import-review"
+                    queue_item.detail = "Reviewed destinations changed; review the bundle again"
+                    results.append({"name": name, "ok": False, "reason": queue_item.detail})
+                    continue
                 if intent:
                     selected_primaries = [c["primary"] for c in intent["choices"]]
                     if intent.get("routes"):
@@ -8912,6 +9065,9 @@ class ROMarr:
                             results.append({"name": name, "ok": False, "reason": str(exc)})
                             continue
 
+            package_roles = None
+            if selected_primaries is not None and queue_item is not None:
+                package_roles = reviewed_roles(queue_item.import_intent)
             if selected_primaries is not None:
                 platform, held = self._nup_gate(
                     path, name, platform, queue_item, inferred=False,
@@ -8926,6 +9082,9 @@ class ROMarr:
                 rename=bool(self.store.settings.get("rename_on_import", True)),
                 prefer_hardlinks=bool(self.store.settings.get("prefer_hardlinks", False)),
                 switch_extras=bool(self.store.settings.get("switch_attach_extras", True)),
+                package_folders=self._package_folders(target_cfg),
+                game_title=getattr(queue_item, "game", "") or "",
+                package_roles=package_roles,
                 layout=self.library_layout(target_cfg),
                 translation=is_translation(name),
                 platform_folders=target_folders,
@@ -9014,6 +9173,7 @@ class ROMarr:
                                 queue_item.external_request_id,
                                 assets=imported_paths,
                                 status="available")
+                pending = self._pending_parts(queue_item, platform)
                 for w in (list(self.store.wanted) if fulfils_base else []):
                     if w.platform != platform.slug:
                         continue
@@ -9029,6 +9189,7 @@ class ROMarr:
                     if any(_titles_are_same(w.game, identity)
                            for identity in _fulfil_identities(name, outcomes)):
                         self.store.fulfil(w.game, w.platform)
+                self._settle_parts(queue_item, platform, outcomes, pending)
                 # Close the aliasing gap on this platform: drop wanted titles
                 # that are already present and verified in the library but were
                 # never fulfilled (word-order/alias titles, pre-existing stale
@@ -11109,7 +11270,9 @@ def make_handler(service: ROMarr):
                 platform = (body.get("platform") or "").strip()
                 if not game or not platform:
                     return self._json(400, {"error": "game and platform are required"})
-                return self._json(200, service.request(game, platform))
+                if "parts" in body and not isinstance(body["parts"], list):
+                    return self._json(400, {"error": "parts must be a list"})
+                return self._json(200, service.request(game, platform, parts=body.get("parts")))
             # Integration API: the request asset API external platforms poll.
             # POST: accept a request from an external game platform and start
             # the same search + grab pipeline the native button uses.
@@ -11154,9 +11317,11 @@ def make_handler(service: ROMarr):
                     return self._json(400, {"error": "monitored and search must be booleans"})
                 if len(game) > 200:
                     return self._json(400, {"error": "game must be at most 200 characters"})
+                if "parts" in body and not isinstance(body["parts"], list):
+                    return self._json(400, {"error": "parts must be a list"})
                 return self._json(200, service.add_wanted(
                     game, platform, monitored=bool(body.get("monitored", True)),
-                    search=bool(body.get("search"))))
+                    search=bool(body.get("search")), parts=body.get("parts")))
             if route.path == "/api/v1/wanted/monitor":
                 game = str(body.get("game") or "").strip()
                 platform = resolve(str(body.get("platform") or ""))

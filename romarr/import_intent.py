@@ -5,7 +5,8 @@ import hashlib
 import json
 from pathlib import Path
 from . import nup
-from .library import _source_for, platform_dir, _digital_set_name, _set_name
+from . import game_packages
+from .library import _source_for, platform_dir, _digital_set_name, _set_name, package_routes, package_title
 from .switch_attach import ATTACH_PLATFORMS, attach_dir as switch_attach_dir
 
 
@@ -16,21 +17,30 @@ def queue_identity(item):
 
 
 def preview_import(download, platform, library_root, *, layout="flat", platform_folders=None, queue_identity=None,
-                   switch_extras=False, member_paths=None):
-    """Build a reviewable preview without hashing game payloads."""
+                   switch_extras=False, member_paths=None, package_folders=False, game_title="",
+                   package_roles=None, selected_primaries=None):
+    """Build a reviewable preview without hashing game payloads.
+
+    `package_roles` (from a review) changes the package destinations shown, so a
+    reviewed preview shows exactly where the importer will write.
+    """
     source = _source_for(download, platform, member_paths=member_paths)
     try:
         return _preview_import_from_source(
             source, download, platform, library_root, layout=layout,
             platform_folders=platform_folders, queue_identity=queue_identity,
-            switch_extras=switch_extras, member_paths=member_paths)
+            switch_extras=switch_extras, member_paths=member_paths,
+            package_folders=package_folders, game_title=game_title, package_roles=package_roles,
+            selected_primaries=selected_primaries)
     finally:
         source.close()
 
 
 def _preview_import_from_source(source, download, platform, library_root, *,
                                 layout="flat", platform_folders=None,
-                                queue_identity=None, switch_extras=False, member_paths=None):
+                                queue_identity=None, switch_extras=False, member_paths=None,
+                                package_folders=False, game_title="", package_roles=None,
+                                selected_primaries=None):
     """Create a preview from an owned source before its scratch files close."""
     names = source.names()
     sets = source.rom_sets(platform)
@@ -61,6 +71,14 @@ def _preview_import_from_source(source, download, platform, library_root, *,
     token = hashlib.sha256(json.dumps([identity, names, queue_identity], sort_keys=True).encode()).hexdigest()
     ambiguous_packages = {".nsp", ".xci", ".pkg", ".cia"}
     target = platform_dir(library_root, platform, layout=layout, platform_folders=platform_folders)
+    package_routing = bool(package_folders and platform.slug in game_packages.PACKAGE_PLATFORMS)
+    # Route the sets the importer will import: a review that leaves a second
+    # base game out plans the folders without it, exactly as the import does.
+    keep = None if selected_primaries is None else set(selected_primaries)
+    routed = [s for s in sets if keep is None or s.primary in keep]
+    folder_routes = (package_routes(source, routed, platform, target, package_title(download, game_title),
+                                    roles=package_roles)
+                     if package_routing else None)
     items = []
     used = set()
     for group in sets:
@@ -71,7 +89,7 @@ def _preview_import_from_source(source, download, platform, library_root, *,
             ("unknown", "Package title, type and version have not been inspected; choose its role manually.", "unknown")
             if unknown else
             ("base", "Platform-compatible ROM set; companions are kept together. Game identity is unverified.", "format-only"))
-        header_role = _nup_role(download, group.primary)
+        header_role = _nup_role(download, group.primary) or _package_role(source, platform, group.primary)
         if header_role is not None:
             role, evidence, confidence = header_role
             unknown = role == "unknown"
@@ -80,12 +98,33 @@ def _preview_import_from_source(source, download, platform, library_root, *,
                       "evidence": evidence,
                       "confidence": confidence,
                       "bytes": sum(sizes[m] for m in members) if all(m in sizes for m in members) else None,
-                      "destination": str(_preview_destination(download, platform, target, group, switch_extras)),
-                      "selected": len(sets) == 1 and not unknown})
+                      "destination": str(_preview_destination(download, platform, target, group, switch_extras,
+                                                              folder_routes)),
+                      "selected": (len(sets) == 1 or folder_routes is not None) and not unknown})
+    # Several packages need a person to say how they relate, unless every one
+    # is identified by its header and they file into one game folder.
     return {"token": token, "items": items,
             "extras": [n for n in names if n not in used],
-            "requires_review": len(sets) > 1 or any(i["role"] == "unknown" for i in items),
+            "requires_review": ((len(sets) > 1 and folder_routes is None)
+                                or any(i["role"] == "unknown" for i in items)),
+            # Package-platform reviews confirm the destination tree their roles produce.
+            "package_routing": package_routing,
             "note": "This imports package files; it does not install or apply updates/DLC. Excluded files and the source download stay intact."}
+
+
+def _package_role(source, platform, primary):
+    """(role, evidence, confidence) from a PS4 package header, or None.
+
+    Only a file on disk is read, and only its first 128 bytes. A header that
+    names a content type this does not know returns None, which leaves the
+    package for review; a file name never decides its role.
+    """
+    header = game_packages.header_of(source, platform.slug, primary)
+    if header is None or not header.role:
+        return None
+    return (header.role,
+            f"PS4 package header: {game_packages.describe_parts({header.role})} ({header.content_id})",
+            "header")
 
 
 _NUP_UNREADABLE = "Could not read this NUP header; choose its role manually."
@@ -149,12 +188,36 @@ def choose_import(preview, choices, mode="single", existing_game=""):
     return intent
 
 
-def _preview_destination(download, platform, target, group, switch_extras):
-    """The folder the importer will use, including Switch update/DLC filing."""
+def reviewed_roles(intent):
+    """The role chosen for each package in a saved review.
+
+    "additional-game" is kept: it tells the importer not to group that
+    package with the base game.
+    """
+    return {c["primary"]: c["role"] for c in (intent or {}).get("choices", [])
+            if isinstance(c, dict) and c.get("role") in (*game_packages.PARTS, "additional-game")}
+
+
+def reviewed_selection(intent):
+    """The packages a saved review chose, or None when there is no review."""
+    chosen = [c["primary"] for c in (intent or {}).get("choices", []) if isinstance(c, dict)]
+    return chosen or None
+
+
+def package_destinations(preview, intent):
+    """{primary: destination} the preview shows for the packages a review chose."""
+    chosen = {c["primary"] for c in intent["choices"]}
+    return {i["primary"]: i["destination"] for i in preview["items"] if i["primary"] in chosen}
+
+
+def _preview_destination(download, platform, target, group, switch_extras, folder_routes=None):
+    """The folder the importer will use, including update/DLC filing."""
     if group.is_multi_file:
         return target / (_digital_set_name(download) if platform.media == "digital"
                          else _set_name(group.primary))
     name = Path(group.primary.replace("\\", "/")).name
+    if folder_routes is not None and group.primary in folder_routes:
+        return target / folder_routes[group.primary] / name
     if switch_extras and platform.slug in ATTACH_PLATFORMS:
         attach = switch_attach_dir(name, target)
         if attach is not None:

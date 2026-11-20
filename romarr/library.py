@@ -16,6 +16,7 @@ from __future__ import annotations
 from .import_duplicates import duplicate_reason, stream_sha1
 from .tar_archive import TAR_SUFFIXES, TarSource, is_tar_name
 from .switch_attach import ATTACH_PLATFORMS, attach_dir as switch_attach_dir, is_real_directory_chain
+from . import game_packages
 
 import json
 import logging
@@ -331,6 +332,14 @@ class _Source:
 
     def read(self, name: str) -> bytes | None:
         raise NotImplementedError
+
+    def head(self, name: str, size: int) -> bytes | None:
+        """The first `size` bytes of a member, or None when that is not cheap.
+
+        Only a file already on disk answers; an archive member would have to
+        be extracted, so archives fall back to what the names say.
+        """
+        return None
 
     def copy(self, name: str, destination: Path) -> None:
         raise NotImplementedError
@@ -688,6 +697,10 @@ class _PathSource(_Source):
             return target.read_bytes()
         except OSError:
             return None
+
+    def head(self, name, size):
+        """Read the start of a regular file without following a link."""
+        return game_packages.read_head(self.path if self.path.is_file() else self.path / name, size)
 
     def hash(self, name, suffix=""):
         """Hash the file a chunk at a time; None if it can't be opened."""
@@ -1213,6 +1226,51 @@ def _digital_set_name(download: Path) -> str:
     return download.name
 
 
+def package_routes(source, sets, platform, target_dir: Path, title: str,
+                   roles: dict[str, str] | None = None) -> dict[str, str] | None:
+    """Game-folder destinations for one download's game packages, or None.
+
+    Each package's role (base, update, DLC) comes from the best evidence the
+    platform has (a PS4 header, a Switch/3DS/Wii U title ID) and from its
+    name otherwise; `game_packages` then picks
+    `<Title>/`, `<Title>/update/` or `<Title>/dlc/`. None keeps the flat
+    destination: not a package platform, a multi-file set, more than one base,
+    or a link anywhere between the platform folder and the game folder.
+    `roles` holds the roles a person chose in review, which win.
+    """
+    if platform.slug not in game_packages.PACKAGE_PLATFORMS or not sets:
+        return None
+    if any(group.is_multi_file for group in sets):
+        return None
+    packages = []
+    for group in sets:
+        header = game_packages.header_of(source, platform.slug, group.primary)
+        role, family = game_packages.describe_package(group.primary, platform.slug, header)
+        role = (roles or {}).get(group.primary) or role
+        if role == "additional-game":
+            role = game_packages.BASE   # a second game: never grouped with the first
+        if role not in game_packages.PARTS:
+            return None
+        packages.append((group.primary, role, family))
+    routes = game_packages.plan_game_folder(packages, target_dir, title, platform.slug,
+                                            platform.extensions)
+    if routes is None:
+        return None
+    if not all(is_real_directory_chain(target_dir, target_dir / relative)
+               for relative in set(routes.values())):
+        return None
+    return routes
+
+
+def package_title(download: Path, game_title: str = "") -> str:
+    """The game-folder title: the request's own name, else the download's."""
+    if game_title.strip():
+        return game_title
+    name = _digital_set_name(download)
+    # A lone package file names its game without the extension.
+    return download.stem if download.is_file() and name == download.name else name
+
+
 def platform_dir(library_root: Path, platform: "Platform | str", *,
                  layout: str = "flat", translation: bool = False,
                  platform_folders=None) -> Path:
@@ -1268,7 +1326,9 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
                requested_game: str | None = None, catalog_platforms=None,
                hash_index=None, duplicate_roots=(),
                switch_extras: bool = False,
-               member_paths: list[Path] | None = None) -> list[ImportResult]:
+               member_paths: list[Path] | None = None,
+               package_folders: bool = False, game_title: str = "",
+               package_roles: dict[str, str] | None = None) -> list[ImportResult]:
     """Place every ROM from a finished download into the library.
 
     A cartridge zip may hold several games (a 3-in-1 collection, a bundle)
@@ -1283,6 +1343,10 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
     the physical extension. Multi-file members keep their reference names.
     `switch_extras` files a Switch update or DLC inside its game's folder
     when that game already has one (see switch_attach).
+    `package_folders` files a game's base, update and DLC packages as one
+    game folder named `game_title`,
+    with `update/` and `dlc/` inside it, the layout RomM reads (see
+    `package_routes`). `package_roles` carries roles chosen in review.
     """
     if not download.exists():
         msg = (
@@ -1319,7 +1383,8 @@ def import_rom(download: Path, platform: Platform, library_root: Path, *,
             selected_primaries=selected_primaries, bundle_routes=bundle_routes,
             requested_game=requested_game, catalog_platforms=catalog_platforms,
             hash_index=hash_index, duplicate_roots=duplicate_roots,
-            switch_extras=switch_extras)
+            switch_extras=switch_extras, package_folders=package_folders,
+            game_title=game_title, package_roles=package_roles)
     finally:
         source.close()
 
@@ -1332,7 +1397,8 @@ def _import_rom_from_source(source, candidates, chosen_sets, download, platform,
                             selected_primaries=None, bundle_routes=None,
                             requested_game=None, catalog_platforms=None,
                             hash_index=None, duplicate_roots=(),
-                            switch_extras=False):
+                            switch_extras=False, package_folders=False, game_title="",
+                            package_roles=None):
     """Finish import while the validated source and its scratch ZIPs remain open."""
     if selected_primaries is not None:
         selected = set(selected_primaries)
@@ -1370,6 +1436,13 @@ def _import_rom_from_source(source, candidates, chosen_sets, download, platform,
     published_hashes = {}
     planned = []
     attached: dict[Path, Path] = {}
+    folder_routes = None
+    if package_folders and bundle_routes is None:
+        folder_routes = package_routes(
+            source, chosen_sets, platform,
+            platform_dir(library_root, platform, layout=layout, translation=translation,
+                         platform_folders=platform_folders),
+            package_title(download, game_title), roles=package_roles)
     destinations = {}
     file_destinations = {}
     destination_parents = {}
@@ -1420,6 +1493,14 @@ def _import_rom_from_source(source, candidates, chosen_sets, download, platform,
                     results.append(ImportResult(False, None, "invalid reviewed destination; review the bundle again"))
                     continue
                 destination = target_dir / relative
+            elif folder_routes is not None:
+                # A reviewed import keeps the name the person confirmed; a DAT
+                # rename would write somewhere the review never showed.
+                name = Path(chosen.primary).name if package_roles else destination.name
+                destination = target_dir / folder_routes[chosen.primary] / name
+                attached[destination] = target_dir
+            # Libraries without RomM game folders still attach Switch extras
+            # to a game folder that already exists.
             elif switch_extras and platform.slug in ATTACH_PLATFORMS:
                 attach = switch_attach_dir(Path(chosen.primary).name, target_dir)
                 if attach is not None:
