@@ -6,7 +6,10 @@ verifying state/cookies before anything else, and the config endpoint keeping
 a write-only secret write-only.
 """
 
-from romarr.app import ROMarr
+from types import SimpleNamespace
+
+from romarr.app import ROMarr, make_handler
+from romarr.auth import SESSION_COOKIE
 from romarr.oidc import COOKIE_NONCE, COOKIE_STATE, COOKIE_VERIFIER
 
 ISSUER = "https://idp.example.com/application/o/romarr/"
@@ -88,13 +91,6 @@ class _FakeHandler:
         return None
 
 
-def _make_handler_class(service):
-    """Build the real Handler and steal its bound methods onto a fake."""
-    from romarr.app import make_handler
-    Real = make_handler(service)
-    return Real
-
-
 def test_login_redirect_sets_the_three_flow_cookies(tmp_path):
     svc = ROMarr(env={"ROMARR_DATA": str(tmp_path / "s.json")})
     svc.store.update_settings({
@@ -124,27 +120,7 @@ def test_callback_refuses_a_state_that_does_not_match_the_cookie(tmp_path):
     """The CSRF gate, at the HTTP layer: state from the query must equal the
     state this browser was given, or the login is refused before any token
     exchange is even attempted."""
-    from romarr.app import make_handler
-    svc = ROMarr(env={"ROMARR_DATA": str(tmp_path / "s.json")})
-    svc.store.update_settings({
-        "oidc_enabled": True, "oidc_issuer": ISSUER,
-        "oidc_client_id": "romarr",
-        "public_url": "https://romarr.example.com"})
-    svc.reload_oidc()
-    Real = make_handler(svc)
-    # Borrow the real method bodies without a socket.
-    handler = Real.__new__(Real)
-    handler.headers = {"Host": "romarr.example.com",
-                       "Cookie": f"{COOKIE_VERIFIER}=V; "
-                                 f"{COOKIE_STATE}=COOKIESTATE; "
-                                 f"{COOKIE_NONCE}=N"}
-    sent = []
-    handler.send_response = lambda code: sent.append(("status", code))
-    handler.send_header = lambda k, v: sent.append((k, v))
-    handler.end_headers = lambda: None
-    handler.wfile = type("W", (), {"write": lambda self, b: sent.append(
-        ("body", b))})()
-    handler._send = Real._send.__get__(handler)
+    svc, handler, sent = _callback_handler(tmp_path, "COOKIESTATE")
 
     # A token exchange must never be reached: patch it to explode if called.
     def boom(*a, **k):
@@ -157,6 +133,48 @@ def test_callback_refuses_a_state_that_does_not_match_the_cookie(tmp_path):
     assert ("status", 403) in sent          # a refusal, not a bad request
     assert "Sign-in did not complete" in body
     assert "state mismatch" in body
+
+
+def _callback_handler(tmp_path, cookie_state):
+    """A real handler wired to record what it sends, with the flow cookies set."""
+    svc = ROMarr(env={"ROMARR_DATA": str(tmp_path / "s.json")})
+    svc.store.update_settings({
+        "oidc_enabled": True, "oidc_issuer": ISSUER,
+        "oidc_client_id": "romarr",
+        "public_url": "https://romarr.example.com"})
+    svc.reload_oidc()
+    Real = make_handler(svc)
+    handler = Real.__new__(Real)
+    handler.headers = {"Host": "romarr.example.com",
+                       "Cookie": f"{COOKIE_VERIFIER}=V; {COOKIE_STATE}={cookie_state}; "
+                                 f"{COOKIE_NONCE}=N"}
+    sent = []
+    handler.send_response = lambda code: sent.append(("status", code))
+    handler.send_header = lambda k, v: sent.append((k, v))
+    handler.end_headers = lambda: None
+    handler.wfile = type("W", (), {"write": lambda self, b: sent.append(("body", b))})()
+    return svc, handler, sent
+
+
+def test_a_successful_callback_lands_on_a_same_site_page(tmp_path):
+    """#235: the IdP starts the navigation to /oidc/callback, so a redirect
+    from there is cross-site and the browser withholds the SameSite=Strict
+    session cookie. The callback answers with a page of its own that
+    refreshes to "/", which is same-site, so the cookie is sent."""
+    svc, handler, sent = _callback_handler(tmp_path, "S")
+    svc.oidc.authenticate = lambda *a, **k: SimpleNamespace(user="user@example.com")
+    handler._oidc_callback({"code": ["C"], "state": ["S"]})
+
+    assert ("status", 200) in sent
+    cookies = [v for k, v in sent if k == "Set-Cookie"]
+    session = [c for c in cookies if c.startswith(f"{SESSION_COOKIE}=")]
+    assert len(session) == 1 and "SameSite=Strict" in session[0] and "HttpOnly" in session[0]
+    for name in (COOKIE_VERIFIER, COOKIE_STATE, COOKIE_NONCE):
+        assert any(c.startswith(f"{name}=;") and "Max-Age=0" in c for c in cookies)
+    assert ("Cache-Control", "no-store") in sent
+    body = b"".join(b for kind, b in sent if kind == "body").decode()
+    assert "http-equiv='refresh' content='0;url=/'" in body
+    assert dict((k, v) for k, v in sent if k == "Content-Length")["Content-Length"] == str(len(body))
 
 
 def test_callback_without_flow_cookies_says_start_again(tmp_path):
@@ -220,3 +238,12 @@ def test_open_paths_include_the_oidc_round_trip(tmp_path):
     Real = make_handler(svc)
     assert "/oidc/login" in Real.OPEN_PATHS
     assert "/oidc/callback" in Real.OPEN_PATHS
+
+
+def test_send_refuses_a_header_with_a_line_break(tmp_path):
+    """No caller may smuggle a second header (or a body) through `headers`."""
+    import pytest
+    _, handler, sent = _callback_handler(tmp_path, "S")
+    with pytest.raises(ValueError):
+        handler._send(200, b"x", "text/plain", [("Set-Cookie", "a=b\r\nX-Evil: 1")])
+    assert not [k for k, _ in sent if k == "X-Evil"]
