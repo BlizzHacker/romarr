@@ -4549,7 +4549,14 @@ class ROMarr:
             try:
                 completed = getattr(client, "completed", None)
                 if callable(completed):
-                    for item in completed():
+                    # Look, don't fetch: the site, hub and debrid lanes download
+                    # inside completed(), and a stall check must not start (or
+                    # fail) the very download it is judging.
+                    try:
+                        finished = completed(fetch=False)
+                    except TypeError:
+                        finished = completed()
+                    for item in finished:
                         if match_queue_item([row], item, client_id=client_id, client_protocol=client_protocol) is not None:
                             return True
             except Exception:

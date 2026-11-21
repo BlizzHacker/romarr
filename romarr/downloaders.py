@@ -3783,6 +3783,19 @@ class SiteDownloader:
         self._write(rows)
         return True
 
+    def active_downloads(self) -> list[dict]:
+        """Jobs still waiting their turn or being fetched, as active downloads.
+
+        This lane fetches `max_active` files per sweep, one by default, so a
+        job can wait hours behind others with nothing wrong. Without this the
+        stalled-download sweep saw a queued job as neither active nor
+        complete, called it stalled three hours after the grab, and
+        blocklisted a release that had simply not been reached yet.
+        """
+        return [{"name": str(r.get("name") or ""), "state": "queued",
+                 "worker_active": True, "progress": 0.0}
+                for r in self._read() if r.get("state") == "pending"]
+
     def completed(self, *, fetch=True) -> list[dict]:
         """Fetch what is pending, then report everything already here.
 
@@ -4089,6 +4102,19 @@ class HubDownloader:
         })
         self._write(rows)
         return True
+
+    def active_downloads(self) -> list[dict]:
+        """Jobs still waiting their turn or being fetched, as active downloads.
+
+        This lane fetches `max_active` files per sweep, one by default, so a
+        job can wait hours behind others with nothing wrong. Without this the
+        stalled-download sweep saw a queued job as neither active nor
+        complete, called it stalled three hours after the grab, and
+        blocklisted a release that had simply not been reached yet.
+        """
+        return [{"name": str(r.get("name") or ""), "state": "queued",
+                 "worker_active": True, "progress": 0.0}
+                for r in self._read() if r.get("state") == "pending"]
 
     def completed(self, *, fetch=True) -> list[dict]:
         """Fetch what is pending, then report everything already here."""
