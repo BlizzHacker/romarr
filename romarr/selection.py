@@ -14,6 +14,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 
+from .release_guards import demo_refusal, executable_refusal
 from .platforms import DISC, PLATFORMS, Platform, all_extensions, by_slug, resolve, same_machine
 from .game_packages import (BASE, DLC, PACKAGE_PLATFORMS, UPDATE, describe_parts,
                            PLATFORM_CATEGORIES, extras_are_parts, held_parts, names_platform,
@@ -140,7 +141,7 @@ _DUMP_PROJECT_BONUS = 40
 # catches "translated", "retranslated" and "retranslation", and RetroWithin
 # publishes "Chrono Trigger (Retranslated)" -- a hack the exact word missed.
 _JUNK_MARKERS = (
-    "beta", "proto", "prototype", "demo", "sample", "hack", "patched",
+    "beta", "proto", "prototype", "sample", "hack", "patched",
     "translat", "trainer", "repack", "update only", "dlc",
 )
 
@@ -149,8 +150,11 @@ _JUNK_MARKERS = (
 #: catalogue. What still marks junk on PC: betas, demos, trainers, bare
 #: updates and DLC-only uploads.
 _JUNK_MARKERS_DIGITAL = (
-    "beta", "demo", "sample", "trainer", "update only", "dlc only",
+    "beta", "sample", "trainer", "update only", "dlc only",
 )
+# "demo" is in neither list: as a substring it docked *Demon's Souls* as much
+# as a real demo. `release_guards.demo_refusal` reads demos as words and
+# refuses them outright, because a demo is never the game somebody asked for.
 
 #: Markers the package step answers instead (see `_package_step`). On a
 #: PS4, Switch or PC search "Game + Update v1.05 + DLC" is the best release
@@ -813,6 +817,9 @@ def judge(release: Release, wanted: str,
     if blocklist is not None and release in blocklist:
         return Judgement(-2000,
                          verdict=f"blocklisted: {blocklist.reason_for(release)}")
+    executable = executable_refusal(release.title, platform.slug if platform else "")
+    if executable:
+        return Judgement(-1500, verdict=executable)
     if profile:
         refusal = profile.refusal(release.title.lower(), getattr(release, "size", 0),
                                   content_path=release.torrent_file_path)
@@ -827,6 +834,9 @@ def judge(release: Release, wanted: str,
     if not (title_matches(release.title, wanted)
             or (packaged and _package_title_matches(release.title, wanted))):
         return Judgement(-500, verdict=f"title does not match {wanted!r}")
+    demo = demo_refusal(release.title, wanted)
+    if demo:
+        return Judgement(-1000, verdict=demo)
 
     points = 0
     reasons: list[tuple[int, str]] = []
