@@ -6720,12 +6720,15 @@ RENDER.getstarted=async()=>{
     +'</p></div>';
 };
 
+// Shared torrent clients also hold films and TV; the source picker shows
+// only game-looking torrents until somebody asks to see the rest, which
+// sets RENDER.collections.showAllSources for the rest of the visit.
 RENDER.collections=async()=>{
   const version=pageVersion;
   const current=()=>activePage==='collections'&&pageVersion===version;
   const st=await j('/api/v1/collection').catch(()=>({dats:[],batches:[]}));
   if(!current())return;
-  const sourceState=await j('/api/v1/collection/source').catch(()=>({torrents:[],jobs:[]}));
+  const sourceState=await j('/api/v1/collection/source'+(RENDER.collections.showAllSources?'?all=1':'')).catch(()=>({torrents:[],jobs:[]}));
   if(!current())return;
   const sourceTorrents=sourceState.torrents||[];
   const dats=st.dats||[];
@@ -6779,6 +6782,12 @@ RENDER.collections=async()=>{
     +'<div id="cres" style="margin-top:16px"></div></div>'
     +'<div class="card" style="margin-top:16px"><h3>Acquire missing files from a set torrent</h3>'
     +(sourceState.errors||[]).map(error=>'<div class="panel-note panel-warn">'+esc(error)+'</div>').join('')
+    +(sourceState.hidden>0
+      ?'<p class="help" id="csrc-hidden">'+esc(String(sourceState.hidden))
+       +(sourceState.hidden===1?' torrent that does not look like a game is':' torrents that do not look like games are')
+       +' hidden (films, TV, music). '
+       +'<a href="#collections" id="csrc-show-all">Show them anyway</a></p>'
+      :'')
     +(sourceTorrents.length&&dats.length
       ?'<p class="help">Preview a DAT plan against one existing qBittorrent or Transmission torrent. ROMarr selects only matching missing files, stages one budgeted batch at a time, verifies each staged set against the DAT, then restores the torrent’s original file priorities and paused state. The cap limits ROMarr staging copies; downloaded torrent files remain in the torrent client and need separate source storage.</p>'
        +'<div class="row" style="flex-wrap:wrap">'
@@ -6795,6 +6804,10 @@ RENDER.collections=async()=>{
     +'<div id="csrc-jobs" style="margin-top:10px"></div></div>'
     +'<div class="card" style="margin-top:16px"><h3>Batches</h3>'
     +'<div id="cbatch"></div></div>';
+  const showAllSources=$('#csrc-show-all');
+  if(showAllSources)showAllSources.onclick=e=>{
+    e.preventDefault(); RENDER.collections.showAllSources=true; RENDER.collections();
+  };
 
   const drawBatches=async()=>{
     if(!current())return;

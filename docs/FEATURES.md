@@ -32,6 +32,8 @@ RAR archives, split RAR sets (`.part01.rar`, `.rar` + `.r00`, `.001`) and any ot
 
 For an existing qBittorrent or Transmission set torrent, selective acquisition first previews matched files and sidecars. ROMarr changes file priorities for a batch within your staging budget, verifies downloaded data before importing, and saves progress across restarts. Completion or cancellation restores the original file selection, priorities and paused state. The workflow does not delete the source torrent or its original downloaded data. Account for those source files separately from the staging budget.
 
+The source picker lists only torrents that look like game sets: ROMarr's own category, a games or ROMs category, a set name such as No-Intro, Redump or TOSEC, or a console name. Torrents in a Radarr, Sonarr or music category, or named with video release tags such as S01E02, 1080p or x264, are hidden and counted, with a link to show them anyway.
+
 If the torrent client is offline when you cancel, the batch stays in *restore needed*: reconnect the client, then use **Restore torrent priorities** in Collections. If ROMarr reports that the selection was changed outside it, restore the file selection in the client yourself before retrying.
 
 To grab an exact file directly from Search, use qBittorrent or Standalone BitTorrent (MDM). Search uses the first enabled torrent client, so put one of those first (or disable an earlier Transmission client) for exact-file grabs.

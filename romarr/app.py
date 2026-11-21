@@ -5242,14 +5242,33 @@ class ROMarr:
                 return None
         return client
 
-    def collection_source_torrents(self) -> dict:
-        """List existing torrent sources and persisted acquisition jobs."""
-        rows, errors = [], []
+    def collection_source_torrents(self, include_all: bool = False) -> dict:
+        """List existing torrent sources and persisted acquisition jobs.
+
+        Torrent clients are usually shared with Radarr and Sonarr, so only
+        torrents that look like game sets are offered unless `include_all`
+        asks for everything. A torrent with an acquisition job is always kept.
+        """
+        from .source_filter import looks_like_game_torrent, torrent_labels
+
+        rows, errors, hidden = [], [], 0
+        jobs = self.store.list_items("collection_sources")
+        job_hashes = {str(job.get("torrent_hash") or "").lower()
+                      for job in jobs if isinstance(job, dict)}
         for client in self.clients:
             if not isinstance(client, QBittorrent) and type(client) is not Transmission:
                 continue
+            config = getattr(client, "_config", None)
+            own = {DEFAULT_CATEGORY, str(getattr(config, "category", "") or "")}
             try:
                 for torrent in client.torrents():
+                    torrent_hash = str(torrent.get("hash") or "").lower()
+                    if not (include_all or torrent_hash in job_hashes
+                            or looks_like_game_torrent(
+                                str(torrent.get("name") or ""),
+                                torrent_labels(torrent), own_categories=own)):
+                        hidden += 1
+                        continue
                     rows.append({
                         "client_id": getattr(client, "romarr_id", ""),
                         "client_name": getattr(client, "romarr_name", client.name),
@@ -5265,8 +5284,8 @@ class ROMarr:
                 name = getattr(client, "romarr_name", client.name)
                 log.warning("could not list collection torrents from %s: %s", name, detail)
                 errors.append(f"{name}: {detail}")
-        return {"torrents": rows, "errors": errors,
-                "jobs": self.store.list_items("collection_sources")}
+        return {"torrents": rows, "errors": errors, "hidden": hidden,
+                "jobs": jobs}
 
     def _collection_source_plan(self, client_id: str, torrent_hash: str,
                                 dat_name: str, platform: str,
@@ -10059,7 +10078,9 @@ def make_handler(service: ROMarr):
             if route.path == "/api/v1/collection":
                 return self._json(200, service.collection_status())
             if route.path == "/api/v1/collection/source":
-                return self._json(200, service.collection_source_torrents())
+                query = parse_qs(route.query or "")
+                include_all = (query.get("all") or [""])[0].lower() in ("1", "true", "yes")
+                return self._json(200, service.collection_source_torrents(include_all))
             if route.path == "/api/v1/openapi.json":
                 return self._json(200, openapi_spec(VERSION))
             if route.path == "/api/v1/metadataprovider":
