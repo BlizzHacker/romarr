@@ -831,3 +831,202 @@ def calendar(providers: list[dict], *, days_back: int = 30,
             "provider_label": "",
             "error": _gap(providers, CALENDAR_PROVIDERS,
                           "answer for a date range", asked, failed)}
+
+
+# --- browse one platform -------------------------------------------------------
+#
+# The storefront shelves above answer across every system. Somebody with a
+# GameCube wants the GameCube catalogue instead: every game the provider knows
+# for that one machine, sorted the way they ask, searchable by title, a page at
+# a time. The provider's own platform ids are looked up by name and resolved
+# through ROMarr's platform table, never hardcoded, so a provider renumbering
+# its platforms cannot quietly send a browse to the wrong machine.
+
+#: How a platform catalogue can be ordered. The same four on every provider.
+PLATFORM_SORTS = ("popular", "released", "rating", "name")
+
+#: RAWG's ceiling on page_size.
+RAWG_MAX_PAGE = 40
+
+#: The last page a platform browse will ask for. Past it, has_more is false.
+BROWSE_MAX_PAGES = 500
+
+#: IGDB game types a platform catalogue lists: main games, standalone
+#: expansions, remakes, remasters, expanded games and ports. Ports matter
+#: most here -- the SNES or Game Boy version of a game is often a port. DLC,
+#: expansions, bundles, mods, episodes, seasons, packs and updates stay out.
+#: The storefront shelves keep IGDB_MAIN_GAMES.
+IGDB_BROWSE_GAME_TYPES = "game_type = (0,4,8,9,10,11)"
+
+_RAWG_ORDERING = {"popular": "-added", "released": "-released",
+                  "rating": "-rating", "name": "name"}
+
+#: IGDB sort per order. `popular` uses how many people rated the game, since
+#: IGDB's popularity table cannot be filtered by platform in one request.
+_IGDB_SORT = {"popular": "total_rating_count desc",
+              "released": "first_release_date desc",
+              "rating": "total_rating desc", "name": "name asc"}
+
+#: A rating sort without a floor is led by games one person scored 100.
+_IGDB_RATING_FLOOR = "total_rating_count >= 5"
+
+
+def rawg_platforms(cfg: dict) -> list[dict]:
+    """RAWG's platform list, so a ROMarr platform can be turned into RAWG ids."""
+    key = str(cfg.get("api_key") or "")
+    if not key:
+        return []
+    out: list[dict] = []
+    for page in range(1, 6):
+        body = _get_json("https://api.rawg.io/api/platforms?" + urllib.parse.urlencode(
+            {"key": key, "page_size": RAWG_MAX_PAGE, "page": page}))
+        if body is None:
+            raise RuntimeError("RAWG platform list did not answer")
+        out.extend({"id": int(row["id"]), "name": str(row.get("name") or "")}
+                   for row in body.get("results") or []
+                   if row.get("id") and row.get("name"))
+        if not body.get("next"):
+            break
+    return out
+
+
+def _page_args(page: int, limit: int, ceiling: int) -> tuple[int, int]:
+    try:
+        size = max(1, min(int(limit or 40), ceiling))
+    except (TypeError, ValueError):
+        size = min(40, ceiling)
+    try:
+        number = max(1, int(page or 1))
+    except (TypeError, ValueError):
+        number = 1
+    return number, size
+
+
+def _rawg_browse(cfg: dict, ids: list[int], sort: str, query: str,
+                 page: int, limit: int) -> tuple[list[dict], bool]:
+    key = str(cfg.get("api_key") or "")
+    if not key or not ids:
+        return [], False
+    number, size = _page_args(page, limit, RAWG_MAX_PAGE)
+    params = {"key": key, "platforms": ",".join(str(int(i)) for i in ids),
+              "page": number, "page_size": size,
+              "ordering": _RAWG_ORDERING.get(sort, "-added")}
+    if query:
+        params.update({"search": query, "search_precise": "true"})
+    body = _get_json("https://api.rawg.io/api/games?" + urllib.parse.urlencode(params))
+    if body is None:
+        raise RuntimeError("RAWG did not answer")
+    rows = [{
+        "title": str(row.get("name") or ""),
+        "summary": "",
+        "released": str(row.get("released") or ""),
+        "rating": float(row.get("rating") or 0.0),
+        "cover_url": str(row.get("background_image") or ""),
+        "platforms": [str((p.get("platform") or {}).get("name") or "")
+                      for p in (row.get("platforms") or [])],
+        "genres": [str(g.get("name") or "") for g in (row.get("genres") or [])
+                   if g.get("name")],
+        "source": "RAWG",
+    } for row in body.get("results") or [] if row.get("name")]
+    return rows, bool(body.get("next"))
+
+
+def _igdb_browse(cfg: dict, ids: list[int], sort: str, query: str,
+                 page: int, limit: int) -> tuple[list[dict], bool]:
+    if not ids:
+        return [], False
+    number, size = _page_args(page, limit, IGDB_MAX_LIMIT - 1)
+    where = [IGDB_BROWSE_GAME_TYPES,
+             "platforms = (" + ",".join(str(int(i)) for i in ids) + ")"]
+    if query:
+        # IGDB refuses `search` combined with `sort` (HTTP 406); a title
+        # search comes back in its own relevance order instead.
+        escaped = str(query).replace("\\", "\\\\").replace('"', '\\"')
+        head, order = f'search "{escaped}"; ', ""
+    else:
+        head, order = "", f" sort {_IGDB_SORT.get(sort, _IGDB_SORT['popular'])};"
+        if sort == "rating":
+            where.append(_IGDB_RATING_FLOOR)
+        elif sort == "released":
+            where.append("first_release_date != null")
+    # One extra row tells whether another page exists without a count query.
+    rows = igdb_query(
+        cfg, "games",
+        f"{head}{IGDB_SHELF_FIELDS[:-1]},genres.name; where {' & '.join(where)};"
+        f"{order} limit {size + 1}; offset {(number - 1) * size};",
+        strict=True)
+    out = []
+    for row in rows[:size]:
+        item = _igdb_shelf_row(row)
+        item["genres"] = [str(g.get("name") or "") for g in (row.get("genres") or [])
+                          if g.get("name")]
+        out.append(item)
+    return out, len(rows) > size
+
+
+BROWSE_PROVIDERS = {"rawg": _rawg_browse, "igdb": _igdb_browse}
+
+
+def browse_platform(providers: list[dict], platform_ids, *, sort: str = "popular",
+                    query: str = "", page: int = 1, limit: int = 40,
+                    provider: str = "") -> dict:
+    """One page of one platform's catalogue from the first provider that knows it.
+
+    `platform_ids(cfg)` returns that provider's ids for the platform being
+    browsed; a provider with none is skipped, so a machine RAWG does not list
+    can still be answered by IGDB. A failure to read a provider's platform list
+    is raised by `platform_ids` and reported as that provider failing.
+
+    `provider` pins later pages to the provider that answered page 1: two
+    catalogues order games differently, so mixing them repeats and skips games.
+    A failure on a pinned page is reported rather than answered elsewhere.
+    """
+    if sort not in PLATFORM_SORTS:
+        return {"items": [], "has_more": False, "provider": None,
+                "provider_label": "",
+                "error": f"unknown sort; one of {', '.join(PLATFORM_SORTS)}"}
+    try:
+        page = max(1, int(page or 1))
+    except (TypeError, ValueError):
+        page = 1
+    if page > BROWSE_MAX_PAGES:
+        return {"items": [], "has_more": False, "provider": None,
+                "provider_label": "",
+                "error": f"browsing stops after page {BROWSE_MAX_PAGES}"}
+    pin = str(provider or "").strip().lower()
+    if pin:
+        providers = [cfg for cfg in providers or []
+                     if str(cfg.get("type") or "").lower() == pin][:1]
+        if not providers:
+            return {"items": [], "has_more": False, "provider": None,
+                    "provider_label": "",
+                    "error": f"{pin} is no longer configured; start the browse again"}
+    query = str(query or "").strip()[:200]
+    found: list = []
+
+    def answer(fn, cfg):
+        ids = platform_ids(cfg)
+        if not ids:
+            return []
+        rows, more = fn(cfg, ids, sort, query, page, limit)
+        found[:] = [more]
+        return rows
+
+    items, cfg, asked, failed = _first_answer(providers, BROWSE_PROVIDERS, answer)
+    if items:
+        more = bool(found and found[0]) and page < BROWSE_MAX_PAGES
+        return {"items": items, "has_more": more,
+                "provider": cfg.get("type"), "provider_label": _label(cfg),
+                "error": None}
+    if failed:
+        error = (f"{', '.join(sorted(set(failed)))} could not be reached -- "
+                 f"see the log")
+    elif asked and query:
+        error = f"{', '.join(sorted(set(asked)))} found nothing matching {query!r}"
+    elif asked:
+        error = (f"{', '.join(sorted(set(asked)))} has no games listed for "
+                 f"this platform")
+    else:
+        error = _gap(providers, BROWSE_PROVIDERS, "browse a platform", asked, failed)
+    return {"items": [], "has_more": False, "provider": None,
+            "provider_label": "", "error": error}
