@@ -91,7 +91,7 @@ from .capture import status as capture_status
 from .catalogue import (Submission, check_source, facets as hub_facets,
                         search as hub_search, submission_link)
 from .frontends import FORMATS as FRONTEND_FORMATS
-from .metadata import PROVIDERS as METADATA_PROVIDERS
+from .metadata import PROVIDERS as METADATA_PROVIDERS, SECRET_FIELDS as METADATA_SECRET_FIELDS
 from .notify import (NOTIFIERS, Message, Notifier, failed, grabbed, imported,
                      FIELD_HELP, FIELD_LABELS, send_test,
                      update_available)
@@ -181,8 +181,8 @@ SECRET_MASK = "********"
 #: providers and connections are also served by dedicated endpoints that mask
 #: the same names; import lists use LIST_SECRETS above.
 MASKED_ITEM_FIELDS = {
-    "metadata_providers": ("api_key", "token", "client_id", "client_secret"),
-    "connections": ("url", "urls", "token", "password", "key"),
+    "metadata_providers": METADATA_SECRET_FIELDS,
+    "connections": ("url", "urls", "token", "password", "key", "secret"),
     "import_lists": LIST_SECRETS,
 }
 _SECRET_KEY_WORDS = ("secret", "password", "token", "passkey", "api_key", "apikey")
@@ -4326,7 +4326,10 @@ class ROMarr:
         self.profile = ReleaseProfile.from_settings(self.store.settings)
         self.blocklist = Blocklist.from_items(
             self.store.list_items("blocklist"))
-        self.notifier = Notifier(self.store.list_items("connections"))
+        self.notifier = Notifier(
+            self.store.list_items("connections"),
+            base_url=(os.environ.get("ROMARR_PUBLIC_URL")
+                      or str(self.store.settings.get("public_url") or "")))
 
     def profile_for(self, platform: Any = None) -> ReleaseProfile:
         """Resolve the release profile for a given platform, with fallback to global."""
@@ -10047,7 +10050,7 @@ def make_handler(service: ROMarr):
             if route.path == "/api/v1/blocklist":
                 return self._json(200, {"items": service.blocklist.as_items()})
             if route.path == "/api/v1/connection":
-                secrets = {"url", "urls", "token", "password", "key"}
+                secrets = {"url", "urls", "token", "password", "key", "secret"}
                 items = []
                 for cfg in service.store.list_items("connections"):
                     items.append({k: ("********" if k in secrets and v else v)
@@ -10070,7 +10073,7 @@ def make_handler(service: ROMarr):
                         ] + [
                             {"name": f, "label": FIELD_LABELS.get(f, f.replace("_", " ").title()),
                              "type": ("secret" if f in ("url", "token",
-                                                        "password", "key")
+                                                        "password", "key", "secret")
                                       else "text"),
                              "default": "",
                              "help": (spec["help"] if f == "url" else
@@ -10160,7 +10163,7 @@ def make_handler(service: ROMarr):
                 return self._json(200, openapi_spec(VERSION))
             if route.path == "/api/v1/metadataprovider":
                 from .metadata import PROVIDERS as _MP
-                secrets = {"api_key", "token", "client_id"}
+                secrets = set(METADATA_SECRET_FIELDS)
                 with service._metadata_lock:
                     providers = service.store.list_items("metadata_providers")
                     revision = service.metadata_revision
@@ -10825,7 +10828,7 @@ def make_handler(service: ROMarr):
                     str(body.get("platform") or ""),
                     force=bool(body.get("force"))))
             if route.path == "/api/v1/metadataprovider":
-                secrets = {"api_key", "token", "client_id"}
+                secrets = set(METADATA_SECRET_FIELDS)
                 if not isinstance(body, dict):
                     return self._json(400, {"error": "invalid provider configuration"})
                 with service._metadata_lock:
@@ -10879,7 +10882,7 @@ def make_handler(service: ROMarr):
                 service.auth.totp = _Totp(secret="", backup=[])
                 return self._json(200, {"ok": True, "enabled": False})
             if route.path == "/api/v1/connection":
-                secrets = {"url", "urls", "token", "password", "key"}
+                secrets = {"url", "urls", "token", "password", "key", "secret"}
                 cfg = dict(body or {})
                 if cfg.get("id"):
                     old_cfg = service.store.get_item("connections",
@@ -10889,6 +10892,10 @@ def make_handler(service: ROMarr):
                             cfg[key] = old_cfg.get(key, "")
                 if not cfg.get("events"):
                     cfg.pop("events", None)   # absent means every event
+                secret = str(cfg.get("secret") or "")
+                if secret and len(secret) < 16:
+                    return self._json(400, {"error": "A webhook signing secret "
+                                                     "needs at least 16 characters."})
                 saved = service.store.put_item("connections", cfg)
                 service.reload_policy()
                 return self._json(200, {k: ("********" if k in secrets and v
@@ -10904,14 +10911,16 @@ def make_handler(service: ROMarr):
                 if cfg.get("id"):
                     old_cfg = service.store.get_item("metadata_providers",
                                                      str(cfg["id"])) or {}
-                    for key in ("api_key", "token", "client_id"):
+                    for key in METADATA_SECRET_FIELDS:
                         # Absent as well as masked, so testing a saved
                         # provider by id alone reports on the credential
                         # that is stored rather than on an empty one.
                         if cfg.get(key, "") in ("********", ""):
                             cfg[key] = old_cfg.get(key, "")
                 try:
-                    info = spec["lookup"](cfg, "Chrono Trigger")
+                    info = (spec["lookup"](cfg, "Chrono Trigger", {"platform": "snes"})
+                            if spec.get("context") else
+                            spec["lookup"](cfg, "Chrono Trigger"))
                 except Exception as exc:
                     return self._json(200, {
                         "ok": False,

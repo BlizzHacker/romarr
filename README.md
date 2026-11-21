@@ -249,6 +249,12 @@ Thanks to the library, emulator and preservation projects ROMarr works with, and
 
 Batch decompression hands disc images to [Compressatorium](https://github.com/pacnpal/compressatorium) by pacnpal over its HTTP API, through the preinstalled [Compressatorium plugin](https://github.com/BlizzHacker/rom-hub-compressatorium); no Compressatorium code is included.
 
+ScreenScraper and SteamGridDB metadata are ported from MIT-licensed [RetroArr](https://github.com/RiDDiX/RetroArr), Copyright (c) 2026 RetroArr.
+
+Demo and executable refusals, Usenet minimum age and retention, and complete-edition detection follow the behaviour of [Gamarr](https://github.com/gamarr-app/Gamarr); no Gamarr code is included.
+
+Signed webhooks, notification links and NZB detection in Torznab feeds follow the behaviour of [Questarr](https://github.com/Doezer/Questarr); no Questarr code is included.
+
 Soundtracks, the Switch report, wishlist monitoring and plugin start-up hardening build on MIT-licensed work from [romarrng](https://github.com/Squeaks72/romarrng), Copyright (c) 2026 MOVE WEIGHT.
 
 MIT — [LICENSE](LICENSE). ROMarr is an independent project and is not endorsed by its integrations.

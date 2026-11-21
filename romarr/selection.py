@@ -14,6 +14,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 
+from .release_guards import demo_refusal, executable_refusal, release_age_minutes
 from .platforms import DISC, PLATFORMS, Platform, all_extensions, by_slug, resolve, same_machine
 from .game_packages import (BASE, DLC, PACKAGE_PLATFORMS, UPDATE, describe_parts,
                            PLATFORM_CATEGORIES, extras_are_parts, held_parts, names_platform,
@@ -140,7 +141,7 @@ _DUMP_PROJECT_BONUS = 40
 # catches "translated", "retranslated" and "retranslation", and RetroWithin
 # publishes "Chrono Trigger (Retranslated)" -- a hack the exact word missed.
 _JUNK_MARKERS = (
-    "beta", "proto", "prototype", "demo", "sample", "hack", "patched",
+    "beta", "proto", "prototype", "sample", "hack", "patched",
     "translat", "trainer", "repack", "update only", "dlc",
 )
 
@@ -149,8 +150,11 @@ _JUNK_MARKERS = (
 #: catalogue. What still marks junk on PC: betas, demos, trainers, bare
 #: updates and DLC-only uploads.
 _JUNK_MARKERS_DIGITAL = (
-    "beta", "demo", "sample", "trainer", "update only", "dlc only",
+    "beta", "sample", "trainer", "update only", "dlc only",
 )
+# "demo" is in neither list: as a substring it docked *Demon's Souls* as much
+# as a real demo. `release_guards.demo_refusal` reads demos as words and
+# refuses them outright, because a demo is never the game somebody asked for.
 
 #: Markers the package step answers instead (see `_package_step`). On a
 #: PS4, Switch or PC search "Game + Update v1.05 + DLC" is the best release
@@ -374,6 +378,9 @@ class Release:
     torrent_file_path: str = ""
     file_selection_required: bool = False
     content_kind: str = ""
+    # When the indexer says the release was posted, as ISO-8601 UTC, or ""
+    # when it did not say. Usenet minimum age and retention read it.
+    published: str = ""
 
 
 def collection_content_kind(path: str) -> str:
@@ -792,6 +799,27 @@ def _package_step(release: Release, wanted: str, platform: Platform,
     return None, reasons, held
 
 
+def usenet_age_refusal(release: Release, profile) -> str:
+    """Why a Usenet post is too young or too old for this profile, or "".
+
+    Minimum age gives a fresh post time to propagate to the news server
+    before a client asks for it; retention skips posts the server has
+    already expired. A post with no date passes both: refusing every
+    undated result would turn a missing field into an empty search.
+    """
+    age = release_age_minutes(release.published)
+    if age is None:
+        return ""
+    minimum = int(getattr(profile, "usenet_minimum_age_minutes", 0) or 0)
+    if minimum > 0 and age < minimum:
+        return (f"posted {int(age)} minutes ago; Usenet minimum age is "
+                f"{minimum} minutes")
+    retention = int(getattr(profile, "usenet_retention_days", 0) or 0)
+    if retention > 0 and age > retention * 1440:
+        return f"older than the {retention}-day Usenet retention"
+    return ""
+
+
 def judge(release: Release, wanted: str,
           platform: Platform | None = None, *,
           profile=None, blocklist=None, parts=None) -> Judgement:
@@ -813,6 +841,9 @@ def judge(release: Release, wanted: str,
     if blocklist is not None and release in blocklist:
         return Judgement(-2000,
                          verdict=f"blocklisted: {blocklist.reason_for(release)}")
+    executable = executable_refusal(release.title, platform.slug if platform else "")
+    if executable:
+        return Judgement(-1500, verdict=executable)
     if profile:
         refusal = profile.refusal(release.title.lower(), getattr(release, "size", 0),
                                   content_path=release.torrent_file_path)
@@ -827,6 +858,9 @@ def judge(release: Release, wanted: str,
     if not (title_matches(release.title, wanted)
             or (packaged and _package_title_matches(release.title, wanted))):
         return Judgement(-500, verdict=f"title does not match {wanted!r}")
+    demo = demo_refusal(release.title, wanted)
+    if demo:
+        return Judgement(-1000, verdict=demo)
 
     points = 0
     reasons: list[tuple[int, str]] = []
@@ -866,6 +900,10 @@ def judge(release: Release, wanted: str,
             add(-20, "no seeders (private tracker, often temporary)")
         else:
             add(min(release.seeders, 20) * 2, f"{release.seeders} seeders")
+    elif release.protocol == "usenet" and profile is not None:
+        refusal = usenet_age_refusal(release, profile)
+        if refusal:
+            return Judgement(-350, verdict=refusal)
 
     detected_regions = detect_regions(release.title)
     pref_list = getattr(profile, "preferred_regions", None) or ["usa", "world", "europe", "japan"]

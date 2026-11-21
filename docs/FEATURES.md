@@ -10,6 +10,10 @@ Start with the [setup walkthrough](GETTING-STARTED.md) for your first import. Th
 
 Failed or stalled releases may be blocklisted with a reason, allowing another result to be tried. Inspect **Queue**, **History** and **Blocklist** when a request is not progressing.
 
+Demo, kiosk and trial builds are refused, as are executables named like a ROM or disc image (`Game.iso.exe`); a PC release may still be an installer. **Settings → Profiles** also holds a Usenet minimum age, which waits for a new post to reach your news server, and a Usenet retention, which skips posts your server has already expired. Both are off at 0. An `.nzb` result in a Torznab feed is sent to the Usenet client.
+
+ScreenScraper can be added under **Settings → Metadata**. It identifies a verified ROM by its hash and needs ScreenScraper developer credentials. SteamGridDB, with a free API key, only supplies a cover when the provider that named the game had none.
+
 ## Files, verification and names
 
 The importer reads supported archives, identifies ROM candidates and files them under the destination platform. Multi-track discs need all referenced tracks. Arcade/Neo Geo and DOS archives can be kept intact because their internal layout matters to the emulator.
@@ -104,6 +108,8 @@ CAPTCHAs, access challenges and blocked downloads can stop a fetch. The client r
 **Settings → Connections** configures notifications such as Discord and generic webhooks. Use **Test** before saving. A failed test reports the endpoint's HTTP status and available response detail. A 403 can be an upstream permission, webhook or access-policy problem; copying ROMarr settings cannot grant access the endpoint refuses.
 
 Do not post webhook URLs in bug reports: the URL may contain the credential. A successful test confirms that test's delivery, not that all future messages will be accepted.
+
+A generic webhook with a **Signing Secret** (16 characters or more) signs each delivery. Verify it on the receiver by computing HMAC-SHA256 of `<X-ROMarr-Timestamp>.<raw body>` with the secret and comparing it with `X-ROMarr-Signature` (`sha256=<hex>`). `X-ROMarr-Delivery` is the same on every attempt; a receiver that is down or answers 408, 429 or 5xx gets two more attempts. When **Public URL** (or `ROMARR_PUBLIC_URL`) is set, grab, import and failure messages link to the Queue or History page.
 
 ## GG Requestz
 

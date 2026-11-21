@@ -161,6 +161,23 @@ def title_before_parts(title: str, wanted: str = "") -> str:
         core = core[:connector.start()]
 
 
+#: Editions that ship the game with its DLC: "GOTY", "Game of the Year",
+#: "Complete/Definitive/Ultimate/Gold/Legendary/Premium Edition". Behaviour
+#: learned from Gamarr (GPL-3.0; the word list is written here).
+_COMPLETE_EDITION_RE = re.compile(
+    r"\b(?:goty|game\s+of\s+the\s+year|"
+    r"(?:complete|definitive|ultimate|gold|legendary|premium)\s+edition)\b")
+
+
+def _complete_edition(lowered: str, wanted: str) -> bool:
+    found = _COMPLETE_EDITION_RE.search(lowered.replace(".", " ").replace("_", " "))
+    if not found:
+        return False
+    # A game asked for by its edition's name ("Tomb Raider Definitive
+    # Edition") is that game, not the game plus its DLC.
+    return found.group(0) not in " ".join(str(wanted or "").lower().split())
+
+
 @functools.lru_cache(maxsize=4096)
 def release_parts(title: str, wanted: str = "") -> frozenset[str]:
     """Which parts of a game a release title says it holds.
@@ -190,6 +207,10 @@ def release_parts(title: str, wanted: str = "") -> frozenset[str]:
         parts.update(kind for kind, _ in markers)
         if markers[0][1]:
             parts.add(BASE)
+    # A complete edition is the game and its DLC -- unless the title already
+    # said it is an extra on its own ("Update v2.5 incl DLC" stays an update).
+    if (not markers or markers[0][1]) and _complete_edition(lowered, wanted):
+        parts.update((BASE, DLC))
     return frozenset(parts or {BASE})
 
 

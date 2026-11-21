@@ -330,6 +330,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # Acquisition & release profiles (global and per-system).
     # 0 defers max_size_mb to each platform's native medium ceiling (`Platform.max_size`).
     "min_seeders": 1,
+    # Usenet: refuse posts younger than N minutes (propagation) and older
+    # than N days (the news server's retention). 0 turns either off.
+    "usenet_minimum_age_minutes": 0,
+    "usenet_retention_days": 0,
     "min_size_mb": 0,
     "max_size_mb": 0,
     "size_preference": "auto",       # auto | smaller | larger | none
