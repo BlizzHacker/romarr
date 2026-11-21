@@ -106,6 +106,7 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "/api/v1/game/detail": ("GET", "Read one game and its cached metadata, wanted entry, queue and history; platform plus id or title."),
     "/api/v1/wanted/add": ("POST", "Save a game/platform with boolean monitored (default true) and search (default false). Wishlist entries use monitored=false and are skipped by automatic searches. On platforms whose games have updates and DLC (PlayStation 3/4/5, PSP, Vita, 3DS, Wii U, Switch, Xbox 360, PC), entries may add parts, a list of base, update and dlc (default: the game)."),
     "/api/v1/wanted/preferred-group": ("POST", "Favour releases by one release group for an existing game/platform on Wanted (whole-word match in the release title, +50); an empty group clears it."),
+    "/api/v1/hydra/library": ("GET", "Hydra Launcher download sources listed by library.hydra.wiki (name, .json URL, status labels), optionally filtered by ?q=; read once an hour."),
     "/api/v1/wanted/monitor": ("POST", "Set boolean monitored for an existing game/platform; false pauses automatic searches without removing the entry."),
     "/api/v1/queue": ("GET", "Active downloads, import-preview availability and client-scoped progress/ETA when available."),
     "/api/queue": ("GET", "Active downloads (legacy path)."),

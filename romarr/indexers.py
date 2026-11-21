@@ -969,6 +969,12 @@ def build_indexer(cfg: dict):
         return TorrentRss(TorrentRssConfig(
             url=cfg["url"], name=name,
             private=bool(cfg.get("private", True)), timeout=timeout))
+    if driver == "hydra":
+        from .hydra import HydraSource, HydraSourceConfig
+
+        return HydraSource(HydraSourceConfig(
+            url=cfg["url"], name=name,
+            categories=tuple(indexer_categories(cfg)), timeout=timeout))
     if driver == "potato":
         return TorrentPotato(TorrentPotatoConfig(
             url=cfg["url"], name=name,
@@ -1149,6 +1155,26 @@ INDEXER_TYPES = {
                           help="The RSS URL, including any passkey it needs"),
             INDEXER_FIELD("priority", "Priority", "int", 25),
             INDEXER_FIELD("private", "Private tracker", "bool", True),
+        ],
+    },
+    "hydra": {
+        "label": "Hydra Launcher source",
+        "protocol": "any",
+        "driver": "hydra",
+        "help": "A Hydra Launcher download source (a .json URL). Magnets go to "
+                "your torrent client, file links to Mister Download Manager or "
+                "Direct HTTP, and file-host links to a debrid service. Browse "
+                "library.hydra.wiki from the Indexers page to pick one.",
+        "fields": [
+            _TIMEOUT_FIELD,
+            INDEXER_FIELD("name", "Name", default="Hydra source"),
+            INDEXER_FIELD("enable", "Enable", "bool", True),
+            INDEXER_FIELD("url", "Source URL",
+                          help="The source's .json URL, e.g. one listed on library.hydra.wiki"),
+            INDEXER_FIELD("categories", "Categories", default="",
+                          help="Leave empty: rows with a platform are filed as console "
+                               "(1000), rows without as PC (4050)"),
+            INDEXER_FIELD("priority", "Priority", "int", 25),
         ],
     },
     "torrentpotato": {

@@ -3040,6 +3040,15 @@ class ROMarr:
                         else (getattr(client, "last_error", "")
                               or f"{client_label} did not confirm the torrent")
                     )
+        elif getattr(client, "protocol", "") == "hoster":
+            # Every link the source listed, best first: a file host no route
+            # can take falls through to the next instead of failing the grab.
+            ok = client.add(pick.download_url, name=pick.title,
+                            mirrors=getattr(pick, "mirrors", ()))
+            download_id = client.last_job_id if ok else ""
+            release_fault = False
+            if not ok:
+                failure_detail = client.last_error or failure_detail
         else:
             ok, download_id = hand_off_with_id(client, pick.download_url,
                                                name=pick.title)
@@ -10054,6 +10063,16 @@ def make_handler(service: ROMarr):
                     err = str(exc)
                 return self._json(200, {"items": items, "proxied": proxied,
                                         "error": err})
+            if route.path == "/api/v1/hydra/library":
+                from .hydra import library_sources
+
+                try:
+                    rows = library_sources(query=(query.get("q") or [""])[0][:100])
+                except Exception as err:
+                    return self._json(502, {"items": [], "error":
+                                            f"library.hydra.wiki did not answer "
+                                            f"({type(err).__name__})"})
+                return self._json(200, {"items": rows})
             if route.path == "/api/v1/downloadclient":
                 return self._json(200, {"items": service.download_clients()})
             if route.path == "/api/v1/downloadclient/schema":
