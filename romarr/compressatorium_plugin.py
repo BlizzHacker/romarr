@@ -115,19 +115,30 @@ def preinstall(*, home: Path | None = None,
     return outcome
 
 
+#: Inside ROM_HUB_HOME: the runtime-owned copies bundled plugins install from.
+SOURCES_DIR = "bundled-sources"
+
+
 def _install_bundled(reg, bundled: Path, home: Path) -> None:
     """Install the bundled checkout from a copy the runtime user owns.
 
     The image builds the checkout as root, while ROMarr runs as PUID. Git
     refuses a local clone from a repository another user owns, so installing
-    straight from the bundled folder failed on every start. A private copy
-    under ROM_HUB_HOME avoids that without loosening git's ownership check.
+    straight from the bundled folder failed on every start. A copy under
+    ROM_HUB_HOME avoids that without loosening git's ownership check, and it
+    is kept: ROM Hub records it as the plugin's source, and a later plugin
+    update clones from it again.
     """
-    home.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix=".preinstall-", dir=home) as stage:
+    sources = home / SOURCES_DIR
+    sources.mkdir(parents=True, exist_ok=True)
+    target = sources / SLUG
+    with tempfile.TemporaryDirectory(prefix=".copy-", dir=sources) as stage:
         staged = Path(stage) / SLUG
         shutil.copytree(bundled, staged, symlinks=True)
-        reg.install(str(staged))
+        if target.exists():
+            shutil.rmtree(target)
+        os.replace(staged, target)
+    reg.install(str(target))
 
 
 def preinstall_in_background() -> None:

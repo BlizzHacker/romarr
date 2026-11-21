@@ -10,6 +10,8 @@ temporary home, installing a throwaway git repository shaped like the plugin.
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
 
 import pytest
@@ -40,11 +42,15 @@ api_key = { type = "secret" }
 """
 
 
+_GIT = shutil.which("git") or "git"
+
+
 def _git(*args, cwd):
-    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True,
+    # git from the developer's PATH, run with an isolated HOME.
+    subprocess.run([_GIT, *args], cwd=cwd, check=True, capture_output=True,
                    env={"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
                         "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t",
-                        "HOME": str(cwd), "PATH": "/usr/bin:/bin:/usr/local/bin"})
+                        "HOME": str(cwd), "PATH": os.environ.get("PATH", "")})
 
 
 @pytest.fixture
@@ -270,9 +276,10 @@ def test_the_bundled_checkout_is_installed_from_a_private_copy(home, bundled, mo
     monkeypatch.setattr(_registry.Registry, "install", spy)
     assert cp.preinstall(home=home, env={"ROMARR_BUNDLED_PLUGINS": str(bundled)}) == "installed"
     assert len(seen) == 1
-    assert seen[0] != str(bundled / cp.SLUG)
-    assert seen[0].startswith(str(home))
-    assert not list(home.glob(".preinstall-*")), "the staging copy is removed"
+    assert seen[0] == str(home / cp.SOURCES_DIR / cp.SLUG)
+    # ROM Hub records this as the plugin's source; updates clone from it later.
+    assert (home / cp.SOURCES_DIR / cp.SLUG / "manifest.toml").is_file()
+    assert not list((home / cp.SOURCES_DIR).glob(".copy-*"))
 
 
 class _FailingStore:

@@ -47,7 +47,9 @@ operator can see the blast radius before authorising a destructive one.
 from __future__ import annotations
 
 import logging
+import os
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -126,6 +128,11 @@ class DecompressItem:
     dat_detail: str = ""
     error: str = ""
     deleted: bool = False
+    #: (device, inode, size, mtime_ns) of each original as it was before any
+    #: work started; deletion only removes a file that still matches.
+    identities: dict = field(default_factory=dict, repr=False)
+    #: Archive members that were not extracted; the original is then kept.
+    skipped_members: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -488,6 +495,7 @@ def _run_local(items: list[DecompressItem], output_dir: str | Path | None,
             continue
         item.status = "decompressed"
         item.output_files = result.output_files
+        item.skipped_members = list(result.skipped_members)
         report.extracted_locally += 1
         report.decompressed += 1
         log.info("decompress: extracted %s locally -> %d file(s)",
@@ -534,24 +542,89 @@ def _verify_all(items: list[DecompressItem], dats: DatIndex | None,
                      "original kept", name)
 
 
+def _identity(path: Path):
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return None
+    return [st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns]
+
+
+def _originals(item: DecompressItem) -> list[Path]:
+    """An item's original files, first volume last.
+
+    A RAR set is found by its first volume, so it goes last: a deletion that
+    stops part-way still leaves a set the next batch can find.
+    """
+    paths = [Path(v) for v in item.volumes] or [Path(item.source)]
+    first = Path(item.source)
+    return [p for p in paths if p != first] + [p for p in paths if p == first]
+
+
+def _record_identities(items: list[DecompressItem]) -> None:
+    for item in items:
+        item.identities = {str(p): _identity(p) for p in _originals(item)}
+
+
+def _delete_if_unchanged(path: Path, expected) -> str:
+    """Delete `path` only if it is still the file that was extracted.
+
+    The file is first renamed aside -- atomic, so a replacement arriving after
+    that point gets the name back and is never touched -- and the renamed file
+    is the one checked and removed. Returns "" when removed, "missing" when it
+    is already gone, otherwise why it was kept.
+    """
+    if not expected:
+        return f"{path.name}: not seen before extraction, kept"
+    aside = path.with_name(f".{path.name}.romarr-deleting-{uuid.uuid4().hex[:8]}")
+    try:
+        os.rename(path, aside)
+    except FileNotFoundError:
+        return "missing"
+    except OSError as err:
+        return f"{path.name}: {err}"
+    if _identity(aside) != list(expected):
+        try:  # put it back, never over a file that took the name meanwhile
+            os.link(aside, path)
+            os.unlink(aside)
+            return f"{path.name}: changed since it was extracted, kept"
+        except OSError:
+            return f"{path.name}: changed since it was extracted, kept as {aside.name}"
+    try:
+        os.unlink(aside)
+    except OSError as err:
+        try:
+            os.link(aside, path)
+            os.unlink(aside)
+        except OSError:
+            pass
+        return f"{path.name}: {err}"
+    return ""
+
+
 def _delete_originals(items: list[DecompressItem],
                       report: DecompressReport) -> None:
     """Delete each verified item's original: its file, or every RAR volume."""
     for item in items:
         if item.status != "verified" or item.dat_match != VERIFIED:
             continue
-        originals = [Path(v) for v in item.volumes] or [Path(item.source)]
+        if item.skipped_members:
+            item.error = ("original kept: some members could not be extracted safely: "
+                          + ", ".join(item.skipped_members[:5]))
+            log.warning("decompress: kept %s: %s", Path(item.source).name, item.error)
+            continue
         failures = []
         removed = 0
-        for path in originals:
-            if not path.is_file():
+        for path in _originals(item):
+            outcome = _delete_if_unchanged(path, item.identities.get(str(path)))
+            if outcome == "missing":
                 continue
-            try:
-                path.unlink()
-                removed += 1
-            except OSError as err:
-                failures.append(f"{path.name}: {err}")
-                log.warning("decompress: could not delete %s: %s", path.name, err)
+            if outcome:
+                failures.append(outcome)
+                log.warning("decompress: kept %s", outcome)
+                # The rest of the set stays together, first volume included.
+                break
+            removed += 1
         if failures:
             item.error = "could not delete original: " + "; ".join(failures)
         if removed and not failures:
@@ -641,6 +714,9 @@ def run_batch(
         log.warning("decompress: delete_originals requested but no DATs are "
                     "loaded -- originals will be KEPT regardless of outcome")
 
+    if can_delete:
+        # Before anything reads them: deletion later removes only these files.
+        _record_identities(items)
     service_items = [it for it in items if it.engine == SERVICE]
     local_items = [it for it in items if it.engine == LOCAL]
     client = _connect(compressatorium_url, compressatorium_api_key,

@@ -62,6 +62,9 @@ class LocalExtraction:
 
     output_files: list[str] = field(default_factory=list)
     error: str = ""
+    #: Members left out because they could not be extracted safely. The
+    #: output is then incomplete, so the original must never be deleted.
+    skipped_members: list[str] = field(default_factory=list)
 
 
 def archive_stem(name: str) -> str:
@@ -102,12 +105,12 @@ def extract_archive(first: Path, volumes: list[Path] | None,
     except OSError as exc:
         return LocalExtraction(error=f"cannot write to {destination_root}: {exc}")
     try:
-        staged = _extract_into(first, volumes, staging)
+        staged, skipped = _extract_into(first, volumes, staging)
         if not staged:
             return LocalExtraction(error="the archive holds no game files")
         placed = _place_all(staged, staging, destination_root,
                             archive_stem(first.name))
-        return LocalExtraction(output_files=placed)
+        return LocalExtraction(output_files=placed, skipped_members=skipped)
     except FileExistsError as exc:
         return LocalExtraction(
             error=f"output already exists, nothing overwritten: {exc.filename or exc}")
@@ -121,12 +124,25 @@ def extract_archive(first: Path, volumes: list[Path] | None,
 
 
 def _extract_into(first: Path, volumes: list[Path] | None,
-                  staging: Path) -> list[str]:
-    """Write every payload member into `staging`; return their names."""
+                  staging: Path) -> tuple[list[str], list[str]]:
+    """Write every payload member into `staging`.
+
+    Returns (written, skipped): the members written, and the payload members
+    `names()` refused as unsafe -- which make the output incomplete.
+    """
     source = library.open_archive(first, volumes)
     try:
+        names = source.names()
+        listed = getattr(source, "all_member_names", None)
+        # names() drops members it will not extract safely. The safe ones are
+        # still extracted, but the caller is told what was left out, because
+        # an incomplete output can still verify -- and must not then cost
+        # the operator the original.
+        kept = set(names)
+        skipped = ([n for n in listed() if n not in kept and not library.is_clutter(n)]
+                   if listed is not None else [])
         written = []
-        for name in source.names():
+        for name in names:
             if library.is_clutter(name):
                 continue
             if not library.is_safe_name(name, staging):
@@ -135,7 +151,7 @@ def _extract_into(first: Path, volumes: list[Path] | None,
             target.parent.mkdir(parents=True, exist_ok=True)
             source.copy(name, target)
             written.append(name)
-        return written
+        return written, skipped
     finally:
         source.close()
 
@@ -153,19 +169,34 @@ def _place_all(names: list[str], staging: Path, root: Path, stem: str) -> list[s
         return [str(target)]
     folder = root / stem
     folder.mkdir()  # FileExistsError when it is already there: nothing reused
-    placed = []
+    placed: list[Path] = []
+    made: list[Path] = [folder]
     try:
         for name in names:
             target = folder / name
-            target.parent.mkdir(parents=True, exist_ok=True)
+            for parent in reversed(target.relative_to(folder).parents[:-1]):
+                directory = folder / parent
+                if not directory.exists():
+                    directory.mkdir()
+                    made.append(directory)
             _place(staging / name, target)
-            placed.append(str(target))
+            placed.append(target)
     except BaseException:
-        # The folder is this run's own, made above: a set that did not finish
-        # moving in is removed whole rather than left looking complete.
-        shutil.rmtree(folder, ignore_errors=True)
+        # Undo only what this run put there: its own files, then its own
+        # folders if they are empty. Anything another writer added since the
+        # folder appeared stays, and so do the folders holding it.
+        for path in reversed(placed):
+            try:
+                path.unlink()
+            except OSError:
+                pass
+        for directory in reversed(made):
+            try:
+                directory.rmdir()
+            except OSError:
+                pass
         raise
-    return sorted(placed)
+    return sorted(str(p) for p in placed)
 
 
 def _place(staged: Path, target: Path) -> None:

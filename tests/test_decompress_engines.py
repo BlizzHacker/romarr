@@ -425,3 +425,83 @@ def test_an_unreachable_service_is_no_error_when_nothing_needed_it(tmp_path, mon
 
     assert _items(report)["Game.zip"].status == "kept"
     assert report.error == ""
+
+
+def test_an_archive_with_an_unextracted_member_is_never_deleted(tmp_path):
+    source = _zip(tmp_path / "Game.zip", {"../evil.bin": b"x", "Game (USA).iso": DISC_1})
+    dats = _index({"Game (USA).iso": DISC_1})
+
+    report = _run(tmp_path, dats=dats, delete_originals=True)
+
+    item = _items(report)["Game.zip"]
+    assert item.dat_match == "verified"
+    assert source.exists(), "an incomplete extraction never costs the original"
+    assert "could not be extracted safely" in item.error
+
+
+def test_a_failed_set_keeps_files_another_writer_added(tmp_path, monkeypatch):
+    _zip(tmp_path / "Set.zip", {"a.bin": DISC_1, "b.bin": DISC_2})
+    real = decompress_local._place
+    calls = []
+
+    def place(staged, target):
+        calls.append(target)
+        if len(calls) == 1:
+            real(staged, target)
+            (target.parent / "synced.txt").write_text("not ours")
+            return
+        raise OSError("disk full")
+
+    monkeypatch.setattr(decompress_local, "_place", place)
+    report = _run(tmp_path)
+
+    assert _items(report)["Set.zip"].status == "failed"
+    folder = tmp_path / "Set"
+    assert (folder / "synced.txt").read_text() == "not ours"
+    assert not (folder / "a.bin").exists(), "this run's own file is rolled back"
+
+
+def test_a_replaced_original_is_not_deleted(tmp_path, monkeypatch):
+    source = _zip(tmp_path / "Game.zip", {"Game (USA).iso": DISC_1})
+    dats = _index({"Game (USA).iso": DISC_1})
+    real = decompress._verify_all
+
+    def verify_then_replace(items, dats, client, report):
+        real(items, dats, client, report)
+        source.unlink()
+        source.write_bytes(b"a different download, same name")
+
+    monkeypatch.setattr(decompress, "_verify_all", verify_then_replace)
+    report = _run(tmp_path, dats=dats, delete_originals=True)
+
+    item = _items(report)["Game.zip"]
+    assert source.read_bytes() == b"a different download, same name"
+    assert not item.deleted and "changed since it was extracted" in item.error
+
+
+def test_the_first_rar_volume_is_deleted_last(tmp_path):
+    item = decompress.DecompressItem(
+        source=str(tmp_path / "Game.part1.rar"),
+        volumes=[str(tmp_path / f"Game.part{i}.rar") for i in (1, 2, 3)])
+    order = [p.name for p in decompress._originals(item)]
+    assert order == ["Game.part2.rar", "Game.part3.rar", "Game.part1.rar"]
+
+
+def test_one_zip_reader_serves_the_whole_extraction(tmp_path, monkeypatch):
+    archive = _zip(tmp_path / "Set.zip", {f"{i}.bin": b"x" * 10 for i in range(20)})
+    opened = []
+    real = zipfile.ZipFile
+
+    class Counting(real):
+        def __init__(self, *a, **k):
+            opened.append(a[0])
+            super().__init__(*a, **k)
+
+    monkeypatch.setattr(library.zipfile, "ZipFile", Counting)
+    source = library.open_archive(archive)
+    try:
+        for name in source.names():
+            source.copy(name, tmp_path / f"out-{name}")
+    finally:
+        source.close()
+    assert len(opened) == 1

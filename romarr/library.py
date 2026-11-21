@@ -379,23 +379,38 @@ class _ZipSource(_Source):
         self.prefer_hardlinks = False
         self.last_transfer = ("copy", "")
         self.transfers = {}
+        self._archive = None
+
+    def _zip(self) -> zipfile.ZipFile:
+        # One reader for the whole source: opening a ZipFile re-parses the
+        # central directory, so an open per member made a large archive cost
+        # (members x entries). Released by close().
+        if self._archive is None:
+            self._archive = zipfile.ZipFile(self.path)
+        return self._archive
+
+    def close(self) -> None:
+        archive, self._archive = self._archive, None
+        if archive is not None:
+            archive.close()
 
     def names(self):
-        with zipfile.ZipFile(self.path) as archive:
-            return safe_members(archive, self.path.parent)
+        return safe_members(self._zip(), self.path.parent)
+
+    def all_member_names(self) -> list[str]:
+        """Every file entry, including any `names()` refuses as unsafe."""
+        return [n for n in self._zip().namelist() if not n.endswith("/")]
 
     def read(self, name):
-        with zipfile.ZipFile(self.path) as archive:
-            return archive.read(name)
+        return self._zip().read(name)
 
     def copy(self, name, destination):
-        with zipfile.ZipFile(self.path) as archive, \
-                archive.open(name) as src, open(destination, "wb") as dst:
+        with self._zip().open(name) as src, open(destination, "wb") as dst:
             shutil.copyfileobj(src, dst)
 
     def hash(self, name, suffix=""):
         """Hash one member as it decompresses, a chunk at a time."""
-        with zipfile.ZipFile(self.path) as archive, archive.open(name) as src:
+        with self._zip().open(name) as src:
             return hash_stream(src, suffix=suffix)
 
 

@@ -1680,6 +1680,10 @@ RENDER.hub=async()=>{
       // is gone and a newer one may hold unsaved input, so leave it alone.
       const formCurrent=()=>isCurrentHub(opVer)&&!!cmF&&cmF.isConnected;
       const btn=cmF?cmF.querySelector('button[type="submit"]'):null;
+      // The fields stay locked until the save and refresh finish, so nothing
+      // typed meanwhile is lost to the re-render.
+      const fields=cmF?[...cmF.querySelectorAll('input')]:[];
+      fields.forEach(f=>f.disabled=true);
       if(btn)btn.disabled=true; if(cmClear)cmClear.disabled=true;
       try{
         try{
@@ -1701,12 +1705,17 @@ RENDER.hub=async()=>{
         if(!formCurrent()) return;
         render(nextData);
       }finally{
-        if(isCurrentHub(opVer)){if(btn)btn.disabled=false; if(cmClear)cmClear.disabled=false;}
+        if(isCurrentHub(opVer)){fields.forEach(f=>f.disabled=false); if(btn)btn.disabled=false; if(cmClear)cmClear.disabled=false;}
       }
     };
     if(cmF) cmF.onsubmit=async e=>{
       e.preventDefault();
-      const payload={url:$('#cm-url').value.trim()};
+      // Send the address only when it was edited: a key-only save must not
+      // clear a saved URL the card is not showing. Emptying the field still
+      // clears it.
+      const urlField=$('#cm-url');
+      const payload={};
+      if(urlField&&urlField.value.trim()!==urlField.defaultValue.trim())payload.url=urlField.value.trim();
       const key=$('#cm-key').value;
       if(key)payload.api_key=key;
       await submitCm(payload,'Compressatorium settings saved');
@@ -7156,11 +7165,13 @@ RENDER.tasks=async()=>{
     :s%60===0?`every ${s/60} min`:`every ${s} s`;
   const scheduled=(d.items||[]).map(t=>[t.name,t.label,t]);
   const manualOnly=[['RefreshLibrary','Re-read the library from RomM',null],
-    ['Decompress','Batch decompress the library: CHD, RVZ, NSZ and the other '
-     +'compressed images go to Compressatorium (COMPRESSATORIUM_URL); RAR sets '
-     +'and multi-file archives are extracted by ROMarr itself. Every output is '
-     +'verified against the DATs. Originals are deleted only when they verified '
-     +'AND the API call asked for deletion — this button never deletes. Needs '
+    ['Decompress','Preview batch decompression: Run lists what would happen to each '
+     +'file and changes nothing. A real run is started through the API '
+     +'(POST /api/v1/decompress): CHD, RVZ, NSZ and the other compressed images go '
+     +'to Compressatorium, set by COMPRESSATORIUM_URL or the Compressatorium plugin '
+     +'on the ROM Hub page, and RAR sets and multi-file archives are extracted by '
+     +'ROMarr itself. Every output is verified against the DATs, and originals are '
+     +'deleted only when they verified and the API call asked for it. Needs '
      +'decompress_path set in settings.',null]];
   $('#page').innerHTML=`<div class="card"><h3>Tasks</h3>
     <p class="help">The service runs these on its own clock &mdash; intervals live
