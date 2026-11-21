@@ -91,7 +91,7 @@ from .capture import status as capture_status
 from .catalogue import (Submission, check_source, facets as hub_facets,
                         search as hub_search, submission_link)
 from .frontends import FORMATS as FRONTEND_FORMATS
-from .metadata import PROVIDERS as METADATA_PROVIDERS
+from .metadata import PROVIDERS as METADATA_PROVIDERS, SECRET_FIELDS as METADATA_SECRET_FIELDS
 from .notify import (NOTIFIERS, Message, Notifier, failed, grabbed, imported,
                      FIELD_HELP, FIELD_LABELS, send_test,
                      update_available)
@@ -181,7 +181,7 @@ SECRET_MASK = "********"
 #: providers and connections are also served by dedicated endpoints that mask
 #: the same names; import lists use LIST_SECRETS above.
 MASKED_ITEM_FIELDS = {
-    "metadata_providers": ("api_key", "token", "client_id", "client_secret"),
+    "metadata_providers": METADATA_SECRET_FIELDS,
     "connections": ("url", "urls", "token", "password", "key", "secret"),
     "import_lists": LIST_SECRETS,
 }
@@ -10163,7 +10163,7 @@ def make_handler(service: ROMarr):
                 return self._json(200, openapi_spec(VERSION))
             if route.path == "/api/v1/metadataprovider":
                 from .metadata import PROVIDERS as _MP
-                secrets = {"api_key", "token", "client_id"}
+                secrets = set(METADATA_SECRET_FIELDS)
                 with service._metadata_lock:
                     providers = service.store.list_items("metadata_providers")
                     revision = service.metadata_revision
@@ -10828,7 +10828,7 @@ def make_handler(service: ROMarr):
                     str(body.get("platform") or ""),
                     force=bool(body.get("force"))))
             if route.path == "/api/v1/metadataprovider":
-                secrets = {"api_key", "token", "client_id"}
+                secrets = set(METADATA_SECRET_FIELDS)
                 if not isinstance(body, dict):
                     return self._json(400, {"error": "invalid provider configuration"})
                 with service._metadata_lock:
@@ -10911,14 +10911,16 @@ def make_handler(service: ROMarr):
                 if cfg.get("id"):
                     old_cfg = service.store.get_item("metadata_providers",
                                                      str(cfg["id"])) or {}
-                    for key in ("api_key", "token", "client_id"):
+                    for key in METADATA_SECRET_FIELDS:
                         # Absent as well as masked, so testing a saved
                         # provider by id alone reports on the credential
                         # that is stored rather than on an empty one.
                         if cfg.get(key, "") in ("********", ""):
                             cfg[key] = old_cfg.get(key, "")
                 try:
-                    info = spec["lookup"](cfg, "Chrono Trigger")
+                    info = (spec["lookup"](cfg, "Chrono Trigger", {"platform": "snes"})
+                            if spec.get("context") else
+                            spec["lookup"](cfg, "Chrono Trigger"))
                 except Exception as exc:
                     return self._json(200, {
                         "ok": False,

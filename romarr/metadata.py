@@ -128,6 +128,22 @@ def lookup_key(verification=None, filename: str = "") -> tuple[str, str]:
     return cleaned, "filename" if cleaned else ""
 
 
+def lookup_context(verification=None, filename: str = "", platform: str = "") -> dict:
+    """What a hash-aware provider may use: a verified dump's hashes, the
+    file's name and the platform. Hashes are only passed for a verified
+    match, because an unverified file's DAT entry is not its own."""
+    context = {"filename": str(filename or ""), "platform": str(platform or "")}
+    rom = getattr(verification, "rom", None)
+    if getattr(verification, "status", "") == "verified" and rom is not None:
+        for key in ("crc", "md5", "sha1"):
+            value = str(getattr(rom, key, "") or "")
+            if value:
+                context[key] = value
+        if not context["filename"] and getattr(rom, "name", ""):
+            context["filename"] = str(rom.name)
+    return context
+
+
 # --- providers --------------------------------------------------------------
 
 def _get_json(url: str, headers: dict | None = None):
@@ -526,22 +542,25 @@ PROVIDERS: dict[str, dict] = {
 }
 
 
+#: Provider fields that are credentials: masked in every response, kept when
+#: an editor sends the mask back.
+SECRET_FIELDS = ("api_key", "token", "client_id", "client_secret",
+                 "dev_password", "password")
+
+
+# ScreenScraper and SteamGridDB live in their own module (ported from
+# RetroArr) and add themselves to PROVIDERS when it loads; importing it here
+# makes PROVIDERS complete wherever it is read.
+from . import retro_metadata as _retro_metadata  # noqa: E402,F401
+
+
 @dataclass
 class Metadata:
     """Every configured provider, asked in order until one answers."""
 
     providers: list[dict] = field(default_factory=list)
 
-    def identify(self, *, verification=None, filename: str = "") -> GameInfo:
-        """What this file is, named from the strongest key available.
-
-        Never raises and never blocks an import. Metadata is an enhancement;
-        a missing cover must not cost somebody a game.
-        """
-        term, how = lookup_key(verification, filename)
-        if not term:
-            return GameInfo()
-
+    def _enabled(self):
         for cfg in self.providers:
             if not cfg.get("enable", True):
                 continue
@@ -549,15 +568,55 @@ class Metadata:
             if spec is None:
                 log.warning("unknown metadata provider %r", cfg.get("type"))
                 continue
-            try:
-                info = spec["lookup"](cfg, term)
-            except Exception as exc:
-                log.warning("metadata provider %r raised: %s",
-                            cfg.get("type"), exc)
+            yield cfg, spec
+
+    @staticmethod
+    def _ask(spec: dict, cfg: dict, term: str, context: dict) -> GameInfo:
+        try:
+            if spec.get("context"):
+                return spec["lookup"](cfg, term, context)
+            return spec["lookup"](cfg, term)
+        except Exception as exc:
+            log.warning("metadata provider %r raised: %s", cfg.get("type"), exc)
+            return GameInfo()
+
+    def identify(self, *, verification=None, filename: str = "",
+                 platform: str = "") -> GameInfo:
+        """What this file is, named from the strongest key available.
+
+        Never raises and never blocks an import. Metadata is an enhancement;
+        a missing cover must not cost somebody a game.
+
+        Providers that can look a file up by hash (ScreenScraper) get the
+        verified dump's hashes; artwork-only providers (SteamGridDB) are not
+        asked to name a game, only to fill in a missing cover afterwards.
+        """
+        term, how = lookup_key(verification, filename)
+        if not term:
+            return GameInfo()
+        context = lookup_context(verification, filename, platform)
+
+        for cfg, spec in self._enabled():
+            if spec.get("artwork"):
                 continue
+            info = self._ask(spec, cfg, term, context)
             if info.found:
+                if not info.cover_url:
+                    cover = self.artwork(info.title or term)
+                    if cover:
+                        info = GameInfo(**{**info.__dict__, "cover_url": cover})
                 return GameInfo(**{**info.__dict__, "matched_by": how})
         return GameInfo(matched_by=how)
+
+    def artwork(self, title: str) -> str:
+        """A cover for `title` from the artwork-only providers, or ""."""
+        for cfg, spec in self._enabled():
+            if not spec.get("artwork"):
+                continue
+            info = self._ask(spec, cfg, title, {})
+            if info.cover_url:
+                return info.cover_url
+        return ""
 
 
 # --- release calendar -------------------------------------------------------
