@@ -370,3 +370,58 @@ def test_a_real_split_rar_set_extracts_with_7zip(tmp_path):
     assert item.status == "deleted", item
     assert (tmp_path / "Game (USA).iso").read_bytes() == DATA
     assert not any(v.exists() for v in volumes)
+
+
+# --- review fixes (#232) ---------------------------------------------------
+
+def _corrupt_member(path: Path) -> None:
+    """Break the compressed bytes of a ZIP's only member, keeping its directory."""
+    data = bytearray(path.read_bytes())
+    start = 30 + int.from_bytes(data[26:28], "little") + int.from_bytes(data[28:30], "little")
+    for i in range(start + 2, min(start + 400, len(data) - 100)):
+        data[i] ^= 0x5A
+    path.write_bytes(bytes(data))
+
+
+def test_a_corrupt_member_fails_only_its_own_archive(tmp_path):
+    good = _zip(tmp_path / "Good.zip", {"Good (USA).iso": DISC_1})
+    bad = tmp_path / "Bad.zip"
+    with zipfile.ZipFile(bad, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("Bad (USA).iso", bytes(range(256)) * 4096)
+    _corrupt_member(bad)
+
+    report = _run(tmp_path)
+
+    items = _items(report)
+    assert items["Bad.zip"].status == "failed"
+    assert items["Good.zip"].status == "kept", "the rest of the batch still runs"
+    assert good.exists() and bad.exists()
+
+
+def test_an_unexpected_extraction_error_fails_only_that_item(tmp_path, monkeypatch):
+    _zip(tmp_path / "A.zip", {"A (USA).iso": DISC_1})
+    _zip(tmp_path / "B.zip", {"B (USA).iso": DISC_1})
+    real = decompress_local.extract_archive
+
+    def flaky(source, volumes, root):
+        if Path(source).name == "A.zip":
+            raise KeyError("surprise")
+        return real(source, volumes, root)
+
+    monkeypatch.setattr(decompress_local, "extract_archive", flaky)
+    report = _run(tmp_path)
+
+    items = _items(report)
+    assert items["A.zip"].status == "failed" and "unexpected" in items["A.zip"].error
+    assert items["B.zip"].status == "kept"
+
+
+def test_an_unreachable_service_is_no_error_when_nothing_needed_it(tmp_path, monkeypatch):
+    _zip(tmp_path / "Game.zip", {"Game (USA).iso": DISC_1})
+    client = FakeClient()
+    client.reachable = lambda: False
+
+    report = _run(tmp_path, client=client, monkeypatch=monkeypatch)
+
+    assert _items(report)["Game.zip"].status == "kept"
+    assert report.error == ""

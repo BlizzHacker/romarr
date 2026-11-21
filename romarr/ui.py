@@ -1676,6 +1676,9 @@ RENDER.hub=async()=>{
     const cmClear=$('#cm-clear');
     const submitCm=async(payload,okToast)=>{
       const opVer=typeof pageVersion==='number'?pageVersion:0;
+      // A filter can re-render the Hub while Save is pending; then this form
+      // is gone and a newer one may hold unsaved input, so leave it alone.
+      const formCurrent=()=>isCurrentHub(opVer)&&!!cmF&&cmF.isConnected;
       const btn=cmF?cmF.querySelector('button[type="submit"]'):null;
       if(btn)btn.disabled=true; if(cmClear)cmClear.disabled=true;
       try{
@@ -1684,18 +1687,18 @@ RENDER.hub=async()=>{
             method:'POST',headers:{'Content-Type':'application/json'},
             body:JSON.stringify(payload)});
           const result=await response.json();
-          if(!isCurrentHub(opVer)) return;
+          if(!formCurrent()) return;
           actionError=result.ok?'':(result.error||'Could not save the Compressatorium settings');
           if(result.ok)toast(okToast);
         }catch(e){
-          if(!isCurrentHub(opVer)) return;
+          if(!formCurrent()) return;
           actionError='Could not save the Compressatorium settings';
         }
         const nextHs=await j('/api/v1/hub/status').catch(()=>hs);
-        if(!isCurrentHub(opVer)) return;
+        if(!formCurrent()) return;
         hs=nextHs;
         const nextData=await load();
-        if(!isCurrentHub(opVer)) return;
+        if(!formCurrent()) return;
         render(nextData);
       }finally{
         if(isCurrentHub(opVer)){if(btn)btn.disabled=false; if(cmClear)cmClear.disabled=false;}

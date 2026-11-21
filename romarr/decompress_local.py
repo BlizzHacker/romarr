@@ -33,6 +33,7 @@ import shutil
 import subprocess
 import tempfile
 import zipfile
+import zlib
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 
@@ -48,7 +49,10 @@ _ARCHIVE_ENDINGS = re.compile(
     r"(\.part\d+\.rar|\.rar|\.\d{3}|\.7z|\.zip)$", re.IGNORECASE)
 
 #: Everything opening, listing or reading an archive can raise.
+#: A ZIP with a sound directory can still hold a corrupt (zlib.error) or
+#: truncated (EOFError) member stream; neither is an OSError.
 _ARCHIVE_ERRORS = (OSError, ValueError, RuntimeError, zipfile.BadZipFile,
+                   zlib.error, EOFError,
                    library.MissingArchiveTool, subprocess.SubprocessError)
 
 

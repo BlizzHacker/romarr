@@ -22,6 +22,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
+import tempfile
 import threading
 from pathlib import Path
 from typing import Mapping
@@ -46,6 +48,10 @@ DEFAULT_BUNDLED_DIR = Path("/opt/romarr/bundled-plugins")
 MARKER_NAME = "romarr-preinstalled.json"
 
 _lock = threading.Lock()
+#: Guards the url/api_key pair, so a reader never sees one field from before a
+#: save and the other from after it. Separate from `_lock`, which is held
+#: across the preinstall's git work.
+_config_lock = threading.Lock()
 
 
 def bundled_dir(env: Mapping[str, str] | None = None) -> Path:
@@ -96,7 +102,7 @@ def preinstall(*, home: Path | None = None,
             else:
                 bundled = bundled_dir(env) / SLUG
                 if (bundled / "manifest.toml").is_file():
-                    reg.install(str(bundled))
+                    _install_bundled(reg, bundled, home)
                 else:
                     reg.install(PLUGIN_REPO, ref=PLUGIN_REF)
                 outcome = "installed"
@@ -107,6 +113,21 @@ def preinstall(*, home: Path | None = None,
             return f"failed: {exc}"
     log.info("compressatorium plugin: %s", outcome)
     return outcome
+
+
+def _install_bundled(reg, bundled: Path, home: Path) -> None:
+    """Install the bundled checkout from a copy the runtime user owns.
+
+    The image builds the checkout as root, while ROMarr runs as PUID. Git
+    refuses a local clone from a repository another user owns, so installing
+    straight from the bundled folder failed on every start. A private copy
+    under ROM_HUB_HOME avoids that without loosening git's ownership check.
+    """
+    home.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=".preinstall-", dir=home) as stage:
+        staged = Path(stage) / SLUG
+        shutil.copytree(bundled, staged, symlinks=True)
+        reg.install(str(staged))
 
 
 def preinstall_in_background() -> None:
@@ -147,13 +168,14 @@ def connection(env: Mapping[str, str], *, home: Path | None = None) -> tuple[str
     if url:
         return url, str(env.get("COMPRESSATORIUM_API_KEY") or ""), "env"
     home = Path(home or hub.HOME)
-    plugin = _plugin(home)
-    if plugin is None:
-        return "", "", ""
-    url = str((getattr(plugin, "config", None) or {}).get("url") or "").strip()
-    if not url:
-        return "", "", ""
-    return url, _secret(home, "api_key"), "plugin"
+    with _config_lock:
+        plugin = _plugin(home)
+        if plugin is None:
+            return "", "", ""
+        url = str((getattr(plugin, "config", None) or {}).get("url") or "").strip()
+        if not url:
+            return "", "", ""
+        return url, _secret(home, "api_key"), "plugin"
 
 
 def _valid_url(url: str) -> str:
@@ -188,19 +210,37 @@ def configure(*, url: str | None = None, api_key: str | None = None,
         problem = _valid_url(url) if url else ""
         if problem:
             return {"ok": False, "error": problem}
-        config = dict(getattr(plugin, "config", None) or {})
-        config["url"] = url.rstrip("/")
-        reg.set_config(SLUG, config)
-    if clear_api_key or api_key:
-        try:
-            from rom_hub import secrets
-            store = secrets.open_store(home)
-            if clear_api_key:
-                store.delete(SLUG, "api_key")
-            else:
-                store.set(SLUG, "api_key", str(api_key))
-        except Exception as exc:
-            return {"ok": False, "error": f"could not save the API key: {exc}"}
+    with _config_lock:
+        # The key is saved first and the url only once it is, so a failure
+        # never leaves a new address paired with the old key -- that pairing
+        # would send the old key to a service it was never meant for.
+        store = previous = None
+        if clear_api_key or api_key:
+            try:
+                from rom_hub import secrets
+                store = secrets.open_store(home)
+                previous = store.get(SLUG, "api_key")
+                if clear_api_key:
+                    store.delete(SLUG, "api_key")
+                else:
+                    store.set(SLUG, "api_key", str(api_key))
+            except Exception as exc:
+                return {"ok": False, "error": f"could not save the API key: {exc}"}
+        if url is not None:
+            try:
+                config = dict(getattr(plugin, "config", None) or {})
+                config["url"] = url.rstrip("/")
+                reg.set_config(SLUG, config)
+            except Exception as exc:
+                if store is not None:
+                    try:  # put the old key back with the old address
+                        if previous:
+                            store.set(SLUG, "api_key", str(previous))
+                        else:
+                            store.delete(SLUG, "api_key")
+                    except Exception:
+                        log.warning("could not restore the %s plugin's API key", SLUG)
+                return {"ok": False, "error": f"could not save the url: {exc}"}
     return {"ok": True}
 
 

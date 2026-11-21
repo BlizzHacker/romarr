@@ -252,3 +252,70 @@ def test_an_installed_plugin_missing_from_the_catalogue_still_gets_a_card(home, 
     assert [(i["slug"], i["installed"], i["enabled"]) for i in items] == [
         (cp.SLUG, True, True)]
     assert items[0]["capabilities"] == ["cores"]
+
+
+# --- review fixes (#232) ---------------------------------------------------
+
+def test_the_bundled_checkout_is_installed_from_a_private_copy(home, bundled, monkeypatch):
+    # The image builds the checkout as root and ROMarr runs as PUID; git
+    # refuses to clone a repository another user owns, so ROMarr installs
+    # from a copy it owns instead.
+    seen = []
+    real = _registry.Registry.install
+
+    def spy(self, source, *a, **k):
+        seen.append(source)
+        return real(self, source, *a, **k)
+
+    monkeypatch.setattr(_registry.Registry, "install", spy)
+    assert cp.preinstall(home=home, env={"ROMARR_BUNDLED_PLUGINS": str(bundled)}) == "installed"
+    assert len(seen) == 1
+    assert seen[0] != str(bundled / cp.SLUG)
+    assert seen[0].startswith(str(home))
+    assert not list(home.glob(".preinstall-*")), "the staging copy is removed"
+
+
+class _FailingStore:
+    def __init__(self, real, fail):
+        self.real, self.fail = real, fail
+
+    def get(self, *a):
+        return self.real.get(*a)
+
+    def set(self, *a):
+        if "set" in self.fail:
+            raise OSError("keyring locked")
+        return self.real.set(*a)
+
+    def delete(self, *a):
+        return self.real.delete(*a)
+
+
+def test_a_failed_key_save_keeps_the_previous_address(home, bundled, monkeypatch):
+    cp.preinstall(home=home, env={"ROMARR_BUNDLED_PLUGINS": str(bundled)})
+    cp.configure(url="http://a:8080", api_key="key-a", home=home)
+    real_open = _secrets.open_store
+    monkeypatch.setattr(_secrets, "open_store", lambda h: _FailingStore(real_open(h), {"set"}))
+
+    result = cp.configure(url="http://b:8080", api_key="key-b", home=home)
+
+    assert not result["ok"]
+    monkeypatch.setattr(_secrets, "open_store", real_open)
+    assert cp.connection({}, home=home) == ("http://a:8080", "key-a", "plugin")
+
+
+def test_a_failed_address_save_restores_the_previous_key(home, bundled, monkeypatch):
+    cp.preinstall(home=home, env={"ROMARR_BUNDLED_PLUGINS": str(bundled)})
+    cp.configure(url="http://a:8080", api_key="key-a", home=home)
+
+    def broken(self, slug, config):
+        raise OSError("state.json is read-only")
+
+    monkeypatch.setattr(_registry.Registry, "set_config", broken)
+    result = cp.configure(url="http://b:8080", api_key="key-b", home=home)
+
+    assert not result["ok"]
+    monkeypatch.undo()
+    monkeypatch.setattr(hub, "available", lambda: True)
+    monkeypatch.setenv("ROM_HUB_SECRET_STORE", "file")
+    assert cp.connection({}, home=home) == ("http://a:8080", "key-a", "plugin")

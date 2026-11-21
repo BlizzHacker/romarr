@@ -370,9 +370,13 @@ def _connect(url: str, api_key: str, service_items: list[DecompressItem],
     client = CompressatoriumClient(CompressatoriumConfig(
         base_url=url, api_key=api_key))
     if not client.reachable():
-        report.error = f"compressatorium at {url} is not reachable"
+        reason = f"compressatorium at {url} is not reachable"
+        # `error` explains skipped work; with nothing for the service, the
+        # local extractions are the whole run and it did not fail.
+        if service_items:
+            report.error = reason
         for item in service_items:
-            _skip(item, report, report.error)
+            _skip(item, report, reason)
         return None
     return client
 
@@ -470,7 +474,11 @@ def _run_local(items: list[DecompressItem], output_dir: str | Path | None,
         source = Path(item.source)
         volumes = [Path(v) for v in item.volumes] or None
         root = Path(output_dir) if output_dir else source.parent
-        result = decompress_local.extract_archive(source, volumes, root)
+        try:
+            result = decompress_local.extract_archive(source, volumes, root)
+        except Exception as exc:  # one bad archive must not end the batch
+            log.exception("decompress: unexpected error extracting %s", source.name)
+            result = decompress_local.LocalExtraction(error=f"unexpected error: {exc}")
         if result.error:
             item.status = "failed"
             item.error = result.error
