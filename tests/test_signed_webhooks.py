@@ -39,13 +39,13 @@ def test_a_secret_signs_the_raw_body_with_the_timestamp(wire):
     Notifier([hook(secret=secret)]).send(Message(ON_GRAB, "Grabbed Chrono Trigger"))
     sent = calls[0]
     headers = sent["headers"]
-    stamp = headers["X-Romarr-Timestamp"]
+    stamp = headers["X-ROMarr-Timestamp"]
     expected = hmac.new(secret.encode(), f"{stamp}.".encode() + sent["data"],
                         hashlib.sha256).hexdigest()
-    assert headers["X-Romarr-Signature"] == f"sha256={expected}"
-    assert headers["X-Romarr-Event"] == ON_GRAB
+    assert headers["X-ROMarr-Signature"] == f"sha256={expected}"
+    assert headers["X-ROMarr-Event"] == ON_GRAB
     payload = json.loads(sent["data"])
-    assert payload["id"] == headers["X-Romarr-Delivery"]
+    assert payload["id"] == headers["X-ROMarr-Delivery"]
     assert payload["title"] == "Grabbed Chrono Trigger"
     assert isinstance(payload["createdAt"], int)
 
@@ -53,8 +53,8 @@ def test_a_secret_signs_the_raw_body_with_the_timestamp(wire):
 def test_without_a_secret_nothing_is_signed(wire):
     calls, _ = wire
     Notifier([hook()]).send(Message(ON_GRAB, "x"))
-    assert "X-Romarr-Signature" not in calls[0]["headers"]
-    assert calls[0]["headers"]["X-Romarr-Delivery"]
+    assert "X-ROMarr-Signature" not in calls[0]["headers"]
+    assert calls[0]["headers"]["X-ROMarr-Delivery"]
 
 
 def test_busy_receivers_are_retried_with_the_same_delivery_id(wire):
@@ -62,7 +62,7 @@ def test_busy_receivers_are_retried_with_the_same_delivery_id(wire):
     script.extend([503, 429, 200])
     Notifier([hook(secret="k" * 16)]).send(Message(ON_GRAB, "x"))
     assert len(calls) == 3
-    assert len({c["headers"]["X-Romarr-Delivery"] for c in calls}) == 1
+    assert len({c["headers"]["X-ROMarr-Delivery"] for c in calls}) == 1
 
 
 def test_a_refusal_is_final_and_retries_stop_after_three_attempts(wire):

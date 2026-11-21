@@ -198,8 +198,8 @@ def _webhook(cfg: dict, message: Message) -> bool:
     into fields is the thing that makes generic webhooks useless.
 
     With a `secret` the delivery is signed (behaviour learned from Questarr,
-    GPL-3.0; nothing copied): `X-Romarr-Signature` is an HMAC-SHA256 of
-    "<X-Romarr-Timestamp>.<body>". `X-Romarr-Delivery` stays the same on
+    GPL-3.0; nothing copied): `X-ROMarr-Signature` is an HMAC-SHA256 of
+    "<X-ROMarr-Timestamp>.<body>". `X-ROMarr-Delivery` stays the same on
     every attempt, so a receiver can drop a retry it already handled. A
     network error, 408, 429 or 5xx is retried twice in the background.
     """
@@ -217,12 +217,12 @@ def _webhook(cfg: dict, message: Message) -> bool:
     def attempt() -> bool:
         headers = {"Content-Type": "application/json",
                    "User-Agent": "ROMarr (+https://github.com/BlizzHacker/romarr)",
-                   "X-Romarr-Event": message.event,
-                   "X-Romarr-Delivery": delivery}
+                   "X-ROMarr-Event": message.event,
+                   "X-ROMarr-Delivery": delivery}
         if secret:
             stamp = int(time.time())
-            headers["X-Romarr-Timestamp"] = str(stamp)
-            headers["X-Romarr-Signature"] = sign_webhook(secret, stamp, body)
+            headers["X-ROMarr-Timestamp"] = str(stamp)
+            headers["X-ROMarr-Signature"] = sign_webhook(secret, stamp, body)
         return _post(url, data=body, headers=headers)
 
     def retry(remaining: tuple) -> None:
@@ -307,7 +307,7 @@ FIELD_HELP = {
     "user": "Your user key.",
     "urls": "Optional. Apprise URLs to notify, one per line or comma separated.",
     "secret": "Optional, 16 characters or more. Signs every delivery with "
-              "HMAC-SHA256 in the X-Romarr-Signature header.",
+              "HMAC-SHA256 in the X-ROMarr-Signature header.",
 }
 
 NOTIFIERS: dict[str, dict] = {
