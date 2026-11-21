@@ -493,3 +493,13 @@ def test_the_docker_image_bundles_the_pinned_plugin():
     dockerfile = (Path(__file__).resolve().parents[1] / "Dockerfile").read_text("utf-8")
     assert f"ARG MDM_PLUGIN_REF={mp.PLUGIN_REF}" in dockerfile
     assert f"{mp.PLUGIN_REPO} \\\n        /opt/romarr/bundled-plugins/{mp.SLUG};" in dockerfile
+
+
+def test_the_status_route_never_returns_the_token(server):
+    base, _ = server
+    _remote(hub.HOME, token="get-secret")
+
+    code, status = call(base, "/api/v1/hub/mdm")
+
+    assert code == 200 and status["configured"] and status["api_token_set"]
+    assert "get-secret" not in json.dumps(status)

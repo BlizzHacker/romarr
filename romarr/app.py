@@ -10556,6 +10556,8 @@ def make_handler(service: ROMarr):
                 return self._json(200, hub.exo2romm_status())
             if route.path == "/api/v1/hub/compressatorium":
                 return self._json(200, _compressatorium_status(service))
+            if route.path == "/api/v1/hub/mdm":
+                return self._json(200, _mdm_status())
             if route.path == "/api/v1/hub/fleet":
                 return self._json(200, hub.fleet_profiles())
             if route.path == "/api/v1/mcp":
