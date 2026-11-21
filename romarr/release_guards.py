@@ -92,18 +92,37 @@ def _bare_demo_word(title: str) -> str:
     return ""
 
 
-def demo_build(title: str) -> str:
-    """What kind of demo a release title names, or "" when it is not one."""
-    spaced = _spaced(title)
+def _without_file_extension(title: str) -> str:
+    """The title with a terminal ROM, disc or archive extension removed.
+
+    "Super Metroid (USA) Demo.smc" must read as ending in Demo, not in a
+    token "smc" that is not release metadata.
+    """
+    text = str(title or "")
+    head, dot, ext = text.rpartition(".")
+    if dot and head and ("." + ext.lower()) in MEDIA_EXTENSIONS:
+        return head
+    return text
+
+
+def _demo_kind(title: str) -> tuple[str, bool]:
+    """(kind, explicit): what demo a title names, and whether a tag or phrase
+    said so outright rather than a bare word that may belong to the name."""
+    spaced = _spaced(_without_file_extension(title))
     if not spaced:
-        return ""
+        return "", False
     tag = _DEMO_TAG.search(spaced)
     if tag:
-        return tag.group(0).strip("()[]").strip().lower()
+        return tag.group(0).strip("()[]").strip().lower(), True
     phrase = _DEMO_PHRASES.search(spaced)
     if phrase:
-        return phrase.group(0).strip(" ([-").lower()
-    return _bare_demo_word(spaced)
+        return phrase.group(0).strip(" ([-").lower(), True
+    return _bare_demo_word(spaced), False
+
+
+def demo_build(title: str) -> str:
+    """What kind of demo a release title names, or "" when it is not one."""
+    return _demo_kind(title)[0]
 
 
 def demo_refusal(title: str, wanted: str = "") -> str:
@@ -112,13 +131,14 @@ def demo_refusal(title: str, wanted: str = "") -> str:
     Somebody who asked for a demo disc by name gets it: when the wanted title
     reads as a demo too, the release is not refused for being one.
     """
-    kind = demo_build(title)
+    kind, explicit = _demo_kind(title)
     if not kind or (wanted and demo_build(wanted)):
         return ""
     # "TRIAL.OF.MANA.USA" ends in metadata-looking capitals after TRIAL, and
-    # the word is part of the game's own name. A word the request names is
-    # never the demo marker.
-    if kind in _words(wanted):
+    # the word is part of the game's own name: a bare word the request names
+    # is not the demo marker. An explicit tag is -- "Trial of Mana (Trial)"
+    # is still the trial build.
+    if not explicit and kind in _words(wanted):
         return ""
     return f"a demo, kiosk or trial build ({kind}), not the game"
 

@@ -5906,7 +5906,7 @@ class ROMarr:
                 metadata, snapshot, uuid.uuid4().hex)
             return True
 
-    def identify(self, filename: str = "", verification=None) -> dict:
+    def identify(self, filename: str = "", verification=None, platform: str = "") -> dict:
         """Name a game, and say how confidently.
 
         `matched_by` travels with the answer because "we matched a DAT name"
@@ -5917,7 +5917,7 @@ class ROMarr:
         with self._metadata_lock:
             metadata = self.metadata
         info = metadata.identify(verification=verification,
-                                 filename=filename)
+                                 filename=filename, platform=platform)
         return {
             "found": info.found,
             "title": info.title,
@@ -10225,8 +10225,26 @@ def make_handler(service: ROMarr):
                      "fields": list(spec["fields"]), "help": spec["help"]}
                     for name, spec in METADATA_PROVIDERS.items()]})
             if route.path == "/api/v1/metadata/lookup":
+                # A caller holding a verified dump's hashes (and its DAT name)
+                # passes them, and hash-aware providers such as ScreenScraper
+                # look the file up by hash instead of by name.
+                hashes = {}
+                for name, size in (("crc", 8), ("md5", 32), ("sha1", 40)):
+                    value = (query.get(name, [""])[0] or "").strip().lower()
+                    if value:
+                        if not re.fullmatch(r"[0-9a-f]{%d}" % size, value):
+                            return self._json(400, {"error": f"{name} must be {size} hex characters"})
+                        hashes[name] = value
+                filename = query.get("filename", [""])[0]
+                verification = None
+                if hashes:
+                    from types import SimpleNamespace
+                    verification = SimpleNamespace(
+                        status="verified", game=query.get("dat_name", [""])[0][:300],
+                        rom=SimpleNamespace(name=filename, **{k: hashes.get(k, "") for k in ("crc", "md5", "sha1")}))
                 return self._json(200, service.identify(
-                    filename=query.get("filename", [""])[0]))
+                    filename=filename, verification=verification,
+                    platform=query.get("platform", [""])[0][:64]))
             if route.path == "/api/v1/frontend/formats":
                 return self._json(200, {"formats": [
                     {"name": name, "label": spec["label"],
@@ -10932,6 +10950,11 @@ def make_handler(service: ROMarr):
                         # that is stored rather than on an empty one.
                         if cfg.get(key, "") in ("********", ""):
                             cfg[key] = old_cfg.get(key, "")
+                    # Identity fields that are not secret (ScreenScraper's
+                    # dev_id, a username) come back too when the request left
+                    # them out; a value the form sent is kept as sent.
+                    for key, value in old_cfg.items():
+                        cfg.setdefault(key, value)
                 try:
                     info = (spec["lookup"](cfg, "Chrono Trigger", {"platform": "snes"})
                             if spec.get("context") else
@@ -11326,7 +11349,9 @@ def make_handler(service: ROMarr):
                 if cfg.get("id"):
                     old_cfg = service.store.get_item("connections",
                                                      str(cfg["id"])) or {}
-                    for key in ("url", "token", "password", "key"):
+                    # `secret` too: the GET masks a webhook's signing secret,
+                    # and a test signed with the placeholder fails verification.
+                    for key in ("url", "token", "password", "key", "secret"):
                         if cfg.get(key, "") in ("********", ""):
                             cfg[key] = old_cfg.get(key, "")
                 ok, detail = send_test(cfg)

@@ -135,8 +135,10 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
                                "reason for each score."),
     "/api/v1/indexer/schema": ("GET", "The nine indexer types and their fields."),
     "/api/v1/metadata/schema": ("GET", "Metadata providers and their fields."),
-    "/api/v1/metadata/lookup": ("GET", "Identify a file. Reports matched_by as "
-                                       "'dat' or 'filename'."),
+    "/api/v1/metadata/lookup": ("GET", "Identify a file by ?filename=. Reports matched_by as "
+                                       "'dat' or 'filename'. Pass a verified dump's "
+                                       "crc/md5/sha1 (and dat_name, platform) to let hash-aware "
+                                       "providers such as ScreenScraper look it up by hash."),
     "/api/v1/calendar": ("GET", "Games released recently or due soon, from "
                                 "the first configured metadata provider that "
                                 "can answer a date range (RAWG or IGDB). "

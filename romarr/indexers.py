@@ -746,7 +746,10 @@ class Torznab:
             size=as_int(attr("size")) or as_int(text("size")),
             seeders=as_int(attr("seeders")),
             categories=categories,
-            download_url=_download_link(row, private=self._config.private),
+            # A Usenet release is fetched from its NZB; _download_link prefers
+            # a magnet, which a Usenet client cannot use.
+            download_url=(row["downloadUrl"] if protocol == "usenet"
+                          else _download_link(row, private=self._config.private)),
             protocol=protocol,
             indexer=self._config.name,
             private=self._config.private,
