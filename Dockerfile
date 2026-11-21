@@ -49,6 +49,17 @@ ARG TARGETARCH
 # runtime dependency rather than builder cargo.
 RUN apk add --no-cache su-exec tzdata libarchive-tools libseccomp git
 
+# Plugins ROMarr ships preinstalled (romarr/compressatorium_plugin.py). Each is
+# a git checkout at a pinned tag, because ROM Hub installs plugins from git;
+# ROMarr installs it into ROM_HUB_HOME on first start, with no network.
+# Not on armv7, which has no ROM Hub.
+ARG COMPRESSATORIUM_PLUGIN_REF=v0.1.0
+RUN if [ "$TARGETARCH" != "arm" ]; then \
+      git clone --quiet --depth 1 --branch "$COMPRESSATORIUM_PLUGIN_REF" \
+        https://github.com/BlizzHacker/rom-hub-compressatorium \
+        /opt/romarr/bundled-plugins/compressatorium; \
+    fi
+
 # bsdtar reads one RAR volume at a time, so a release split into
 # .part1.rar/.r00/.001 volumes (the usual shape on usenet) could never import
 # (#224). Alpine has no package that joins split RAR sets -- its 7zip is built

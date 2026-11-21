@@ -6,21 +6,38 @@ and plain 7z/zip archives. ROMarr owns the DAT index and therefore the verdict
 -- "is the decompressed file the published dump" is answered here, not by the
 extractor.
 
-The API contract below is read from the service's own source (app/models.py,
-app/routes/convert.py, app/routes/dat.py at tag v4.5.0-beta-3), not guessed:
+The API contract below was checked against the service's documented routes
+and behaviour at tag v4.5.2. Compressatorium publishes no licence, so ROMarr
+uses it only over HTTP and none of its code is copied here:
 
   * POST   /api/jobs          one job: {file_path, mode, output_dir, ...}
   * POST   /api/jobs/batch    many files, ONE mode per call
   * GET    /api/jobs          list every job
   * GET    /api/jobs/{id}     one job's status
   * DELETE /api/jobs/{id}     cancel a job
-  * POST   /api/dat/match     {path} -> {matched, ...} for one file
-  * GET    /health            unauthenticated liveness
+  * POST   /api/dat/match     {path} -> {matched, game_name, dat_name} for one
+                              file; {matched: false, error} when the match
+                              could not be worked out; 503 when matching left
+                              a process stuck on unresponsive storage
+  * GET    /api/tools         {available: [tool id], unavailable: [tool id]}:
+                              a tool whose prerequisites are missing (nsz
+                              without the operator's prod.keys) is unavailable
+  * GET    /health            unauthenticated liveness, {status, version}
 
 A job is created with a `mode` -- the ConversionMode enum value naming which
 tool runs. There is no "decompress whatever this is" mode, so this module
 maps file extensions to modes itself and groups a batch by mode, because
 /api/jobs/batch takes one mode for every file in the call.
+
+Two modes need more than a suffix to choose:
+
+  * a CHD is decompressed by a different chdman mode per media type, so its
+    header is read (`chd_header`) to choose between extractcd, extractdvd,
+    extracthd, extractld and extractraw;
+  * `romz_extract` takes only a .7z/.zip holding exactly one cartridge ROM
+    (OS clutter such as `__MACOSX/` aside). Any other archive -- a zipped
+    cue/bin, a multi-file set, a split RAR -- has no Compressatorium mode, and
+    `decompress` extracts it with ROMarr's own archive readers instead.
 
 Auth, when the service enables it, accepts a bearer token; the header name
 is `Authorization: Bearer <token>` (the service also reads
@@ -32,9 +49,13 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import requests
+
+from .chd_header import extract_mode_for_chd
+from .library import is_clutter
 
 log = logging.getLogger(__name__)
 
@@ -91,6 +112,51 @@ _MODE_BY_SUFFIX: tuple[tuple[str, str], ...] = (
     (".zip", "romz_extract"),
 )
 
+#: ConversionMode value -> the id of the Compressatorium tool that runs it,
+#: as GET /api/tools names tools. A mode whose tool the service reports
+#: unavailable is not submitted: the job could only fail.
+TOOL_BY_MODE: dict[str, str] = {
+    "nkit_restore": "nkit",
+    "z3ds_decompress": "z3ds",
+    "nsz_decompress": "nsz",
+    "cso_decompress": "cso",
+    "jwud_decompress": "jwud",
+    "dolphin_iso": "dolphin",
+    "extractcd": "chdman",
+    "extractdvd": "chdman",
+    "extracthd": "chdman",
+    "extractld": "chdman",
+    "extractraw": "chdman",
+    "romz_extract": "romz",
+}
+
+#: Why a tool may be unavailable, for the ones whose reason is known.
+UNAVAILABLE_REASON: dict[str, str] = {
+    "nsz": "it needs the operator's prod.keys mounted into the container",
+}
+
+#: Member suffixes `romz_extract` accepts as "one cartridge ROM". It is a
+#: cartridge-archive tool: a disc image, a cue/bin pair or a Switch package
+#: inside a .7z is not its job, and the service refuses it.
+ROMZ_ROM_SUFFIXES: frozenset[str] = frozenset({
+    ".gb", ".gbc", ".gba", ".nds",
+    ".nes", ".sfc", ".smc", ".z64", ".n64", ".v64",
+    ".sms", ".md", ".gen", ".smd", ".gg",
+    ".vb", ".ws", ".wsc", ".ngp", ".ngc", ".lnx",
+    ".d64", ".t64", ".prg", ".a26", ".a78",
+})
+
+def romz_accepts(members: list[str]) -> bool:
+    """Whether `romz_extract` takes an archive holding `members`.
+
+    Exactly one member once clutter is set aside, and it is a cartridge ROM.
+    """
+    payload = [m for m in members if not is_clutter(m)]
+    return (len(payload) == 1
+            and PurePosixPath(payload[0].replace("\\", "/")).suffix.lower()
+            in ROMZ_ROM_SUFFIXES)
+
+
 #: Statuses the service reports on a ConversionJob.
 QUEUED = "queued"
 PROCESSING = "processing"
@@ -113,6 +179,19 @@ def mode_for(filename: str) -> str:
         if lowered.endswith(suffix):
             return mode
     return ""
+
+
+def mode_for_file(path: str | Path) -> str:
+    """`mode_for`, refined by reading the file where the suffix is not enough.
+
+    A CHD's header names its media, and chdman needs the matching extract
+    mode: `extractcd` on a DVD CHD fails. Every other format is decided by
+    its suffix alone.
+    """
+    mode = mode_for(Path(path).name)
+    if mode == "extractcd":
+        return extract_mode_for_chd(path)
+    return mode
 
 
 # ------------------------------------------------------------- results --
@@ -148,6 +227,10 @@ class MatchResult:
     game: str = ""
     dat: str = ""
     detail: str = ""
+    #: Set when the service could not work out a match at all (a stuck hash
+    #: helper, an unreadable embedded hash). That is not "unknown to the
+    #: DATs", and the batch must not report it as if it were.
+    error: str = ""
 
 
 # -------------------------------------------------------------- client --
@@ -215,6 +298,35 @@ class CompressatoriumClient:
             return {"ok": False, "error": str(err)}
         except ValueError:
             return {"ok": False, "error": "invalid response"}
+
+    def available_tools(self) -> frozenset[str] | None:
+        """The tool ids the service says it can run now, or None if unknown.
+
+        None means "do not gate": the route is missing (a release older than
+        /api/tools), refused, or unreachable. Gating on a guess would skip
+        work the service could have done; submitting anyway lets the service
+        give its own answer per job, as it did before this was asked.
+        """
+        if not self.configured:
+            return None
+        try:
+            response = self._session.get(
+                self._url("/api/tools"), headers=self._headers(),
+                timeout=self._config.health_timeout)
+        except requests.RequestException as err:
+            log.warning("compressatorium tool list failed: %s",
+                        err.__class__.__name__)
+            return None
+        if not response.ok:
+            return None
+        try:
+            payload = response.json()
+        except ValueError:
+            return None
+        available = payload.get("available") if isinstance(payload, dict) else None
+        if not isinstance(available, list):
+            return None
+        return frozenset(str(tool) for tool in available)
 
     # ------------------------------------------------------ job calls --
 
@@ -330,22 +442,23 @@ class CompressatoriumClient:
                 headers=self._headers(), timeout=self._config.timeout)
         except requests.RequestException as err:
             log.warning("compressatorium dat match failed: %s", err)
-            return MatchResult(path=path, detail=str(err))
+            return MatchResult(path=path, error=f"service unreachable: "
+                                                f"{err.__class__.__name__}")
         if not response.ok:
-            return MatchResult(path=path,
-                               detail=f"status {response.status_code}")
+            return MatchResult(path=path, error=_match_refusal(response))
         try:
             payload = response.json()
         except ValueError:
-            return MatchResult(path=path, detail="invalid response")
+            return MatchResult(path=path, error="invalid response")
         if not isinstance(payload, dict):
-            return MatchResult(path=path, detail="unexpected response shape")
+            return MatchResult(path=path, error="unexpected response shape")
         return MatchResult(
             path=path,
             matched=bool(payload.get("matched")),
             game=str(payload.get("game_name") or payload.get("name") or ""),
             dat=str(payload.get("dat_name") or payload.get("dat") or ""),
             detail=str(payload.get("detail") or ""),
+            error=str(payload.get("error") or ""),
         )
 
     # ------------------------------------------------------------ parse --
@@ -378,6 +491,27 @@ class CompressatoriumClient:
 
 
 # --------------------------------------------------------------- helpers --
+
+def _match_refusal(response: requests.Response) -> str:
+    """Why /api/dat/match did not answer, in the service's words when it gave any.
+
+    403 means the path is outside the volumes mounted into the service -- the
+    usual cause is ROMarr and Compressatorium mounting the library at
+    different paths -- and 503 means a hash helper is stuck on storage that
+    stopped answering. Both are reasons to fix something, not verdicts.
+    """
+    detail = ""
+    try:
+        payload = response.json()
+        if isinstance(payload, dict):
+            detail = str(payload.get("detail") or "")
+    except ValueError:
+        detail = ""
+    if response.status_code == 403:
+        detail = detail or "path is outside the service's volumes"
+    return (f"status {response.status_code}: {_truncate(detail, 200)}"
+            if detail else f"status {response.status_code}")
+
 
 def _truncate(text: str, limit: int) -> str:
     """A response body, shortened so a log line stays readable."""

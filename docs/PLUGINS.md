@@ -14,6 +14,8 @@
 | Native Windows app | The Windows ZIP includes ROM Hub. Linux seccomp confinement is unavailable on Windows. |
 | Windows source helper | ROM Hub is optional. The PowerShell helper installs ROMarr's base requirements; see the command below for the additional host package. |
 
+One plugin comes preinstalled: **Compressatorium** ([rom-hub-compressatorium](https://github.com/BlizzHacker/rom-hub-compressatorium)), which holds the address of a [Compressatorium](https://github.com/pacnpal/compressatorium) container for batch decompression (see [Features](FEATURES.md#batch-decompression)). ROMarr installs it once, the first time it starts with ROM Hub available: from a copy bundled in the Docker image, otherwise from GitHub. If you disable it, it stays disabled.
+
 The top of the Plugins page reports whether plugins can run confined on your host. Installing a plugin runs third-party code with access available to the ROMarr process, so read its repository and install sources you trust.
 
 ## Install and use a searchable plugin

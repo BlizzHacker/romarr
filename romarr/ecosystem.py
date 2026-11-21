@@ -75,6 +75,15 @@ ECOSYSTEM: dict[str, list[Project]] = {
             repo="https://github.com/derkommutator/eXo2romm",
             site="https://github.com/BlizzHacker/rom-hub-exo2romm",
             tab="acquisition"),
+        Project(
+            "Compressatorium",
+            "pacnpal's self-hosted converter for CHD, RVZ, Z3DS, NSZ, CSO and "
+            "more. ROMarr's batch decompression sends it disc images and "
+            "verifies every output against your DATs; the preinstalled "
+            "Compressatorium plugin holds its address.",
+            repo="https://github.com/pacnpal/compressatorium",
+            site="https://github.com/BlizzHacker/rom-hub-compressatorium",
+            tab="acquisition"),
     ],
     "First-party apps — maintained by the RomM team": [
         Project(

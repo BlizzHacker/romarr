@@ -18,6 +18,7 @@ from .tar_archive import TAR_SUFFIXES, TarSource, is_tar_name
 from .switch_attach import ATTACH_PLATFORMS, attach_dir as switch_attach_dir, is_real_directory_chain
 from . import game_packages
 
+import contextlib
 import json
 import logging
 import errno
@@ -33,7 +34,7 @@ import zipfile
 from contextlib import ExitStack
 from dataclasses import dataclass, field
 from functools import lru_cache
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from .dat import BAD_DUMP, UNKNOWN, VERIFIED, Match, hash_bytes, hash_stream
 from .platforms import Platform, resolve, romm_fs_slug
@@ -291,6 +292,23 @@ def is_safe_name(name: str, root: Path) -> bool:
     return (root_resolved / name).resolve().is_relative_to(root_resolved)
 
 
+#: File and folder names archivers and NAS boxes leave beside the payload.
+#: They are not part of a game and do not make an archive multi-file.
+_CLUTTER_NAMES = frozenset({
+    "__macosx", ".ds_store", "thumbs.db", "desktop.ini", "@eadir",
+    ".@__thumb", "#recycle", ".appledouble",
+})
+
+
+def is_clutter(member: str) -> bool:
+    """Whether an archive member is OS/NAS clutter rather than game data."""
+    for part in PurePosixPath(str(member).replace("\\", "/")).parts:
+        lowered = part.lower()
+        if lowered in _CLUTTER_NAMES or lowered.startswith("._"):
+            return True
+    return False
+
+
 def safe_members(archive: zipfile.ZipFile, root: Path) -> list[str]:
     """Archive entries that stay inside `root` when extracted.
 
@@ -322,6 +340,14 @@ class _Source:
     def close(self) -> None:
         """Release temporary archive state when this source owns any."""
         return None
+
+    @contextlib.contextmanager
+    def session(self):
+        """Keep this source's reader open for a run of operations.
+
+        A no-op by default; a ZIP reuses one reader inside a session.
+        """
+        yield self
 
     def names(self) -> list[str]:
         raise NotImplementedError
@@ -362,23 +388,61 @@ class _ZipSource(_Source):
         self.prefer_hardlinks = False
         self.last_transfer = ("copy", "")
         self.transfers = {}
+        self._archive = None
+        self._sessions = 0
+
+    @contextlib.contextmanager
+    def session(self):
+        # Inside a session one reader serves every operation: opening a
+        # ZipFile re-parses the central directory, so an open per member made
+        # extracting a large archive cost (members x entries). Outside one,
+        # each call opens and closes its own reader, so a directory import
+        # holding many sources never holds a file open per archive.
+        self._sessions += 1
+        try:
+            yield self
+        finally:
+            self._sessions -= 1
+            if self._sessions == 0:
+                self.close()
+
+    @contextlib.contextmanager
+    def _reader(self):
+        if self._archive is not None:
+            yield self._archive
+        elif self._sessions:
+            self._archive = zipfile.ZipFile(self.path)
+            yield self._archive
+        else:
+            with zipfile.ZipFile(self.path) as archive:
+                yield archive
+
+    def close(self) -> None:
+        archive, self._archive = self._archive, None
+        if archive is not None:
+            archive.close()
 
     def names(self):
-        with zipfile.ZipFile(self.path) as archive:
+        with self._reader() as archive:
             return safe_members(archive, self.path.parent)
 
+    def all_member_names(self) -> list[str]:
+        """Every file entry, including any `names()` refuses as unsafe."""
+        with self._reader() as archive:
+            return [n for n in archive.namelist() if not n.endswith("/")]
+
     def read(self, name):
-        with zipfile.ZipFile(self.path) as archive:
+        with self._reader() as archive:
             return archive.read(name)
 
     def copy(self, name, destination):
-        with zipfile.ZipFile(self.path) as archive, \
-                archive.open(name) as src, open(destination, "wb") as dst:
+        with self._reader() as archive, archive.open(name) as src, \
+                open(destination, "wb") as dst:
             shutil.copyfileobj(src, dst)
 
     def hash(self, name, suffix=""):
         """Hash one member as it decompresses, a chunk at a time."""
-        with zipfile.ZipFile(self.path) as archive, archive.open(name) as src:
+        with self._reader() as archive, archive.open(name) as src:
             return hash_stream(src, suffix=suffix)
 
 
@@ -1115,6 +1179,23 @@ def _source_for(download: Path, platform: Platform | None = None, *,
     return _PathSource(download, member_paths)
 
 
+def open_archive(first: Path, volumes: list[Path] | None = None) -> _Source:
+    """A reader for one archive file, or for a split RAR set given its volumes.
+
+    One layer only: a zip is read as the zip it is, never unwrapped into the
+    zips inside it, because the batch decompressor writes out what an archive
+    holds rather than choosing ROMs from it. A split RAR set goes to 7-Zip or
+    unar (`_rar_source`); a single archive is opened exactly as the importer
+    opens it (`_source_for`).
+    """
+    if volumes and len(volumes) > 1:
+        return _rar_source(first, list(volumes))
+    if first.suffix.lower() in _STDLIB_ARCHIVES:
+        check_zip_central_directory(first, max_members=MAX_OUTER_ZIP_MEMBERS)
+        return _ZipSource(first)
+    return _source_for(first)
+
+
 def list_candidates(download: Path) -> list[str]:
     """Every file a completed download offers, looking inside an archive if needed."""
     source = _source_for(download)
@@ -1285,7 +1366,7 @@ def platform_dir(library_root: Path, platform: "Platform | str", *,
     return base
 
 
-def _publish_staged(staged: Path, destination: Path, overwrite: bool) -> None:
+def publish_staged(staged: Path, destination: Path, overwrite: bool) -> None:
     """Publish complete bytes; link gives atomic no-clobber on a shared filesystem."""
     if overwrite:
         os.replace(staged, destination)
@@ -1578,7 +1659,7 @@ def _import_rom_from_source(source, candidates, chosen_sets, download, platform,
                         if reason:
                             results.append(ImportResult(False, destination, reason, verification=verdict))
                             continue
-                    _publish_staged(staged, destination, overwrite)
+                    publish_staged(staged, destination, overwrite)
             except (OSError, ValueError, zipfile.BadZipFile, RuntimeError, subprocess.SubprocessError) as exc:
                 results.append(ImportResult(False, destination, f"copy/extraction or publication failed: {exc}"))
                 continue
@@ -1672,7 +1753,7 @@ def _import_rom_from_source(source, candidates, chosen_sets, download, platform,
                 for name in written:
                     final = destination / name
                     final.parent.mkdir(parents=True, exist_ok=True)
-                    _publish_staged(staged_dir / name, final, overwrite)
+                    publish_staged(staged_dir / name, final, overwrite)
         except (OSError, ValueError, zipfile.BadZipFile, RuntimeError, subprocess.SubprocessError) as exc:
             results.append(ImportResult(False, destination, f"set copy/extraction or publication failed: {exc}; reconcile any completed members before retrying"))
             continue
