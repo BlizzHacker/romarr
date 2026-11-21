@@ -2306,11 +2306,14 @@ RENDER.missing=async()=>{
       <span style="color:var(--dim);font-size:12.5px">
         ${d.items.length} game(s) requested but not yet imported</span></div>
     ${d.items.length?`<div class="tablewrap"><table><thead><tr><th>Game</th><th>Platform</th>
-      <th>Monitored</th><th>Added</th><th>Attempts</th><th>Last error</th><th></th></tr></thead><tbody>
+      <th>Monitored</th><th>Group</th><th>Added</th><th>Attempts</th><th>Last error</th><th></th></tr></thead><tbody>
       ${d.items.map(w=>`<tr${w.monitored===false?' style="opacity:.62"':''}><td><a href="${esc(gameHref(w.platform,'',w.game))}">${esc(w.game)}</a></td><td>${esc(w.platform||'—')}</td>
         <td><button class="mini" data-mon-game="${esc(w.game)}" data-mon-platform="${esc(w.platform)}"
           data-mon="${w.monitored===false?'0':'1'}" aria-pressed="${w.monitored!==false}"
           title="Monitored games are searched by the sweep and watched in RSS">${w.monitored===false?'Off':'On'}</button></td>
+        <td><button class="mini" data-group-game="${esc(w.game)}" data-group-platform="${esc(w.platform)}"
+          data-group="${esc(w.preferred_group||'')}"
+          title="Favour releases by this group for this game">${esc(w.preferred_group||'Any')}</button></td>
         <td title="${esc(w.added)}">${esc(fmtDate(w.added))}</td><td>${w.attempts}</td>
         <td style="color:var(--dim)">${esc(w.last_error||'—')}</td>
         <td><button class="mini" data-drop-game="${esc(w.game)}"
@@ -2334,6 +2337,15 @@ RENDER.missing=async()=>{
       body:JSON.stringify({game:x.dataset.monGame,platform:x.dataset.monPlatform,monitored:x.dataset.mon!=='1'})});
     if(version!==pageVersion||activePage!=='missing')return;
     if(r.ok) go('missing'); else {x.disabled=false; toast('Could not change monitoring');}
+  });
+  $('#page').querySelectorAll('button[data-group-game]').forEach(x=>x.onclick=async()=>{
+    const typed=prompt(`Release group to favour for "${x.dataset.groupGame}" (empty for any):`,x.dataset.group||'');
+    if(typed===null)return;
+    x.disabled=true;
+    const r=await j('/api/v1/wanted/preferred-group',{method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({game:x.dataset.groupGame,platform:x.dataset.groupPlatform,group:typed})});
+    if(version!==pageVersion||activePage!=='missing')return;
+    if(r.ok) go('missing'); else {x.disabled=false; toast(r.error||'Could not set the group');}
   });
   // Dropping a request, which Wanted could not do at all: the list was only
   // ever emptied by an import, so a typo went on being searched for forever.

@@ -125,6 +125,9 @@ class WantedItem:
     # platforms whose games have updates and DLC.
     # Empty means the game itself. See game_packages.normalise_parts.
     parts: list[str] = field(default_factory=list)
+    # A release group to favour for this game (RetroArr's per-game preferred
+    # group). Empty means no preference.
+    preferred_group: str = ""
 
 
 @dataclass
@@ -586,6 +589,29 @@ class Store:
             else:
                 item.parts = stored
         self.save()
+
+    def set_preferred_group(self, game: str, platform: str, group: str) -> bool:
+        """Favour releases by `group` for one Wanted entry; "" clears it.
+
+        False if the entry is not on Wanted.
+        """
+        with self._lock:
+            for item in self.wanted:
+                if item.game.lower() == game.lower() and item.platform == platform:
+                    item.preferred_group = group
+                    break
+            else:
+                return False
+        self.save()
+        return True
+
+    def preferred_group(self, game: str, platform: str) -> str:
+        """The release group a Wanted entry favours, or ""."""
+        with self._lock:
+            for item in self.wanted:
+                if item.game.lower() == game.lower() and item.platform == platform:
+                    return item.preferred_group or ""
+        return ""
 
     def set_monitored(self, game: str, platform: str, monitored: bool) -> bool:
         """Turn watching on or off for one Wanted entry; False if it is not there."""

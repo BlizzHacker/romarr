@@ -319,6 +319,42 @@ _CREDITED_TO_A_GROUP = re.compile(r"\bby\s+\S")
 # though at -150 it will usually fall below the zero floor best_release applies.
 _TRANSLATION_PENALTY = 150
 _CREDIT_PENALTY = 80
+# A group the operator asked for on this game. As strong as a verified dump:
+# it is the operator's own choice, so it should decide between otherwise equal
+# releases, but it never makes an unusable release usable.
+PREFERRED_GROUP_BONUS = 50
+PREFERRED_GROUP_MAX = 100
+
+
+def clean_group_name(raw) -> str:
+    """A preferred release group as stored: trimmed, one line, at most 100 characters.
+
+    Raises ValueError for anything else, so a bad value is refused rather than
+    silently cut down to something the operator did not type.
+    """
+    if raw is None:
+        return ""
+    if not isinstance(raw, str):
+        raise ValueError("group must be a string")
+    group = raw.strip()
+    if len(group) > PREFERRED_GROUP_MAX:
+        raise ValueError(f"group must be {PREFERRED_GROUP_MAX} characters or fewer")
+    if any(ord(c) < 32 or ord(c) == 127 for c in group):
+        raise ValueError("group must be a single line")
+    return group
+
+
+def names_group(title: str, group: str) -> bool:
+    """True when `title` names `group` as a whole word, ignoring case.
+
+    Whole words, so a preference for "CPY" is not met by "CPYX" and "BAT" is
+    not met by "Batman".
+    """
+    group = (group or "").strip().lower()
+    if not group:
+        return False
+    return re.search(r"(?<![a-z0-9])" + re.escape(group) + r"(?![a-z0-9])",
+                     title.lower()) is not None
 _GOOD_DUMP_BONUS = 50
 # A .nup is a decrypted dump in one file: RomM reads it, but Tinfoil and the
 # console cannot install it. 45 beats the 40-point seeder cap, so an otherwise
@@ -822,7 +858,8 @@ def usenet_age_refusal(release: Release, profile) -> str:
 
 def judge(release: Release, wanted: str,
           platform: Platform | None = None, *,
-          profile=None, blocklist=None, parts=None) -> Judgement:
+          profile=None, blocklist=None, parts=None,
+          preferred_group: str = "") -> Judgement:
     """Rank a release and record why. Higher is better; negative means no.
 
     `profile` and `blocklist` are operator policy and are applied before any
@@ -834,6 +871,10 @@ def judge(release: Release, wanted: str,
     `parts` is what a request wants (base, update, DLC) on a platform whose
     games have updates and DLC; see `game_packages.normalise_parts`.
     Platforms without them ignore it.
+
+    `preferred_group` is the release group the operator favours for this game.
+    A release naming it scores PREFERRED_GROUP_BONUS more and is not docked
+    for being credited to a group. It ranks; it never rescues a refusal.
     """
     content_refusal = collection_content_refusal(release)
     if content_refusal:
@@ -981,7 +1022,8 @@ def judge(release: Release, wanted: str,
     if translated:
         add(-_TRANSLATION_PENALTY, "not English, or a fan translation")
 
-    if _CREDITED_TO_A_GROUP.search(lowered) and not _digital:
+    preferred = names_group(release.title, preferred_group)
+    if _CREDITED_TO_A_GROUP.search(lowered) and not _digital and not preferred:
         # On a cartridge a group credit usually means a hack; on PC it is
         # how every release is signed.
         add(-_CREDIT_PENALTY, "credited to a group, which usually means a hack")
@@ -1213,6 +1255,9 @@ def judge(release: Release, wanted: str,
                                                platform_evidence=has_platform_evidence):
             add(delta, text)
 
+    if preferred:
+        add(PREFERRED_GROUP_BONUS, f"preferred group ({preferred_group.strip()})")
+
     # Last, and never below 1: it ranks a NUP under an equal installable
     # release, but is not on its own the reason a lone NUP is refused. A title
     # tagged "(NUP)" without the extension has no +60 for it to come out of.
@@ -1305,18 +1350,19 @@ def _size_floor(platform: Platform) -> int:
 
 
 def score(release: Release, wanted: str, platform: Platform | None = None,
-          *, profile=None, blocklist=None, parts=None) -> int:
+          *, profile=None, blocklist=None, parts=None, preferred_group: str = "") -> int:
     """Rank a release. Higher is better; negative means "do not take this"."""
     return judge(release, wanted, platform, profile=profile, blocklist=blocklist,
-                 parts=parts).points
+                 parts=parts, preferred_group=preferred_group).points
 
 
 def explain(release: Release, wanted: str,
             platform: Platform | None = None,
-            *, profile=None, blocklist=None, parts=None) -> list[str]:
+            *, profile=None, blocklist=None, parts=None,
+            preferred_group: str = "") -> list[str]:
     """Why this release scored what it did, worst reason first."""
     return judge(release, wanted, platform, profile=profile, blocklist=blocklist,
-                 parts=parts).why()
+                 parts=parts, preferred_group=preferred_group).why()
 
 
 def package_class(release: Release, wanted: str, platform: Platform | None) -> str:
@@ -1328,10 +1374,12 @@ def package_class(release: Release, wanted: str, platform: Platform | None) -> s
 
 def best_release(releases: list[Release], wanted: str,
                  platform: Platform | None = None, *,
-                 profile=None, blocklist=None, parts=None) -> Release | None:
+                 profile=None, blocklist=None, parts=None,
+                 preferred_group: str = "") -> Release | None:
     """The highest-scoring usable release, or None if nothing qualifies."""
     ranked = [(judge(r, wanted, platform, profile=profile,
-                     blocklist=blocklist, parts=parts).points, r) for r in releases]
+                     blocklist=blocklist, parts=parts,
+                     preferred_group=preferred_group).points, r) for r in releases]
     ranked = [(s, r) for s, r in ranked if s > 0]
     if not ranked:
         return None
