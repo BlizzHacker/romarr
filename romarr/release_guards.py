@@ -16,7 +16,9 @@ copied, the rules re-derived and the word lists written for ROM releases):
 
 from __future__ import annotations
 
+import datetime as _dt
 import re
+from email.utils import parsedate_to_datetime
 
 # --- demo, kiosk and trial builds -----------------------------------------
 
@@ -163,3 +165,65 @@ def executable_refusal(title: str, platform_slug: str = "") -> str:
     if last == ".com" or platform_slug in PC_PLATFORM_SLUGS:
         return ""
     return f"the release is an executable ({last}), not a game image"
+
+
+# --- when a release was posted ---------------------------------------------
+
+def published_iso(value) -> str:
+    """An indexer's posting date as ISO-8601 UTC, or "" when unreadable.
+
+    Torznab and Newznab send RFC-822 (`<pubDate>`, `usenetdate`); Prowlarr
+    sends ISO-8601 (`publishDate`). A date with no zone is taken as UTC.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    when = None
+    try:
+        when = _dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        try:
+            when = parsedate_to_datetime(text)
+        except (TypeError, ValueError, IndexError):
+            return ""
+    if when is None:
+        return ""
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=_dt.timezone.utc)
+    return when.astimezone(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def release_age_minutes(published: str, now: _dt.datetime | None = None) -> float | None:
+    """Minutes since `published` (ISO-8601), or None when it is unknown."""
+    if not published:
+        return None
+    try:
+        when = _dt.datetime.fromisoformat(str(published).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=_dt.timezone.utc)
+    now = now or _dt.datetime.now(_dt.timezone.utc)
+    return max(0.0, (now - when).total_seconds() / 60.0)
+
+
+def is_nzb_link(url: str, mime: str = "") -> bool:
+    """Whether an indexer link is an NZB rather than a torrent.
+
+    A Torznab feed can carry Usenet results; the enclosure type says so, and
+    so does a link whose path or query names an `.nzb` file. Sending one of
+    those to a torrent client fails every time.
+    """
+    if "nzb" in str(mime or "").lower():
+        return True
+    from urllib.parse import parse_qsl, urlsplit
+    try:
+        parts = urlsplit(str(url or ""))
+    except ValueError:
+        return False
+    if parts.scheme == "magnet":
+        return False
+    if parts.path.lower().endswith(".nzb"):
+        return True
+    return any(str(v).lower().endswith(".nzb")
+               for _, v in parse_qsl(parts.query, keep_blank_values=True))

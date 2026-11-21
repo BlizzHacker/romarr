@@ -4934,6 +4934,8 @@ RENDER.profiles=async()=>{
       ?rawGlobalMax
       :(rawPlatMax||(platInfo?(rawGlobalMax>0?Math.min(platInfo.max_size_mb,rawGlobalMax):platInfo.max_size_mb):rawGlobalMax));
     const minSeeders=getVal('min_seeders',1);
+    const usenetMinAge=getVal('usenet_minimum_age_minutes',0);
+    const usenetRetention=getVal('usenet_retention_days',0);
     const sizePref=getVal('size_preference','auto');
     const sizeWeight=getVal('size_weight',0);
     const regions=getVal('preferred_regions',['USA','World','Europe','Japan']);
@@ -5014,6 +5016,20 @@ RENDER.profiles=async()=>{
             <input type="number" id="prof-min-seeders" value="${esc(minSeeders)}" placeholder="1">
             <div style="color:var(--dim);font-size:11.5px;margin-top:4px">
               Required seeders on public torrent trackers.
+            </div>
+          </div>
+          <div class="field">
+            <label>Usenet Minimum Age (minutes)</label>
+            <input type="number" min="0" id="prof-usenet-min-age" value="${esc(usenetMinAge)}" placeholder="0">
+            <div style="color:var(--dim);font-size:11.5px;margin-top:4px">
+              Skip posts younger than this, so they can reach your news server first. 0 is off.
+            </div>
+          </div>
+          <div class="field">
+            <label>Usenet Retention (days)</label>
+            <input type="number" min="0" id="prof-usenet-retention" value="${esc(usenetRetention)}" placeholder="0">
+            <div style="color:var(--dim);font-size:11.5px;margin-top:4px">
+              Skip posts older than your news server keeps. 0 is off.
             </div>
           </div>
         </div>
@@ -5134,6 +5150,8 @@ RENDER.profiles=async()=>{
       const inputMaxSz=Number($('#prof-max-size').value)||0;
       const maxSz=(!isGlobal&&!maxSizeDirty&&!rawPlatMax)?0:inputMaxSz;
       const seeders=Number($('#prof-min-seeders').value)||1;
+      const usenetAge=Math.max(0,Math.floor(Number($('#prof-usenet-min-age').value)||0));
+      const usenetKeep=Math.max(0,Math.floor(Number($('#prof-usenet-retention').value)||0));
       const sPref=$('#prof-size-pref').value;
       const sWeight=Number($('#prof-size-weight').value)||0;
       const regList=$('#prof-regions').value.split(',').map(s=>s.trim()).filter(Boolean);
@@ -5172,6 +5190,8 @@ RENDER.profiles=async()=>{
         patch.min_size_mb=minSz;
         patch.max_size_mb=maxSz;
         patch.min_seeders=seeders;
+        patch.usenet_minimum_age_minutes=usenetAge;
+        patch.usenet_retention_days=usenetKeep;
         patch.size_preference=sPref;
         patch.size_weight=sWeight;
         patch.preferred_regions=regList;
@@ -5190,6 +5210,8 @@ RENDER.profiles=async()=>{
           min_size_mb:minSz,
           max_size_mb:maxSz,
           min_seeders:seeders,
+          usenet_minimum_age_minutes:usenetAge,
+          usenet_retention_days:usenetKeep,
           size_preference:sPref,
           size_weight:sWeight,
           preferred_regions:regList,

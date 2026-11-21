@@ -14,7 +14,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 
-from .release_guards import demo_refusal, executable_refusal
+from .release_guards import demo_refusal, executable_refusal, release_age_minutes
 from .platforms import DISC, PLATFORMS, Platform, all_extensions, by_slug, resolve, same_machine
 from .game_packages import (BASE, DLC, PACKAGE_PLATFORMS, UPDATE, describe_parts,
                            PLATFORM_CATEGORIES, extras_are_parts, held_parts, names_platform,
@@ -378,6 +378,9 @@ class Release:
     torrent_file_path: str = ""
     file_selection_required: bool = False
     content_kind: str = ""
+    # When the indexer says the release was posted, as ISO-8601 UTC, or ""
+    # when it did not say. Usenet minimum age and retention read it.
+    published: str = ""
 
 
 def collection_content_kind(path: str) -> str:
@@ -796,6 +799,27 @@ def _package_step(release: Release, wanted: str, platform: Platform,
     return None, reasons, held
 
 
+def usenet_age_refusal(release: Release, profile) -> str:
+    """Why a Usenet post is too young or too old for this profile, or "".
+
+    Minimum age gives a fresh post time to propagate to the news server
+    before a client asks for it; retention skips posts the server has
+    already expired. A post with no date passes both: refusing every
+    undated result would turn a missing field into an empty search.
+    """
+    age = release_age_minutes(release.published)
+    if age is None:
+        return ""
+    minimum = int(getattr(profile, "usenet_minimum_age_minutes", 0) or 0)
+    if minimum > 0 and age < minimum:
+        return (f"posted {int(age)} minutes ago; Usenet minimum age is "
+                f"{minimum} minutes")
+    retention = int(getattr(profile, "usenet_retention_days", 0) or 0)
+    if retention > 0 and age > retention * 1440:
+        return f"older than the {retention}-day Usenet retention"
+    return ""
+
+
 def judge(release: Release, wanted: str,
           platform: Platform | None = None, *,
           profile=None, blocklist=None, parts=None) -> Judgement:
@@ -876,6 +900,10 @@ def judge(release: Release, wanted: str,
             add(-20, "no seeders (private tracker, often temporary)")
         else:
             add(min(release.seeders, 20) * 2, f"{release.seeders} seeders")
+    elif release.protocol == "usenet" and profile is not None:
+        refusal = usenet_age_refusal(release, profile)
+        if refusal:
+            return Judgement(-350, verdict=refusal)
 
     detected_regions = detect_regions(release.title)
     pref_list = getattr(profile, "preferred_regions", None) or ["usa", "world", "europe", "japan"]
