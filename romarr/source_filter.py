@@ -19,9 +19,11 @@ from collections.abc import Iterable
 from . import platforms
 
 #: Category or label words that mean another *arr or a media library owns it.
+#: Every alternative is delimited, so "mylarge-roms" is not Mylar's. ROMarr's
+#: own soundtrack category ("romarr-soundtracks") is audio, not a ROM set.
 _MEDIA_CATEGORY = re.compile(
-    r"radarr|sonarr|lidarr|readarr|whisparr|mylar|"
-    r"(?:^|[^a-z])(?:movies?|films?|tv|series|shows?|music|audio|books?|"
+    r"(?:^|[^a-z])(?:radarr|sonarr|lidarr|readarr|whisparr|mylar|"
+    r"movies?|films?|tv|series|shows?|music|audio|soundtracks?|osts?|books?|"
     r"ebooks?|audiobooks?|anime|xxx|comics?|podcasts?)(?:$|[^a-z])")
 
 #: Category or label words that mean games.
@@ -33,7 +35,7 @@ _VIDEO_NAME = re.compile(
     r"\bs\d{1,2}(?:e\d{1,3})?\b|\bseason[ ._-]?\d+\b|\bcomplete[ ._-]series\b|"
     r"\b(?:480|576|720|1080|1440|2160|4320)[pi]\b|\b(?:uhd|hdr10\+?|dolby[ ._-]?vision)\b|"
     r"\b(?:x|h)[ .]?26[45]\b|\b(?:hevc|xvid|divx|avc)\b|"
-    r"\b(?:blu-?ray|bdrip|brrip|bdremux|remux|web-?dl|web-?rip|hdtv|dvdrip|hdrip|dvd9|dvd5)\b|"
+    r"\b(?:blu-?ray|bdrip|brrip|bdremux|remux|web-?dl|web-?rip|hdtv|dvdrip|hdrip)\b|"
     r"\b(?:ddp?[ .]?[257][ .][01]|truehd|atmos|dts(?:-hd)?)\b")
 
 #: Words that name a ROM set or a set-making tool, matched as whole words.

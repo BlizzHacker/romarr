@@ -5263,13 +5263,14 @@ class ROMarr:
             try:
                 for torrent in client.torrents():
                     torrent_hash = str(torrent.get("hash") or "").lower()
-                    if not (include_all or torrent_hash in job_hashes
-                            or looks_like_game_torrent(
-                                str(torrent.get("name") or ""),
-                                torrent_labels(torrent), own_categories=own)):
+                    is_game = (torrent_hash in job_hashes or looks_like_game_torrent(
+                        str(torrent.get("name") or ""),
+                        torrent_labels(torrent), own_categories=own))
+                    if not (include_all or is_game):
                         hidden += 1
                         continue
                     rows.append({
+                        "game": is_game,
                         "client_id": getattr(client, "romarr_id", ""),
                         "client_name": getattr(client, "romarr_name", client.name),
                         "hash": str(torrent.get("hash") or ""),

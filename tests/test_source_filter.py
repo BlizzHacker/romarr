@@ -103,3 +103,40 @@ def test_torrent_with_a_job_stays_listed_whatever_its_name(tmp_path, monkeypatch
     state = svc.collection_source_torrents()
     assert [t["hash"] for t in state["torrents"]] == ["e" * 40]
     assert state["hidden"] == 0
+
+
+def test_arr_names_only_match_as_whole_words():
+    assert looks_like_game_torrent("Unnamed pack", ["mylarge-roms"])
+    assert not looks_like_game_torrent("No-Intro Romset", ["radarr4k"])
+    assert not looks_like_game_torrent("No-Intro Romset", ["tv-sonarr"])
+
+
+def test_dvd9_is_not_video_evidence():
+    assert looks_like_game_torrent("Redump Sony PlayStation 2 DVD9 collection", ["games"])
+    assert looks_like_game_torrent("PS2 DVD5 USA set (Redump)")
+
+
+def test_romarr_soundtrack_category_is_hidden():
+    assert not looks_like_game_torrent("Chrono Trigger OST", ["romarr-soundtracks"])
+    assert not looks_like_game_torrent("Nintendo - Game Boy (20240101)", ["romarr-soundtracks"])
+
+
+def test_include_all_marks_which_rows_look_like_games(tmp_path, monkeypatch):
+    svc = _service(tmp_path, monkeypatch)
+    svc.clients = [_ListingQbit([
+        _row("a", "Nintendo - Game Boy (20240101)"),
+        _row("b", "The.Show.S01E01.1080p.WEB-DL", "tv-sonarr"),
+    ])]
+    rows = svc.collection_source_torrents(include_all=True)["torrents"]
+    assert [(t["hash"][0], t["game"]) for t in rows] == [("a", True), ("b", False)]
+
+
+def test_show_them_anyway_reveals_in_place_without_rerendering():
+    from romarr.ui import JS
+    start = JS.index("RENDER.collections=async()=>{")
+    body = JS[start:JS.index("\nRENDER.manualimport=", start)]
+    assert "j('/api/v1/collection/source?all=1')" in body
+    assert "' hidden data-nongame=\"1\"'" in body
+    handler = body[body.index("showAllSources.onclick"):body.index("const drawBatches")]
+    assert "RENDER.collections()" not in handler, "a re-render would drop DAT and plan choices"
+    assert "option[data-nongame]" in handler

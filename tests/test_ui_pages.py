@@ -88,7 +88,7 @@ const enhancePlatformSelect=()=>{}, fmtBytes=String, confirm=()=>true;
 const esc=s=>String(s).replace(/</g,'&lt;').replace(/>/g,'&gt;');
 const j=(url,options)=>{
   if(url==='/api/v1/collection')return initial||Promise.resolve({dats:['Demo']});
-  if(url==='/api/v1/collection/source')return Promise.resolve({
+  if(url==='/api/v1/collection/source'||url==='/api/v1/collection/source?all=1')return Promise.resolve({
     torrents:[{hash:'hash',client_id:'one'}],
     jobs:[{status:'restore-needed',errors:['<restore error>']}]
   });
