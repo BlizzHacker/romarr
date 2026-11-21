@@ -270,6 +270,16 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
                                      "re-runs the request, remove forgets it; resume-retained explicitly resumes an owned retained collection."),
     "/api/v1/queue/clear": ("POST", "Empty the queue, or only the rows in "
                                     "{state} (e.g. failed)."),
+    "/api/v1/discover/platform": ("GET", "Browse one platform's catalogue: "
+                                         "?platform=<slug or name>&sort="
+                                         "popular|released|rating|name&q="
+                                         "<title search>&page=&limit=, from the "
+                                         "first configured provider that lists "
+                                         "the platform (RAWG or IGDB). Each row "
+                                         "carries state (library, downloading, "
+                                         "monitored, unmonitored or empty) and "
+                                         "owned; has_more says whether a next "
+                                         "page exists."),
     "/api/v1/discover/library": ("GET", "Browse the library you already "
                                         "have: ?shelf=top-rated|recent|"
                                         "recently-added|hidden-gems|"

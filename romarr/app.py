@@ -100,6 +100,8 @@ from .upgrade import is_upgrade, merge_tags, scan as scan_directory
 from .metadata import (Metadata, calendar as metadata_calendar,
                        igdb_catalog_config, igdb_catalog_platforms, igdb_catalog_search)
 from .metadata import discover as metadata_discover
+from .metadata import browse_platform as metadata_browse_platform
+from .metadata import rawg_platforms
 from .openapi import spec as openapi_spec
 from .ops import (LogRing, RateLimiter, make_backup, read_backup,
                   render_metrics, to_csv)
@@ -4080,6 +4082,54 @@ class ROMarr:
             if plat is not None and plat.slug == slug:
                 ids.append(int(row["id"]))
         return ids
+
+    def _rawg_platform_ids(self, cfg: dict, slug: str) -> list[int]:
+        """RAWG platform ids whose names resolve to this ROMarr platform."""
+        cache = getattr(self, "_rawg_platform_cache", None)
+        config_key = (str(cfg.get("id") or ""), str(cfg.get("api_key") or ""))
+        if cache is None or time.time() - cache[0] > 6 * 3600 or cache[2] != config_key:
+            try:
+                cache = (time.time(), rawg_platforms(cfg), config_key)
+            except Exception:  # noqa: BLE001 - another provider may answer
+                return []
+            self._rawg_platform_cache = cache
+        return [int(row["id"]) for row in cache[1]
+                if (plat := resolve(row.get("name", ""))) is not None
+                and plat.slug == slug]
+
+    def discover_platform(self, platform_name: str, *, sort: str = "popular",
+                          query: str = "", page: int = 1, limit: int = 40) -> dict:
+        """One page of one platform's catalogue, marked with where each game stands.
+
+        Unlike the storefront shelves, every row here is about one platform
+        ROMarr files, so each can say whether it is already in the library,
+        downloading or wanted, and be added without picking a platform.
+        """
+        platform = resolve(platform_name)
+        if platform is None:
+            return {"platform": None, "items": [], "has_more": False,
+                    "provider": None, "provider_label": "",
+                    "error": f"unknown platform: {platform_name!r}"}
+
+        def ids_for(cfg: dict) -> list[int]:
+            kind = str(cfg.get("type") or "").lower()
+            if kind == "igdb":
+                return self._igdb_platform_ids(cfg, platform.slug)
+            if kind == "rawg":
+                return self._rawg_platform_ids(cfg, platform.slug)
+            return []
+
+        result = metadata_browse_platform(
+            self.store.list_items("metadata_providers"), ids_for,
+            sort=sort, query=query, page=page, limit=limit)
+        known = self._owned_keys()
+        for row in result["items"]:
+            row["state"] = self._game_state(row.get("title", ""), platform.slug, known)
+            row["owned"] = row["state"] == "library"
+        result.update({"platform": {"slug": platform.slug, "name": platform.name},
+                       "sort": sort, "query": str(query or "").strip()[:200],
+                       "page": max(1, int(page or 1))})
+        return result
 
     def _game_state(self, title: str, slug: str, known: set | None = None) -> str:
         """library | downloading | monitored | unmonitored | '' for one game."""
@@ -9828,6 +9878,17 @@ def make_handler(service: ROMarr):
                     month=(query.get("month") or [""])[0],
                     day=(query.get("day") or [""])[0],
                     limit=int((query.get("limit") or ["200"])[0] or 200)))
+            if route.path == "/api/v1/discover/platform":
+                def _int(name: str, default: int) -> int:
+                    try:
+                        return int((query.get(name) or [str(default)])[0] or default)
+                    except ValueError:
+                        return default
+                return self._json(200, service.discover_platform(
+                    (query.get("platform") or [""])[0],
+                    sort=(query.get("sort") or ["popular"])[0] or "popular",
+                    query=(query.get("q") or [""])[0],
+                    page=_int("page", 1), limit=_int("limit", 40)))
             if route.path == "/api/v1/discover":
                 return self._json(200, metadata_discover(
                     service.store.list_items("metadata_providers"),
