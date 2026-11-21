@@ -59,6 +59,13 @@ RUN if [ "$TARGETARCH" != "arm" ]; then \
         https://github.com/BlizzHacker/rom-hub-compressatorium \
         /opt/romarr/bundled-plugins/compressatorium; \
     fi
+# The Mister Download Manager plugin (romarr/mdm_plugin.py), bundled the same way.
+ARG MDM_PLUGIN_REF=v0.1.0
+RUN if [ "$TARGETARCH" != "arm" ]; then \
+      git clone --quiet --depth 1 --branch "$MDM_PLUGIN_REF" \
+        https://github.com/BlizzHacker/rom-hub-mdm \
+        /opt/romarr/bundled-plugins/mdm; \
+    fi
 
 # bsdtar reads one RAR volume at a time, so a release split into
 # .part1.rar/.r00/.001 volumes (the usual shape on usenet) could never import

@@ -1394,6 +1394,35 @@ RENDER.hub=async()=>{
         +(cm.api_key_set&&cm.source!=='env'?'<button class="mini" id="cm-clear" type="button">Clear API key</button>':'')
         +'</div></form>'
         +'<p class="help">'+esc(cm.credit||'')+'</p></div>' : '';
+    const md=hs.mdm||{};
+    const mdOpt=(value,label,current)=>'<option value="'+esc(value)+'"'
+      +(current===value?' selected':'')+'>'+esc(label)+'</option>';
+    const mdForm=(pl.slug==='mdm'&&pl.installed)
+      ?'<div style="margin-top:12px"><b>Mister Download Manager settings</b>'
+        +'<p class="help">'+(md.configured
+          ?'The Standalone Direct HTTP and BitTorrent (MDM) download clients use these settings ('
+            +esc(md.mode||'')+' mode). Saving either client changes them here too.'
+          :'Pick a mode to have the Standalone Direct HTTP and BitTorrent (MDM) download clients '
+            +'use these settings. Left unset, each client keeps its own.')+'</p>'
+        +'<form id="md-form" autocomplete="off">'
+        +'<div class="row"><select id="md-mode" title="Mode">'
+        +mdOpt('','Not set (clients keep their own)',md.mode||'')
+        +mdOpt('cli','Local MDM CLI',md.mode||'')
+        +mdOpt('remote','Remote MDM daemon or desktop (HTTPS)',md.mode||'')+'</select>'
+        +'<input id="md-url" type="url" placeholder="https://127.0.0.1:8463" maxlength="2048" '
+        +'title="Remote MDM URL" value="'+esc(md.remote_url||'')+'"></div>'
+        +'<div class="row"><input id="md-token" type="password" placeholder="'
+        +(md.api_token_set?'API token saved':'API token (Remote mode)')+'" '
+        +'autocomplete="new-password" maxlength="4096">'
+        +'<input id="md-conns" type="number" min="1" max="128" step="1" title="Connections (direct HTTP)" '
+        +'value="'+esc(String(md.connections||8))+'">'
+        +'<select id="md-cat" title="Category (Remote mode)">'
+        +[''].concat(md.categories||[]).map(c=>mdOpt(c,c||'No category',md.category||'')).join('')
+        +'</select></div>'
+        +'<div class="row"><button class="mini accent" type="submit">Save</button>'
+        +(md.api_token_set?'<button class="mini" id="md-clear" type="button">Clear API token</button>':'')
+        +'</div></form>'
+        +'<p class="help">'+esc(md.credit||'')+'</p></div>' : '';
     return '<div class="pcard'+(pl.installed?' installed':'')+'">'
       +'<h4>'+esc(pl.name)+(pl.author?'<span class="by">by '+esc(pl.author)+'</span>':'')+'</h4>'
       +'<div class="desc">'+esc(pl.description||'No description supplied.')+'</div>'
@@ -1403,7 +1432,7 @@ RENDER.hub=async()=>{
       +(pl.key_required?'<div class="help">Requires an account or key. Check the instructions before installing.</div>':'')
       +'<div class="foot">'+action
       +(net?'<span class="net">reaches '+esc(net)+'</span>':'')+'</div>'
-      +authForm+cmForm+'</div>';
+      +authForm+cmForm+mdForm+'</div>';
   };
 
   const render=d=>{
@@ -1672,31 +1701,31 @@ RENDER.hub=async()=>{
       await submitIaAuth({clear:true},'Could not clear Archive.org login','Archive.org credentials cleared');
     };
 
-    const cmF=$('#cm-form');
-    const cmClear=$('#cm-clear');
-    const submitCm=async(payload,okToast)=>{
+    // Saves a plugin settings card (Compressatorium, Mister Download Manager)
+    // and re-renders the Hub with what the server now holds.
+    const pluginSaver=(form,clearBtn,endpoint,failure)=>async(payload,okToast)=>{
       const opVer=typeof pageVersion==='number'?pageVersion:0;
       // A filter can re-render the Hub while Save is pending; then this form
       // is gone and a newer one may hold unsaved input, so leave it alone.
-      const formCurrent=()=>isCurrentHub(opVer)&&!!cmF&&cmF.isConnected;
-      const btn=cmF?cmF.querySelector('button[type="submit"]'):null;
+      const formCurrent=()=>isCurrentHub(opVer)&&!!form&&form.isConnected;
+      const btn=form?form.querySelector('button[type="submit"]'):null;
       // The fields stay locked until the save and refresh finish, so nothing
       // typed meanwhile is lost to the re-render.
-      const fields=cmF?[...cmF.querySelectorAll('input')]:[];
+      const fields=form?[...form.querySelectorAll('input,select')]:[];
       fields.forEach(f=>f.disabled=true);
-      if(btn)btn.disabled=true; if(cmClear)cmClear.disabled=true;
+      if(btn)btn.disabled=true; if(clearBtn)clearBtn.disabled=true;
       try{
         try{
-          const response=await fetch('/api/v1/hub/compressatorium',{
+          const response=await fetch(endpoint,{
             method:'POST',headers:{'Content-Type':'application/json'},
             body:JSON.stringify(payload)});
           const result=await response.json();
           if(!formCurrent()) return;
-          actionError=result.ok?'':(result.error||'Could not save the Compressatorium settings');
+          actionError=result.ok?'':(result.error||failure);
           if(result.ok)toast(okToast);
         }catch(e){
           if(!formCurrent()) return;
-          actionError='Could not save the Compressatorium settings';
+          actionError=failure;
         }
         const nextHs=await j('/api/v1/hub/status').catch(()=>hs);
         if(!formCurrent()) return;
@@ -1705,9 +1734,13 @@ RENDER.hub=async()=>{
         if(!formCurrent()) return;
         render(nextData);
       }finally{
-        if(isCurrentHub(opVer)){fields.forEach(f=>f.disabled=false); if(btn)btn.disabled=false; if(cmClear)cmClear.disabled=false;}
+        if(isCurrentHub(opVer)){fields.forEach(f=>f.disabled=false); if(btn)btn.disabled=false; if(clearBtn)clearBtn.disabled=false;}
       }
     };
+    const cmF=$('#cm-form');
+    const cmClear=$('#cm-clear');
+    const submitCm=pluginSaver(cmF,cmClear,'/api/v1/hub/compressatorium',
+      'Could not save the Compressatorium settings');
     if(cmF) cmF.onsubmit=async e=>{
       e.preventDefault();
       // Send the address only when it was edited: a key-only save must not
@@ -1722,6 +1755,22 @@ RENDER.hub=async()=>{
     };
     if(cmClear) cmClear.onclick=async()=>{
       await submitCm({clear_api_key:true},'Compressatorium API key cleared');
+    };
+    const mdF=$('#md-form');
+    const mdClear=$('#md-clear');
+    const submitMd=pluginSaver(mdF,mdClear,'/api/v1/hub/mdm',
+      'Could not save the Mister Download Manager settings');
+    if(mdF) mdF.onsubmit=async e=>{
+      e.preventDefault();
+      const payload={mode:$('#md-mode').value,remote_url:$('#md-url').value.trim(),
+        connections:$('#md-conns').value.trim(),category:$('#md-cat').value};
+      // The token is sent only when typed: a blank field keeps the saved one.
+      const token=$('#md-token').value;
+      if(token)payload.api_token=token;
+      await submitMd(payload,'Mister Download Manager settings saved');
+    };
+    if(mdClear) mdClear.onclick=async()=>{
+      await submitMd({clear_api_token:true},'Mister Download Manager API token cleared');
     };
 
     p.querySelectorAll('button[data-act]').forEach(b=>b.onclick=async()=>{
@@ -5278,6 +5327,16 @@ RENDER.clients=async()=>{
            <div style="margin-top:6px"><button class="btn ghost" id="mdm-install">Install MDM (${esc(mdm.release_tag||'v0.5.2')})</button>
            <span class="help" id="mdm-install-msg" style="margin-left:8px"></span></div>`
         :`<span style="color:var(--warn)">${esc(mdm.reason)}</span>`}
+    ${mdm.plugin&&mdm.plugin.configured
+      ?`<div style="margin-top:6px">Both MDM clients take their settings from the
+         <a href="#hub">${esc(mdm.plugin.label)}</a> plugin (${esc(mdm.plugin.mode)} mode${
+         mdm.plugin.remote_url?', '+esc(mdm.plugin.remote_url):''}). Saving an MDM client
+         here updates the plugin too.</div>`
+      :mdm.plugin&&mdm.plugin.plugin_enabled
+        ?`<div style="margin-top:6px">Set a mode on the
+           <a href="#hub">${esc(mdm.plugin.label)}</a> plugin to manage both MDM
+           clients in one place.</div>`
+        :''}
   </div>`:'';
   $('#page').innerHTML=`<div class="card">
     <div class="row" style="margin-bottom:12px">
