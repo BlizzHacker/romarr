@@ -6720,14 +6720,21 @@ RENDER.getstarted=async()=>{
     +'</p></div>';
 };
 
+// Shared torrent clients also hold films and TV. The picker lists only
+// game-looking torrents; the rest are fetched too but stay hidden until
+// "Show them anyway" reveals them in place, so DAT, platform and plan
+// choices already made on this page are kept.
 RENDER.collections=async()=>{
   const version=pageVersion;
   const current=()=>activePage==='collections'&&pageVersion===version;
   const st=await j('/api/v1/collection').catch(()=>({dats:[],batches:[]}));
   if(!current())return;
-  const sourceState=await j('/api/v1/collection/source').catch(()=>({torrents:[],jobs:[]}));
+  const sourceState=await j('/api/v1/collection/source?all=1').catch(()=>({torrents:[],jobs:[]}));
   if(!current())return;
-  const sourceTorrents=sourceState.torrents||[];
+  const allSources=sourceState.torrents||[];
+  const sourceTorrents=allSources.filter(t=>t.game!==false)
+    .concat(allSources.filter(t=>t.game===false));
+  const hiddenSources=allSources.length-allSources.filter(t=>t.game!==false).length;
   const dats=st.dats||[];
   $('#page').innerHTML='<div class="card"><h3>Plan a set</h3>'
     +(dats.length
@@ -6779,11 +6786,19 @@ RENDER.collections=async()=>{
     +'<div id="cres" style="margin-top:16px"></div></div>'
     +'<div class="card" style="margin-top:16px"><h3>Acquire missing files from a set torrent</h3>'
     +(sourceState.errors||[]).map(error=>'<div class="panel-note panel-warn">'+esc(error)+'</div>').join('')
+    +(hiddenSources>0
+      ?'<p class="help" id="csrc-hidden">'+esc(String(hiddenSources))
+       +(hiddenSources===1?' torrent that does not look like a game is':' torrents that do not look like games are')
+       +' hidden (films, TV, music). '
+       +'<a href="#collections" id="csrc-show-all">Show them anyway</a></p>'
+      :'')
     +(sourceTorrents.length&&dats.length
       ?'<p class="help">Preview a DAT plan against one existing qBittorrent or Transmission torrent. ROMarr selects only matching missing files, stages one budgeted batch at a time, verifies each staged set against the DAT, then restores the torrent’s original file priorities and paused state. The cap limits ROMarr staging copies; downloaded torrent files remain in the torrent client and need separate source storage.</p>'
-       +'<div class="row" style="flex-wrap:wrap">'
+       +'<div class="row" id="csrc-row" style="flex-wrap:wrap'
+       +(hiddenSources===allSources.length?';display:none':'')+'">'
        +'<select id="csrc-torrent">'+sourceTorrents.map(t=>
-         '<option value="'+esc(t.hash)+'" data-client="'+esc(t.client_id)+'">'
+         '<option value="'+esc(t.hash)+'" data-client="'+esc(t.client_id)+'"'
+         +(t.game===false?' hidden data-nongame="1"':'')+'>'
          +esc(t.client_name+' · '+t.name+' · '+t.state)+'</option>').join('')+'</select>'
        +'<label class="help">Staging cap (GiB) <input id="csrc-cap" type="number" min="0.01" step="1" value="100" style="width:90px"></label>'
        +'<button class="btn" id="csrc-plan">Preview source plan</button></div>'
@@ -6795,6 +6810,13 @@ RENDER.collections=async()=>{
     +'<div id="csrc-jobs" style="margin-top:10px"></div></div>'
     +'<div class="card" style="margin-top:16px"><h3>Batches</h3>'
     +'<div id="cbatch"></div></div>';
+  const showAllSources=$('#csrc-show-all');
+  if(showAllSources)showAllSources.onclick=e=>{
+    e.preventDefault();
+    document.querySelectorAll('#csrc-torrent option[data-nongame]').forEach(o=>{o.hidden=false;});
+    const row=$('#csrc-row'); if(row)row.style.display='';
+    const note=$('#csrc-hidden'); if(note)note.textContent='Showing every torrent in the client.';
+  };
 
   const drawBatches=async()=>{
     if(!current())return;
