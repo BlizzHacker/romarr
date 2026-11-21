@@ -273,13 +273,14 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "/api/v1/discover/platform": ("GET", "Browse one platform's catalogue: "
                                          "?platform=<slug or name>&sort="
                                          "popular|released|rating|name&q="
-                                         "<title search>&page=&limit=, from the "
+                                         "<title search>&page=&limit=&provider=, from the "
                                          "first configured provider that lists "
                                          "the platform (RAWG or IGDB). Each row "
                                          "carries state (library, downloading, "
                                          "monitored, unmonitored or empty) and "
                                          "owned; has_more says whether a next "
-                                         "page exists."),
+                                         "page exists. Pass page 1's provider "
+                                         "back as ?provider= for later pages."),
     "/api/v1/discover/library": ("GET", "Browse the library you already "
                                         "have: ?shelf=top-rated|recent|"
                                         "recently-added|hidden-gems|"

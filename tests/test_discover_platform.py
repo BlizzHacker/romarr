@@ -199,3 +199,61 @@ def test_discover_page_has_a_platform_tab_wired_to_the_route():
     assert "async function discoverPlatform()" in JS
     assert "/api/v1/discover/platform?platform=" in JS
     assert "if(DISC.shelf==='platform'){await discoverPlatform();return;}" in JS
+
+
+def test_igdb_page_stays_under_its_500_ceiling_with_the_lookahead(monkeypatch):
+    bodies = []
+    monkeypatch.setattr(m, "igdb_query", lambda cfg, ep, body, strict=False:
+                        bodies.append(body) or [{"id": 1, "name": "G"}])
+    browse_platform([IGDB], lambda cfg: [21], limit=500, page=2)
+    assert "limit 500; offset 499;" in bodies[0]
+
+
+def test_igdb_browse_lists_ports_and_remakes_but_not_dlc(monkeypatch):
+    bodies = []
+    monkeypatch.setattr(m, "igdb_query", lambda cfg, ep, body, strict=False:
+                        bodies.append(body) or [{"id": 1, "name": "G"}])
+    browse_platform([IGDB], lambda cfg: [21])
+    assert "game_type = (0,4,8,9,10,11)" in bodies[0]
+    assert m.IGDB_MAIN_GAMES == "game_type = 0", "the shelves keep main games only"
+
+
+def test_last_page_reports_no_more_and_past_it_asks_nothing(monkeypatch):
+    monkeypatch.setattr(m, "_get_json", lambda url: _rawg_page(["A"], more=True))
+    last = browse_platform([RAWG], lambda cfg: [7], page=m.BROWSE_MAX_PAGES)
+    assert last["items"] and last["has_more"] is False
+    monkeypatch.setattr(m, "_get_json", lambda url: pytest.fail("no request past the end"))
+    past = browse_platform([RAWG], lambda cfg: [7], page=m.BROWSE_MAX_PAGES + 1)
+    assert past["items"] == [] and past["has_more"] is False and "page" in past["error"]
+
+
+def test_later_pages_stay_on_the_provider_that_answered_page_one(monkeypatch):
+    monkeypatch.setattr(m, "_get_json", lambda url: None)
+    monkeypatch.setattr(m, "igdb_query", lambda *a, **k: pytest.fail("must not switch to IGDB"))
+    out = browse_platform([RAWG, IGDB], lambda cfg: [7], page=2, provider="rawg")
+    assert out["items"] == [] and "could not be reached" in out["error"]
+    gone = browse_platform([IGDB], lambda cfg: [7], page=2, provider="rawg")
+    assert "no longer configured" in gone["error"]
+
+
+def test_failed_platform_list_is_reported_not_read_as_empty(server, monkeypatch):
+    base, svc = server
+    svc.store.put_item("metadata_providers", dict(RAWG))
+
+    def down(cfg):
+        raise RuntimeError("RAWG platform list did not answer")
+
+    monkeypatch.setattr("romarr.app.rawg_platforms", down)
+    code, out = call(base, "/api/v1/discover/platform?platform=snes")
+    assert code == 200
+    assert out["items"] == [] and "could not be reached" in out["error"]
+    assert svc._rawg_platform_ids(RAWG, "snes") == [], "non-strict callers still get []"
+
+
+def test_browse_ui_guards_repeat_saves_and_page_loads():
+    from romarr.ui import JS
+    body = JS[JS.index("async function discoverPlatform()"):JS.index("RENDER.peers=async")]
+    assert "if(!g||saving.has(g.title))return;" in body
+    assert "if(loading)return;" in body
+    assert "'&provider='+encodeURIComponent(providerType)" in body
+    assert "pageError=d.error||'The next page did not load.'" in body

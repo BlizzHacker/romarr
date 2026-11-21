@@ -848,6 +848,16 @@ PLATFORM_SORTS = ("popular", "released", "rating", "name")
 #: RAWG's ceiling on page_size.
 RAWG_MAX_PAGE = 40
 
+#: The last page a platform browse will ask for. Past it, has_more is false.
+BROWSE_MAX_PAGES = 500
+
+#: IGDB game types a platform catalogue lists: main games, standalone
+#: expansions, remakes, remasters, expanded games and ports. Ports matter
+#: most here -- the SNES or Game Boy version of a game is often a port. DLC,
+#: expansions, bundles, mods, episodes, seasons, packs and updates stay out.
+#: The storefront shelves keep IGDB_MAIN_GAMES.
+IGDB_BROWSE_GAME_TYPES = "game_type = (0,4,8,9,10,11)"
+
 _RAWG_ORDERING = {"popular": "-added", "released": "-released",
                   "rating": "-rating", "name": "name"}
 
@@ -886,7 +896,7 @@ def _page_args(page: int, limit: int, ceiling: int) -> tuple[int, int]:
     except (TypeError, ValueError):
         size = min(40, ceiling)
     try:
-        number = max(1, min(int(page or 1), 500))
+        number = max(1, int(page or 1))
     except (TypeError, ValueError):
         number = 1
     return number, size
@@ -925,8 +935,8 @@ def _igdb_browse(cfg: dict, ids: list[int], sort: str, query: str,
                  page: int, limit: int) -> tuple[list[dict], bool]:
     if not ids:
         return [], False
-    number, size = _page_args(page, limit, IGDB_MAX_LIMIT)
-    where = [IGDB_MAIN_GAMES,
+    number, size = _page_args(page, limit, IGDB_MAX_LIMIT - 1)
+    where = [IGDB_BROWSE_GAME_TYPES,
              "platforms = (" + ",".join(str(int(i)) for i in ids) + ")"]
     if query:
         # IGDB refuses `search` combined with `sort` (HTTP 406); a title
@@ -958,17 +968,39 @@ BROWSE_PROVIDERS = {"rawg": _rawg_browse, "igdb": _igdb_browse}
 
 
 def browse_platform(providers: list[dict], platform_ids, *, sort: str = "popular",
-                    query: str = "", page: int = 1, limit: int = 40) -> dict:
+                    query: str = "", page: int = 1, limit: int = 40,
+                    provider: str = "") -> dict:
     """One page of one platform's catalogue from the first provider that knows it.
 
     `platform_ids(cfg)` returns that provider's ids for the platform being
     browsed; a provider with none is skipped, so a machine RAWG does not list
-    can still be answered by IGDB.
+    can still be answered by IGDB. A failure to read a provider's platform list
+    is raised by `platform_ids` and reported as that provider failing.
+
+    `provider` pins later pages to the provider that answered page 1: two
+    catalogues order games differently, so mixing them repeats and skips games.
+    A failure on a pinned page is reported rather than answered elsewhere.
     """
     if sort not in PLATFORM_SORTS:
         return {"items": [], "has_more": False, "provider": None,
                 "provider_label": "",
                 "error": f"unknown sort; one of {', '.join(PLATFORM_SORTS)}"}
+    try:
+        page = max(1, int(page or 1))
+    except (TypeError, ValueError):
+        page = 1
+    if page > BROWSE_MAX_PAGES:
+        return {"items": [], "has_more": False, "provider": None,
+                "provider_label": "",
+                "error": f"browsing stops after page {BROWSE_MAX_PAGES}"}
+    pin = str(provider or "").strip().lower()
+    if pin:
+        providers = [cfg for cfg in providers or []
+                     if str(cfg.get("type") or "").lower() == pin][:1]
+        if not providers:
+            return {"items": [], "has_more": False, "provider": None,
+                    "provider_label": "",
+                    "error": f"{pin} is no longer configured; start the browse again"}
     query = str(query or "").strip()[:200]
     found: list = []
 
@@ -982,10 +1014,14 @@ def browse_platform(providers: list[dict], platform_ids, *, sort: str = "popular
 
     items, cfg, asked, failed = _first_answer(providers, BROWSE_PROVIDERS, answer)
     if items:
-        return {"items": items, "has_more": bool(found and found[0]),
+        more = bool(found and found[0]) and page < BROWSE_MAX_PAGES
+        return {"items": items, "has_more": more,
                 "provider": cfg.get("type"), "provider_label": _label(cfg),
                 "error": None}
-    if asked and query:
+    if failed:
+        error = (f"{', '.join(sorted(set(failed)))} could not be reached -- "
+                 f"see the log")
+    elif asked and query:
         error = f"{', '.join(sorted(set(asked)))} found nothing matching {query!r}"
     elif asked:
         error = (f"{', '.join(sorted(set(asked)))} has no games listed for "

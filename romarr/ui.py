@@ -2785,54 +2785,77 @@ async function discoverPlatform(){
     return;
   }
   const items=[];
-  let page=0, provider='';
+  // Game titles with a save in flight, and whether a page is loading: both
+  // survive redraws, so a rebuilt button cannot send the same request twice.
+  const saving=new Set();
+  let page=0, providerLabel='', providerType='', more=false, loading=false, pageError='';
   const tile=(g,i)=>{
     const st=g.state||'';
     const href=gameHref(DISC.platform,'',g.title);
+    const busy=saving.has(g.title)?' disabled':'';
     return `<div class="tile">
       <a href="${esc(href)}"><div class="art" style="background-image:url('${esc(g.cover_url||'')}')"></div></a>
       <div class="nm" title="${esc(g.summary||'')}">${esc(g.title)}</div>
       <div class="pf">${esc((g.released||'').slice(0,4))}${g.rating?' · ★'+Number(g.rating).toFixed(1):''}</div>
       ${st?`<div class="pf" style="padding-top:0"><span class="pill">${esc(stateLabel[st]||st)}</span></div>`
         :`<div class="rowact" style="margin-top:4px">
-          <button data-dpadd="${i}" data-search="1">Want + search</button>
-          <button data-dpadd="${i}" data-search="0">Wishlist</button></div>`}</div>`;
+          <button data-dpadd="${i}" data-search="1"${busy}>${busy?'Saving…':'Want + search'}</button>
+          <button data-dpadd="${i}" data-search="0"${busy}>Wishlist</button></div>`}</div>`;
   };
-  const draw=more=>{
+  const draw=()=>{
     $('#d-out').innerHTML=`<p class="help">${fmt(items.length)} game(s) from
-        ${esc(provider||'a metadata provider')}'s catalogue for this platform.
+        ${esc(providerLabel||'a metadata provider')}'s catalogue for this platform.
         Badges show what is already in your library or Wanted.</p>
       <div class="grid">${items.map(tile).join('')}</div>
-      ${more?'<div class="row" style="margin-top:10px"><button class="btn ghost" id="dp-more">Load more</button></div>':''}`;
+      ${pageError?`<p class="help" role="alert">${esc(pageError)}</p>`:''}
+      ${more?`<div class="row" style="margin-top:10px"><button class="btn ghost" id="dp-more"${loading?' disabled':''}>${
+        loading?'Loading…':pageError?'Try again':'Load more'}</button></div>`:''}`;
     document.querySelectorAll('[data-dpadd]').forEach(b=>b.onclick=async()=>{
       const g=items[Number(b.dataset.dpadd)], search=b.dataset.search==='1';
-      b.disabled=true; b.textContent=search?'Searching…':'Saving…';
+      if(!g||saving.has(g.title))return;
+      saving.add(g.title); draw();
       const r=await j('/api/v1/wanted/add',{method:'POST',
         headers:{'content-type':'application/json'},
         body:JSON.stringify({game:g.title,platform:DISC.platform,monitored:search,search})})
         .catch(()=>({ok:false,error:'Could not save'}));
+      saving.delete(g.title);
       refreshCounts();
       if(!current())return;
       if(r.ok)g.state=r.state||(search?'monitored':'unmonitored');
       toast(r.ok?(r.search?.ok?'Download started':search?'No release yet; monitoring is on':'Saved to wishlist')
         :(r.error||'Could not save'));
-      draw(more);
+      draw();
     });
     const btn=$('#dp-more'); if(btn) btn.onclick=load;
   };
   const load=async()=>{
-    const btn=$('#dp-more'); if(btn){btn.disabled=true;btn.textContent='Loading…';}
+    if(loading)return;
+    loading=true; if(items.length)draw();
     const d=await j('/api/v1/discover/platform?platform='+encodeURIComponent(DISC.platform)
       +'&sort='+encodeURIComponent(DISC.sort)+'&q='+encodeURIComponent(DISC.q)
-      +'&page='+(page+1)+'&limit=40').catch(()=>({items:[],error:'Browse failed'}));
+      +'&page='+(page+1)+'&limit=40'
+      +(providerType?'&provider='+encodeURIComponent(providerType):''))
+      .catch(()=>({items:[],error:'Browse failed'}));
+    loading=false;
     if(!current())return;
-    if(!(d.items||[]).length&&!items.length){
-      $('#d-out').innerHTML=`<div class="empty">${esc(d.error||'Nothing to show.')}</div>`;
+    const rows=d.items||[];
+    if(!rows.length){
+      if(!items.length){
+        $('#d-out').innerHTML=`<div class="empty">${esc(d.error||'Nothing to show.')}</div>`;
+        return;
+      }
+      // Keep what is loaded and offer the same page again.
+      pageError=d.error||'The next page did not load.';
+      if(!d.error)more=false;
+      draw();
       return;
     }
-    page+=1; provider=d.provider_label||provider;
-    items.push(...(d.items||[]));
-    draw(!!d.has_more);
+    page+=1; pageError='';
+    providerLabel=d.provider_label||providerLabel;
+    providerType=providerType||d.provider||'';
+    items.push(...rows);
+    more=!!d.has_more;
+    draw();
   };
   $('#d-out').innerHTML='<div class="empty">Browsing…</div>';
   await load();

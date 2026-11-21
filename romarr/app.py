@@ -4066,14 +4066,20 @@ class ROMarr:
         return {(self._title_key(g.name), self._slug_of(g).casefold())
                 for g in (library or []) if self._is_local(g)}
 
-    def _igdb_platform_ids(self, cfg: dict, slug: str) -> list[int]:
-        """IGDB platform ids whose names resolve to this ROMarr platform."""
+    def _igdb_platform_ids(self, cfg: dict, slug: str, *, strict: bool = False) -> list[int]:
+        """IGDB platform ids whose names resolve to this ROMarr platform.
+
+        With `strict`, a failure to read IGDB's platform list raises instead
+        of reading as "IGDB does not list this platform".
+        """
         cache = getattr(self, "_igdb_platform_cache", None)
         config_key = (str(cfg.get("id") or ""), str(cfg.get("client_id") or ""), str(cfg.get("token") or ""))
         if cache is None or time.time() - cache[0] > 6 * 3600 or cache[2] != config_key:
             try:
                 cache = (time.time(), igdb_catalog_platforms(cfg), config_key)
             except Exception:  # noqa: BLE001 - search still works unfiltered
+                if strict:
+                    raise
                 return []
             self._igdb_platform_cache = cache
         ids = []
@@ -4083,14 +4089,19 @@ class ROMarr:
                 ids.append(int(row["id"]))
         return ids
 
-    def _rawg_platform_ids(self, cfg: dict, slug: str) -> list[int]:
-        """RAWG platform ids whose names resolve to this ROMarr platform."""
+    def _rawg_platform_ids(self, cfg: dict, slug: str, *, strict: bool = False) -> list[int]:
+        """RAWG platform ids whose names resolve to this ROMarr platform.
+
+        With `strict`, a failure to read RAWG's platform list raises.
+        """
         cache = getattr(self, "_rawg_platform_cache", None)
         config_key = (str(cfg.get("id") or ""), str(cfg.get("api_key") or ""))
         if cache is None or time.time() - cache[0] > 6 * 3600 or cache[2] != config_key:
             try:
                 cache = (time.time(), rawg_platforms(cfg), config_key)
             except Exception:  # noqa: BLE001 - another provider may answer
+                if strict:
+                    raise
                 return []
             self._rawg_platform_cache = cache
         return [int(row["id"]) for row in cache[1]
@@ -4098,7 +4109,8 @@ class ROMarr:
                 and plat.slug == slug]
 
     def discover_platform(self, platform_name: str, *, sort: str = "popular",
-                          query: str = "", page: int = 1, limit: int = 40) -> dict:
+                          query: str = "", page: int = 1, limit: int = 40,
+                          provider: str = "") -> dict:
         """One page of one platform's catalogue, marked with where each game stands.
 
         Unlike the storefront shelves, every row here is about one platform
@@ -4114,14 +4126,14 @@ class ROMarr:
         def ids_for(cfg: dict) -> list[int]:
             kind = str(cfg.get("type") or "").lower()
             if kind == "igdb":
-                return self._igdb_platform_ids(cfg, platform.slug)
+                return self._igdb_platform_ids(cfg, platform.slug, strict=True)
             if kind == "rawg":
-                return self._rawg_platform_ids(cfg, platform.slug)
+                return self._rawg_platform_ids(cfg, platform.slug, strict=True)
             return []
 
         result = metadata_browse_platform(
             self.store.list_items("metadata_providers"), ids_for,
-            sort=sort, query=query, page=page, limit=limit)
+            sort=sort, query=query, page=page, limit=limit, provider=provider)
         known = self._owned_keys()
         for row in result["items"]:
             row["state"] = self._game_state(row.get("title", ""), platform.slug, known)
@@ -9888,7 +9900,8 @@ def make_handler(service: ROMarr):
                     (query.get("platform") or [""])[0],
                     sort=(query.get("sort") or ["popular"])[0] or "popular",
                     query=(query.get("q") or [""])[0],
-                    page=_int("page", 1), limit=_int("limit", 40)))
+                    page=_int("page", 1), limit=_int("limit", 40),
+                    provider=(query.get("provider") or [""])[0]))
             if route.path == "/api/v1/discover":
                 return self._json(200, metadata_discover(
                     service.store.list_items("metadata_providers"),
