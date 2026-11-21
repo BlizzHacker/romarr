@@ -168,6 +168,7 @@ ROMarr's **Hub → Library Shell** (`/#portal`), **Hub → Plugins** (`/#hub`), 
 - **Multi-Device & Network Fleet Manager (`/api/v1/hub/fleet`)**: Synchronize verified 1G1R sets and `gamelist.xml` / Playnite / LaunchBox manifests across local LAN/SMB/NFS shares, SSH/Tailscale handhelds, and cloud WebDAV targets — supporting **ES-DE**, **Raspberry Pi / RetroPie / ArcadePunks / Batocera**, **Argosy Launcher**, **Grout** (muOS/NextUI), **DeckRommSync** (Steam Deck), **SwitchRomM / Tinfoil**, **pkgj / pkgi / fpkgi**, **Kekatsu**, and **RetroArch Cloud Sync**.
 - **Igir v5.8.0 1G1R Front-End (`/api/v1/hub/igir`)**: Full GUI and API wrapper for Igir v5.8.0 with native `{romm}`, `{es}`, and `{batocera}` output folder tokens.
 - **ROMarr MCP (`/api/v1/mcp`)**: Connect Claude, Codex, Hermes or Antigravity directly to your own server. Streamable HTTP and a portable stdio bridge support API-key authentication. Read-only tools are enabled by default; [setup and permissions](MCP.md). Open-Eyes is a separate optional desktop-control tool.
+- **Chat Agent (`/api/v1/chat`)**: A built-in chat panel that uses your own Ollama, OpenAI-compatible or Anthropic model with ROMarr's tools. Off until enabled; actions that change your library wait for your confirmation. [Setup and tools](CHAT-AGENT.md).
 
 ### Platform-specific searches
 

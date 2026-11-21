@@ -897,6 +897,7 @@ NAV = [
         ('peers', 'Friends', None),
         ('ecosystem', 'Ecosystem', None),
         ('agents', 'AI Agents', None),
+        ('assistant', 'Chat Agent', None),
     ]),
     ('Settings', [
         ('general', 'General', None),
@@ -1316,7 +1317,7 @@ function go(pageSpec){
     calendar:'Release Calendar',manualimport:'Manual Import',
     collections:'Collections \u2014 full sets and 1G1R',
     getstarted:'Get Started',setup:'Setup Guide',reports:'Reports & Help',
-    hub:'ROM Hub — Plugins',emulators:'Emulator Hub',portal:'Library & Devices',agents:'AI Agents (MCP)'};
+    hub:'ROM Hub — Plugins',emulators:'Emulator Hub',portal:'Library & Devices',assistant:'Chat Agent',agents:'AI Agents (MCP)'};
   $('#top h1').textContent=titles[page]||'ROMarr';
   $('#search').classList.toggle('hide', page !== 'library');
   (RENDER[page]||RENDER.library)();
@@ -3678,6 +3679,139 @@ RENDER.portal=async()=>{
   draw();
 };
 
+// Chat Agent: provider setup and a streaming chat with ROMarr's own tools.
+// Replies stream as NDJSON; tool calls and their results render inline, and
+// actions that change something wait for the Confirm button here.
+let CHAT_BUSY=false;
+const chatCurrent=v=>activePage==='assistant'&&pageVersion===v;
+const chatJson=s=>{try{return JSON.stringify(JSON.parse(s),null,2);}catch(_){return String(s||'');}};
+function chatToolHtml(name,args,result,ok){
+  const state=result===undefined?'running…':(ok?'done':'failed');
+  return `<details class="chat-tool"><summary><code>${esc(name)}</code> <span class="pill">${esc(state)}</span></summary>`
+    +`<div class="help">Arguments</div><pre class="chat-pre">${esc(JSON.stringify(args||{},null,2))}</pre>`
+    +(result===undefined?'':`<div class="help">Result</div><pre class="chat-pre">${esc(chatJson(result))}</pre>`)+`</details>`;
+}
+function chatAppend(html,cls){
+  const log=$('#chat-log'); if(!log) return null;
+  const div=document.createElement('div'); div.className='chat-msg '+(cls||''); div.innerHTML=html;
+  log.appendChild(div); log.scrollTop=log.scrollHeight; return div;
+}
+function chatConfirmCard(ev,version){
+  const card=chatAppend(`<div class="panel-note${ev.destructive?' panel-warn':''}"><b>${ev.destructive?'Confirm removal':'Confirm action'}:</b> ${esc(ev.summary)}`
+    +`<div class="row" style="margin-top:8px;gap:8px"><button class="btn" data-chat-ok>Confirm</button>`
+    +`<button class="btn ghost" data-chat-no>Cancel</button></div></div>`,'chat-confirm');
+  if(!card) return;
+  const answer=approve=>{card.querySelectorAll('button').forEach(b=>b.disabled=true);
+    chatSend('/api/v1/chat/confirm',{id:ev.id,approve},version);};
+  card.querySelector('[data-chat-ok]').onclick=()=>answer(true);
+  card.querySelector('[data-chat-no]').onclick=()=>answer(false);
+}
+function chatRenderHistory(messages,pending,version){
+  const log=$('#chat-log'); if(!log) return; log.innerHTML='';
+  const results={};
+  messages.forEach(m=>{if(m.role==='tool')results[m.tool_call_id]=m;});
+  messages.forEach(m=>{
+    if(m.role==='user') chatAppend(esc(m.content),'chat-user');
+    else if(m.role==='assistant'){
+      if(m.content) chatAppend(esc(m.content),'chat-bot');
+      (m.tool_calls||[]).forEach(c=>{const r=results[c.id];
+        chatAppend(chatToolHtml(c.name,c.arguments,r?r.content:undefined,r?!/"error"|"declined"|"cancelled"/.test(r.content):false),'chat-bot');});
+    }
+  });
+  (pending||[]).forEach(ev=>chatConfirmCard(ev,version));
+  if(!messages.length) chatAppend('<span class="help">Ask about your library: “what is missing from my SNES set?”, “find Chrono Trigger for snes”, “why was that release refused?”.</span>','chat-bot');
+}
+async function chatSend(url,payload,version){
+  if(CHAT_BUSY) return; CHAT_BUSY=true;
+  const send=$('#chat-send'); if(send) send.disabled=true;
+  let bot=null, tools={};
+  const textNode=()=>{if(!bot) bot=chatAppend('','chat-bot'); return bot;};
+  try{
+    const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    if(!r.ok||!r.body){const e=await r.json().catch(()=>({}));throw new Error(e.error||('HTTP '+r.status));}
+    const reader=r.body.getReader(), dec=new TextDecoder(); let buf='';
+    for(;;){
+      const {value,done}=await reader.read(); if(done) break;
+      if(!chatCurrent(version)){reader.cancel();return;}
+      buf+=dec.decode(value,{stream:true}); let nl;
+      while((nl=buf.indexOf('\n'))>=0){
+        const line=buf.slice(0,nl).trim(); buf=buf.slice(nl+1); if(!line) continue;
+        let ev; try{ev=JSON.parse(line);}catch(_){continue;}
+        if(ev.type==='text'){const n=textNode(); n.textContent+=ev.delta;}
+        else if(ev.type==='tool_call'){bot=null; tools[ev.id]=chatAppend(chatToolHtml(ev.name,ev.arguments),'chat-bot');}
+        else if(ev.type==='tool_result'){const n=tools[ev.id]; if(n) n.innerHTML=chatToolHtml(ev.name,(JSON.parse(n.querySelector('pre').textContent||'{}')),ev.result,ev.ok);}
+        else if(ev.type==='confirm'){bot=null; chatConfirmCard(ev,version);}
+        else if(ev.type==='notice'){chatAppend(`<span class="help">${esc(ev.message)}</span>`,'chat-bot');}
+        else if(ev.type==='error'){bot=null; chatAppend(`<div class="panel-note panel-warn">${esc(ev.message)}</div>`,'chat-bot');}
+      }
+      const log=$('#chat-log'); if(log) log.scrollTop=log.scrollHeight;
+    }
+  }catch(err){chatAppend(`<div class="panel-note panel-warn">${esc(err.message||err)}</div>`,'chat-bot');}
+  finally{CHAT_BUSY=false; const s=$('#chat-send'); if(s) s.disabled=false;}
+}
+function chatForm(){
+  const v=k=>$('#chat-'+k);
+  return {enabled:v('enabled').checked,provider:v('provider').value,base_url:v('base_url').value.trim(),
+    model:v('model').value.trim(),api_key:v('api_key').value,tool_mode:v('tool_mode').value,
+    max_steps:Number(v('max_steps').value),max_tokens:Number(v('max_tokens').value),
+    token_budget:Number(v('token_budget').value)};
+}
+RENDER.assistant=async()=>{
+  const version=pageVersion;
+  $('#page').innerHTML='<div class="empty">Loading the chat agent…</div>';
+  let cfg,hist;
+  try{
+    [cfg,hist]=await Promise.all([j('/api/v1/chat/config'),j('/api/v1/chat/history')]);
+  }catch(_){ if(chatCurrent(version)) $('#page').innerHTML='<div class="empty">Could not load the chat agent. Reopen the page to retry.</div>'; return; }
+  if(!chatCurrent(version)) return;
+  const opt=(val,label,cur)=>`<option value="${esc(val)}"${val===cur?' selected':''}>${esc(label)}</option>`;
+  const num=(k,label)=>`<div class="field"><label>${label}</label><input id="chat-${k}" type="number" min="${cfg.limits[k][0]}" max="${cfg.limits[k][1]}" value="${esc(cfg[k])}"></div>`;
+  $('#page').innerHTML=`
+  <style>#chat-log{max-height:60vh;overflow:auto;display:flex;flex-direction:column;gap:8px;padding:4px}
+  .chat-msg{max-width:92%;white-space:pre-wrap;line-height:1.45}.chat-user{align-self:flex-end;background:var(--bg);padding:8px 12px;border-radius:10px}
+  .chat-bot{align-self:flex-start}.chat-pre{white-space:pre-wrap;max-height:240px;overflow:auto;font-size:12px;margin:4px 0}
+  .chat-tool summary{cursor:pointer}</style>
+  <details class="card" ${cfg.enabled&&cfg.model?'':'open'}><summary><b>Provider settings</b> <span class="pill">${cfg.enabled?'enabled':'disabled'}</span></summary>
+    <p class="help">Talk to your own model: a local Ollama, any OpenAI-compatible endpoint (LiteLLM, LM Studio, vLLM, OpenRouter…), or Anthropic. Actions that change your library always ask you to confirm here first.</p>
+    <label class="check"><input id="chat-enabled" type="checkbox"${cfg.enabled?' checked':''}> Enable the chat agent</label>
+    <div class="field"><label>Provider</label><select id="chat-provider">${cfg.providers.map(p=>opt(p.id,p.label,cfg.provider)).join('')}</select></div>
+    <div class="field"><label>Base URL</label><input id="chat-base_url" type="text" value="${esc(cfg.base_url)}" placeholder="${esc((cfg.providers.find(p=>p.id===cfg.provider)||{}).default_url||'')}"></div>
+    <div class="field"><label>API key</label><input id="chat-api_key" type="password" autocomplete="off" value="" placeholder="${cfg.api_key_set?'Saved — leave blank to keep it':'Not needed for a local Ollama'}"></div>
+    <div class="field"><label>Model</label><div class="row" style="gap:8px"><input id="chat-model" type="text" list="chat-models" value="${esc(cfg.model)}" placeholder="e.g. qwen2.5:7b" style="flex:1"><button class="btn ghost" id="chat-load">Load models</button></div><datalist id="chat-models"></datalist></div>
+    <div class="field"><label>Tool calling</label><select id="chat-tool_mode">${opt('auto','Auto (native, JSON fallback)',cfg.tool_mode)}${opt('native','Native tool calls only',cfg.tool_mode)}${opt('json','JSON mode (small models)',cfg.tool_mode)}</select></div>
+    <div class="row" style="gap:10px;flex-wrap:wrap">${num('max_steps','Max steps')}${num('max_tokens','Max tokens per reply')}${num('token_budget','Token budget per message')}</div>
+    <div class="row" style="gap:8px"><button class="btn" id="chat-save">Save</button><button class="btn ghost" id="chat-test">Test</button></div>
+    <div id="chat-msg" class="testline"></div>
+  </details>
+  <div class="card"><div class="row" style="justify-content:space-between"><b>Chat</b><button class="btn ghost" id="chat-clear">Clear conversation</button></div>
+    <div id="chat-log" aria-live="polite"></div>
+    <div class="row" style="gap:8px;margin-top:10px"><textarea id="chat-input" rows="2" maxlength="4000" style="flex:1" placeholder="${hist.enabled?'Ask ROMarr…':'Enable the chat agent above first'}"></textarea><button class="btn" id="chat-send">Send</button></div>
+  </div>`;
+  chatRenderHistory(hist.messages||[],hist.pending||[],version);
+  const say=t=>{const m=$('#chat-msg'); if(m) m.textContent=t;};
+  const post=(url,body)=>fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)}).then(r=>r.json());
+  $('#chat-load').onclick=async()=>{say('Asking the provider…');
+    const r=await post('/api/v1/chat/models',chatForm()).catch(e=>({ok:false,error:String(e)}));
+    if(!chatCurrent(version)) return;
+    if(!r.ok){say(r.error||'Could not list models.');return;}
+    $('#chat-models').innerHTML=r.models.map(m=>`<option value="${esc(m)}">`).join('');
+    say(r.models.length?`${r.models.length} model(s) found; pick one in the Model box.`:'The provider lists no models.');};
+  $('#chat-test').onclick=async()=>{say('Testing…');
+    const r=await post('/api/v1/chat/test',chatForm()).catch(e=>({ok:false,error:String(e)}));
+    if(chatCurrent(version)) say(r.ok?r.message:(r.error||'Test failed.'));};
+  $('#chat-save').onclick=async()=>{
+    const r=await fetch('/api/v1/chat/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(chatForm())});
+    const d=await r.json().catch(()=>({}));
+    if(!chatCurrent(version)) return;
+    if(!r.ok){say(d.error||'Could not save.');return;}
+    say('Saved.'); go('assistant');};
+  $('#chat-clear').onclick=async()=>{await fetch('/api/v1/chat/history',{method:'DELETE'});
+    if(chatCurrent(version)) chatRenderHistory([],[],version);};
+  const submit=()=>{const box=$('#chat-input'); const text=box.value.trim(); if(!text||CHAT_BUSY) return;
+    box.value=''; chatAppend(esc(text),'chat-user'); chatSend('/api/v1/chat',{message:text},version);};
+  $('#chat-send').onclick=submit;
+  $('#chat-input').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();submit();}};
+};
 RENDER.agents=async()=>{
   const version=pageVersion;
   const mcp=await j('/api/v1/mcp').catch(()=>({tools:[],mcp_client_config:{}}));

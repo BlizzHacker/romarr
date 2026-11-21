@@ -153,6 +153,17 @@ class Auth:
         except Exception:
             return False
 
+    def session_subject(self, token: str | None) -> str:
+        """The `sub` claim of a valid session, or "" (password and key logins have none)."""
+        if not self.check_session(token):
+            return ""
+        body = str(token).rpartition(".")[0]
+        try:
+            claims = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
+        except ValueError:  # binascii.Error and JSONDecodeError are both ValueErrors
+            return ""
+        return str(claims.get("sub") or "") if isinstance(claims, dict) else ""
+
     def _sign(self, body: str) -> str:
         return hmac.new(self.api_key.encode(), body.encode(),
                         hashlib.sha256).hexdigest()

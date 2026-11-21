@@ -206,6 +206,12 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "/api/v1/hub/compressatorium": ("GET", "Compressatorium plugin status: whether it is installed and enabled, the service address batch decompression uses and where it comes from (env or plugin), whether an API key is saved, and credit to pacnpal/Compressatorium. Never returns the key (POST saves the address or key)."),
     "/api/v1/hub/mdm": ("GET", "Mister Download Manager (direct downloads) plugin status: whether it is installed and enabled, whether its mode is set (then the Standalone Direct HTTP and BitTorrent (MDM) clients use its settings), the mode, remote URL, connections and category, whether an API token is saved, and credit to anefzaoui/misterdownloadmanager. Never returns the token (POST saves the settings)."),
     "/api/v1/hub/fleet": ("GET", "Multi-device and network library sync profiles for ES-DE, RetroPie/ArcadePunks, Batocera, Argosy, Grout, Steam Deck, and RetroArch WebDAV (POST builds a 1G1R + gamelist.xml sync plan)."),
+    "/api/v1/chat": ("POST", "Send one message to the built-in chat agent and stream its reply as NDJSON events (text, tool_call, tool_result, confirm, notice, error, done). Refused while the agent is disabled."),
+    "/api/v1/chat/confirm": ("POST", "Approve or decline one action the chat agent proposed (`id`, boolean `approve`), then stream the rest of the reply as NDJSON. Single-use; only the user the action was proposed to can answer it."),
+    "/api/v1/chat/config": ("GET", "Chat agent settings: enabled, provider (ollama, openai, anthropic), base URL, model, tool mode and limits. The API key is never returned, only whether one is saved (POST saves)."),
+    "/api/v1/chat/models": ("POST", "Models the chat provider offers (Ollama reads /api/tags), using saved settings with any unsaved form values on top."),
+    "/api/v1/chat/test": ("POST", "Check the chat provider answers with the key and that the chosen model exists. Never echoes the key."),
+    "/api/v1/chat/history": ("GET", "This user's chat agent conversation and any action still waiting for confirmation (DELETE clears it)."),
     "/api/v1/mcp": ("GET", "MCP connection manifest (GET), or authenticated stateless JSON-RPC MCP transport (POST). GET text/event-stream returns 405; no standalone SSE stream is offered."),
     "/api/v1/hub/archive-org/auth": ("POST", "Save or clear host-managed Archive.org credentials; returns status without credentials."),
     "/api/v1/hub/plugin": ("POST", "Install, enable, disable or uninstall a plugin."),
@@ -646,6 +652,47 @@ def spec(version: str = "0.0.0", *, base_url: str = "") -> dict:
     }
     paths["/api/v1/hub/mdm"]["post"]["responses"]["400"] = {
         "description": "The plugin is not installed, or a setting cannot be used.",
+    }
+    paths["/api/v1/chat/config"].update(_operation(
+        "/api/v1/chat/config", "POST",
+        "Save chat agent settings. A blank or masked api_key leaves the saved key unchanged."))
+    paths["/api/v1/chat/config"]["post"]["requestBody"] = {
+        "required": True,
+        "content": {"application/json": {"schema": {
+            "type": "object",
+            "properties": {
+                "enabled": {"type": "boolean"},
+                "provider": {"type": "string", "enum": ["ollama", "openai", "anthropic"]},
+                "base_url": {"type": "string", "description": "http(s) base URL; empty uses the provider default."},
+                "model": {"type": "string"},
+                "api_key": {"type": "string", "format": "password",
+                            "description": "Replaces the saved key; blank or masked leaves it unchanged."},
+                "clear_api_key": {"type": "boolean", "default": False},
+                "tool_mode": {"type": "string", "enum": ["auto", "native", "json"]},
+                "max_steps": {"type": "integer", "minimum": 1, "maximum": 12},
+                "max_tokens": {"type": "integer", "minimum": 128, "maximum": 8192},
+                "token_budget": {"type": "integer", "minimum": 1000, "maximum": 200000},
+            },
+        }}},
+    }
+    paths["/api/v1/chat/config"]["post"]["responses"]["400"] = {
+        "description": "A setting is out of range or the base URL cannot be used.",
+    }
+    paths["/api/v1/chat/history"].update(_operation(
+        "/api/v1/chat/history", "DELETE", "Clear this user's chat agent conversation."))
+    paths["/api/v1/chat"]["post"]["requestBody"] = {
+        "required": True,
+        "content": {"application/json": {"schema": {
+            "type": "object", "required": ["message"],
+            "properties": {"message": {"type": "string", "maxLength": 4000}},
+        }}},
+    }
+    paths["/api/v1/chat/confirm"]["post"]["requestBody"] = {
+        "required": True,
+        "content": {"application/json": {"schema": {
+            "type": "object", "required": ["id", "approve"],
+            "properties": {"id": {"type": "string"}, "approve": {"type": "boolean"}},
+        }}},
     }
     _guide_contracts(paths)
 
