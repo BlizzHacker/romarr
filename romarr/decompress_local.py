@@ -26,6 +26,7 @@ multi-disc set stays together and never mixes with its neighbours.
 
 from __future__ import annotations
 
+import contextlib
 import errno
 import logging
 import re
@@ -132,26 +133,30 @@ def _extract_into(first: Path, volumes: list[Path] | None,
     """
     source = library.open_archive(first, volumes)
     try:
-        names = source.names()
-        listed = getattr(source, "all_member_names", None)
-        # names() drops members it will not extract safely. The safe ones are
-        # still extracted, but the caller is told what was left out, because
-        # an incomplete output can still verify -- and must not then cost
-        # the operator the original.
-        kept = set(names)
-        skipped = ([n for n in listed() if n not in kept and not library.is_clutter(n)]
-                   if listed is not None else [])
-        written = []
-        for name in names:
-            if library.is_clutter(name):
-                continue
-            if not library.is_safe_name(name, staging):
-                raise ValueError(f"refusing member outside the archive: {name!r}")
-            target = staging / name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            source.copy(name, target)
-            written.append(name)
-        return written, skipped
+        # Not every source keeps a reader to reuse; those without a session
+        # simply open per call.
+        session = getattr(source, "session", None)
+        with session() if session else contextlib.nullcontext():
+            names = source.names()
+            listed = getattr(source, "all_member_names", None)
+            # names() drops members it will not extract safely. The safe ones are
+            # still extracted, but the caller is told what was left out, because
+            # an incomplete output can still verify -- and must not then cost
+            # the operator the original.
+            kept = set(names)
+            skipped = ([n for n in listed() if n not in kept and not library.is_clutter(n)]
+                       if listed is not None else [])
+            written = []
+            for name in names:
+                if library.is_clutter(name):
+                    continue
+                if not library.is_safe_name(name, staging):
+                    raise ValueError(f"refusing member outside the archive: {name!r}")
+                target = staging / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                source.copy(name, target)
+                written.append(name)
+            return written, skipped
     finally:
         source.close()
 

@@ -500,8 +500,19 @@ def test_one_zip_reader_serves_the_whole_extraction(tmp_path, monkeypatch):
     monkeypatch.setattr(library.zipfile, "ZipFile", Counting)
     source = library.open_archive(archive)
     try:
-        for name in source.names():
-            source.copy(name, tmp_path / f"out-{name}")
+        with source.session():
+            for name in source.names():
+                source.copy(name, tmp_path / f"out-{name}")
+            assert len(opened) == 1, "one reader for the whole session"
+        assert source._archive is None, "the session closes its reader"
     finally:
         source.close()
-    assert len(opened) == 1
+
+
+def test_listing_outside_a_session_keeps_no_archive_open(tmp_path):
+    # A directory import lists many archives; none may stay open afterwards.
+    sources = [library.open_archive(_zip(tmp_path / f"{i}.zip", {"a.bin": b"x"}))
+               for i in range(5)]
+    for source in sources:
+        assert source.names() == ["a.bin"]
+        assert source._archive is None

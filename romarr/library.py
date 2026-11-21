@@ -18,6 +18,7 @@ from .tar_archive import TAR_SUFFIXES, TarSource, is_tar_name
 from .switch_attach import ATTACH_PLATFORMS, attach_dir as switch_attach_dir, is_real_directory_chain
 from . import game_packages
 
+import contextlib
 import json
 import logging
 import errno
@@ -340,6 +341,14 @@ class _Source:
         """Release temporary archive state when this source owns any."""
         return None
 
+    @contextlib.contextmanager
+    def session(self):
+        """Keep this source's reader open for a run of operations.
+
+        A no-op by default; a ZIP reuses one reader inside a session.
+        """
+        yield self
+
     def names(self) -> list[str]:
         raise NotImplementedError
 
@@ -380,14 +389,33 @@ class _ZipSource(_Source):
         self.last_transfer = ("copy", "")
         self.transfers = {}
         self._archive = None
+        self._sessions = 0
 
-    def _zip(self) -> zipfile.ZipFile:
-        # One reader for the whole source: opening a ZipFile re-parses the
-        # central directory, so an open per member made a large archive cost
-        # (members x entries). Released by close().
-        if self._archive is None:
+    @contextlib.contextmanager
+    def session(self):
+        # Inside a session one reader serves every operation: opening a
+        # ZipFile re-parses the central directory, so an open per member made
+        # extracting a large archive cost (members x entries). Outside one,
+        # each call opens and closes its own reader, so a directory import
+        # holding many sources never holds a file open per archive.
+        self._sessions += 1
+        try:
+            yield self
+        finally:
+            self._sessions -= 1
+            if self._sessions == 0:
+                self.close()
+
+    @contextlib.contextmanager
+    def _reader(self):
+        if self._archive is not None:
+            yield self._archive
+        elif self._sessions:
             self._archive = zipfile.ZipFile(self.path)
-        return self._archive
+            yield self._archive
+        else:
+            with zipfile.ZipFile(self.path) as archive:
+                yield archive
 
     def close(self) -> None:
         archive, self._archive = self._archive, None
@@ -395,22 +423,26 @@ class _ZipSource(_Source):
             archive.close()
 
     def names(self):
-        return safe_members(self._zip(), self.path.parent)
+        with self._reader() as archive:
+            return safe_members(archive, self.path.parent)
 
     def all_member_names(self) -> list[str]:
         """Every file entry, including any `names()` refuses as unsafe."""
-        return [n for n in self._zip().namelist() if not n.endswith("/")]
+        with self._reader() as archive:
+            return [n for n in archive.namelist() if not n.endswith("/")]
 
     def read(self, name):
-        return self._zip().read(name)
+        with self._reader() as archive:
+            return archive.read(name)
 
     def copy(self, name, destination):
-        with self._zip().open(name) as src, open(destination, "wb") as dst:
+        with self._reader() as archive, archive.open(name) as src, \
+                open(destination, "wb") as dst:
             shutil.copyfileobj(src, dst)
 
     def hash(self, name, suffix=""):
         """Hash one member as it decompresses, a chunk at a time."""
-        with self._zip().open(name) as src:
+        with self._reader() as archive, archive.open(name) as src:
             return hash_stream(src, suffix=suffix)
 
 
