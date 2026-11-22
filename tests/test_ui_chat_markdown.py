@@ -43,3 +43,27 @@ def test_numbered_steps_become_an_ordered_list():
 
 def test_markup_in_a_reply_is_escaped():
     assert "&lt;script&gt;" in _md("<script>alert(1)</script>")
+
+
+
+def test_single_asterisks_render_as_italics_but_bullets_do_not():
+    assert "every one was <i>title does not match</i>." in _md("every one was *title does not match*.")
+    assert "<ul><li>Score: 82</li></ul>" in _md("* Score: 82")
+
+
+def test_a_successful_tool_result_with_a_null_error_is_not_failed():
+    import json
+    import shutil
+    import subprocess
+    import pytest
+    node = shutil.which("node") or "/root/.nvm/versions/node/v20.20.2/bin/node"
+    if not shutil.which(node) and not __import__("os").path.exists(node):
+        pytest.skip("node is not installed")
+    js = ui.JS
+    start = js.index("function chatToolFailed(")
+    end = js.index("\n}\n", start) + 3
+    cases = [json.dumps({"game": "x", "error": None, "results": []}),
+             json.dumps({"error": "timed out"}), json.dumps({"declined": True}), "not json"]
+    prog = js[start:end] + "\nprocess.stdout.write(JSON.stringify(" + json.dumps(cases) + ".map(chatToolFailed)));"
+    out = subprocess.run([node, "-e", prog], capture_output=True, text=True, check=True).stdout
+    assert json.loads(out) == [False, True, True, False]

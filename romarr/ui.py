@@ -1359,6 +1359,7 @@ const mdLite=text=>{
     const t=esc(s)
       .replace(/`([^`]+)`/g,(m,c)=>'\u0000'+(codes.push(c)-1)+'\u0000')
       .replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>')
+      .replace(/(^|[^*\w])\*([^*\s][^*]*?)\*(?![*\w])/g,'$1<i>$2</i>')
       .replace(/\[([^\]]+)\]\((https:\/\/[^)\s]+)\)/g,
         (m,label,url)=>'<a href="'+url+'" target="_blank" rel="noopener">'+label+'</a>');
     return t.replace(/\u0000(\d+)\u0000/g,(m,n)=>'<code>'+codes[Number(n)]+'</code>');};
@@ -3909,6 +3910,14 @@ function chatConfirmCard(ev,version){
   card.querySelector('[data-chat-ok]').onclick=()=>answer(true);
   card.querySelector('[data-chat-no]').onclick=()=>answer(false);
 }
+// A stored tool result failed only if it carries a real error, refusal or
+// cancellation. Every successful search result has `"error": null`, and the
+// word alone used to mark it failed.
+function chatToolFailed(content){
+  try{const o=JSON.parse(content);
+    return !!(o&&typeof o==='object'&&(o.error||o.declined||o.cancelled));}
+  catch(_){return /"(error|declined|cancelled)"\s*:\s*(true|"[^"])/.test(String(content||''));}
+}
 function chatRenderHistory(messages,pending,version){
   const log=$('#chat-log'); if(!log) return; log.innerHTML='';
   const results={};
@@ -3918,7 +3927,7 @@ function chatRenderHistory(messages,pending,version){
     else if(m.role==='assistant'){
       if(m.content) chatAppend(mdLite(m.content),'chat-bot chat-md');
       (m.tool_calls||[]).forEach(c=>{const r=results[c.id];
-        chatAppend(chatToolHtml(c.name,c.arguments,r?r.content:undefined,r?!/"error"|"declined"|"cancelled"/.test(r.content):false),'chat-bot');});
+        chatAppend(chatToolHtml(c.name,c.arguments,r?r.content:undefined,r?!chatToolFailed(r.content):false),'chat-bot');});
     }
   });
   (pending||[]).forEach(ev=>chatConfirmCard(ev,version));
