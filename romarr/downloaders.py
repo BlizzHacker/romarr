@@ -2299,6 +2299,24 @@ class DebridClient:
 
     # -- the client interface -----------------------------------------------
 
+    def active_downloads(self) -> list[dict]:
+        """Items the cloud has finished that are still being fetched here.
+
+        `completed(fetch=False)` reports an item only once every file is on
+        disk, so an item the service finished while its local download is
+        still running was neither complete nor active to the stalled-download
+        sweep -- and was blocklisted for being slow to copy. An item the
+        cloud has not finished is not reported: that is the stall to catch.
+        """
+        if not self.configured:
+            return []
+        try:
+            finished = self._finished()
+        except Exception:
+            return []
+        return [{"name": str(item[0]), "worker_active": True, "progress": 1.0}
+                for item in finished if item]
+
     def _finished(self) -> list[tuple[str, list]]:
         """`(name, links)` for every one of our items the cloud has finished.
 

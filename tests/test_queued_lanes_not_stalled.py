@@ -85,3 +85,24 @@ def test_romm_library_offers_a_browser_url():
     assert "public_url" in fields
     assert fields["public_url"]["label"] == "Browser URL"
     assert fields["public_url"]["type"] != "secret"
+
+
+def test_a_debrid_item_finished_in_the_cloud_is_active_while_it_copies(tmp_path, monkeypatch):
+    from romarr.downloaders import RealDebrid, RealDebridConfig
+    rd = RealDebrid(RealDebridConfig(api_token="t", save_path=str(tmp_path)))
+    monkeypatch.setattr(rd, "_finished", lambda: [("Chrono Cross (U)", ["https://x/1"], "")])
+    assert rd.active_downloads() == [{"name": "Chrono Cross (U)", "worker_active": True, "progress": 1.0}]
+    monkeypatch.setattr(rd, "_finished", lambda: [])
+    assert rd.active_downloads() == []
+
+
+def test_a_library_browser_url_beats_the_global_public_url(tmp_path):
+    service = ROMarr({"ROMARR_DATA": str(tmp_path / "state.json")})
+    service.store.settings["romm_public_url"] = "https://global.example"
+    from romarr.clients import Romm
+    lib = Romm.__new__(Romm)
+    service.game_libraries = [({"name": "RomM", "url": "http://192.168.0.94:8080",
+                                "public_url": "https://romm.example"}, lib)]
+    assert service._romm_link_base("RomM") == "https://romm.example"
+    service.game_libraries = [({"name": "RomM", "url": "http://192.168.0.94:8080"}, lib)]
+    assert service._romm_link_base("RomM") == "https://global.example"
