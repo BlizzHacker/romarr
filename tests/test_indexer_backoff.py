@@ -220,7 +220,12 @@ def test_timeout_reaches_every_driver_and_configuration_schema(kind):
     assert any(field["name"] == "timeout" for field in INDEXER_TYPES[kind]["fields"])
     if kind != "prowlarr":
         client = build_indexer({"type": kind, "url": "https://host/api", "timeout": "17"})
-        session = Session(Response())
+        reply = Response()
+        if kind == "hydra":   # a Hydra source is JSON, not a feed
+            from romarr.hydra import clear_cache
+            clear_cache()
+            reply.text = '{"downloads": [{"title": "Game", "uris": ["magnet:?xt=urn:btih:%s"]}]}' % ("a" * 40)
+        session = Session(reply)
         client._session = session
         client.caps()
         assert session.calls[0][1]["timeout"] == 17

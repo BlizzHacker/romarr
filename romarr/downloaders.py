@@ -2338,6 +2338,18 @@ class DebridClient:
             host = host.split(".", 1)[1]
         return False
 
+    @staticmethod
+    def _is_hoster_link(url: str) -> bool:
+        """An http(s) link to a file host's page -- not a .torrent file URL,
+        which these services take only as an upload and is refused."""
+        text = str(url or "")
+        if not text.lower().startswith(("http://", "https://")):
+            return False
+        try:
+            return not urlsplit(text).path.lower().endswith(".torrent")
+        except ValueError:
+            return False
+
     def _add_hoster_link(self, url: str, name: str = "") -> bool:
         """Record a file-host link as one of our jobs; `completed` unlocks it."""
         key = "link:" + hashlib.sha1(url.encode("utf-8")).hexdigest()[:24]
@@ -2704,7 +2716,7 @@ class RealDebrid(DebridClient):
             name: str = "") -> bool:
         if not self.configured:
             return False
-        if magnet_or_url.lower().startswith(("http://", "https://")):
+        if self._is_hoster_link(magnet_or_url):
             # A file-host link: unlocked with /unrestrict/link when fetched.
             return self._add_hoster_link(magnet_or_url, name)
         if not magnet_or_url.startswith("magnet:"):
@@ -2792,7 +2804,7 @@ class AllDebrid(DebridClient):
             name: str = "") -> bool:
         if not self.configured:
             return False
-        if magnet_or_url.lower().startswith(("http://", "https://")):
+        if self._is_hoster_link(magnet_or_url):
             # A file-host link: unlocked with /link/unlock when fetched.
             return self._add_hoster_link(magnet_or_url, name)
         if not magnet_or_url.startswith("magnet:"):

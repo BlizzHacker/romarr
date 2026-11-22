@@ -5648,16 +5648,17 @@ RENDER.indexers=async()=>{
         </tr>`).join('')}</tbody></table></div>`
     :(d.error?`<div class="card"><h3>Via Prowlarr</h3>
         <p class="help" style="color:var(--warn)">${esc(d.error)}</p></div>`:'')}`;
-  $('#i-add').onclick=()=>addItem('indexer');
-  document.querySelectorAll('[data-iedit]').forEach(b=>b.onclick=()=>
-    editItem('indexer', d.items[Number(b.dataset.iedit)]));
-  $('#page').insertAdjacentHTML('beforeend',`<div class="card"><h3>Hydra Launcher sources</h3>
+  $('#page').innerHTML+=`<div class="card"><h3>Hydra Launcher sources</h3>
     <p class="help">Community download lists from <a href="https://library.hydra.wiki" target="_blank" rel="noopener">library.hydra.wiki</a>.
       Console lists (Redump, No-Intro, Rutracker consoles) carry each game's platform. Magnets go to your torrent client,
       file links to Mister Download Manager or Direct HTTP, and file-host links to Real-Debrid or AllDebrid.</p>
     <div class="row"><input id="hy-q" type="search" placeholder="Filter sources" style="max-width:260px">
       <button class="btn ghost" id="hy-load">Browse the library</button></div>
-    <div id="hy-list" style="margin-top:10px"></div></div>`);
+    <div id="hy-list" style="margin-top:10px"></div></div>`;
+  $('#i-add').onclick=()=>addItem('indexer');
+  document.querySelectorAll('[data-iedit]').forEach(b=>b.onclick=()=>
+    editItem('indexer', d.items[Number(b.dataset.iedit)]));
+
   const have=new Set(d.items.map(it=>it.url));
   const hyLoad=async()=>{
     const box=$('#hy-list'); box.innerHTML='<div class="empty">Loading…</div>';

@@ -238,7 +238,14 @@ class HydraSource:
                 raise ValueError(f"{self.name} is larger than "
                                  f"{MAX_SOURCE_BYTES // (1024 * 1024)} MB")
             chunks, total = [], 0
-            for chunk in response.iter_content(1024 * 1024):
+            stream = getattr(response, "iter_content", None)
+            if callable(stream):
+                pieces = stream(1024 * 1024)
+            else:   # a response that cannot stream: read it whole
+                body = getattr(response, "content", None)
+                pieces = [body if isinstance(body, bytes)
+                          else str(getattr(response, "text", "") or "").encode("utf-8")]
+            for chunk in pieces:
                 total += len(chunk)
                 if total > MAX_SOURCE_BYTES:
                     raise ValueError(f"{self.name} is larger than "
