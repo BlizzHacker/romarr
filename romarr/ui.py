@@ -260,6 +260,7 @@ a:hover{text-decoration:underline;text-underline-offset:2px}
 .pcard .foot{display:flex;gap:8px;align-items:center;
   border-top:1px solid var(--line-soft);padding-top:10px;margin-top:2px}
 .pcard .net{color:var(--dim);font-size:11px;margin-left:auto;text-align:right}
+.card .pcard p.help{margin:6px 0 0}
 .dot-ok{width:7px;height:7px;border-radius:50%;background:var(--ok);
   display:inline-block;flex:none}
 .dot-off{width:7px;height:7px;border-radius:50%;background:var(--surface-3);
@@ -3906,7 +3907,7 @@ function chatRenderHistory(messages,pending,version){
   messages.forEach(m=>{
     if(m.role==='user') chatAppend(esc(m.content),'chat-user');
     else if(m.role==='assistant'){
-      if(m.content) chatAppend(esc(m.content),'chat-bot');
+      if(m.content) chatAppend(mdLite(m.content),'chat-bot chat-md');
       (m.tool_calls||[]).forEach(c=>{const r=results[c.id];
         chatAppend(chatToolHtml(c.name,c.arguments,r?r.content:undefined,r?!/"error"|"declined"|"cancelled"/.test(r.content):false),'chat-bot');});
     }
@@ -3930,7 +3931,7 @@ async function chatSend(url,payload,version){
       while((nl=buf.indexOf('\n'))>=0){
         const line=buf.slice(0,nl).trim(); buf=buf.slice(nl+1); if(!line) continue;
         let ev; try{ev=JSON.parse(line);}catch(_){continue;}
-        if(ev.type==='text'){const n=textNode(); n.textContent+=ev.delta;}
+        if(ev.type==='text'){const n=textNode(); n.classList.add('chat-md'); n.dataset.raw=(n.dataset.raw||'')+ev.delta; n.innerHTML=mdLite(n.dataset.raw);}
         else if(ev.type==='tool_call'){bot=null; tools[ev.id]=chatAppend(chatToolHtml(ev.name,ev.arguments),'chat-bot');}
         else if(ev.type==='tool_result'){const n=tools[ev.id]; if(n) n.innerHTML=chatToolHtml(ev.name,(JSON.parse(n.querySelector('pre').textContent||'{}')),ev.result,ev.ok);}
         else if(ev.type==='confirm'){bot=null; chatConfirmCard(ev,version);}
@@ -3961,7 +3962,7 @@ RENDER.assistant=async()=>{
   const num=(k,label)=>`<div class="field"><label>${label}</label><input id="chat-${k}" type="number" min="${cfg.limits[k][0]}" max="${cfg.limits[k][1]}" value="${esc(cfg[k])}"></div>`;
   $('#page').innerHTML=`
   <style>#chat-log{max-height:60vh;overflow:auto;display:flex;flex-direction:column;gap:8px;padding:4px}
-  .chat-msg{max-width:92%;white-space:pre-wrap;line-height:1.45}.chat-user{align-self:flex-end;background:var(--bg);padding:8px 12px;border-radius:10px}
+  .chat-msg{max-width:92%;white-space:pre-wrap;line-height:1.45}.chat-md{white-space:normal}.chat-md p{margin:0 0 8px}.chat-md ul{margin:4px 0 8px 18px}.chat-md .pd-table{font-size:13px}.chat-user{align-self:flex-end;background:var(--bg);padding:8px 12px;border-radius:10px}
   .chat-bot{align-self:flex-start}.chat-pre{white-space:pre-wrap;max-height:240px;overflow:auto;font-size:12px;margin:4px 0}
   .chat-tool summary{cursor:pointer}</style>
   <details class="card" ${cfg.enabled&&cfg.model?'':'open'}><summary><b>Provider settings</b> <span class="pill">${cfg.enabled?'enabled':'disabled'}</span></summary>
