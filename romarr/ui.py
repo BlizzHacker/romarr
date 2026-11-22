@@ -7585,7 +7585,10 @@ RENDER.collections=async()=>{
     });
     sourceDat.addEventListener('change',()=>{
       const guess=datPlatforms[sourceDat.value]||'';
-      if(!platformChosen&&guess&&sourcePlatform.value!==guess){
+      // Until the operator picks a platform, it follows the DAT -- including
+      // back to blank, so a DAT with no known platform never inherits the
+      // previous DAT's.
+      if(!platformChosen&&sourcePlatform.value!==guess){
         settingPlatform=true;
         sourcePlatform.value=guess;
         if(sourcePlatform.dispatchEvent&&typeof Event==='function')

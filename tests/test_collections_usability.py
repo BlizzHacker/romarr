@@ -224,3 +224,42 @@ def test_the_guide_exists_and_is_linked():
         assert heading in guide
     assert "docs/COLLECTIONS.md" in (root / "README.md").read_text(encoding="utf-8")
     assert "COLLECTIONS.md" in (root / "docs" / "FEATURES.md").read_text(encoding="utf-8")
+
+
+def test_a_named_dat_that_is_not_loaded_is_refused_not_swapped(tmp_path):
+    """Review: an unknown DAT name fell back to the first loaded DAT while the
+    platform came from the requested name -- SNES titles requested as GBA."""
+    service = _service(tmp_path)
+    result = service.collection_start("Nintendo - Game Boy Advance", "")
+    assert "is not loaded" in result["error"]
+    source = service.collection_source_start("one", "h", "Nintendo - Game Boy Advance", "", 1 << 30)
+    assert "is not loaded" in source["error"]
+
+
+def test_a_title_already_in_flight_counts_as_requested_not_failed(tmp_path):
+    service = _service(tmp_path)
+    asked = []
+    service.request = lambda name, platform: asked.append(name) or {"ok": True}
+    service._reserve_automatic_grab = lambda game, platform: None  # in flight
+    service.store.put_item("batches", Batch(id="b", platform="snes", queue=["A"]).to_dict())
+    progress = service.collection_step("b")
+    assert asked == [], "an in-flight title must not be handed off again"
+    assert progress["done"] == 1 and progress["failed"] == 0
+
+
+def test_switching_to_a_dat_without_a_known_platform_clears_the_old_one():
+    _render_harness({"dats": ["Nintendo - Super Nintendo Entertainment System", "Odd DAT"],
+                     "dat_platforms": {"Nintendo - Super Nintendo Entertainment System": "snes",
+                                       "Odd DAT": ""},
+                     "batches": []}, """
+(async()=>{
+  await RENDER.collections();
+  $('#cplat').value='snes';
+  $('#cdat').value='Odd DAT';
+  $('#cdat').events.change();
+  assert.equal($('#cplat').value,'');
+  $('#cdat').value='Nintendo - Super Nintendo Entertainment System';
+  $('#cdat').events.change();
+  assert.equal($('#cplat').value,'snes');
+})().catch(error=>{console.error(error);process.exitCode=1;});
+""")

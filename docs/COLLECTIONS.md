@@ -115,8 +115,8 @@ Each row is one requested set.
 | Column / control | Meaning |
 |---|---|
 | Progress | Titles handled (requested or failed) out of the total, plus the state: *waiting for the next pass*, *requesting*, *paused* or *finished*. |
-| **Requested** | Titles handed to the normal request pipeline. Each is now on the **Queue** (a release was grabbed). |
-| **Failed** | Titles that could not be requested. Click **why** to see each reason. Most read *no usable release … (kept on Wanted; the Wanted search retries it)*. Those are not lost: they sit on **Wanted** and the scheduled Wanted search keeps looking. |
+| **Requested** | Titles handed to the normal request pipeline. Each is now on the **Queue** (a release was grabbed). A title that was already queued or downloading from elsewhere is counted here too and not grabbed twice. |
+| **Failed** | Titles that could not be requested. Click **why** to see the reasons (the first 20 per set; the rest are kept and retried by **Retry failed**). Most read *no usable release … (kept on Wanted; the Wanted search retries it)*. Those are not lost: they sit on **Wanted** and the scheduled Wanted search keeps looking. |
 | **Left** | Titles not yet tried. |
 | **Run next** | Do one pass now instead of waiting for the next scheduled one. |
 | **Pause / Resume** | A paused set is skipped by the schedule and by Run next. |
@@ -231,7 +231,7 @@ At the defaults (5 per pass, every 10 minutes) ROMarr requests about 30 titles a
 
 ### Can I stop and come back later?
 
-Yes. Sets and torrent jobs are saved, survive restarts, and can be paused, resumed or cancelled.
+Yes. Sets and torrent jobs are saved and survive restarts. Sets can be paused, resumed or cancelled. Torrent jobs cannot be paused: they only advance when you press **Run next**, so simply stop pressing it. You can also **Cancel** them (which restores the torrent), **Restore** one stuck in *restore-needed*, or retry failed titles over the API.
 
 ### What is the difference between "present" and "verified"?
 

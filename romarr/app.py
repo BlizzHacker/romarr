@@ -5330,6 +5330,9 @@ class ROMarr:
         # request has nowhere to go: each one failed as "unknown platform"
         # and the batch still read 100% done. Default to the DAT's own
         # platform, and refuse plainly when that cannot be worked out.
+        dat_name, dat_error = self._loaded_dat_name(str(dat_name or ""))
+        if dat_error:
+            return {"error": dat_error}
         platform = str(platform or "").strip()
         if not platform:
             platform = self._dat_platform(dat_name)
@@ -5386,7 +5389,10 @@ class ROMarr:
                                     "request it again with a platform chosen")
                 continue
             try:
-                result = self.request(name, batch.platform)
+                # The same once-only handoff RSS and the Wanted sweep use: a
+                # title already queued, downloading or awaiting import review
+                # (from any path, or another set) is not handed off again.
+                result = self._automatic_request(name, batch.platform)
             except Exception as err:  # noqa: BLE001 - one title must not stop the set
                 batch.record(name, ok=False,
                              reason=f"{err.__class__.__name__}: {err}")
@@ -5394,6 +5400,10 @@ class ROMarr:
             # `request` reports most failures in its result rather than
             # raising. Counting those as done showed a set as complete when
             # nothing had been grabbed.
+            if isinstance(result, dict) and result.get("skipped"):
+                # Already on its way. Counted as requested, never as failed.
+                batch.record(name, ok=True)
+                continue
             if isinstance(result, dict) and result.get("ok") is False:
                 reason = str(result.get("error") or "request failed")
                 if reason.startswith("no usable release"):
@@ -5472,6 +5482,25 @@ class ROMarr:
         self.store.put_item("batches", batch.to_dict())
         self.store.save()
         return batch.progress()
+
+    def _loaded_dat_name(self, dat_name: str) -> tuple[str, str]:
+        """The loaded DAT a set will use, as (name, error).
+
+        `collection_plan` falls back to the first loaded DAT when the name is
+        empty. A NAMED DAT that is not loaded must not take that fallback: the
+        platform would be inferred from the requested name while the titles
+        came from a different system's DAT.
+        """
+        names = self.dat_names()
+        if dat_name:
+            if dat_name in names:
+                return dat_name, ""
+            return "", (f"DAT {dat_name!r} is not loaded; pick one of the "
+                        "loaded DATs")
+        if not names:
+            return "", ("no DAT loaded. Point DAT_PATH at a No-Intro or "
+                        "Redump directory, or add one under Settings.")
+        return names[0], ""
 
     def _dat_platform(self, dat_name: str) -> str:
         """The platform slug a DAT most likely covers, or "" (a UI default)."""
@@ -5628,6 +5657,9 @@ class ROMarr:
         import shutil
         import uuid
 
+        dat_name, dat_error = self._loaded_dat_name(str(dat_name or ""))
+        if dat_error:
+            return {"error": dat_error}
         platform = str(platform or "").strip() or self._dat_platform(dat_name)
         if not platform:
             return {"error": "select a platform before starting source acquisition"}
