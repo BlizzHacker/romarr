@@ -227,6 +227,24 @@ a:hover{text-decoration:underline;text-underline-offset:2px}
 
 .pgrid{display:grid;gap:12px;
   grid-template-columns:repeat(auto-fill,minmax(320px,1fr))}
+.pd-head{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin:6px 0 12px}
+.pd-head h2{margin:0;font-size:22px}
+.pd-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;margin:12px 0}
+.pd-box{background:var(--bg);border:1px solid var(--line);border-radius:var(--r-md);padding:16px}
+.pd-box h3{margin:0 0 10px;font-size:16px}
+.pd-box ol,.pd-box ul{margin:6px 0 0 18px;line-height:1.6}
+.pd-field{margin:0 0 14px}
+.pd-field label{display:block;font-weight:600;margin-bottom:4px}
+.pd-field input[type=text],.pd-field input[type=number],.pd-field input[type=password],.pd-field textarea{width:100%;font-size:15px}
+.pd-field textarea{min-height:70px}
+.pd-field .help{margin-top:4px}
+.pd-readme{line-height:1.6;max-width:960px;overflow-wrap:break-word}
+.pd-table code{white-space:nowrap}
+.pd-readme h3,.pd-readme h4,.pd-readme h5,.pd-readme h6{margin:16px 0 6px}
+.pd-code,.pd-out{white-space:pre-wrap;background:var(--surface);border:1px solid var(--line-soft);border-radius:var(--r-sm);padding:10px;overflow:auto;font-size:13px}
+.pd-out{max-height:420px}
+.pd-table{border-collapse:collapse;margin:8px 0;font-size:14px}
+.pd-table td,.pd-table th{border:1px solid var(--line);padding:5px 9px;text-align:left;vertical-align:top}
 .pcard{background:var(--bg);border:1px solid var(--line);
   border-radius:var(--r-md);padding:15px 16px;display:flex;
   flex-direction:column;gap:9px;
@@ -1328,6 +1346,173 @@ addEventListener('hashchange',()=>{
   if(page!==ROUTE_SPEC) go(page);
 });
 
+/* ---------------- plugin dashboard ---------------- */
+// A README rendered from Markdown. Everything is escaped first; only the
+// handful of constructs plugin READMEs use are turned back into markup, and
+// a link survives only when it is https.
+const mdLite=text=>{
+  const lines=String(text||'').replace(/\r/g,'').split('\n');
+  const inline=s=>esc(s)
+    .replace(/`([^`]+)`/g,'<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>')
+    .replace(/\[([^\]]+)\]\((https:\/\/[^)\s]+)\)/g,
+      (m,label,url)=>'<a href="'+url+'" target="_blank" rel="noopener">'+label+'</a>');
+  const cells=r=>r.trim().replace(/^\|/,'').replace(/\|$/,'').split('|').map(c=>c.trim());
+  let html='', i=0;
+  while(i<lines.length){
+    const l=lines[i];
+    if(l.startsWith('```')){
+      const code=[]; i++;
+      while(i<lines.length&&!lines[i].startsWith('```')) code.push(lines[i++]);
+      i++; html+='<pre class="pd-code">'+esc(code.join('\n'))+'</pre>'; continue;
+    }
+    const h=l.match(/^(#{1,4})\s+(.*)/);
+    if(h){const n=h[1].length+2; html+='<h'+n+'>'+inline(h[2])+'</h'+n+'>'; i++; continue;}
+    if(l.trim().startsWith('|')){
+      const rows=[];
+      while(i<lines.length&&lines[i].trim().startsWith('|')) rows.push(lines[i++]);
+      const body=rows.filter(r=>!/^[\s|:-]+$/.test(r));
+      html+='<table class="pd-table">'+body.map((r,n)=>'<tr>'+cells(r).map(c=>
+        n?'<td>'+inline(c)+'</td>':'<th>'+inline(c)+'</th>').join('')+'</tr>').join('')+'</table>';
+      continue;
+    }
+    if(/^ {4}\S/.test(l)){
+      const code=[];
+      while(i<lines.length&&(/^ {4}/.test(lines[i])||!lines[i].trim())) code.push(lines[i++].slice(4));
+      html+='<pre class="pd-code">'+esc(code.join('\n').trim())+'</pre>'; continue;
+    }
+    if(/^\s*[-*]\s+/.test(l)){
+      const items=[];
+      while(i<lines.length&&/^\s*[-*]\s+/.test(lines[i])) items.push(lines[i++].replace(/^\s*[-*]\s+/,''));
+      html+='<ul>'+items.map(x=>'<li>'+inline(x)+'</li>').join('')+'</ul>'; continue;
+    }
+    if(!l.trim()){i++; continue;}
+    const para=[];
+    do{para.push(lines[i++]);}
+    while(i<lines.length&&lines[i].trim()&&!/^(#{1,4}\s|```|\s*\||\s*[-*]\s| {4}\S)/.test(lines[i]));
+    html+='<p>'+inline(para.join(' '))+'</p>';
+  }
+  return html;
+};
+
+// One installed plugin's own page: what it is, what it still needs, its
+// settings from its manifest, how to use it, a way to try it, and its README.
+const pluginDashboard=async(slug,onBack)=>{
+  const p=$('#page');
+  p.innerHTML='<div class="empty">Opening '+esc(slug)+'…</div>';
+  let d;
+  try{d=await j('/api/v1/hub/plugin/detail?slug='+encodeURIComponent(slug));}
+  catch(e){d={ok:false,error:'ROMarr did not answer.'};}
+  const back='<button class="mini" id="pd-back">&larr; All plugins</button>';
+  const reopen=()=>pluginDashboard(slug,onBack);
+  if(!d.ok){
+    p.innerHTML=back+'<div class="panel-note panel-warn">'+esc(d.error||'Could not open this plugin.')+'</div>';
+    $('#pd-back').onclick=onBack; return;
+  }
+  const ACRONYMS={api:'API',url:'URL',id:'ID',ids:'IDs',ra:'RA',crc:'CRC',md5:'MD5',sha1:'SHA1',
+    ssh:'SSH',ftp:'FTP',http:'HTTP',https:'HTTPS',bios:'BIOS',rom:'ROM',roms:'ROMs',dat:'DAT',igdb:'IGDB'};
+  const label=k=>esc(k.split('_').map((w,n)=>ACRONYMS[w]||(n?w:w.charAt(0).toUpperCase()+w.slice(1))).join(' '));
+  const def=f=>(f.default===undefined||f.default===null||f.default===''||
+    (Array.isArray(f.default)&&!f.default.length))?'':'<br><span style="color:var(--dim)">Default: '+esc(Array.isArray(f.default)?f.default.join(', '):String(f.default))+'</span>';
+  const field=f=>{
+    const help=(f.help||def(f))?'<div class="help">'+esc(f.help||'')+def(f)+'</div>':'';
+    if(f.type==='secret') return '<div class="pd-field"><label>'+label(f.key)+' (secret)</label>'
+      +'<input type="password" data-ps="'+esc(f.key)+'" autocomplete="new-password" maxlength="4096" placeholder="'
+      +(f.set?'Saved. Leave blank to keep it':'Not set')+'">'
+      +(f.set?'<label class="help"><input type="checkbox" data-pclear="'+esc(f.key)+'"> Remove the saved value</label>':'')
+      +help+'</div>';
+    if(f.type==='bool') return '<div class="pd-field"><label><input type="checkbox" data-pk="'+esc(f.key)+'"'
+      +(f.value?' checked':'')+'> '+label(f.key)+'</label>'+help+'</div>';
+    if(f.type==='int') return '<div class="pd-field"><label>'+label(f.key)+'</label><input type="number" step="1" data-pk="'
+      +esc(f.key)+'" value="'+esc(f.value==null?'':String(f.value))+'">'+help+'</div>';
+    if(f.type==='list[str]') return '<div class="pd-field"><label>'+label(f.key)+' (one per line)</label><textarea data-pk="'
+      +esc(f.key)+'">'+esc((f.value||[]).join('\n'))+'</textarea>'+help+'</div>';
+    return '<div class="pd-field"><label>'+label(f.key)+'</label><input type="text" data-pk="'+esc(f.key)
+      +'" value="'+esc(f.value==null?'':String(f.value))+'">'+help+'</div>';
+  };
+  const caps=d.capabilities||[];
+  const tries=[];
+  if(caps.includes('search')) tries.push('<div class="pd-field"><label>Search this plugin only</label>'
+    +'<div class="row"><input type="text" id="pd-q" placeholder="Game title, for example Super Metroid" maxlength="200">'
+    +'<input type="text" id="pd-plat" placeholder="Platform (optional, e.g. snes)" maxlength="40">'
+    +'<button class="mini accent" data-run="search">Search</button></div></div>');
+  if(caps.includes('metadata')) tries.push('<div class="pd-field"><label>Enrich a RomM game</label>'
+    +'<div class="row"><input type="text" id="pd-rom" inputmode="numeric" placeholder="RomM game id, e.g. 61640" maxlength="12">'
+    +'<input type="text" id="pd-sid" placeholder="Exact name or hash (optional)" maxlength="300">'
+    +'<button class="mini accent" data-run="enrich">Enrich in RomM</button></div>'
+    +'<div class="help">This writes what the plugin finds to that game in RomM. Leave the exact name '
+    +'empty to match on the library\'s own name and hashes.</div></div>');
+  ['cores','assets','firmware'].filter(c=>caps.includes(c)).forEach(c=>tries.push(
+    '<button class="mini" data-run="'+c+'">List '+c+'</button> '));
+  p.innerHTML=back
+    +'<div class="pd-head"><h2>'+esc(d.name)+'</h2><span class="pill">v'+esc(d.version)+'</span>'
+    +'<span class="'+(d.enabled?'dot-ok':'dot-off')+'"></span><span>'+(d.enabled?'Enabled':'Disabled')+'</span>'
+    +'<button class="mini" id="pd-toggle">'+(d.enabled?'Disable':'Enable')+'</button>'
+    +(String(d.repository||'').startsWith('https://')?'<a href="'+esc(d.repository)+'" target="_blank" rel="noopener">Source and instructions</a>':'')
+    +'</div>'
+    +(d.description?'<p>'+esc(d.description)+'</p>':'')
+    +(d.needs||[]).map(n=>'<div class="panel-note panel-warn">'+esc(n)+'</div>').join('')
+    +'<div class="pd-grid">'
+    +'<div class="pd-box"><h3>What it does and how to use it</h3>'
+    +((d.guide||[]).map(g=>'<b>'+esc(g.title)+'</b><ul>'+g.steps.map(s=>'<li>'+esc(s)+'</li>').join('')+'</ul>').join('')
+      ||'<p class="help">This plugin declares no capabilities ROMarr knows how to use.</p>')
+    +((d.network||[]).length?'<p class="help">Connects to: '+esc(d.network.join(', '))+'</p>':'')
+    +((d.platforms||[]).length?'<p class="help">Covers '+d.platforms.length+' platforms.</p>':'')
+    +'</div>'
+    +'<div class="pd-box"><h3>Settings</h3>'
+    +((d.fields||[]).length?'<form id="pd-form" autocomplete="off">'+d.fields.map(field).join('')
+      +'<button class="btn" type="submit">Save settings</button></form>'
+      :'<p class="help">This plugin has no settings.</p>')
+    +'</div>'
+    +(tries.length?'<div class="pd-box"><h3>Try it</h3>'+tries.join('')+'<div id="pd-out"></div></div>':'')
+    +'</div>'
+    +(d.terms?'<div class="panel-note"><b>Terms.</b> '+esc(d.terms)+'</div>':'')
+    +(d.readme?'<details class="pd-box" open><summary><b>Instructions (README)</b></summary><div class="pd-readme">'
+      +mdLite(d.readme)+'</div></details>':'');
+  $('#pd-back').onclick=onBack;
+  $('#pd-toggle').onclick=async()=>{
+    const r=await fetch('/api/v1/hub/plugin',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({slug,action:d.enabled?'disable':'enable'})}).then(r=>r.json()).catch(()=>({}));
+    toast(r.ok?(d.enabled?'Disabled ':'Enabled ')+d.name:(r.err||r.error||'Could not change it'));
+    reopen();
+  };
+  const form=$('#pd-form');
+  if(form) form.onsubmit=async e=>{
+    e.preventDefault();
+    const values={}, secrets={}, clear=[];
+    form.querySelectorAll('[data-pk]').forEach(el=>{
+      values[el.dataset.pk]=el.type==='checkbox'?el.checked:el.tagName==='TEXTAREA'
+        ?el.value.split('\n').map(x=>x.trim()).filter(Boolean):el.value;});
+    form.querySelectorAll('[data-ps]').forEach(el=>{if(el.value.trim())secrets[el.dataset.ps]=el.value;});
+    form.querySelectorAll('[data-pclear]').forEach(el=>{if(el.checked)clear.push(el.dataset.pclear);});
+    const btn=form.querySelector('button[type=submit]'); btn.disabled=true;
+    const r=await fetch('/api/v1/hub/plugin/config',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({slug,values,secrets,clear})}).then(r=>r.json()).catch(()=>({error:'ROMarr did not answer.'}));
+    if(r.ok){toast('Settings saved'); reopen();}
+    else{btn.disabled=false; toast(r.error||'Could not save the settings');}
+  };
+  p.querySelectorAll('button[data-run]').forEach(b=>b.onclick=async()=>{
+    const action=b.dataset.run, out=$('#pd-out');
+    const payload={slug,action};
+    if(action==='search'){payload.query=$('#pd-q').value; payload.platform=$('#pd-plat').value;}
+    if(action==='enrich'){
+      payload.rom_id=$('#pd-rom').value.trim(); payload.source_id=$('#pd-sid').value.trim();
+      if(!confirm('Write '+d.name+' metadata to RomM game '+payload.rom_id+'?')) return;
+    }
+    b.disabled=true; out.innerHTML='<p class="help">Working… this can take a minute.</p>';
+    const r=await fetch('/api/v1/hub/plugin/run',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify(payload)}).then(r=>r.json()).catch(()=>({error:'ROMarr did not answer.'}));
+    b.disabled=false;
+    if(r.rows) out.innerHTML=(r.error?'<div class="panel-note panel-warn">'+esc(r.error)+'</div>':'')
+      +(r.rows.length?'<table class="pd-table"><tr><th>Title</th><th>Platform</th><th>Size</th></tr>'
+        +r.rows.map(x=>'<tr><td>'+esc(x.title||'')+'</td><td>'+esc(x.platform||'')+'</td><td>'
+          +(x.size_bytes?esc((x.size_bytes/1048576).toFixed(1)+' MB'):'')+'</td></tr>').join('')+'</table>'
+        :'<p class="help">No results from this plugin for that search.</p>');
+    else out.innerHTML=(r.error?'<div class="panel-note panel-warn">'+esc(r.error)+'</div>':'')
+      +((r.lines||[]).length?'<pre class="pd-out">'+esc(r.lines.join('\n'))+'</pre>':'');
+  });
+};
+
 /* ---------------- pages ---------------- */
 const RENDER={};
 RENDER.hub=async()=>{
@@ -1357,6 +1542,7 @@ RENDER.hub=async()=>{
     const action = pl.installed
       ? '<span class="'+(pl.enabled?'dot-ok':'dot-off')+'"></span>'
         +'<span class="help" style="margin:0">'+(pl.enabled?'Enabled':'Disabled')+'</span>'
+        +'<button class="mini accent" data-open="'+esc(pl.slug)+'">Open</button>'
         +'<button class="mini" data-act="'+(pl.enabled?'disable':'enable')+'" '
         +'data-slug="'+esc(pl.slug)+'">'+(pl.enabled?'Disable':'Enable')+'</button>'
       : '<button class="mini accent" data-act="install" data-slug="'+esc(pl.slug)+'">Install'
@@ -1779,6 +1965,8 @@ RENDER.hub=async()=>{
       await submitMd({clear_api_token:true},'Mister Download Manager API token cleared');
     };
 
+    const backToHub=async()=>{hs=await j('/api/v1/hub/status').catch(()=>hs); render(await load());};
+    p.querySelectorAll('button[data-open]').forEach(b=>b.onclick=()=>pluginDashboard(b.dataset.open,backToHub));
     p.querySelectorAll('button[data-act]').forEach(b=>b.onclick=async()=>{
       const slug=b.dataset.slug, action=b.dataset.act;
       b.disabled=true; b.textContent='Working…'; actionError='';
@@ -1797,6 +1985,10 @@ RENDER.hub=async()=>{
           +(e&&e.message?e.message:'ROMarr did not answer.');
       }
       hs=await j('/api/v1/hub/status').catch(()=>hs);
+      if(action==='install'&&!actionError){
+        toast('Installed. Here is what it does and how to set it up.');
+        return pluginDashboard(slug,backToHub);
+      }
       render(await load());
     });
 
@@ -5739,6 +5931,15 @@ RENDER.general=async()=>{
        Plugins install from GitHub, GitLab, Codeberg, sourcehut, Bitbucket,
        git.moveweight.com and git.romarr.app. Add the host of your own git forge here, comma separated.
        Only https sources are accepted.</div></div>`
+  +`<div class="field"><label>GitHub token for ROM Hub plugins</label>
+     <input type="password" data-k="_github_token" autocomplete="new-password" maxlength="255"
+       placeholder="${SETTINGS.github_token_set?'Saved. Leave blank to keep it':'Not set'}">
+     <div style="color:var(--dim);font-size:11.5px;margin-top:4px">
+       Plugins that read GitHub (libretro thumbnails, cores, cheats, overlays, controller
+       profiles, Compressatorium, Mister Download Manager) share GitHub's limit of 60
+       requests an hour without one. Create a fine-grained token at github.com &rarr;
+       Settings &rarr; Developer settings with no repository access: public data needs
+       no permissions. Sent only to api.github.com, and never shown again.</div></div>`
   +chk('auto_import','Import completed downloads automatically',SETTINGS.auto_import)
   +`<div class="field"><label>Protocol</label>
      <select data-k="protocol">

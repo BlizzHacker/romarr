@@ -33,6 +33,35 @@ def configure_flaresolverr(url: str | None) -> None:
         _FLARESOLVERR_URL = str(url or "").strip().rstrip("/")
 
 
+_GITHUB_TOKEN_LOCK = threading.Lock()
+_GITHUB_TOKEN = ""
+
+
+def configure_github_token(token: str | None) -> None:
+    """Set the GitHub token ROM Hub's host fetcher sends to api.github.com.
+
+    ROM Hub reads ROM_HUB_GITHUB_TOKEN, and only ever sends it on GET
+    requests to api.github.com. Without one, every plugin that lists GitHub
+    releases or files shares the anonymous 60-requests-an-hour limit of the
+    whole network's public address. Applied to ROMarr's own environment for
+    the in-process search, and to the Hub CLI's through `_host_env`; plugin
+    subprocesses never see it.
+    """
+    global _GITHUB_TOKEN
+    value = str(token or "").strip()
+    with _GITHUB_TOKEN_LOCK:
+        _GITHUB_TOKEN = value
+        if value:
+            os.environ["ROM_HUB_GITHUB_TOKEN"] = value
+        else:
+            os.environ.pop("ROM_HUB_GITHUB_TOKEN", None)
+
+
+def github_token_set() -> bool:
+    with _GITHUB_TOKEN_LOCK:
+        return bool(_GITHUB_TOKEN or os.environ.get("ROM_HUB_GITHUB_TOKEN", "").strip())
+
+
 def flaresolverr_url() -> str:
     """Return the active FlareSolverr URL from settings or environment."""
     with _FLARESOLVERR_LOCK:
@@ -320,6 +349,9 @@ def _host_env() -> dict:
     env["PYTHONUTF8"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
     env.update(_backend_env())
+    token = os.environ.get("ROM_HUB_GITHUB_TOKEN", "").strip()
+    if token:
+        env["ROM_HUB_GITHUB_TOKEN"] = token
     return env
 
 
@@ -594,7 +626,7 @@ def _search_platform(platform: str | None) -> str | None:
 
 
 def search(query: str, platform: str | None = None, limit: int = 25,
-           timeout: float = 90.0) -> tuple[list[dict], str]:
+           timeout: float = 90.0, only: str | None = None) -> tuple[list[dict], str]:
     """Search every enabled ROM Hub plugin, merged.
 
     Returns `(rows, error)`. Rows are plain dicts with the Hub's SearchResult
@@ -612,6 +644,7 @@ def search(query: str, platform: str | None = None, limit: int = 25,
     try:
         plugins = [p for p in _registry.Registry(HOME).installed()
                    if getattr(p, "enabled", True)
+                   and (only is None or p.slug == only)
                    and "search" in (getattr(p.manifest, "capabilities", ())
                                     or ())]
     except Exception as exc:
@@ -669,6 +702,10 @@ def search(query: str, platform: str | None = None, limit: int = 25,
         for source in getattr(outcome, "statuses", []):
             if source.slug == "archive-org" and not source.ok:
                 auth_error = f"Archive.org search failed: {source.error}"
+            elif only is not None and source.slug == only and not source.ok:
+                # Asked about one plugin, its failure is the answer -- not
+                # an empty result list that reads as "the site has nothing".
+                auth_error = f"{only} search failed: {source.error}"
         for r in outcome.results:
             try:
                 rows.append(r.model_dump())

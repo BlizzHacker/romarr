@@ -64,6 +64,7 @@ from .libraries import (
 from .clients import QBittorrent, QbitConfig, QbitAuthenticationError, Romm, RommConfig
 from . import soundtracks as soundtracks_mod
 from . import hub  # ROM Hub bridge -- the Cartridge plugin layer
+from . import plugin_dashboard  # per-plugin dashboard (settings, how-to, try it)
 from . import clamav, scanners, nup, mdm
 from .emulators import EmulatorHub
 from .libretro import CoreHub
@@ -917,6 +918,10 @@ class ROMarr:
         hub.configure_flaresolverr(
             str(self.store.settings.get("flaresolverr_url")
                 or e.get("ROM_HUB_FLARESOLVERR_URL", "") or "")
+        )
+        hub.configure_github_token(
+            str(self.store.settings.get("_github_token")
+                or e.get("ROM_HUB_GITHUB_TOKEN", "") or "")
         )
 
         # The headless RetroArch stream server, if the operator runs one. It is
@@ -2091,8 +2096,9 @@ class ROMarr:
         # here by name for the same reason as the two above: the underscore
         # is a naming convention, not a boundary, and `_romm_url` proves the
         # convention is not a reliable one to filter on.
+        out["github_token_set"] = bool(str(out.get("_github_token") or "").strip())
         for secret in ("_api_key", "_password_hash", "_peers",
-                       "_oidc_client_secret"):
+                       "_oidc_client_secret", "_github_token"):
             out.pop(secret, None)
         # Everything else that carries a credential, by the same masking the
         # dedicated endpoints already use. The dedicated endpoints masked these;
@@ -10696,6 +10702,12 @@ def make_handler(service: ROMarr):
                     game, (query.get("platform") or [""])[0]))
             if route.path == "/api/v1/hub/plugins":
                 return self._json(200, hub.plugins())
+            if route.path == "/api/v1/hub/plugin/detail":
+                slug = (query.get("slug") or [""])[0].strip()
+                if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", slug):
+                    return self._json(400, {"error": "a plugin slug is required"})
+                result = plugin_dashboard.detail(slug)
+                return self._json(200 if result.get("ok") else 404, result)
             if route.path == "/api/v1/hub/igir":
                 return self._json(200, hub.igir_status())
             if route.path == "/api/v1/hub/exo2romm":
@@ -11611,6 +11623,26 @@ def make_handler(service: ROMarr):
                     email=payload.get("email", ""), password=payload.get("password", ""),
                     clear=payload.get("clear", False))
                 return self._json(200 if result.get("ok") else 400, result)
+            if route.path in ("/api/v1/hub/plugin/config", "/api/v1/hub/plugin/run"):
+                payload = body if isinstance(body, dict) else {}
+                slug = str(payload.get("slug") or "").strip()
+                if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", slug):
+                    return self._json(400, {"error": "a plugin slug is required"})
+                if route.path == "/api/v1/hub/plugin/config":
+                    values, secrets_in = payload.get("values") or {}, payload.get("secrets") or {}
+                    clear = payload.get("clear") or []
+                    if not (isinstance(values, dict) and isinstance(secrets_in, dict)
+                            and isinstance(clear, list)):
+                        return self._json(400, {"error": "values and secrets are objects, clear a list"})
+                    result = plugin_dashboard.save(slug, values, secrets_in, clear)
+                else:
+                    result = plugin_dashboard.run(
+                        slug, str(payload.get("action") or ""),
+                        query=str(payload.get("query") or ""),
+                        platform=str(payload.get("platform") or ""),
+                        rom_id=str(payload.get("rom_id") or ""),
+                        source_id=str(payload.get("source_id") or ""))
+                return self._json(200 if result.get("ok") else 400, result)
             if route.path == "/api/v1/hub/plugin":
                 slug = (body.get("slug") or "").strip()
                 action = (body.get("action") or "").strip()
@@ -11996,6 +12028,11 @@ def make_handler(service: ROMarr):
                 secret = body.get("_oidc_client_secret")
                 if "_oidc_client_secret" in body and secret in ("", "********"):
                     body.pop("_oidc_client_secret")
+                # Same rule for the GitHub token; `clear_github_token` empties it.
+                if body.pop("clear_github_token", False):
+                    body["_github_token"] = ""
+                elif "_github_token" in body and body["_github_token"] in ("", "********"):
+                    body.pop("_github_token")
                 # Serialize public settings writes with the updater launch.
                 try:
                     with service._lock:
@@ -12003,6 +12040,8 @@ def make_handler(service: ROMarr):
                         updated = service.store.update_settings(body)
                         if "flaresolverr_url" in body:
                             hub.configure_flaresolverr(str(updated.get("flaresolverr_url") or ""))
+                        if "_github_token" in body:
+                            hub.configure_github_token(str(updated.get("_github_token") or ""))
                 except ValueError as exc:
                     return self._json(400, {"error": str(exc)})
                 if any(str(k).startswith("oidc") or k == "_oidc_client_secret"

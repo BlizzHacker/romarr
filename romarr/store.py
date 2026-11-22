@@ -287,6 +287,10 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # Confidential-client secret, if the IdP issued one. Underscore prefix
     # marks it a credential so it is masked out of any settings response.
     "_oidc_client_secret": "",
+    # A GitHub token for ROM Hub's GitHub API reads (plugin listings of
+    # releases, cores, cheats, thumbnails). A token with no scopes is enough.
+    # Write-only, like the OIDC secret: never returned by the settings API.
+    "_github_token": "",
     # Read ROM hashes from the library server so netplay can match on bytes.
     # Daily and at startup; off only if you never want the traffic.
     "hash_index": True,
