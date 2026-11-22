@@ -200,6 +200,11 @@ class HosterRoute:
                 supports = getattr(debrid, "supports_host", None)
                 if callable(supports) and not supports(host_of(link)):
                     continue
+                # Ask before taking it: a service records a link it cannot
+                # fetch and fails later, after the mirrors were given up.
+                available = getattr(debrid, "link_available", None)
+                if callable(available) and not available(link):
+                    continue
                 if _hand(debrid, link, name):
                     self._taken_by = debrid
                     return True

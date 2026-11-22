@@ -2350,15 +2350,38 @@ class DebridClient:
         except ValueError:
             return False
 
-    def _add_hoster_link(self, url: str, name: str = "") -> bool:
-        """Record a file-host link as one of our jobs; `completed` unlocks it."""
-        key = "link:" + hashlib.sha1(url.encode("utf-8")).hexdigest()[:24]
-        self._remember(key, link=url, name=name or _basename_of(url))
+    @staticmethod
+    def _job_folder_name(name: str, fallback: str) -> str:
+        """One safe folder name for a job: `completed` writes to save_path/name,
+        so a source title such as "../Game (USA)" must never leave save_path."""
+        unsafe = set("\\/:*?\"<>|") | {chr(c) for c in range(32)}
+        clean = "".join(" " if ch in unsafe else ch for ch in str(name or "")).strip(" .")
+        clean = re.sub(r"\s+", " ", clean)[:180]
+        return clean if clean and clean not in (".", "..") else fallback
+
+    def link_available(self, url: str) -> bool:
+        """Whether the service says this file-host link can be fetched now.
+
+        True when it cannot say: refusing a link the service might unlock is
+        the worse mistake. Services with a link-check call override it.
+        """
         return True
+
+    def _add_hoster_link(self, url: str, name: str = "") -> bool:
+        """Record a file-host link as one of our jobs; `completed` unlocks it.
+
+        False when the ledger could not be written: a job nothing recorded
+        would be reported as grabbed and never fetched.
+        """
+        key = "link:" + hashlib.sha1(url.encode("utf-8")).hexdigest()[:24]
+        folder = self._job_folder_name(name, _basename_of(url) or key[5:])
+        self._remember(key, link=url, name=folder)
+        return any(self._entry_id(e) == key for e in self._ours())
 
     def _hoster_jobs(self) -> list[tuple[str, list]]:
         """`(name, [link])` for every file-host link this ROMarr added."""
-        return [(str(e.get("name") or e.get("id")), [str(e["link"])])
+        return [(self._job_folder_name(str(e.get("name") or ""), str(e.get("id"))[5:] or "download"),
+                 [str(e["link"])])
                 for e in self._ours() if isinstance(e, dict) and e.get("link")]
 
     @staticmethod
@@ -2712,6 +2735,16 @@ class RealDebrid(DebridClient):
         listed = self._get("/hosts/domains")
         return frozenset(str(d) for d in listed) if isinstance(listed, list) else frozenset()
 
+    def link_available(self, url: str) -> bool:
+        """/unrestrict/check: a deleted or offline file answers an error."""
+        try:
+            checked = self._post("/unrestrict/check", {"link": url})
+        except Exception:
+            return True
+        if not isinstance(checked, dict):
+            return True
+        return not checked.get("error") and checked.get("supported", 1) != 0
+
     def add(self, magnet_or_url: str, *, save_path: str | None = None,
             name: str = "") -> bool:
         if not self.configured:
@@ -2791,6 +2824,15 @@ class AllDebrid(DebridClient):
 
     takes_hoster_links = True
     TAKES_NAME = True
+
+    def link_available(self, url: str) -> bool:
+        """/link/infos: a dead link comes back with an error of its own."""
+        try:
+            infos = self._data(self._post("/link/infos", {"link[]": url})).get("infos") or []
+        except Exception:
+            return True
+        first = infos[0] if isinstance(infos, list) and infos else {}
+        return not (isinstance(first, dict) and first.get("error"))
 
     def _host_domains(self) -> frozenset:
         hosts = self._data(self._get("/hosts")).get("hosts") or {}

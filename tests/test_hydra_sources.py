@@ -255,3 +255,26 @@ def test_alldebrid_records_a_file_host_link(tmp_path):
     ad = AllDebrid(DebridConfig(api_token="t", save_path=str(tmp_path)))
     assert ad.add("https://gofile.io/d/abc", name="Game")
     assert ad._hoster_jobs() == [("Game", ["https://gofile.io/d/abc"])]
+
+
+def test_a_source_title_cannot_leave_the_download_folder(tmp_path):
+    rd = RealDebrid(RealDebridConfig(api_token="t", save_path=str(tmp_path)))
+    assert rd.add("https://1fichier.com/?abc", name="../../Ookami (USA)")
+    (name, links, _), = rd._finished()
+    assert ".." not in name and "/" not in name and name.endswith("Ookami (USA)")
+
+
+def test_an_unwritable_ledger_fails_the_grab(tmp_path, monkeypatch):
+    rd = RealDebrid(RealDebridConfig(api_token="t", save_path=str(tmp_path)))
+    monkeypatch.setattr(rd, "_remember", lambda *a, **k: None)
+    assert rd.add("https://1fichier.com/?abc", name="Game") is False
+
+
+def test_a_dead_link_falls_through_to_the_next_mirror():
+    class Debrid(_Client):
+        def link_available(self, url):
+            return "dead" not in url
+    debrid = Debrid("torrent", takes=True, rid="rd")
+    route = HosterRoute(debrid=[debrid])
+    assert route.add("https://1fichier.com/?dead", name="G", mirrors=("https://gofile.io/d/alive",))
+    assert debrid.calls == [("https://gofile.io/d/alive", "G")]
