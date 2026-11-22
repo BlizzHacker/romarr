@@ -210,6 +210,19 @@ def _ollama(cfg, messages, tools, max_tokens, json_mode):
         body["format"] = "json"
     response = _request(cfg, "POST", "/api/chat", body=body, stream=True)
     calls = 0
+    # Ollama sends a tool call whole, with dict arguments -- or, from builds
+    # that stream like the OpenAI API, as indexed pieces: the first names the
+    # function, later ones carry string fragments of its arguments. Pieces are
+    # collected by index and emitted once, whole, when the reply ends.
+    pending: dict[int, dict] = {}
+
+    def flush():
+        for index in sorted(pending):
+            slot = pending[index]
+            yield "tool_call", {"id": slot["id"] or f"call_{index + 1}", "name": slot["name"],
+                                "arguments": _parse_args(slot["args"])}
+        pending.clear()
+
     for line in _lines(response):
         if not line.strip():
             continue
@@ -224,11 +237,24 @@ def _ollama(cfg, messages, tools, max_tokens, json_mode):
             yield "text", message["content"]
         for call in message.get("tool_calls") or []:
             fn = call.get("function") or {}
+            args = fn.get("arguments")
+            if "index" in call or isinstance(args, str):
+                slot = pending.setdefault(int(call.get("index") or 0), {"id": "", "name": "", "args": ""})
+                slot["id"] = slot["id"] or str(call.get("id") or "")
+                if fn.get("name"):
+                    slot["name"] = str(fn["name"])
+                if isinstance(args, str):
+                    slot["args"] += args
+                elif isinstance(args, dict):
+                    slot["args"] = json.dumps(args)
+                continue
             calls += 1
             yield "tool_call", {"id": f"call_{calls}", "name": str(fn.get("name") or ""),
-                                "arguments": _parse_args(fn.get("arguments"))}
+                                "arguments": _parse_args(args)}
         if chunk.get("done"):
+            yield from flush()
             yield "usage", int(chunk.get("prompt_eval_count") or 0) + int(chunk.get("eval_count") or 0)
+    yield from flush()
 
 
 # -- OpenAI-compatible ---------------------------------------------------------
