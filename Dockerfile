@@ -28,7 +28,7 @@ RUN pip install --no-cache-dir --prefix=/install -r /tmp/requirements.txt
 ARG TARGETARCH
 RUN if [ "$TARGETARCH" != "arm" ]; then \
       pip install --no-cache-dir --prefix=/install \
-        "rom-hub @ https://github.com/BlizzHacker/rom-hub/archive/7c0099e41dd50f62c5a4ba9f0e1c803a8301bd88.tar.gz"; \
+        "rom-hub @ https://github.com/BlizzHacker/rom-hub/archive/021cb8a0d94b49c1d6f492dae7599b9da9dc4a77.tar.gz"; \
     fi
 
 

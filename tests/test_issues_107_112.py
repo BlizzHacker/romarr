@@ -362,7 +362,7 @@ def test_issue_93_rom_hub_pin_updated():
     reach enrich plugins, GitHub token for listings, 512 core cap, and the
     catalogue pointing at 23 republished plugin tags."""
     root = pathlib.Path(__file__).resolve().parents[1]
-    expected_sha = "7c0099e41dd50f62c5a4ba9f0e1c803a8301bd88"
+    expected_sha = "021cb8a0d94b49c1d6f492dae7599b9da9dc4a77"
     for rel in ("Dockerfile", "Dockerfile.browser", "docs/PLUGINS.md",
                 "scripts/build-windows-desktop.ps1", ".github/workflows/docker.yml"):
         content = (root / rel).read_text(encoding="utf-8")
