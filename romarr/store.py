@@ -194,6 +194,11 @@ class QueueItem:
     # The parts the request asked for when this row was grabbed, so an
     # import that brings only some of them can leave the rest on Wanted.
     parts: list[str] = field(default_factory=list)
+    # When a client last reported this download waiting its turn or paused
+    # (qBittorrent queuedDL / pausedDL / stoppedDL). The stall timeout runs
+    # from the later of this and `at`, so a torrent that sat in the queue
+    # past the timeout still gets the whole timeout to start once it leaves.
+    waited_at: str = ""
 
 
 @dataclass

@@ -159,3 +159,32 @@ def test_a_torrent_with_no_peers_is_still_retired(tmp_path):
     row = _sweep(tmp_path, "stalledDL")
     assert row.state == "failed"
     assert row.detail.startswith("stalled: no import after")
+
+
+
+def test_a_torrent_that_just_left_the_queue_gets_the_whole_timeout(tmp_path):
+    """Grabbed 400 minutes ago, queued until the last sweep, peerless now:
+    it has had no time to connect, so it is not retired yet."""
+    service = ROMarr({"ROMARR_DATA": str(tmp_path / "state.json")})
+    service.store.settings["stalled_timeout_minutes"] = 180
+    row = _torrent_row()
+    client = _QueuedTorrents("queuedDL")
+    service.queue = [row]
+    service.clients = [client]
+    service.retire_dead_downloads()
+    assert row.waited_at, "the sweep records that it saw the torrent waiting"
+
+    client.state = "stalledDL"
+    service.retire_dead_downloads()
+    assert row.state == "grabbed" and not row.blocklisted
+
+
+def test_a_torrent_stalled_for_the_whole_timeout_after_the_queue_is_retired(tmp_path):
+    service = ROMarr({"ROMARR_DATA": str(tmp_path / "state.json")})
+    service.store.settings["stalled_timeout_minutes"] = 180
+    row = _torrent_row()
+    row.waited_at = (datetime.now(timezone.utc) - timedelta(minutes=200)).isoformat(timespec="seconds")
+    service.queue = [row]
+    service.clients = [_QueuedTorrents("stalledDL")]
+    service.retire_dead_downloads()
+    assert row.state == "failed"

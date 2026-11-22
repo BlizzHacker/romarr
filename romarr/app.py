@@ -4619,6 +4619,7 @@ class ROMarr:
                         # stall timeout blocklisted and deleted 2,240 queued
                         # torrents on one install.
                         if state in self._WAITING_TORRENT_STATES:
+                            row.waited_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
                             return True
                         if dlspeed > 0 or state in (
                             "downloading", "forcedDL", "checkingDL",
@@ -4666,13 +4667,29 @@ class ROMarr:
 
     @staticmethod
     def _row_age_minutes(row, now) -> float | None:
-        """How long this row has been waiting, or None if it will not say."""
+        """How long this row has been eligible to download, or None if it will not say.
+
+        Measured from the grab, or from the last time a client reported the
+        download waiting in its queue or paused, whichever is later: a
+        torrent that waited out the whole stall timeout behind qBittorrent's
+        active-download limit must not be retired the moment it starts.
+        """
         try:
             stamped = datetime.fromisoformat(row.at)
         except (TypeError, ValueError):
             return None
         if stamped.tzinfo is None:
             stamped = stamped.replace(tzinfo=timezone.utc)
+        waited = getattr(row, "waited_at", "") or ""
+        if waited:
+            try:
+                left = datetime.fromisoformat(waited)
+            except (TypeError, ValueError):
+                left = None
+            if left is not None:
+                if left.tzinfo is None:
+                    left = left.replace(tzinfo=timezone.utc)
+                stamped = max(stamped, left)
         return (now - stamped).total_seconds() / 60.0
 
     def unblock(self, entry_id: str) -> bool:
