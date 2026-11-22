@@ -10048,10 +10048,15 @@ def make_handler(service: ROMarr):
                 items = [redact_indexer(i)
                          for i in service.store.list_items("indexers")]
                 proxied, err = [], None
-                try:
-                    proxied = service.prowlarr.indexers()
-                except Exception as exc:
-                    err = str(exc)
+                prowlarr_cfg = getattr(service.prowlarr, "_config", None)
+                if str(getattr(prowlarr_cfg, "base_url", "") or "").strip():
+                    try:
+                        proxied = service.prowlarr.indexers()
+                    except Exception as exc:
+                        # A sentence, not a Python exception: the card shows it.
+                        log.warning("prowlarr indexer list failed: %s", exc)
+                        err = ("Prowlarr did not answer. Check its address and API key "
+                               "under Indexers.")
                 return self._json(200, {"items": items, "proxied": proxied,
                                         "error": err})
             if route.path == "/api/v1/downloadclient":
