@@ -7371,9 +7371,9 @@ RENDER.collections=async()=>{
           +'placeholder="usa,world,europe,japan" style="'+inputStyle+'">',
           'Comma-separated, best first. When a game has several dumps, the earliest region in this list wins.')
        +'<div class="field" style="flex:1;min-width:220px;margin:0"><label>Rules</label>'
-       +'<label class="help" style="margin:0" title="Keep one dump per game (the best one by your region order) instead of every regional version and revision">'
+       +'<label class="help" style="margin:0;text-transform:none;letter-spacing:0;font-weight:400;font-size:12.5px;" title="Keep one dump per game (the best one by your region order) instead of every regional version and revision">'
        +'<input type="checkbox" id="c1g1r" checked> One game, one ROM (1G1R): one dump per game</label>'
-       +'<label class="help" style="margin:0" title="Treat the region list as an allowlist: omit a title when no dump matches one of your regions">'
+       +'<label class="help" style="margin:0;text-transform:none;letter-spacing:0;font-weight:400;font-size:12.5px;" title="Treat the region list as an allowlist: omit a title when no dump matches one of your regions">'
        +'<input type="checkbox" id="cstrict"'+((SETTINGS.region_mode||'prefer')==='strict'?' checked':'')+'> '
        +'Only my regions: skip games with no dump in the list</label></div>'
        +'</div>'
@@ -7381,7 +7381,7 @@ RENDER.collections=async()=>{
        +'<div class="row" style="flex-wrap:wrap;gap:14px">'
        +[['proto','prototypes'],['beta','betas'],['demo','demos and kiosk'],
          ['hack','hacks and trainers'],['unlicensed','unlicensed and pirate']].map(k=>
-          '<label class="help" style="margin:0"><input type="checkbox" class="cex" '
+          '<label class="help" style="margin:0;text-transform:none;letter-spacing:0;font-weight:400;font-size:12.5px;"><input type="checkbox" class="cex" '
           +'value="'+k[0]+'" checked> '+k[1]+'</label>').join('')
        +'</div><div class="help" style="margin:0">Ticked kinds are not part of the set. Untick one to include it.</div></div>'
        +'<details id="clang"'+(languagesOpen?' open':'')+' style="margin-top:12px">'
@@ -7602,7 +7602,9 @@ RENDER.collections=async()=>{
     const opt=sourceSelect.selectedOptions[0];
     const cap=Math.floor((parseFloat(sourceCap.value)||0)*1024*1024*1024);
     return {client_id:opt.dataset.client,torrent_hash:opt.value,
-      dat:sourceDat.value,platform:sourcePlatform.value.trim(),cap_bytes:cap};
+      dat:sourceDat.value,
+      platform:sourcePlatform.value.trim()||datPlatforms[sourceDat.value]||'',
+      cap_bytes:cap};
   };
   if(sourceSelect&&sourcePlanButton)sourcePlanButton.onclick=async()=>{
     const seq=++sourcePlanSeq;
@@ -7626,8 +7628,9 @@ RENDER.collections=async()=>{
       +((d.unmatched||[]).length?'<details><summary class="help">Unmatched titles ('+
         d.unmatched.length+')</summary><div class="help">'+d.unmatched.map(x=>
         esc(x.title)+' — '+esc(x.reason)).join('<br>')+'</div></details>':'')
-      +'<button class="btn" id="csrc-start"'+(sourcePlatform.value.trim()?'':' disabled')+'>Start selective acquisition</button>'
-      +(sourcePlatform.value.trim()?'':'<span class="help" style="margin-left:8px">Choose a platform above first.</span>');
+      +'<button class="btn" id="csrc-start"'+(request.platform?'':' disabled')+'>Start selective acquisition</button>'
+      +(request.platform?'':'<span class="help" style="margin-left:8px">Choose the <b>Platform</b> in '
+        +'<b>Plan a set</b> above, then preview again.</span>');
     const start=$('#csrc-start');
     start.onclick=async()=>{
       if(!current()||seq!==sourcePlanSeq)return;
@@ -7783,7 +7786,7 @@ function collectionsPlanHtml(d,platform,passMinutes){
     +((c.language_omitted||0)?tile(c.language_omitted,'omitted — language not in preference','var(--dim)'):'')
     +((c.unknown_language||0)?tile(c.unknown_language,'unknown language (not counted)','var(--dim)'):'')
     +'</div>'
-    +'<p class="help">'+esc(d.dat)+(d.dat_version?' ('+esc(d.dat_version)+')':'')
+    +'<p class="help" style="margin:12px 0">'+esc(d.dat)+(d.dat_version?' ('+esc(d.dat_version)+')':'')
     +' — region order '+esc((d.policy.regions||[]).join(' → '))
     +((d.policy.preferred_languages||[]).length?' · preferred languages '+esc(d.policy.preferred_languages.join(' → ')):'')
     +(d.policy.region_mode==='strict'?' (strict: titles without a matching-region dump are omitted)':'')+'.</p>'

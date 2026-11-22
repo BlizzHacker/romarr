@@ -5374,8 +5374,17 @@ class ROMarr:
         if batch.status == BATCH_PAUSED:
             return {"paused": True, **batch.progress()}
 
+        if not resolve(batch.platform or ""):
+            guess = self._dat_platform(batch.dat)
+            if guess:
+                batch.platform = guess
         batch.status = BATCH_RUNNING
         for name in batch.take():
+            if not resolve(batch.platform or ""):
+                batch.record(name, ok=False,
+                             reason="this set has no platform; cancel it and "
+                                    "request it again with a platform chosen")
+                continue
             try:
                 result = self.request(name, batch.platform)
             except Exception as err:  # noqa: BLE001 - one title must not stop the set
@@ -5386,8 +5395,12 @@ class ROMarr:
             # raising. Counting those as done showed a set as complete when
             # nothing had been grabbed.
             if isinstance(result, dict) and result.get("ok") is False:
-                batch.record(name, ok=False,
-                             reason=str(result.get("error") or "request failed"))
+                reason = str(result.get("error") or "request failed")
+                if reason.startswith("no usable release"):
+                    # `request` put the title on Wanted; say so, because
+                    # "failed" alone reads as "dropped".
+                    reason += " (kept on Wanted; the Wanted search retries it)"
+                batch.record(name, ok=False, reason=reason)
             else:
                 batch.record(name, ok=True)
         if not batch.queue:
@@ -5615,7 +5628,7 @@ class ROMarr:
         import shutil
         import uuid
 
-        platform = str(platform or "").strip()
+        platform = str(platform or "").strip() or self._dat_platform(dat_name)
         if not platform:
             return {"error": "select a platform before starting source acquisition"}
         selected_platform = resolve(platform)

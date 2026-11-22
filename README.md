@@ -48,7 +48,7 @@ Forks and code reuse are welcome; independent projects should use their own bran
 |---|---|---|
 | Import ROMs I already have | **Manual Import** | A destination folder and access to the source files. No indexer or download client needed. |
 | Find and download a particular game | **Add New** or **Interactive Search** | A search source, a matching download client, and a destination folder. |
-| Check what a collection is missing | **Collections** | A No-Intro or Redump DAT and your local library. |
+| Check what a collection is missing | **Collections** ([guide](docs/COLLECTIONS.md)) | A No-Intro or Redump DAT and your local library. |
 | Report a suspicious or unwanted file | **Activity → Reports & Help** | A relative library path; available scanners record evidence, quarantine is your choice. [How reporting works](docs/REPORTING.md). |
 | Connect an AI assistant | **Hub → Library Shell → AI agents (MCP)** | Your server URL and API key. [Claude, Codex, Hermes and Antigravity setup](docs/MCP.md). |
 | Chat with your own model about your library | **Hub → Chat Agent** | Ollama, an OpenAI-compatible endpoint or an Anthropic key. Searches, explains refusals and finds set gaps; asks before grabbing or changing Wanted. [How it works](docs/CHAT-AGENT.md). |
