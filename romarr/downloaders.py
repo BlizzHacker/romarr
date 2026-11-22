@@ -2173,6 +2173,11 @@ class DebridClient:
 
     protocol = "torrent"
     name = "Debrid"
+    #: Whether this service unlocks file-host links (1fichier, gofile…) as
+    #: well as magnets. The services that do override `_resolve` to unlock.
+    takes_hoster_links = False
+    #: Its own `/hosts` list, read once an hour: (monotonic time, domains).
+    _hosts_cache: tuple[float, frozenset] | None = None
 
     #: Per service, so two rows pointed at the same save path do not read each
     #: other's ids and "import" the other's downloads.
@@ -2296,6 +2301,92 @@ class DebridClient:
             self._ledger_path().write_text(json.dumps(entries))
         except OSError as err:
             log.warning("could not record the %s item id: %s", self.name, err)
+
+    # -- file-host links ----------------------------------------------------
+
+    def _host_domains(self) -> frozenset:
+        """Domains this service says it can unlock; empty when it cannot say."""
+        return frozenset()
+
+    def supports_host(self, host: str) -> bool:
+        """Whether this service unlocks links on `host`.
+
+        True when its host list could not be read: refusing a link the
+        service might well unlock would be the worse mistake, and a link it
+        cannot unlock fails at resolve time with its own reason.
+        """
+        if not self.takes_hoster_links:
+            return False
+        cached = self._hosts_cache
+        if cached is None or time.monotonic() - cached[0] > 3600:
+            try:
+                domains = frozenset(d.lower() for d in self._host_domains())
+            except Exception as err:   # a listing failure is not a refusal
+                log.warning("%s host list could not be read: %s", self.name,
+                            type(err).__name__)
+                domains = frozenset()
+            self._hosts_cache = cached = (time.monotonic(), domains)
+        domains = cached[1]
+        if not domains:
+            return True
+        host = (host or "").lower()
+        while host:
+            if host in domains:
+                return True
+            if "." not in host:
+                return False
+            host = host.split(".", 1)[1]
+        return False
+
+    @staticmethod
+    def _is_hoster_link(url: str) -> bool:
+        """An http(s) link to a file host's page -- not a .torrent file URL,
+        which these services take only as an upload and is refused."""
+        text = str(url or "")
+        if not text.lower().startswith(("http://", "https://")):
+            return False
+        try:
+            return not urlsplit(text).path.lower().endswith(".torrent")
+        except ValueError:
+            return False
+
+    @staticmethod
+    def _job_folder_name(name: str, fallback: str) -> str:
+        """One safe folder name for a job: `completed` writes to save_path/name,
+        so a source title such as "../Game (USA)" must never leave save_path."""
+        unsafe = set("\\/:*?\"<>|") | {chr(c) for c in range(32)}
+        clean = "".join(" " if ch in unsafe else ch for ch in str(name or "")).strip(" .")
+        clean = re.sub(r"\s+", " ", clean)[:180]
+        return clean if clean and clean not in (".", "..") else fallback
+
+    def link_available(self, url: str) -> bool:
+        """Whether the service says this file-host link can be fetched now.
+
+        True when it cannot say: refusing a link the service might unlock is
+        the worse mistake. Services with a link-check call override it.
+        """
+        return True
+
+    def _add_hoster_link(self, url: str, name: str = "") -> bool:
+        """Record a file-host link as one of our jobs; `completed` unlocks it.
+
+        False when the ledger could not be written: a job nothing recorded
+        would be reported as grabbed and never fetched.
+        """
+        key = "link:" + hashlib.sha1(url.encode("utf-8")).hexdigest()[:24]
+        folder = self._job_folder_name(name, _basename_of(url) or key[5:])
+        self._remember(key, link=url, name=folder)
+        return any(self._entry_id(e) == key for e in self._ours())
+
+    def _hoster_jobs(self) -> list[tuple[str, list]]:
+        """`(name, [link])` for every file-host link this ROMarr added."""
+        return [(self._job_folder_name(str(e.get("name") or ""), str(e.get("id"))[5:] or "download"),
+                 [str(e["link"])])
+                for e in self._ours() if isinstance(e, dict) and e.get("link")]
+
+    @staticmethod
+    def _is_hoster_entry(entry) -> bool:
+        return isinstance(entry, dict) and bool(entry.get("link"))
 
     # -- the client interface -----------------------------------------------
 
@@ -2628,6 +2719,8 @@ class RealDebrid(DebridClient):
 
     name = "Real-Debrid"
     magnet_only = True
+    takes_hoster_links = True
+    TAKES_NAME = True
 
     LEDGER = ".romarr-realdebrid.json"
     DEFAULT_URL = "https://api.real-debrid.com/rest/1.0"
@@ -2638,9 +2731,27 @@ class RealDebrid(DebridClient):
         user = self._get("/user")
         return bool(user and user.get("id"))
 
-    def add(self, magnet_or_url: str, *, save_path: str | None = None) -> bool:
+    def _host_domains(self) -> frozenset:
+        listed = self._get("/hosts/domains")
+        return frozenset(str(d) for d in listed) if isinstance(listed, list) else frozenset()
+
+    def link_available(self, url: str) -> bool:
+        """/unrestrict/check: a deleted or offline file answers an error."""
+        try:
+            checked = self._post("/unrestrict/check", {"link": url})
+        except Exception:
+            return True
+        if not isinstance(checked, dict):
+            return True
+        return not checked.get("error") and checked.get("supported", 1) != 0
+
+    def add(self, magnet_or_url: str, *, save_path: str | None = None,
+            name: str = "") -> bool:
         if not self.configured:
             return False
+        if self._is_hoster_link(magnet_or_url):
+            # A file-host link: unlocked with /unrestrict/link when fetched.
+            return self._add_hoster_link(magnet_or_url, name)
         if not magnet_or_url.startswith("magnet:"):
             # RD can ingest .torrent files too, but that is an upload flow;
             # magnets cover what indexers hand out. Saying so beats a 400.
@@ -2658,10 +2769,12 @@ class RealDebrid(DebridClient):
 
     def _finished(self) -> list[tuple[str, list]]:
         """List completed Real-Debrid torrents from our ledger."""
-        out = []
+        out = [(name, links, "") for name, links in self._hoster_jobs()]
         for entry in self._ours():
             if self._probe_timed_out():
                 break
+            if self._is_hoster_entry(entry):
+                continue
             torrent_id = self._entry_id(entry)
             info = self._get(f"/torrents/info/{torrent_id}")
             if not info or info.get("status") != "downloaded":
@@ -2709,9 +2822,33 @@ class AllDebrid(DebridClient):
             return False
         return bool(self._data(self._get("/user")).get("user"))
 
-    def add(self, magnet_or_url: str, *, save_path: str | None = None) -> bool:
+    takes_hoster_links = True
+    TAKES_NAME = True
+
+    def link_available(self, url: str) -> bool:
+        """/link/infos: a dead link comes back with an error of its own."""
+        try:
+            infos = self._data(self._post("/link/infos", {"link[]": url})).get("infos") or []
+        except Exception:
+            return True
+        first = infos[0] if isinstance(infos, list) and infos else {}
+        return not (isinstance(first, dict) and first.get("error"))
+
+    def _host_domains(self) -> frozenset:
+        hosts = self._data(self._get("/hosts")).get("hosts") or {}
+        out = set()
+        for spec in (hosts.values() if isinstance(hosts, dict) else []):
+            for domain in (spec or {}).get("domains") or []:
+                out.add(str(domain))
+        return frozenset(out)
+
+    def add(self, magnet_or_url: str, *, save_path: str | None = None,
+            name: str = "") -> bool:
         if not self.configured:
             return False
+        if self._is_hoster_link(magnet_or_url):
+            # A file-host link: unlocked with /link/unlock when fetched.
+            return self._add_hoster_link(magnet_or_url, name)
         if not magnet_or_url.startswith("magnet:"):
             # `magnets[]` takes a magnet or a bare infohash. A .torrent URL is
             # a different endpoint and a file upload; saying so beats a 400.
@@ -2729,10 +2866,12 @@ class AllDebrid(DebridClient):
 
     def _finished(self) -> list[tuple[str, list]]:
         """List completed AllDebrid magnets from our ledger."""
-        out = []
+        out = self._hoster_jobs()
         for entry in self._ours():
             if self._probe_timed_out():
                 break
+            if self._is_hoster_entry(entry):
+                continue
             ident = self._entry_id(entry)
             magnet = self._data(self._post("/magnet/status", {"id": ident})) \
                 .get("magnets") or {}
@@ -4356,6 +4495,10 @@ def pick_client(protocol: str, clients: list) -> object | None:
     skipped rather than producing a connection error on every request.
     """
     wanted = (protocol or "torrent").lower()
+    if wanted == "hoster":
+        from .hosters import HosterRoute
+
+        return HosterRoute.for_clients(clients)
     for client in clients:
         if getattr(client, "protocol", "") != wanted:
             continue

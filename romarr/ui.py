@@ -5649,9 +5649,40 @@ RENDER.indexers=async()=>{
         </tr>`).join('')}</tbody></table></div>`
     :(d.error?`<div class="card"><h3>Via Prowlarr</h3>
         <p class="help" style="color:var(--warn)">${esc(d.error)}</p></div>`:'')}`;
+  $('#page').innerHTML+=`<div class="card"><h3>Hydra Launcher sources</h3>
+    <p class="help">Community download lists from <a href="https://library.hydra.wiki" target="_blank" rel="noopener">library.hydra.wiki</a>.
+      Console lists (Redump, No-Intro, Rutracker consoles) carry each game's platform. Magnets go to your torrent client,
+      file links to Mister Download Manager or Direct HTTP, and file-host links to Real-Debrid or AllDebrid.</p>
+    <div class="row"><input id="hy-q" type="search" placeholder="Filter sources" style="max-width:260px">
+      <button class="btn ghost" id="hy-load">Browse the library</button></div>
+    <div id="hy-list" style="margin-top:10px"></div></div>`;
   $('#i-add').onclick=()=>addItem('indexer');
   document.querySelectorAll('[data-iedit]').forEach(b=>b.onclick=()=>
     editItem('indexer', d.items[Number(b.dataset.iedit)]));
+
+  const have=new Set(d.items.map(it=>it.url));
+  let hySeq=0;
+  const hyLoad=async()=>{
+    const box=$('#hy-list'); box.innerHTML='<div class="empty">Loading…</div>';
+    const mine=++hySeq, ver=pageVersion;
+    const stale=()=>mine!==hySeq||ver!==pageVersion||activePage!=='indexers';
+    let r;
+    try{r=await j('/api/v1/hydra/library?q='+encodeURIComponent($('#hy-q').value||''));}
+    catch(_){ if(!stale())box.innerHTML='<p class="help" style="color:var(--warn)">The library did not answer. Try again.</p>'; return; }
+    if(stale())return;
+    if(r.error){box.innerHTML=`<p class="help" style="color:var(--warn)">${esc(r.error)}</p>`;return;}
+    box.innerHTML=(r.items||[]).length?`<table><thead><tr><th>Source</th><th>Status</th><th></th></tr></thead><tbody>
+      ${r.items.map((s,i)=>`<tr><td>${esc(s.name)}<div style="color:var(--dim);font-size:11.5px">${esc(s.url)}</div></td>
+        <td>${(s.status||[]).map(x=>`<span class="pill">${esc(x)}</span>`).join(' ')}</td>
+        <td>${have.has(s.url)?'<span class="pill">added</span>':`<button class="mini" data-hy="${i}">Add</button>`}</td></tr>`).join('')}
+      </tbody></table>`:'<div class="empty">No sources match.</div>';
+    box.querySelectorAll('[data-hy]').forEach(b=>b.onclick=()=>{
+      const s=r.items[Number(b.dataset.hy)];
+      editItem('indexer',{type:'hydra',name:s.name,url:s.url,enable:true,priority:25,timeout:60});
+    });
+  };
+  $('#hy-load').onclick=hyLoad;
+  $('#hy-q').onkeydown=e=>{if(e.key==='Enter')hyLoad();};
 };
 
 RENDER.general=async()=>{

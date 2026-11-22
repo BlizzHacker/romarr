@@ -417,6 +417,13 @@ class Release:
     # When the indexer says the release was posted, as ISO-8601 UTC, or ""
     # when it did not say. Usenet minimum age and retention read it.
     published: str = ""
+    # The platform the source itself files this release under (a Hydra
+    # source's `platform` code, resolved to a ROMarr slug). Evidence for that
+    # platform and a refusal for every other one.
+    platform_hint: str = ""
+    # Other links to the same release, best first, tried in order when the
+    # download link cannot be fetched (a Hydra row's other file hosts).
+    mirrors: tuple[str, ...] = ()
 
 
 def collection_content_kind(path: str) -> str:
@@ -902,6 +909,9 @@ def judge(release: Release, wanted: str,
     demo = demo_refusal(release.title, wanted)
     if demo:
         return Judgement(-1000, verdict=demo)
+    hint = getattr(release, "platform_hint", "") or ""
+    if platform is not None and hint and not same_machine(hint, platform.slug):
+        return Judgement(-300, verdict=f"the source files it under another platform ({hint})")
 
     points = 0
     reasons: list[tuple[int, str]] = []
@@ -1145,6 +1155,11 @@ def judge(release: Release, wanted: str,
             if not has_ext:
                 return Judgement(-300, verdict="collection path has no platform evidence")
 
+    if (platform is not None and hint and not path_confirms_platform
+            and same_machine(hint, platform.slug)):
+        add(60, f"the source files it under {platform.name}")
+        path_confirms_platform = True
+
     has_ext = False
     names_plat = False
     names_explicit_name = False
@@ -1293,6 +1308,11 @@ def infer_platform(release: Release) -> Platform | None:
          or Newznab/Torznab PC category IDs (`4050` PC/Games) -> `win`.
     """
     from .platforms import PLATFORMS, resolve
+
+    # 0. The source said which platform it is (a Hydra row's platform code).
+    hinted = resolve(release.platform_hint) if getattr(release, "platform_hint", "") else None
+    if hinted is not None:
+        return hinted
 
     text = f"{release.title or ''} {release.torrent_file_path or ''}".lower()
     # 1. Unique ROM extension
