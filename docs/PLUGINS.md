@@ -107,12 +107,27 @@ Install Git using your operating system's package manager. Then install the host
   "rom-hub @ https://github.com/BlizzHacker/rom-hub/archive/a563e70dd3792568c97cc8342935d359e0a7a7ea.tar.gz"
 ```
 
+**Upgrading an existing install:** every Hub revision reports version 0.1.0, so pip says
+`Requirement already satisfied` and keeps the old files. Force it, for `rom-hub` only, then
+restart ROMarr so it loads the new module:
+
+```bash
+/opt/romarr/.venv/bin/python -m pip install --force-reinstall --no-deps \
+  "rom-hub @ https://github.com/BlizzHacker/rom-hub/archive/a563e70dd3792568c97cc8342935d359e0a7a7ea.tar.gz"
+```
+
 For a checkout using `.venv`, use `.venv/bin/python` instead. Installing into system Python or another virtual environment will not make the package available to ROMarr. Refresh the Plugins page after installing; restart ROMarr after a package upgrade if it has already loaded an older module.
 
 For the advanced [Windows source helper](INSTALL.md#windows-source-install), run from the repository directory:
 
 ```powershell
 .\.venv-windows\Scripts\python.exe -m pip install "rom-hub @ https://github.com/BlizzHacker/rom-hub/archive/a563e70dd3792568c97cc8342935d359e0a7a7ea.tar.gz"
+```
+
+To upgrade an existing Windows install, add `--force-reinstall --no-deps`, then restart ROMarr:
+
+```powershell
+.\.venv-windows\Scripts\python.exe -m pip install --force-reinstall --no-deps "rom-hub @ https://github.com/BlizzHacker/rom-hub/archive/a563e70dd3792568c97cc8342935d359e0a7a7ea.tar.gz"
 ```
 
 Use your chosen virtual-environment path if you changed `-VenvDirectory`. Git must be on `PATH` when installing plugin repositories. The Hub page reports the lack of Linux sandbox support on Windows; do not assume it is confined there.

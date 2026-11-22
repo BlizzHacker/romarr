@@ -55,6 +55,26 @@ class Session:
         return next(self.responses)
 
 
+class CategorySession(Session):
+    """Prowlarr runs its Other-category query concurrently with the game query.
+
+    That query is answered here, apart from the queued replies, so the queued
+    429 always reaches the game query whichever thread calls first, and
+    `calls` keeps counting only the game and indexer requests the test is
+    about. A concurrent Other query admitted before the 429 is allowed.
+    """
+
+    def __init__(self, *responses):
+        super().__init__(*responses)
+        self.other_calls = []
+
+    def get(self, url, **kwargs):
+        if "categories=8000" in url:
+            self.other_calls.append(url)
+            return Response()
+        return super().get(url, **kwargs)
+
+
 @pytest.fixture
 def clock(monkeypatch):
     """Advance cooldown deadlines deterministically without sleeping."""
@@ -68,7 +88,7 @@ def clock(monkeypatch):
 def test_all_clients_suppress_repeated_search_and_caps_during_cooldown(kind, clock):
     """Search and Test share one guard, and sibling clients keep functioning."""
     limited = Response(429, "45")
-    session = Session(limited, Response())
+    session = (CategorySession if kind == "prowlarr" else Session)(limited, Response())
     if kind == "prowlarr":
         client = Prowlarr(ProwlarrConfig("https://example/api", "secret"), session)
         test = client.indexers
