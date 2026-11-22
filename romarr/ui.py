@@ -260,6 +260,7 @@ a:hover{text-decoration:underline;text-underline-offset:2px}
 .pcard .foot{display:flex;gap:8px;align-items:center;
   border-top:1px solid var(--line-soft);padding-top:10px;margin-top:2px}
 .pcard .net{color:var(--dim);font-size:11px;margin-left:auto;text-align:right}
+.card .pcard p.help{margin:6px 0 0}
 .dot-ok{width:7px;height:7px;border-radius:50%;background:var(--ok);
   display:inline-block;flex:none}
 .dot-off{width:7px;height:7px;border-radius:50%;background:var(--surface-3);
@@ -1352,11 +1353,15 @@ addEventListener('hashchange',()=>{
 // a link survives only when it is https.
 const mdLite=text=>{
   const lines=String(text||'').replace(/\r/g,'').split('\n');
-  const inline=s=>esc(s)
-    .replace(/`([^`]+)`/g,'<code>$1</code>')
-    .replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>')
-    .replace(/\[([^\]]+)\]\((https:\/\/[^)\s]+)\)/g,
-      (m,label,url)=>'<a href="'+url+'" target="_blank" rel="noopener">'+label+'</a>');
+  // Code spans are lifted out first and put back last, so `**x**` inside
+  // backticks stays literal instead of turning bold.
+  const inline=s=>{const codes=[];
+    const t=esc(s)
+      .replace(/`([^`]+)`/g,(m,c)=>'\u0000'+(codes.push(c)-1)+'\u0000')
+      .replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>')
+      .replace(/\[([^\]]+)\]\((https:\/\/[^)\s]+)\)/g,
+        (m,label,url)=>'<a href="'+url+'" target="_blank" rel="noopener">'+label+'</a>');
+    return t.replace(/\u0000(\d+)\u0000/g,(m,n)=>'<code>'+codes[Number(n)]+'</code>');};
   const cells=r=>r.trim().replace(/^\|/,'').replace(/\|$/,'').split('|').map(c=>c.trim());
   let html='', i=0;
   while(i<lines.length){
@@ -1386,10 +1391,15 @@ const mdLite=text=>{
       while(i<lines.length&&/^\s*[-*]\s+/.test(lines[i])) items.push(lines[i++].replace(/^\s*[-*]\s+/,''));
       html+='<ul>'+items.map(x=>'<li>'+inline(x)+'</li>').join('')+'</ul>'; continue;
     }
+    if(/^\s*\d+[.)]\s+/.test(l)){
+      const items=[];
+      while(i<lines.length&&/^\s*\d+[.)]\s+/.test(lines[i])) items.push(lines[i++].replace(/^\s*\d+[.)]\s+/,''));
+      html+='<ol>'+items.map(x=>'<li>'+inline(x)+'</li>').join('')+'</ol>'; continue;
+    }
     if(!l.trim()){i++; continue;}
     const para=[];
     do{para.push(lines[i++]);}
-    while(i<lines.length&&lines[i].trim()&&!/^(#{1,4}\s|```|\s*\||\s*[-*]\s| {4}\S)/.test(lines[i]));
+    while(i<lines.length&&lines[i].trim()&&!/^(#{1,4}\s|```|\s*\||\s*[-*]\s|\s*\d+[.)]\s| {4}\S)/.test(lines[i]));
     html+='<p>'+inline(para.join(' '))+'</p>';
   }
   return html;
@@ -3906,7 +3916,7 @@ function chatRenderHistory(messages,pending,version){
   messages.forEach(m=>{
     if(m.role==='user') chatAppend(esc(m.content),'chat-user');
     else if(m.role==='assistant'){
-      if(m.content) chatAppend(esc(m.content),'chat-bot');
+      if(m.content) chatAppend(mdLite(m.content),'chat-bot chat-md');
       (m.tool_calls||[]).forEach(c=>{const r=results[c.id];
         chatAppend(chatToolHtml(c.name,c.arguments,r?r.content:undefined,r?!/"error"|"declined"|"cancelled"/.test(r.content):false),'chat-bot');});
     }
@@ -3930,7 +3940,7 @@ async function chatSend(url,payload,version){
       while((nl=buf.indexOf('\n'))>=0){
         const line=buf.slice(0,nl).trim(); buf=buf.slice(nl+1); if(!line) continue;
         let ev; try{ev=JSON.parse(line);}catch(_){continue;}
-        if(ev.type==='text'){const n=textNode(); n.textContent+=ev.delta;}
+        if(ev.type==='text'){const n=textNode(); n.classList.add('chat-md'); n.dataset.raw=(n.dataset.raw||'')+ev.delta; n.innerHTML=mdLite(n.dataset.raw);}
         else if(ev.type==='tool_call'){bot=null; tools[ev.id]=chatAppend(chatToolHtml(ev.name,ev.arguments),'chat-bot');}
         else if(ev.type==='tool_result'){const n=tools[ev.id]; if(n) n.innerHTML=chatToolHtml(ev.name,(JSON.parse(n.querySelector('pre').textContent||'{}')),ev.result,ev.ok);}
         else if(ev.type==='confirm'){bot=null; chatConfirmCard(ev,version);}
@@ -3961,7 +3971,7 @@ RENDER.assistant=async()=>{
   const num=(k,label)=>`<div class="field"><label>${label}</label><input id="chat-${k}" type="number" min="${cfg.limits[k][0]}" max="${cfg.limits[k][1]}" value="${esc(cfg[k])}"></div>`;
   $('#page').innerHTML=`
   <style>#chat-log{max-height:60vh;overflow:auto;display:flex;flex-direction:column;gap:8px;padding:4px}
-  .chat-msg{max-width:92%;white-space:pre-wrap;line-height:1.45}.chat-user{align-self:flex-end;background:var(--bg);padding:8px 12px;border-radius:10px}
+  .chat-msg{max-width:92%;white-space:pre-wrap;line-height:1.45}.chat-md{white-space:normal}.chat-md p{margin:0 0 8px}.chat-md ul,.chat-md ol{margin:4px 0 8px 18px}.chat-md .pd-table{font-size:13px}.chat-user{align-self:flex-end;background:var(--bg);padding:8px 12px;border-radius:10px}
   .chat-bot{align-self:flex-start}.chat-pre{white-space:pre-wrap;max-height:240px;overflow:auto;font-size:12px;margin:4px 0}
   .chat-tool summary{cursor:pointer}</style>
   <details class="card" ${cfg.enabled&&cfg.model?'':'open'}><summary><b>Provider settings</b> <span class="pill">${cfg.enabled?'enabled':'disabled'}</span></summary>
