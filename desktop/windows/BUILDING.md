@@ -2,7 +2,7 @@
 
 The native desktop is a self-contained .NET 10 WinForms application with its own
 WebView2 interface. The release ZIP includes Python 3.13.17, ROM Hub pinned to
-`97c3bb875bd99b07fb061a30a48fdeb346529313`, MinGit 2.56.0.3, and the fixed
+`7c0099e41dd50f62c5a4ba9f0e1c803a8301bd88`, MinGit 2.56.0.3, and the fixed
 Microsoft WebView2 156.0.4314.42 x64 runtime. Running the ZIP needs no separate
 Python, Git, Docker, .NET, PowerShell, or browser installation.
 
