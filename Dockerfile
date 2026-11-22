@@ -59,6 +59,23 @@ RUN if [ "$TARGETARCH" != "arm" ]; then \
         https://github.com/BlizzHacker/rom-hub-compressatorium \
         /opt/romarr/bundled-plugins/compressatorium; \
     fi
+# The Mister Download Manager plugin (romarr/mdm_plugin.py), bundled the same way.
+ARG MDM_PLUGIN_REF=v0.1.0
+RUN if [ "$TARGETARCH" != "arm" ]; then \
+      git clone --quiet --depth 1 --branch "$MDM_PLUGIN_REF" \
+        https://github.com/BlizzHacker/rom-hub-mdm \
+        /opt/romarr/bundled-plugins/mdm; \
+    fi
+# Default source plugins (preinstalled_plugins.DEFAULT_PLUGINS), bundled the
+# same way so a new install has them with no network. Keep the refs in step.
+RUN if [ "$TARGETARCH" != "arm" ]; then \
+      for spec in archive-org:v0.4.1 homebrew:v0.3.0 libretro-content:v0.2.0 \
+                  scummvm-freeware:v0.2.0 universal-db:v0.2.0; do \
+        git clone --quiet --depth 1 --branch "${spec#*:}" \
+          "https://github.com/BlizzHacker/rom-hub-${spec%%:*}" \
+          "/opt/romarr/bundled-plugins/${spec%%:*}"; \
+      done; \
+    fi
 
 # bsdtar reads one RAR volume at a time, so a release split into
 # .part1.rar/.r00/.001 volumes (the usual shape on usenet) could never import

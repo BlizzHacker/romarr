@@ -620,6 +620,10 @@ within the download folder and have every file downloaded.
   *Settings → Download Clients* offers a one-click SHA-256-verified installer
   into `<data_dir>/tools/mdm`; on Alpine/musl Docker images, connect Remote mode
   to a companion `misterdownloadmanager --headless` container.
+  Once a mode is set on the preinstalled **Mister Download Manager (direct
+  downloads)** plugin in *Hub → Plugins*, both MDM clients take their mode,
+  remote URL, API token, category and connections from it, and saving either
+  client updates the plugin (see [Plugins](PLUGINS.md)).
 - **Standalone Usenet (NNTP)** — built-in pure-Python NNTP/NNTPS client with
   `.nzb` parsing, concurrent connections, yEnc CRC32 verification, and
   automatic missing-article retirement; needs only your Usenet host credentials.

@@ -15,21 +15,25 @@ them here.
 Preinstalled, not forced: ROMarr installs the plugin once, the first time it
 starts with ROM Hub available, and records that it did. An operator who
 disables the plugin (ROM Hub has no uninstall) or deletes it keeps it that way.
+The install itself is shared with ROMarr's other preinstalled plugins, in
+`preinstalled_plugins`.
 """
 
 from __future__ import annotations
 
-import json
 import logging
-import os
-import shutil
-import tempfile
 import threading
 from pathlib import Path
 from typing import Mapping
 from urllib.parse import urlsplit
 
-from . import hub
+from . import hub, preinstalled_plugins
+from .preinstalled_plugins import (  # noqa: F401 - part of this module's API
+    DEFAULT_BUNDLED_DIR,
+    MARKER_NAME,
+    SOURCES_DIR,
+    bundled_dir,
+)
 
 log = logging.getLogger(__name__)
 
@@ -41,130 +45,34 @@ UPSTREAM_URL = "https://github.com/pacnpal/compressatorium"
 CREDIT = ("Compressatorium is by pacnpal (https://github.com/pacnpal/compressatorium). "
           "ROMarr talks to it over its HTTP API and includes none of its code.")
 
-#: Where the Docker image and desktop packages put plugins they ship with.
-DEFAULT_BUNDLED_DIR = Path("/opt/romarr/bundled-plugins")
-
-#: Inside ROM_HUB_HOME: the plugins ROMarr has preinstalled there, ever.
-MARKER_NAME = "romarr-preinstalled.json"
-
-_lock = threading.Lock()
 #: Guards the url/api_key pair, so a reader never sees one field from before a
-#: save and the other from after it. Separate from `_lock`, which is held
-#: across the preinstall's git work.
+#: save and the other from after it. Separate from the preinstall lock, which
+#: is held across the preinstall's git work.
 _config_lock = threading.Lock()
-
-
-def bundled_dir(env: Mapping[str, str] | None = None) -> Path:
-    env = os.environ if env is None else env
-    return Path(env.get("ROMARR_BUNDLED_PLUGINS") or DEFAULT_BUNDLED_DIR)
-
-
-def _marker(home: Path) -> Path:
-    return home / MARKER_NAME
-
-
-def _read_marker(home: Path) -> dict:
-    try:
-        data = json.loads(_marker(home).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
-
-
-def _write_marker(home: Path, data: dict) -> None:
-    path = _marker(home)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(data, indent=2, sort_keys=True), encoding="utf-8")
-    os.replace(tmp, path)
 
 
 def preinstall(*, home: Path | None = None,
                env: Mapping[str, str] | None = None) -> str:
     """Install the plugin once, if ROM Hub is here and it never was.
 
-    Returns what happened, for the log and for tests: `no-hub`, `offered`
-    (installed before; left as the operator has it), `present` (already
-    installed by hand), `installed`, or `failed: <reason>`. A failure is not
-    recorded, so the next start tries again.
+    See `preinstalled_plugins.preinstall` for the outcomes it returns.
     """
-    if not hub.available():
-        return "no-hub"
-    home = Path(home or hub.HOME)
-    with _lock:
-        marker = _read_marker(home)
-        if SLUG in marker:
-            return "offered"
-        try:
-            _, registry = hub._import()
-            reg = registry.Registry(home)
-            if any(p.slug == SLUG for p in reg.installed()):
-                outcome = "present"
-            else:
-                bundled = bundled_dir(env) / SLUG
-                if (bundled / "manifest.toml").is_file():
-                    _install_bundled(reg, bundled, home)
-                else:
-                    reg.install(PLUGIN_REPO, ref=PLUGIN_REF)
-                outcome = "installed"
-            marker[SLUG] = PLUGIN_REF
-            _write_marker(home, marker)
-        except Exception as exc:  # the host is optional; never block startup
-            log.warning("could not preinstall the %s plugin: %s", SLUG, exc)
-            return f"failed: {exc}"
-    log.info("compressatorium plugin: %s", outcome)
-    return outcome
-
-
-#: Inside ROM_HUB_HOME: the runtime-owned copies bundled plugins install from.
-SOURCES_DIR = "bundled-sources"
-
-
-def _install_bundled(reg, bundled: Path, home: Path) -> None:
-    """Install the bundled checkout from a copy the runtime user owns.
-
-    The image builds the checkout as root, while ROMarr runs as PUID. Git
-    refuses a local clone from a repository another user owns, so installing
-    straight from the bundled folder failed on every start. A copy under
-    ROM_HUB_HOME avoids that without loosening git's ownership check, and it
-    is kept: ROM Hub records it as the plugin's source, and a later plugin
-    update clones from it again.
-    """
-    sources = home / SOURCES_DIR
-    sources.mkdir(parents=True, exist_ok=True)
-    target = sources / SLUG
-    with tempfile.TemporaryDirectory(prefix=".copy-", dir=sources) as stage:
-        staged = Path(stage) / SLUG
-        shutil.copytree(bundled, staged, symlinks=True)
-        if target.exists():
-            shutil.rmtree(target)
-        os.replace(staged, target)
-    reg.install(str(target))
+    return preinstalled_plugins.preinstall(SLUG, PLUGIN_REPO, PLUGIN_REF,
+                                           home=home, env=env)
 
 
 def preinstall_in_background() -> None:
     """`preinstall` on a daemon thread, so a slow git never delays serving."""
-    threading.Thread(target=preinstall, name="preinstall-plugins",
-                     daemon=True).start()
+    preinstalled_plugins.preinstall_in_background(SLUG, PLUGIN_REPO, PLUGIN_REF)
 
 
 def _plugin(home: Path):
     """The installed, enabled plugin, or None."""
-    try:
-        _, registry = hub._import()
-        plugin = registry.Registry(home).get(SLUG)
-    except Exception:
-        return None
-    return plugin if getattr(plugin, "enabled", True) else None
+    return preinstalled_plugins.enabled_plugin(SLUG, home)
 
 
 def _secret(home: Path, key: str) -> str:
-    try:
-        from rom_hub import secrets
-        value = secrets.open_store(home).get(SLUG, key)
-    except Exception as exc:
-        log.warning("cannot read the %s plugin's %s: %s", SLUG, key, exc)
-        return ""
-    return str(value or "")
+    return preinstalled_plugins.secret(SLUG, home, key)
 
 
 def connection(env: Mapping[str, str], *, home: Path | None = None) -> tuple[str, str, str]:

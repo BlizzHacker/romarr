@@ -255,6 +255,8 @@ Demo and executable refusals, Usenet minimum age and retention, and complete-edi
 
 Signed webhooks, notification links and NZB detection in Torznab feeds follow the behaviour of [Questarr](https://github.com/Doezer/Questarr); no Questarr code is included.
 
+Standalone direct HTTP and BitTorrent downloads use [Mister Download Manager](https://github.com/anefzaoui/misterdownloadmanager) by anefzaoui (GPL-3.0-or-later), run as a separate program or over its Remote HTTPS API, with its settings in the preinstalled [Mister Download Manager plugin](https://github.com/BlizzHacker/rom-hub-mdm); no Mister Download Manager code is included.
+
 Soundtracks, the Switch report, wishlist monitoring and plugin start-up hardening build on MIT-licensed work from [romarrng](https://github.com/Squeaks72/romarrng), Copyright (c) 2026 MOVE WEIGHT.
 
 MIT — [LICENSE](LICENSE). ROMarr is an independent project and is not endorsed by its integrations.

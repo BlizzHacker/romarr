@@ -332,7 +332,9 @@ ECOSYSTEM: dict[str, list[Project]] = {
         Project(
             "Mister Download Manager",
             "An open-source multi-connection HTTP and BitTorrent engine that "
-            "powers ROMarr's standalone download clients.",
+            "powers ROMarr's standalone download clients. The preinstalled "
+            "Mister Download Manager (direct downloads) plugin holds their "
+            "settings.",
             repo="https://github.com/anefzaoui/misterdownloadmanager",
             site="https://misterdownloadmanager.com", tab="acquisition"),
         Project(

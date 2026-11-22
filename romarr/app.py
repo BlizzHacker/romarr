@@ -1947,8 +1947,16 @@ class ROMarr:
                 urls.append(url)
         return tuple(dict.fromkeys(urls))
 
-    def _build_client(self, cfg: dict):
-        """Instantiate a configured client, preserving legacy 1-arg build_client mocks."""
+    def _build_client(self, cfg: dict, *, use_plugin: bool = True):
+        """Instantiate a configured client, preserving legacy 1-arg build_client mocks.
+
+        An MDM client takes its connection from the Mister Download Manager
+        plugin once that plugin's mode is set (`mdm_plugin.apply`), unless
+        `use_plugin` is off -- the form's Test button tries what the form shows.
+        """
+        if use_plugin:
+            from . import mdm_plugin
+            cfg = mdm_plugin.apply(cfg)
         params = inspect.signature(build_client).parameters.values()
         if any(p.name == "data_dir" or p.kind == inspect.Parameter.VAR_KEYWORD for p in params):
             client = build_client(cfg, data_dir=str(self.store.path.parent))
@@ -2049,7 +2057,12 @@ class ROMarr:
         call site means a new secret field is covered the moment it is declared.
         """
         out = dict(self.store.settings)
-        out["download_clients"] = [redact(c) for c in out.get("download_clients", [])]
+        # An MDM client's form shows the plugin's settings once they are the
+        # ones in force, so what is edited is what runs.
+        from . import mdm_plugin
+        mdm_now = mdm_plugin.settings()
+        out["download_clients"] = [redact(mdm_plugin.apply(c, mdm_now))
+                                   for c in out.get("download_clients", [])]
         out["indexers"] = [redact_indexer(i) for i in out.get("indexers", [])]
         out["libraries"] = [redact_library(lib) for lib in out.get("libraries", [])]
         # General Settings shows the configured, enabled qBittorrent clients.
@@ -2329,9 +2342,9 @@ class ROMarr:
                 return {"ok": False, "message": "Rejected the API key"}
             return {"ok": False, "message": f"{type(err).__name__}: {err}"}
 
-    def test_client(self, cfg: dict) -> dict:
+    def test_client(self, cfg: dict, *, use_plugin: bool = True) -> dict:
         """Try a configuration without saving it, the way *arr's Test does."""
-        client = self._build_client(cfg)
+        client = self._build_client(cfg, use_plugin=use_plugin)
         if client is None:
             return {"ok": False, "message": f"unknown client type: {cfg.get('type')!r}"}
         try:
@@ -3615,6 +3628,8 @@ class ROMarr:
         )
         info = mdm.availability(configured_path, data_dir=self.store.path.parent)
         info["configured"] = bool(rows)
+        from . import mdm_plugin
+        info["plugin"] = mdm_plugin.status()
         info["usenet_builtin"] = any(
             type(c).__name__ == "BuiltinNzbClient" and getattr(c, "configured", False)
             for c in self.clients
@@ -10541,6 +10556,8 @@ def make_handler(service: ROMarr):
                 return self._json(200, hub.exo2romm_status())
             if route.path == "/api/v1/hub/compressatorium":
                 return self._json(200, _compressatorium_status(service))
+            if route.path == "/api/v1/hub/mdm":
+                return self._json(200, _mdm_status())
             if route.path == "/api/v1/hub/fleet":
                 return self._json(200, hub.fleet_profiles())
             if route.path == "/api/v1/mcp":
@@ -10562,6 +10579,7 @@ def make_handler(service: ROMarr):
                                         "sandbox_detail": why,
                                         "archive_org_auth": hub.archive_org_auth_status(),
                                         "compressatorium": _compressatorium_status(service),
+                                        "mdm": _mdm_status(),
                                         "flaresolverr_configured": bool(hub.flaresolverr_url()),
                                         "searchable_plugins": searchable,
                                         # The Plugins page says out loud what
@@ -11413,6 +11431,25 @@ def make_handler(service: ROMarr):
                     url=url, api_key=api_key,
                     clear_api_key=payload.get("clear_api_key") is True)
                 return self._json(200 if result.get("ok") else 400, result)
+            if route.path == "/api/v1/hub/mdm":
+                from . import mdm_plugin
+                payload = body if isinstance(body, dict) else {}
+                fields = {k: payload.get(k)
+                          for k in ("mode", "remote_url", "api_token", "category")}
+                if any(v is not None and not isinstance(v, str) for v in fields.values()):
+                    return self._json(400, {"ok": False, "error": (
+                        "mode, remote_url, api_token and category must be strings")})
+                conns = payload.get("connections")
+                if conns is not None and (isinstance(conns, bool)
+                                          or not isinstance(conns, (int, str))):
+                    return self._json(400, {"ok": False,
+                                            "error": "connections must be a number"})
+                result = mdm_plugin.configure(
+                    **fields, connections=conns,
+                    clear_api_token=payload.get("clear_api_token") is True)
+                if result.get("ok"):
+                    service.reload_clients()
+                return self._json(200 if result.get("ok") else 400, result)
             if route.path == "/api/v1/hub/archive-org/auth":
                 payload = body if isinstance(body, dict) else {}
                 result = hub.archive_org_auth_configure(
@@ -11545,6 +11582,16 @@ def make_handler(service: ROMarr):
                             merged["timeout"] = indexer_timeout(merged)
                         except ValueError as err:
                             return self._json(400, {"error": str(err)})
+                    else:
+                        # While the MDM plugin is set it is where these
+                        # settings live, so the edit goes there too. The
+                        # plugin is written first: if it refuses, the row
+                        # is not saved either, and the two never disagree.
+                        from . import mdm_plugin
+                        synced = mdm_plugin.sync_from_client(dict(body))
+                        if not synced.get("ok"):
+                            return self._json(400, {"error": synced.get("error")
+                                                    or "could not save the MDM plugin settings"})
                     saved = service.store.put_item(key, merged)
                     service.reload_clients()
                 return self._json(200, redact_indexer(saved) if is_indexer
@@ -11576,7 +11623,10 @@ def make_handler(service: ROMarr):
                 # Tested against the submitted form, with any untouched secret
                 # filled back in, so Test reflects what Save would store.
                 existing = service.store.get_item("download_clients", body.get("id"))                     if body.get("id") else None
-                return self._json(200, service.test_client(merge_secrets(dict(body), existing)))
+                from . import mdm_plugin
+                return self._json(200, service.test_client(
+                    mdm_plugin.for_test(body, merge_secrets(dict(body), existing)),
+                    use_plugin=False))
             if route.path in ("/api/v1/emulators/cores/install", "/api/v1/emulators/cores/configure"):
                 try:
                     core_hub = CoreHub(service.store.path.parent)
@@ -11832,6 +11882,12 @@ def _compressatorium_status(service) -> dict:
     return compressatorium_plugin.status(service._env)
 
 
+def _mdm_status() -> dict:
+    """The Mister Download Manager card's state; never the API token itself."""
+    from . import mdm_plugin
+    return mdm_plugin.status()
+
+
 def serve(port: int = 6868, env: dict[str, str] | None = None):
     service = ROMarr(env, defer_dats=True)
     # Reconcile integration rows that were mid-dispatch when the server
@@ -11845,8 +11901,10 @@ def serve(port: int = 6868, env: dict[str, str] | None = None):
     # Plugins ROMarr ships with are installed once, the first time ROM Hub is
     # available; never again, so one the operator disabled stays disabled.
     try:
-        from . import compressatorium_plugin
+        from . import compressatorium_plugin, mdm_plugin, preinstalled_plugins
         compressatorium_plugin.preinstall_in_background()
+        mdm_plugin.preinstall_in_background()
+        preinstalled_plugins.preinstall_defaults_in_background()
     except Exception:
         log.exception("plugin preinstall skipped (non-fatal)")
 

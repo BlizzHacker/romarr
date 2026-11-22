@@ -204,6 +204,7 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "/api/v1/hub/igir": ("GET", "Igir v5.8.0 1G1R front-end status, default profile, and CLI execution (POST runs or previews an Igir 1G1R job with {romm} output tokens)."),
     "/api/v1/hub/exo2romm": ("GET", "eXo2romm eXoDOS-to-RomM ZIP repackager status, attribution to derkommutator, and defaults (POST previews or repackages eXoDOS game zips)."),
     "/api/v1/hub/compressatorium": ("GET", "Compressatorium plugin status: whether it is installed and enabled, the service address batch decompression uses and where it comes from (env or plugin), whether an API key is saved, and credit to pacnpal/Compressatorium. Never returns the key (POST saves the address or key)."),
+    "/api/v1/hub/mdm": ("GET", "Mister Download Manager (direct downloads) plugin status: whether it is installed and enabled, whether its mode is set (then the Standalone Direct HTTP and BitTorrent (MDM) clients use its settings), the mode, remote URL, connections and category, whether an API token is saved, and credit to anefzaoui/misterdownloadmanager. Never returns the token (POST saves the settings)."),
     "/api/v1/hub/fleet": ("GET", "Multi-device and network library sync profiles for ES-DE, RetroPie/ArcadePunks, Batocera, Argosy, Grout, Steam Deck, and RetroArch WebDAV (POST builds a 1G1R + gamelist.xml sync plan)."),
     "/api/v1/mcp": ("GET", "MCP connection manifest (GET), or authenticated stateless JSON-RPC MCP transport (POST). GET text/event-stream returns 405; no standalone SSE stream is offered."),
     "/api/v1/hub/archive-org/auth": ("POST", "Save or clear host-managed Archive.org credentials; returns status without credentials."),
@@ -613,6 +614,38 @@ def spec(version: str = "0.0.0", *, base_url: str = "") -> dict:
     }
     paths["/api/v1/hub/compressatorium"]["post"]["responses"]["400"] = {
         "description": "The plugin is not installed, or the address cannot be used.",
+    }
+    paths["/api/v1/hub/mdm"].update(_operation(
+        "/api/v1/hub/mdm", "POST",
+        "Save the Mister Download Manager plugin's settings. The API token goes to "
+        "ROM Hub's secret store. Omitted fields are left unchanged; the whole result "
+        "is validated before anything is written."))
+    paths["/api/v1/hub/mdm"]["post"]["requestBody"] = {
+        "required": True,
+        "content": {"application/json": {"schema": {
+            "type": "object",
+            "properties": {
+                "mode": {"type": "string", "enum": ["", "cli", "remote"],
+                         "description": "cli or remote; an empty string unsets it, "
+                                        "and each MDM client keeps its own settings."},
+                "remote_url": {"type": "string",
+                               "description": "Remote mode: https:// base address (plain "
+                                              "http:// only to localhost)."},
+                "api_token": {"type": "string", "format": "password",
+                              "description": "Replaces the saved token; omit to leave it unchanged."},
+                "clear_api_token": {"type": "boolean", "default": False,
+                                    "description": "Delete the saved token."},
+                "connections": {"type": ["integer", "string"], "minimum": 1, "maximum": 128,
+                                "description": "Parallel HTTP range connections for direct downloads."},
+                "category": {"type": "string",
+                             "enum": ["", "programs", "compressed", "documents", "music",
+                                      "videos", "other"],
+                             "description": "MDM category in Remote mode; empty for none."},
+            },
+        }}},
+    }
+    paths["/api/v1/hub/mdm"]["post"]["responses"]["400"] = {
+        "description": "The plugin is not installed, or a setting cannot be used.",
     }
     _guide_contracts(paths)
 
