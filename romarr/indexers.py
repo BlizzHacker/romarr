@@ -38,6 +38,11 @@ log = logging.getLogger(__name__)
 
 # Newznab category ids sent with every search. Console + PC games only.
 SEARCH_CATEGORIES = (1000, 4050)
+# Asked for separately, never folded into SEARCH_CATEGORIES: general trackers
+# file ROMs under Other (8000) and PC games under plain PC (4000, with 4020),
+# and in one combined query those categories' films, albums and apps would
+# use up each indexer's result limit before the games did.
+OTHER_SEARCH_CATEGORIES = (8000, 4000)
 
 # A .torrent metainfo file is small compared with the ROMs it describes. Keep
 # the local proxy bounded so a broken or hostile indexer cannot fill RAM.
@@ -345,16 +350,35 @@ class Prowlarr:
             return privacy
 
     def search(self, term: str, *, limit: int = 100) -> list[Release]:
-        """Search every configured indexer for a game."""
-        url = self._url("search", query=term, categories=list(SEARCH_CATEGORIES),
+        """Search every configured indexer for a game.
+
+        Two queries: the game categories, then Other on its own. The second
+        is best-effort -- a failure there never costs the game results -- and
+        what it finds is only kept by the scorer when the title proves it is
+        a ROM (selection.other_has_rom_evidence).
+        """
+        rows = self._search_rows(term, SEARCH_CATEGORIES, limit)
+        try:
+            other = self._search_rows(term, OTHER_SEARCH_CATEGORIES, limit)
+        except Exception as err:  # noqa: BLE001 - best effort; never costs the game results
+            log.warning("prowlarr Other-category search failed: %s", err.__class__.__name__)
+            other = []
+        seen = {str(r.get("guid") or r.get("downloadUrl") or r.get("title")) for r in rows}
+        rows += [r for r in other
+                 if str(r.get("guid") or r.get("downloadUrl") or r.get("title")) not in seen]
+        privacy = self._private_ids()
+        return [self._to_release(row, privacy) for row in rows]
+
+    def _search_rows(self, term: str, categories, limit: int) -> list[dict]:
+        url = self._url("search", query=term, categories=list(categories),
                         type="search", limit=limit)
         response = self._requests.get(self._session,
             url, headers={"X-Api-Key": self._config.api_key},
             timeout=self._config.timeout,
         )
         response.raise_for_status()
-        privacy = self._private_ids()
-        return [self._to_release(row, privacy) for row in response.json()]
+        body = response.json()
+        return body if isinstance(body, list) else []
 
     def is_prowlarr_download_url(self, url: str) -> bool:
         """Whether a result URL points back to this configured Prowlarr host.

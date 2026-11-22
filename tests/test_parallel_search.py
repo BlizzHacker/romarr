@@ -112,6 +112,9 @@ def test_prowlarr_workers_use_own_sessions_and_warm_shared_privacy(tmp_path, mon
             self.urls.append(url)
             if url.endswith("/api/v1/indexer"):
                 return Response([{"id": 7, "privacy": "private"}])
+            if "categories=8000" in url:
+                # The best-effort Other-category query (indexers.Prowlarr.search).
+                return Response([])
             barrier.wait()
             if "query=Game&" in url:
                 raise TimeoutError("plain title timed out")
