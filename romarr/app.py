@@ -2625,6 +2625,9 @@ class ROMarr:
             if not row.get("title"):
                 continue
             plugin_slug = str(row.get("plugin") or "")
+            if plugin_slug in hub.NON_GAME_PLUGINS:
+                # Guides, videos, mods and tools are not the game.
+                continue
             extra = row.get("extra") if isinstance(row.get("extra"), dict) else {}
             is_minerva = plugin_slug == "minerva-archive"
             magnet = str(row.get("magnet") or "")
@@ -2668,8 +2671,8 @@ class ROMarr:
                 title=row["title"],
                 size=int(row.get("size_bytes") or 0),
                 seeders=0,
-                # A plugin result is a game by definition -- it came from a
-                # ROM source. 1000 is the console range the scorer accepts;
+                # A result from a game source (NON_GAME_PLUGINS are skipped
+                # above) is a game. 1000 is the console range the scorer accepts;
                 # inventing a category would make `is_game_release` reject
                 # every row the Hub returned.
                 categories=(1000,),

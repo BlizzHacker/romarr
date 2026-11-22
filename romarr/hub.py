@@ -546,6 +546,21 @@ def archive_org_auth_configure(email="", password="", clear=False) -> dict:
     return configure(HOME, email=email, password=password, clear=clear)
 
 
+#: Plugins whose search results are not game files: guides, video
+#: tutorials, manuals, mods, artwork, cheats, save tools, BIOS and emulator
+#: listings, and source repositories. Their rows are useful on their own
+#: pages but are never a release for a game request -- a "Super Metroid
+#: review" video must not be grabbed and imported as Super Metroid.
+NON_GAME_PLUGINS = frozenset({
+    "youtube-tutorials", "strategywiki", "gamefaqs", "game-manuals",
+    "moddb", "gamebanana", "nexusmods", "modrinth", "curseforge", "thunderstore",
+    "github-games", "ludusavi", "retroarch-autoconfig", "libretro-cheats",
+    "libretro-thumbnails", "libretro-overlays", "libretro-database", "openvgdb",
+    "hasheous", "open-bios", "emulators", "libretro-cores", "retroachievements",
+    "compressatorium", "mdm",
+})
+
+
 def searchable_plugins() -> list[str]:
     """Slugs of installed, enabled plugins that declare `search`."""
     try:

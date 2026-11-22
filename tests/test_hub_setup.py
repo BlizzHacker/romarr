@@ -62,12 +62,16 @@ def test_rejected_source_never_reaches_installer(server, source):
 
 def test_configured_source_hosts_are_applied(server):
     base, service, installs = server
+    # Extra hosts add to the built-in forges; they never replace them.
     service.store.settings["plugin_hosts"] = ["forge.example"]
     assert post(base, "/api/v1/hub/source/install",
-                {"url": "https://github.com/example/plugin"})[0] == 400
-    assert post(base, "/api/v1/hub/source/install",
                 {"url": "https://forge.example/example/plugin"})[0] == 200
-    assert installs == ["https://forge.example/example/plugin"]
+    assert post(base, "/api/v1/hub/source/install",
+                {"url": "https://github.com/example/plugin"})[0] == 200
+    assert post(base, "/api/v1/hub/source/install",
+                {"url": "https://unlisted.example/example/plugin"})[0] == 400
+    assert installs == ["https://forge.example/example/plugin",
+                        "https://github.com/example/plugin"]
 
 
 def test_installer_failure_is_reported_instead_of_claiming_success(server, monkeypatch):
