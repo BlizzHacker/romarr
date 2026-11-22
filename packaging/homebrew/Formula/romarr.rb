@@ -3,8 +3,8 @@ class Romarr < Formula
 
   desc "*arr for games: request, find, verify and file games into your library"
   homepage "https://romarr.app"
-  url "https://github.com/BlizzHacker/romarr/archive/refs/tags/v1.11.4.tar.gz"
-  sha256 "dca45aac06d997dbf75dc19d656016c6db38e3a89641c6bca21c7bd8b4363223"
+  url "https://github.com/BlizzHacker/romarr/archive/refs/tags/v1.12.0.tar.gz"
+  sha256 "775c2c334986f6ed40c2cd0b58bd051389cd520f2764a26f82b1eef4cde4251b"
   license "MIT"
   head "https://github.com/BlizzHacker/romarr.git", branch: "main"
 
