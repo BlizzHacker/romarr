@@ -140,17 +140,15 @@ def test_a_linux_build_is_not_a_windows_game():
     assert not j.accepted
 
 
+def test_the_other_query_waits_for_the_game_query():
+    """Concurrent fan-outs queue inside Prowlarr and the Other one timed out."""
+    order = []
 
-def test_the_two_prowlarr_queries_run_at_the_same_time():
-    """Each fans out to every indexer; in sequence they doubled a search."""
-    import threading
-    both = threading.Barrier(2, timeout=5)
-
-    class Concurrent(_Session):
+    class Ordered(_Session):
         def get(self, url, **kw):
             if "/search" in url:
-                both.wait()  # deadlocks (BrokenBarrierError) if run one after the other
+                order.append("other" if "categories=8000" in url else "game")
             return super().get(url, **kw)
 
-    client = Prowlarr(ProwlarrConfig(base_url="http://p:9696", api_key="k"), Concurrent())
-    assert len(client.search("Chrono Trigger")) == 2
+    Prowlarr(ProwlarrConfig(base_url="http://p:9696", api_key="k"), Ordered()).search("Chrono Trigger")
+    assert order == ["game", "other"]
