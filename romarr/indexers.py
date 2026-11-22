@@ -23,6 +23,7 @@ import math
 import time
 from email.utils import parsedate_to_datetime
 import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from threading import Lock
 from urllib.parse import (
@@ -357,12 +358,20 @@ class Prowlarr:
         what it finds is only kept by the scorer when the title proves it is
         a ROM (selection.other_has_rom_evidence).
         """
-        rows = self._search_rows(term, SEARCH_CATEGORIES, limit)
+        # Concurrent, not one after the other: each query fans out to every
+        # indexer behind Prowlarr, and in sequence the second one roughly
+        # doubled a search (93s measured on a 54-indexer install).
+        pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="prowlarr-other")
+        pending = pool.submit(self._search_rows, term, OTHER_SEARCH_CATEGORIES, limit)
         try:
-            other = self._search_rows(term, OTHER_SEARCH_CATEGORIES, limit)
-        except Exception as err:  # noqa: BLE001 - best effort; never costs the game results
-            log.warning("prowlarr Other-category search failed: %s", err.__class__.__name__)
-            other = []
+            rows = self._search_rows(term, SEARCH_CATEGORIES, limit)
+            try:
+                other = pending.result(timeout=float(self._config.timeout) + 5)
+            except Exception as err:  # noqa: BLE001 - best effort; never costs the game results
+                log.warning("prowlarr Other-category search failed: %s", err.__class__.__name__)
+                other = []
+        finally:
+            pool.shutdown(wait=False, cancel_futures=True)
         seen = {str(r.get("guid") or r.get("downloadUrl") or r.get("title")) for r in rows}
         rows += [r for r in other
                  if str(r.get("guid") or r.get("downloadUrl") or r.get("title")) not in seen]

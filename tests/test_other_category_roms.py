@@ -71,7 +71,8 @@ def test_prowlarr_asks_for_other_separately_and_merges_without_duplicates():
     titles = [r.title for r in client.search("Chrono Trigger")]
     searches = [u for u in session.urls if "/search" in u]
     assert len(searches) == 2
-    assert "categories=1000" in searches[0] and "categories=8000" in searches[1]
+    assert sorted("categories=8000" in u for u in searches) == [False, True]
+    assert any("categories=1000" in u for u in searches)
     assert titles == ["Chrono Trigger (USA) [SNES]", "Chrono Trigger (USA)"]
 
 
@@ -137,3 +138,19 @@ def test_a_bare_dotted_build_number_is_pc_evidence():
 def test_a_linux_build_is_not_a_windows_game():
     j = judge(_release("hollow-knight-linux-gog-phoenix-games-lab", cats=(8010,)), "Hollow Knight", WIN)
     assert not j.accepted
+
+
+
+def test_the_two_prowlarr_queries_run_at_the_same_time():
+    """Each fans out to every indexer; in sequence they doubled a search."""
+    import threading
+    both = threading.Barrier(2, timeout=5)
+
+    class Concurrent(_Session):
+        def get(self, url, **kw):
+            if "/search" in url:
+                both.wait()  # deadlocks (BrokenBarrierError) if run one after the other
+            return super().get(url, **kw)
+
+    client = Prowlarr(ProwlarrConfig(base_url="http://p:9696", api_key="k"), Concurrent())
+    assert len(client.search("Chrono Trigger")) == 2
