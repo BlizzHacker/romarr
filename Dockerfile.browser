@@ -36,7 +36,7 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt \
  && pip install --no-cache-dir "playwright==${PLAYWRIGHT_VERSION}" \
  && if [ "$TARGETARCH" != "arm" ]; then \
       pip install --no-cache-dir \
-        "rom-hub @ https://github.com/BlizzHacker/rom-hub/archive/0d4f7114db4b047bc90a78912574a823e3b10527.tar.gz"; \
+        "rom-hub @ https://github.com/BlizzHacker/rom-hub/archive/97c3bb875bd99b07fb061a30a48fdeb346529313.tar.gz"; \
     fi
 
 WORKDIR /app

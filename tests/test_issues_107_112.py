@@ -358,10 +358,11 @@ def test_issue_107_ui_local_timezone_helpers():
 def test_issue_93_rom_hub_pin_updated():
     """#93 & Archive.org auth: Dockerfile, Dockerfile.browser, docs/PLUGINS.md,
     scripts/build-windows-desktop.ps1, and .github/workflows/docker.yml pin the
-    updated BlizzHacker/rom-hub commit containing the catalog, Igir v5.8.0,
-    eXo2romm v0.1.0, and shared Archive.org host auth updates."""
+    updated BlizzHacker/rom-hub commit. Bumped for rom-hub #60: RomM hashes
+    reach enrich plugins, GitHub token for listings, 512 core cap, and the
+    catalogue pointing at 23 republished plugin tags."""
     root = pathlib.Path(__file__).resolve().parents[1]
-    expected_sha = "0d4f7114db4b047bc90a78912574a823e3b10527"
+    expected_sha = "97c3bb875bd99b07fb061a30a48fdeb346529313"
     for rel in ("Dockerfile", "Dockerfile.browser", "docs/PLUGINS.md",
                 "scripts/build-windows-desktop.ps1", ".github/workflows/docker.yml"):
         content = (root / rel).read_text(encoding="utf-8")
