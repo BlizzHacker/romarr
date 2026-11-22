@@ -4566,6 +4566,10 @@ class ROMarr:
                 log.warning("%s failed_jobs() failed: %s", name, err)
         return jobs
 
+    #: qBittorrent states for a torrent that is waiting its turn or was paused
+    #: by the operator -- not stalled, whatever its age (see below).
+    _WAITING_TORRENT_STATES = frozenset({"queuedDL", "pausedDL", "stoppedDL"})
+
     def _is_download_active_or_complete(self, row: QueueItem) -> bool:
         """Return True if a download client reports `row` is completed or actively transferring (#108).
 
@@ -4606,6 +4610,16 @@ class ROMarr:
                             return True
                         dlspeed = int(item.get("dlspeed", 0) or 0)
                         state = str(item.get("state") or "")
+                        # Waiting, not dead. With queueing on, qBittorrent
+                        # holds every torrent past `max_active_downloads` (4
+                        # by default) in queuedDL, and one the operator
+                        # paused sits in pausedDL/stoppedDL. Neither has had
+                        # a chance to download, so the grab's age says
+                        # nothing about the release: retiring them after the
+                        # stall timeout blocklisted and deleted 2,240 queued
+                        # torrents on one install.
+                        if state in self._WAITING_TORRENT_STATES:
+                            return True
                         if dlspeed > 0 or state in (
                             "downloading", "forcedDL", "checkingDL",
                             "checkingUP", "allocating", "moving",
