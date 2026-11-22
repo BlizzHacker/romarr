@@ -384,6 +384,28 @@ def _sandbox_policy() -> bool:
     return True
 
 
+def _plugin_secrets(plugin) -> dict:
+    """The plugin's saved `secret` settings, resolved the way the Hub CLI does.
+
+    ROM Hub keeps secrets out of `state.json` and hands them to a plugin
+    only in its start-up frame. The CLI does that through `prepare_secrets`;
+    ROMarr's own in-process starts (search, torrent resolve, download plan)
+    did not, so a plugin whose key was saved -- Demozoo, CurseForge, Nexus
+    Mods, GitHub Games, Mister Download Manager -- ran as if it had none.
+    A store that cannot be read means no secrets, never a failed search.
+    """
+    try:
+        from rom_hub.cli import prepare_secrets
+    except Exception:  # noqa: BLE001 - an older Hub without secret support
+        return {}
+    try:
+        return prepare_secrets(plugin, HOME)
+    except Exception as exc:  # noqa: BLE001 - logged; the plugin runs keyless
+        log.warning("could not read saved secrets for %s: %s",
+                    getattr(plugin, "slug", "?"), type(exc).__name__)
+        return {}
+
+
 def _plugin_env() -> dict:
     """Apply the same fail-closed policy to the Hub CLI and worker bridge."""
     env = _host_env()
@@ -692,6 +714,7 @@ def search(query: str, platform: str | None = None, limit: int = 25,
             continue
         try:
             outcome = search_all(group, fetcher=fetcher, query=query,
+                                 secrets_for=_plugin_secrets,
                                  platform=_search_platform(platform), limit=call_limit, timeout=timeout,
                                  allow_unsandboxed=_unsandboxed())
         except Exception as exc:
@@ -801,6 +824,7 @@ def resolve_torrents(rows: list[dict]) -> list[dict]:
                         plugin_dir=plugin.path, manifest=manifest,
                         config=getattr(plugin, "config", {}) or {},
                         fetcher=fetcher, timeout=90.0,
+                        secrets=_plugin_secrets(plugin),
                         allow_unsandboxed=_unsandboxed()) as proc:
                     for row in plugin_rows:
                         raw = raw_magnet(row)
@@ -885,6 +909,7 @@ def fetch(row: dict, dest_dir) -> dict:
         with PluginProcess(plugin_dir=plugin.path, manifest=plugin.manifest,
                            config=getattr(plugin, "config", {}) or {},
                            fetcher=fetcher,
+                           secrets=_plugin_secrets(plugin),
                            allow_unsandboxed=_unsandboxed()) as proc:
             plan = proc.plan(result)
             with HttpDownloader(
