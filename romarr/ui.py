@@ -7331,55 +7331,85 @@ RENDER.collections=async()=>{
     .concat(allSources.filter(t=>t.game===false));
   const hiddenSources=allSources.length-allSources.filter(t=>t.game!==false).length;
   const dats=st.dats||[];
-  $('#page').innerHTML='<div class="card"><h3>Plan a set</h3>'
+  // The platform each DAT most likely covers, worked out on the server from
+  // the DAT name. Only a default: a set with no platform requested every
+  // title for nowhere, which is how a first set "did nothing".
+  const datPlatforms=st.dat_platforms||{};
+  const passMinutes=st.interval_minutes||10;
+  const firstPlatform=dats.length?(datPlatforms[dats[0]]||''):'';
+  const helpHidden=collectionsHelpHidden();
+  const inputStyle='padding:7px 10px;background:var(--bg);color:var(--fg);'
+    +'border:1px solid var(--line);border-radius:6px';
+  const field=(label,control,hint)=>'<div class="field" style="flex:1;min-width:220px;margin:0">'
+    +'<label>'+label+'</label>'+control
+    +(hint?'<div class="help" style="margin:0">'+hint+'</div>':'')+'</div>';
+  const regionsDefault=(SETTINGS.preferred_regions&&SETTINGS.preferred_regions.length
+    ?SETTINGS.preferred_regions:['usa','world','europe','japan'])
+    .map(r=>String(r).toLowerCase()).join(',');
+  const languagesOpen=(SETTINGS.translation_policy||'exclude')!=='exclude'
+    ||(SETTINGS.preferred_languages||[]).length>0;
+  $('#page').innerHTML=collectionsHowItWorks(passMinutes,helpHidden)
+    +'<div class="card" id="cplan-card"'+(helpHidden?'':' style="margin-top:16px"')+'>'
+    +'<div class="row" style="justify-content:space-between;align-items:center">'
+    +'<h3 style="margin:0">Plan a set</h3>'
+    +'<a href="#collections" id="chelp-show" class="help"'+(helpHidden?'':' style="display:none"')
+    +'>How this works</a></div>'
     +(dats.length
-      ?'<p class="help">Compare a DAT against your library. Nothing is '
-       +'requested until you say so.</p>'
-       +'<div class="row" style="flex-wrap:wrap;gap:10px">'
-       +'<select id="cdat">'+dats.map(d=>'<option>'+esc(d)+'</option>').join('')+'</select>'
-       +'<select id="cplat"><option value="">platform (match on disk)</option>'
-       +PLATFORMS.map(p=>'<option value="'+esc(p.slug)+'">'+esc(p.name)+'</option>').join('')
-       +'</select>'
-       +'<label class="help" style="margin:0"><input type="checkbox" id="c1g1r" checked> '
-       +'One game, one ROM</label>'
-       +'<input id="cregions" placeholder="usa,world,europe,japan" '
-       +'style="flex:1;min-width:180px;padding:7px 10px;background:var(--bg);'
-       +'color:var(--fg);border:1px solid var(--line);border-radius:6px">'
+      ?'<p class="help" style="margin-top:8px">Compare a DAT with your library. Nothing is '
+       +'requested until you press <b>Request missing</b>.</p>'
+       +'<div class="row" style="flex-wrap:wrap;gap:12px;align-items:flex-start">'
+       +field('DAT (the checklist)','<select id="cdat">'+dats.map(d=>'<option>'+esc(d)+'</option>').join('')+'</select>',
+          'From your DAT directory. One DAT lists every game of one system.')
+       +field('Platform','<select id="cplat"><option value="">choose the platform this DAT is for</option>'
+          +PLATFORMS.map(p=>'<option value="'+esc(p.slug)+'"'+(p.slug===firstPlatform?' selected':'')+'>'
+            +esc(p.name)+'</option>').join('')+'</select>',
+          'Where these games live in your library. ROMarr picks it from the DAT name when it can; '
+          +'missing games are requested for this platform.')
+       +'</div>'
+       +'<div class="row" style="flex-wrap:wrap;gap:12px;margin-top:12px;align-items:flex-start">'
+       +field('Region order','<input id="cregions" value="'+esc(regionsDefault)+'" '
+          +'placeholder="usa,world,europe,japan" style="'+inputStyle+'">',
+          'Comma-separated, best first. When a game has several dumps, the earliest region in this list wins.')
+       +'<div class="field" style="flex:1;min-width:220px;margin:0"><label>Rules</label>'
+       +'<label class="help" style="margin:0" title="Keep one dump per game (the best one by your region order) instead of every regional version and revision">'
+       +'<input type="checkbox" id="c1g1r" checked> One game, one ROM (1G1R): one dump per game</label>'
        +'<label class="help" style="margin:0" title="Treat the region list as an allowlist: omit a title when no dump matches one of your regions">'
        +'<input type="checkbox" id="cstrict"'+((SETTINGS.region_mode||'prefer')==='strict'?' checked':'')+'> '
-       +'Only selected regions</label>'
-       +'<button class="btn" id="cplan">Preview plan</button></div>'
-       +'<div class="row" style="flex-wrap:wrap;gap:14px;margin-top:10px">'
-       +['proto','beta','demo','hack','unlicensed'].map(k=>
-          '<label class="help" style="margin:0"><input type="checkbox" class="cex" '
-          +'value="'+k+'" checked> exclude '+k+'</label>').join('')
+       +'Only my regions: skip games with no dump in the list</label></div>'
        +'</div>'
-       +'<div class="row" style="gap:8px;margin-top:10px;align-items:center">'
-       +'<label class="help" style="margin:0">Fan translations</label>'
-       +'<select id="ctrans">'
-       +[['exclude','exclude (published dumps only)'],
-         ['fill','fill gaps (a selected-language translation only where no preferred region exists)'],
-         ['prefer','prefer (a selected-language translation over the region winner)'],
-         ['keep_both','keep both (original + translation under Translations/)']].map(o=>
+       +'<div class="field" style="margin:12px 0 0"><label>Leave out</label>'
+       +'<div class="row" style="flex-wrap:wrap;gap:14px">'
+       +[['proto','prototypes'],['beta','betas'],['demo','demos and kiosk'],
+         ['hack','hacks and trainers'],['unlicensed','unlicensed and pirate']].map(k=>
+          '<label class="help" style="margin:0"><input type="checkbox" class="cex" '
+          +'value="'+k[0]+'" checked> '+k[1]+'</label>').join('')
+       +'</div><div class="help" style="margin:0">Ticked kinds are not part of the set. Untick one to include it.</div></div>'
+       +'<details id="clang"'+(languagesOpen?' open':'')+' style="margin-top:12px">'
+       +'<summary class="help" style="cursor:pointer;margin:0">Translations and languages (optional)</summary>'
+       +'<div class="row" style="flex-wrap:wrap;gap:12px;margin-top:10px;align-items:flex-start">'
+       +field('Fan translations','<select id="ctrans">'
+       +[['exclude','Leave them out (published dumps only)'],
+         ['fill','Fill gaps: use one only where no dump is in your regions'],
+         ['prefer','Prefer: use one over the region winner'],
+         ['keep_both','Keep both: original plus translation under Translations/']].map(o=>
           '<option value="'+o[0]+'"'+((SETTINGS.translation_policy||'exclude')===o[0]?' selected':'')
           +'>'+o[1]+'</option>').join('')
-       +'</select>'
-       +'<label class="help" style="margin:0">languages</label>'
-       +'<input id="ctranslangs" placeholder="'+esc((SETTINGS.translation_langs||['en']).join(', '))+'" '
-       +'value="'+esc((SETTINGS.translation_langs||['en']).join(', '))+'" '
-       +'style="width:110px;padding:6px 8px;background:var(--bg);color:var(--fg);'
-       +'border:1px solid var(--line);border-radius:6px" title="Comma-separated codes, e.g. de, en">'
-       +'<label class="help" style="margin:0;margin-left:8px">Preferred languages</label>'
-       +'<input id="cpreflangs" placeholder="Optional: French, English" '
-       +'value="'+esc((SETTINGS.preferred_languages||[]).join(', '))+'" '
-       +'style="width:170px;padding:6px 8px;background:var(--bg);color:var(--fg);'
-       +'border:1px solid var(--line);border-radius:6px" title="Optional ordered languages, e.g. French, English. Empty disables language filtering.">'
-       +'</div>'
-      :'<div class="empty-cat"><b>No DAT loaded</b>'
-       +'Point DAT_PATH at a directory of No-Intro or Redump DATs. Without one '
-       +'there is no list of what a complete set contains.</div>')
+       +'</select>','What to do with a fan translation of a game.')
+       +field('Translation languages','<input id="ctranslangs" placeholder="'+esc((SETTINGS.translation_langs||['en']).join(', '))+'" '
+          +'value="'+esc((SETTINGS.translation_langs||['en']).join(', '))+'" '
+          +'style="'+inputStyle+'" title="Comma-separated codes, e.g. de, en">',
+          'Which translations count, e.g. <code>en</code> or <code>de, en</code>.')
+       +field('Preferred game languages','<input id="cpreflangs" placeholder="Optional: French, English" '
+          +'value="'+esc((SETTINGS.preferred_languages||[]).join(', '))+'" '
+          +'style="'+inputStyle+'" title="Optional ordered languages, e.g. French, English. Empty disables language filtering.">',
+          'Optional. When set, language is picked before region and games in other languages are left out.')
+       +'</div></details>'
+       +'<div class="row" style="margin-top:14px;gap:10px;align-items:center">'
+       +'<button class="btn" id="cplan">Preview plan</button>'
+       +'<span class="help" style="margin:0">Reads the DAT and your library. Nothing is downloaded.</span></div>'
+      :collectionsNoDat())
     +'<div id="cres" style="margin-top:16px"></div></div>'
-    +'<div class="card" style="margin-top:16px"><h3>Acquire missing files from a set torrent</h3>'
+    +'<div class="card" style="margin-top:16px"><h3>Fill a set from a torrent you already have (optional)</h3>'
     +(sourceState.errors||[]).map(error=>'<div class="panel-note panel-warn">'+esc(error)+'</div>').join('')
     +(hiddenSources>0
       ?'<p class="help" id="csrc-hidden">'+esc(String(hiddenSources))
@@ -7388,22 +7418,32 @@ RENDER.collections=async()=>{
        +'<a href="#collections" id="csrc-show-all">Show them anyway</a></p>'
       :'')
     +(sourceTorrents.length&&dats.length
-      ?'<p class="help">Preview a DAT plan against one existing qBittorrent or Transmission torrent. ROMarr selects only matching missing files, stages one budgeted batch at a time, verifies each staged set against the DAT, then restores the torrent’s original file priorities and paused state. The cap limits ROMarr staging copies; downloaded torrent files remain in the torrent client and need separate source storage.</p>'
+      ?'<p class="help">Use this instead of searching when a whole-set torrent (for example a No-Intro pack) '
+       +'is already in qBittorrent or Transmission. Pick the DAT and platform above, choose the torrent, then '
+       +'<b>Preview source plan</b>. ROMarr downloads only the files your set is missing, one batch at a time '
+       +'within the staging budget, checks each against the DAT, imports it, and finally puts the torrent’s '
+       +'file selection and paused state back the way they were. The budget limits ROMarr’s staging copies; '
+       +'the torrent’s own files stay in the client and need their own space.</p>'
        +'<div class="row" id="csrc-row" style="flex-wrap:wrap'
        +(hiddenSources===allSources.length?';display:none':'')+'">'
        +'<select id="csrc-torrent">'+sourceTorrents.map(t=>
          '<option value="'+esc(t.hash)+'" data-client="'+esc(t.client_id)+'"'
          +(t.game===false?' hidden data-nongame="1"':'')+'>'
          +esc(t.client_name+' · '+t.name+' · '+t.state)+'</option>').join('')+'</select>'
-       +'<label class="help">Staging cap (GiB) <input id="csrc-cap" type="number" min="0.01" step="1" value="100" style="width:90px"></label>'
+       +'<label class="help" title="The most ROMarr copies out of the torrent at once">Staging budget (GiB) '
+       +'<input id="csrc-cap" type="number" min="0.01" step="1" value="100" style="width:90px"></label>'
        +'<button class="btn" id="csrc-plan">Preview source plan</button></div>'
        +'<div id="csrc-out" style="margin-top:10px"></div>'
       :(sourceTorrents.length
         ?'<p class="help">Load a DAT before previewing missing collection files.</p>'
-        :'<p class="help">No existing set torrents were found. Add the set torrent to qBittorrent or Transmission'
-         +' (and enable that client under Download Clients if it is off), then come back here.</p>'))
+        :'<p class="help">No set torrents found. This part is optional: <b>Request missing</b> above '
+         +'searches your indexers instead. To use a set torrent you already have, add it to qBittorrent or '
+         +'Transmission (and enable that client under <a href="#clients">Download Clients</a> if it is off), '
+         +'then come back here.</p>'))
     +'<div id="csrc-jobs" style="margin-top:10px"></div></div>'
-    +'<div class="card" style="margin-top:16px"><h3>Batches</h3>'
+    +'<div class="card" style="margin-top:16px"><h3>Sets in progress</h3>'
+    +'<p class="help">Each set requests a few titles per pass, by itself every '+esc(String(passMinutes))
+    +' minutes. <b>Run next</b> does a pass now. Requested games show up under Queue and Wanted like any other request.</p>'
     +'<div id="cbatch"></div></div>';
   const showAllSources=$('#csrc-show-all');
   if(showAllSources)showAllSources.onclick=e=>{
@@ -7412,7 +7452,18 @@ RENDER.collections=async()=>{
     const row=$('#csrc-row'); if(row)row.style.display='';
     const note=$('#csrc-hidden'); if(note)note.textContent='Showing every torrent in the client.';
   };
+  const helpPanel=$('#chelp'), helpShow=$('#chelp-show'), helpHide=$('#chelp-hide'), planCard=$('#cplan-card');
+  const setHelp=hidden=>{
+    collectionsHelpRemember(hidden);
+    if(helpPanel&&helpPanel.style)helpPanel.style.display=hidden?'none':'';
+    if(helpShow&&helpShow.style)helpShow.style.display=hidden?'':'none';
+    if(planCard&&planCard.style)planCard.style.marginTop=hidden?'0':'16px';
+  };
+  if(helpHide)helpHide.onclick=e=>{if(e&&e.preventDefault)e.preventDefault();setHelp(true);};
+  if(helpShow)helpShow.onclick=e=>{if(e&&e.preventDefault)e.preventDefault();setHelp(false);};
 
+  const BATCH_STATE={pending:'waiting for the next pass',running:'requesting',
+    paused:'paused',done:'finished'};
   const drawBatches=async()=>{
     if(!current())return;
     const s=await j('/api/v1/collection').catch(()=>({batches:[]}));
@@ -7420,22 +7471,31 @@ RENDER.collections=async()=>{
     const cb=$('#cbatch');
     const b=s.batches||[];
     cb.innerHTML=b.length
-      ?'<table><thead><tr><th>Set</th><th>Progress</th><th>Done</th>'
+      ?'<table><thead><tr><th>Set</th><th>Progress</th><th>Requested</th>'
        +'<th>Failed</th><th>Left</th><th></th></tr></thead><tbody>'
-       +b.map(x=>'<tr data-id="'+esc(x.id)+'"><td>'+esc(x.dat||x.platform||x.id)+'</td>'
+       +b.map(x=>'<tr data-id="'+esc(x.id)+'"><td>'+esc(x.dat||x.platform||x.id)
+         +(x.platform?'<div class="help" style="margin:0">'+esc(x.platform)+'</div>':'')+'</td>'
          +'<td style="min-width:150px"><div style="background:var(--bg);'
          +'border:1px solid var(--line);border-radius:4px;height:16px;overflow:hidden">'
          +'<div style="height:100%;width:'+x.percent+'%;background:var(--accent)"></div>'
-         +'</div><span class="help" style="margin:0">'+x.percent+'% — '+esc(x.status)+'</span></td>'
-         +'<td>'+x.done+'</td><td>'+x.failed+'</td><td>'+x.remaining+'</td>'
+         +'</div><span class="help" style="margin:0">'+x.percent+'% — '+esc(BATCH_STATE[x.status]||x.status)+'</span></td>'
+         +'<td>'+x.done+'</td><td>'+x.failed
+         +((x.failures||[]).length
+           ?'<details><summary class="help" style="margin:0;cursor:pointer">why</summary>'
+            +'<ul style="margin:6px 0 0 16px">'+x.failures.map(f=>
+              '<li class="help" style="margin:0">'+esc(f.title)+' — '+esc(f.reason)+'</li>').join('')
+            +'</ul>'+(x.failed>x.failures.length?'<div class="help" style="margin:0">and '
+              +(x.failed-x.failures.length)+' more</div>':'')+'</details>'
+           :'')+'</td><td>'+x.remaining+'</td>'
          +'<td class="row" style="gap:6px">'
-         +'<button class="btn ghost cstep">Run next</button>'
-         +'<button class="btn ghost cact" data-a="'+(x.status==='paused'?'resume':'pause')+'">'
-         +(x.status==='paused'?'Resume':'Pause')+'</button>'
+         +(x.remaining&&x.status!=='paused'?'<button class="btn ghost cstep">Run next</button>':'')
+         +(x.status==='done'?'':'<button class="btn ghost cact" data-a="'+(x.status==='paused'?'resume':'pause')+'">'
+           +(x.status==='paused'?'Resume':'Pause')+'</button>')
          +(x.failed?'<button class="btn ghost cact" data-a="retry">Retry failed</button>':'')
-         +'<button class="btn ghost cact" data-a="cancel">Cancel</button></td></tr>').join('')
+         +'<button class="btn ghost cact" data-a="cancel">'+(x.status==='done'?'Remove':'Cancel')+'</button></td></tr>').join('')
        +'</tbody></table>'
-      :'<div class="empty">No set is being acquired.</div>';
+      :'<div class="empty">No set is being acquired yet. Preview a plan above, then press '
+       +'<b>Request missing</b>.</div>';
 
     cb.querySelectorAll('.cstep').forEach(el=>el.onclick=async e=>{
       const id=e.target.closest('tr').dataset.id;
@@ -7446,7 +7506,7 @@ RENDER.collections=async()=>{
     });
     cb.querySelectorAll('.cact').forEach(el=>el.onclick=async e=>{
       const id=e.target.closest('tr').dataset.id, action=e.target.dataset.a;
-      if(action==='cancel'&&!confirm('Cancel this set? Titles already requested are unaffected.')) return;
+      if(action==='cancel'&&!confirm('Remove this set from the list? Titles already requested stay requested.')) return;
       await j('/api/v1/collection/control',{method:'POST',
         headers:{'Content-Type':'application/json'},
         body:JSON.stringify({id:id,action:action})});
@@ -7480,6 +7540,7 @@ RENDER.collections=async()=>{
         headers:{'Content-Type':'application/json'},body:JSON.stringify({id:btn.dataset.id})});
       if(!current())return;
       if(r.error)toast(r.error);
+      else if(r.waiting)toast(r.message||'Still downloading');
       drawSourceJobs();
     });
     node.querySelectorAll('.csrc-restore').forEach(btn=>btn.onclick=async()=>{
@@ -7514,8 +7575,28 @@ RENDER.collections=async()=>{
     const out=$('#csrc-out');
     if(out)out.innerHTML='<p class="help">Selection changed. Preview the source plan again before starting.</p>';
   };
-  [sourcePlatform,sourceDat,sourceSelect].filter(Boolean)
-    .forEach(input=>input.addEventListener('change',invalidateSourcePreview));
+  // Picking another DAT moves the platform to that DAT's own, until the
+  // operator chooses a platform themselves; after that their choice stays.
+  let platformChosen=false, settingPlatform=false;
+  if(sourcePlatform&&sourcePlatform.addEventListener&&sourceDat&&sourceDat.addEventListener){
+    sourcePlatform.addEventListener('change',()=>{
+      if(!settingPlatform)platformChosen=true;
+      invalidateSourcePreview();
+    });
+    sourceDat.addEventListener('change',()=>{
+      const guess=datPlatforms[sourceDat.value]||'';
+      if(!platformChosen&&guess&&sourcePlatform.value!==guess){
+        settingPlatform=true;
+        sourcePlatform.value=guess;
+        if(sourcePlatform.dispatchEvent&&typeof Event==='function')
+          sourcePlatform.dispatchEvent(new Event('change',{bubbles:true}));
+        settingPlatform=false;
+      }
+      invalidateSourcePreview();
+    });
+  }
+  if(sourceSelect&&sourceSelect.addEventListener)
+    sourceSelect.addEventListener('change',invalidateSourcePreview);
   if(sourceCap)sourceCap.addEventListener('input',invalidateSourcePreview);
   const sourceRequest=()=>{
     const opt=sourceSelect.selectedOptions[0];
@@ -7545,7 +7626,8 @@ RENDER.collections=async()=>{
       +((d.unmatched||[]).length?'<details><summary class="help">Unmatched titles ('+
         d.unmatched.length+')</summary><div class="help">'+d.unmatched.map(x=>
         esc(x.title)+' — '+esc(x.reason)).join('<br>')+'</div></details>':'')
-      +'<button class="btn" id="csrc-start"'+(sourcePlatform.value.trim()?'':' disabled')+'>Start selective acquisition</button>';
+      +'<button class="btn" id="csrc-start"'+(sourcePlatform.value.trim()?'':' disabled')+'>Start selective acquisition</button>'
+      +(sourcePlatform.value.trim()?'':'<span class="help" style="margin-left:8px">Choose a platform above first.</span>');
     const start=$('#csrc-start');
     start.onclick=async()=>{
       if(!current()||seq!==sourcePlanSeq)return;
@@ -7576,7 +7658,7 @@ RENDER.collections=async()=>{
       dat:$('#cdat').value,
       platform:$('#cplat').value,
       one_game_one_rom:$('#c1g1r').checked,
-      regions:($('#cregions').value.trim()||'').split(',').filter(Boolean),
+      regions:($('#cregions').value.trim()||'').split(',').map(s=>s.trim()).filter(Boolean),
       region_mode:$('#cstrict').checked?'strict':'prefer',
       translation_policy:$('#ctrans').value,
       translation_langs:($('#ctranslangs').value.trim()||'').split(',').map(s=>s.trim()).filter(Boolean),
@@ -7595,62 +7677,10 @@ RENDER.collections=async()=>{
     const d=await j('/api/v1/collection/plan?'+q).catch(()=>({error:'plan failed'}));
     if(!current()||seq!==cplanSeq)return;
     if(d.error){out.innerHTML='<div class="panel-note panel-warn">'+esc(d.error)+'</div>';return;}
-    const c=d.counts;
-    const tile=(n,label,colour)=>'<div style="flex:1;min-width:110px;padding:10px 12px;'
-      +'background:var(--bg);border:1px solid var(--line);border-radius:6px">'
-      +'<div style="font-size:22px;font-weight:600;color:'+colour+'">'+n+'</div>'
-      +'<div class="help" style="margin:0">'+label+'</div></div>';
-    out.innerHTML='<div class="row" style="gap:10px;flex-wrap:wrap">'
-      +tile(c.expected,'in the set','var(--fg)')
-      +tile(c.have,'you have','var(--ok)')
-      +tile(c.missing,'missing','var(--warn)')
-      +tile(c.bad,'bad dumps','var(--bad)')
-      +tile(c.excluded,'excluded by policy','var(--dim)')
-      +((c.region_omitted||0)?tile(c.region_omitted,'omitted — no dump in your regions','var(--dim)'):'')
-      +((c.language_omitted||0)?tile(c.language_omitted,'omitted — language not in preference','var(--dim)'):'')
-      +((c.unknown_language||0)?tile(c.unknown_language,'unknown language (not counted)','var(--dim)'):'')
-      +'</div>'
-      +'<p class="help">'+esc(d.dat)+(d.dat_version?' ('+esc(d.dat_version)+')':'')
-      +' — region order '+esc((d.policy.regions||[]).join(' → '))
-      +((d.policy.preferred_languages||[]).length?' · preferred languages '+esc(d.policy.preferred_languages.join(' → ')):'')
-      +(d.policy.region_mode==='strict'?' (strict: titles without a matching-region dump are omitted)':'')+'.</p>'
-      +'<div class="row"><button class="btn" id="cstart">Request '+c.missing
-      +' missing</button>'
-      +'<label class="help" style="margin:0">at <input id="cpp" type="number" '
-      +'min="1" max="50" value="5" style="width:60px;padding:5px;background:var(--bg);'
-      +'color:var(--fg);border:1px solid var(--line);border-radius:4px"> per pass</label></div>'
-      +'<table style="margin-top:14px"><thead><tr><th>Title</th><th>Status</th>'
-      +'<th>Why this dump</th></tr></thead><tbody>'
-      +d.titles.slice(0,300).map(t=>{
-        const pill=t.status==='verified'
-          ?'<span class="pill" style="background:var(--ok);color:#08210d">verified</span>'
-          :t.status==='bad'
-            ?'<span class="pill" style="background:var(--bad);color:#2a0b0b">bad dump</span>'
-            :t.status==='missing'
-              ?'<span class="pill" style="background:var(--warn);color:#2a1c05">missing</span>'
-              :'<span class="pill">present</span>';
-        const clones=(t.discarded||[]).length
-          ?'<details><summary class="help" style="margin:0;cursor:pointer">'
-           +t.discarded.length+' other dump'+(t.discarded.length>1?'s':'')+'</summary>'
-           +'<ul style="margin:6px 0 0 16px">'+t.discarded.map(x=>
-             '<li class="help" style="margin:0">'+esc(x.name)+' — '+esc(x.why)+'</li>').join('')
-           +'</ul></details>':'';
-        return '<tr><td>'+esc(t.name)
-          +(t.outside_preference?' <span class="pill" title="No dump in your preferred regions; kept so the game is not lost">outside regions</span>':'')
-          +'</td><td>'+pill+'</td><td class="help" style="margin:0">'+esc(t.why)
-          +clones+'</td></tr>';
-      }).join('')+'</tbody></table>'
-      +(d.titles.length>300?'<p class="help">Showing the first 300 of '
-        +d.titles.length+'.</p>':'')
-      +((d.unknown_language_titles||[]).length
-        ?'<details style="margin-top:14px"><summary class="help" style="margin:0;cursor:pointer">'
-         +'Unknown language metadata ('+d.unknown_language_titles.length+' games — not counted as missing)</summary>'
-         +'<table style="margin-top:8px"><thead><tr><th>Title</th><th>Status</th><th>Note</th></tr></thead><tbody>'
-         +d.unknown_language_titles.slice(0,200).map(u=>
-           '<tr><td>'+esc(u.name)+'</td><td><span class="pill">'+esc(u.status||'missing')+'</span></td><td class="help" style="margin:0">'+esc(u.why||'')+'</td></tr>'
-         ).join('')+'</tbody></table></details>':'');
-
-    $('#cstart').onclick=async e=>{
+    out.innerHTML=collectionsPlanHtml(d,previewPolicy.platform,passMinutes);
+    const startBtn=$('#cstart');
+    if(!startBtn)return;
+    startBtn.onclick=async e=>{
       e.target.disabled=true; e.target.textContent='Queueing…';
       const r=await j('/api/v1/collection/start',{method:'POST',
         headers:{'Content-Type':'application/json'},
@@ -7658,12 +7688,130 @@ RENDER.collections=async()=>{
           ...previewPolicy,
           per_pass:parseInt($('#cpp').value,10)||5})});
       if(!current())return;
-      toast(r.error?r.error:('Queued '+(r.queued||0)+' titles'));
-      e.target.disabled=false; e.target.textContent='Request missing';
+      if(r.error){
+        toast(r.error);
+        e.target.disabled=false; e.target.textContent='Request '+d.counts.missing+' missing';
+        return;
+      }
+      toast(r.queued?('Queued '+r.queued+' titles. See Sets in progress below.'):(r.message||'Nothing to queue'));
+      e.target.textContent='Queued';
       drawBatches();
     };
   };
 };
+
+// The dismissible "How this works" panel. Remembered per browser only: it is
+// a convenience, so a private window or blocked storage simply shows it again.
+const COLLECTIONS_GUIDE='https://github.com/BlizzHacker/romarr/blob/main/docs/COLLECTIONS.md';
+const COLLECTIONS_HELP_KEY='romarr.collections.help.hidden';
+function collectionsHelpHidden(){
+  try{return localStorage.getItem(COLLECTIONS_HELP_KEY)==='1';}catch(_){return false;}
+}
+function collectionsHelpRemember(hidden){
+  try{
+    if(hidden)localStorage.setItem(COLLECTIONS_HELP_KEY,'1');
+    else localStorage.removeItem(COLLECTIONS_HELP_KEY);
+  }catch(_){}
+}
+function collectionsHowItWorks(passMinutes,hidden){
+  return '<div class="card" id="chelp"'+(hidden?' style="display:none"':'')+'>'
+    +'<div class="row" style="justify-content:space-between;align-items:center">'
+    +'<h3 style="margin:0">How Collections works</h3>'
+    +'<button class="btn ghost" id="chelp-hide" title="Hide this panel. Bring it back with How this works.">Hide</button></div>'
+    +'<p class="help" style="margin-top:8px">A collection is a whole set for one system, such as every USA '
+    +'SNES game. A DAT is the checklist for that set. ROMarr compares it with what is on disk and requests '
+    +'only what is missing.</p>'
+    +'<ol class="help" style="margin:0 0 8px 18px;padding:0">'
+    +'<li><b>Load a DAT</b> (No-Intro for cartridges, Redump for discs) under '
+    +'<a href="#media">Settings → Media Management</a>.</li>'
+    +'<li><b>Pick the DAT and its platform</b> below. ROMarr fills in the platform when the DAT name says which system it is.</li>'
+    +'<li><b>Choose your rules</b>: one game, one ROM, your region order, and what to leave out.</li>'
+    +'<li><b>Preview the plan</b>. Nothing is downloaded. You see what you have, what is missing, and why each dump was picked.</li>'
+    +'<li><b>Request the missing games</b>. ROMarr works through them a few at a time, every '
+    +esc(String(passMinutes))+' minutes, through your indexers and download clients. Imports are checked against the DAT.</li>'
+    +'</ol>'
+    +'<p class="help" style="margin:0">Already have a whole-set torrent in qBittorrent or Transmission? '
+    +'Use <b>Fill a set from a torrent you already have</b> instead of searching. '
+    +'<a href="'+COLLECTIONS_GUIDE+'" target="_blank" rel="noopener">Read the Collections guide</a> '
+    +'for worked examples and what every status means.</p></div>';
+}
+function collectionsNoDat(){
+  return '<div class="empty-cat"><b>No DAT loaded yet</b>'
+    +'<p class="help" style="margin:8px 0 0">A DAT is the checklist of every game in a set. '
+    +'Collections needs at least one.</p>'
+    +'<ol class="help" style="text-align:left;display:inline-block;margin:12px auto 0">'
+    +'<li>Download the DAT for your system: <a href="https://datomatic.no-intro.org" target="_blank" rel="noopener">No-Intro</a> '
+    +'for cartridges, <a href="http://redump.org/downloads/" target="_blank" rel="noopener">Redump</a> for discs.</li>'
+    +'<li>Unzip the <code>.dat</code> files into one folder ROMarr can read.</li>'
+    +'<li>Enter that folder as <b>DAT directory</b> under <a href="#media">Settings → Media Management</a> and save.</li>'
+    +'<li>Come back here. Large DATs can take a minute to load.</li></ol>'
+    +'<p class="help" style="margin:10px 0 0"><a href="'+COLLECTIONS_GUIDE+'" target="_blank" rel="noopener">'
+    +'Read the Collections guide</a></p></div>';
+}
+function collectionsPlanHtml(d,platform,passMinutes){
+  const c=d.counts;
+  const tile=(n,label,colour,hint)=>'<div style="flex:1;min-width:110px;padding:10px 12px;'
+    +'background:var(--bg);border:1px solid var(--line);border-radius:6px"'
+    +(hint?' title="'+esc(hint)+'"':'')+'>'
+    +'<div style="font-size:22px;font-weight:600;color:'+colour+'">'+n+'</div>'
+    +'<div class="help" style="margin:0">'+label+'</div></div>';
+  const pill=t=>t.status==='verified'
+    ?'<span class="pill" style="background:var(--ok);color:#08210d" title="On disk and hash-verified against the DAT when it was imported">verified</span>'
+    :t.status==='bad'
+      ?'<span class="pill" style="background:var(--bad);color:#2a0b0b" title="On disk, but a DAT marks this dump as bad. Replace it.">bad dump</span>'
+      :t.status==='missing'
+        ?'<span class="pill" style="background:var(--warn);color:#2a1c05" title="Not found in this platform’s library folder">missing</span>'
+        :'<span class="pill" title="A file with this name is on disk. ROMarr has not hash-checked it.">present</span>';
+  const action=c.missing
+    ?(platform
+      ?'<div class="row" style="align-items:center;gap:10px"><button class="btn" id="cstart">Request '+c.missing
+       +' missing</button>'
+       +'<label class="help" style="margin:0" title="How many titles each pass requests">'
+       +'<input id="cpp" type="number" min="1" max="50" value="5" style="width:60px;padding:5px;'
+       +'background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px"> per pass, every '
+       +esc(String(passMinutes))+' minutes</label></div>'
+      :'<div class="panel-note panel-warn">Choose the platform this DAT is for, then preview again. '
+       +'Without a platform ROMarr cannot read the right library folder or file the games it finds.</div>')
+    :'<div class="panel-note">Nothing is missing. Every title this plan expects is already in your library.</div>';
+  return '<div class="row" style="gap:10px;flex-wrap:wrap">'
+    +tile(c.expected,'in the set','var(--fg)','Titles the DAT lists that fit your rules')
+    +tile(c.have,'you have','var(--ok)','In the set and already on disk')
+    +tile(c.missing,'missing','var(--warn)','In the set and not found on disk')
+    +tile(c.bad,'bad dumps','var(--bad)','On disk, but the DAT marks the dump as bad')
+    +tile(c.excluded,'left out by your rules','var(--dim)','Prototypes, betas, demos and the other kinds you ticked')
+    +((c.region_omitted||0)?tile(c.region_omitted,'omitted — no dump in your regions','var(--dim)'):'')
+    +((c.language_omitted||0)?tile(c.language_omitted,'omitted — language not in preference','var(--dim)'):'')
+    +((c.unknown_language||0)?tile(c.unknown_language,'unknown language (not counted)','var(--dim)'):'')
+    +'</div>'
+    +'<p class="help">'+esc(d.dat)+(d.dat_version?' ('+esc(d.dat_version)+')':'')
+    +' — region order '+esc((d.policy.regions||[]).join(' → '))
+    +((d.policy.preferred_languages||[]).length?' · preferred languages '+esc(d.policy.preferred_languages.join(' → ')):'')
+    +(d.policy.region_mode==='strict'?' (strict: titles without a matching-region dump are omitted)':'')+'.</p>'
+    +action
+    +'<table style="margin-top:14px"><thead><tr><th>Title</th><th>Status</th>'
+    +'<th>Why this dump</th></tr></thead><tbody>'
+    +d.titles.slice(0,300).map(t=>{
+      const clones=(t.discarded||[]).length
+        ?'<details><summary class="help" style="margin:0;cursor:pointer">'
+         +t.discarded.length+' other dump'+(t.discarded.length>1?'s':'')+'</summary>'
+         +'<ul style="margin:6px 0 0 16px">'+t.discarded.map(x=>
+           '<li class="help" style="margin:0">'+esc(x.name)+' — '+esc(x.why)+'</li>').join('')
+         +'</ul></details>':'';
+      return '<tr><td>'+esc(t.name)
+        +(t.outside_preference?' <span class="pill" title="No dump in your preferred regions; kept so the game is not lost">outside regions</span>':'')
+        +'</td><td>'+pill(t)+'</td><td class="help" style="margin:0">'+esc(t.why)
+        +clones+'</td></tr>';
+    }).join('')+'</tbody></table>'
+    +(d.titles.length>300?'<p class="help">Showing the first 300 of '
+      +d.titles.length+'.</p>':'')
+    +((d.unknown_language_titles||[]).length
+      ?'<details style="margin-top:14px"><summary class="help" style="margin:0;cursor:pointer">'
+       +'Unknown language metadata ('+d.unknown_language_titles.length+' games — not counted as missing)</summary>'
+       +'<table style="margin-top:8px"><thead><tr><th>Title</th><th>Status</th><th>Note</th></tr></thead><tbody>'
+       +d.unknown_language_titles.slice(0,200).map(u=>
+         '<tr><td>'+esc(u.name)+'</td><td><span class="pill">'+esc(u.status||'missing')+'</span></td><td class="help" style="margin:0">'+esc(u.why||'')+'</td></tr>'
+       ).join('')+'</tbody></table></details>':'');
+}
 
 RENDER.manualimport=async()=>{
   $('#page').innerHTML='<div class="card"><h3>Manual Import</h3>'
