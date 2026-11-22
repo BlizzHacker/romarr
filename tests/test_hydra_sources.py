@@ -45,7 +45,7 @@ def _fresh_cache():
 @pytest.mark.parametrize("code, slug", [
     ("ps2", "ps2"), ("ns", "switch"), ("ns2", "switch-2"), ("gc", "ngc"),
     ("psv", "psvita"), ("ps1", "psx"), ("x360", "xbox360"), ("MAME", "arcade"),
-    ("GB/GBC", "gb"), ("Sega Mega Drive/Genesis", "genesis-slash-megadrive"),
+    ("GB/GBC", ""), ("Sega Mega Drive/Genesis", "genesis-slash-megadrive"),
     ("", ""), ("not a console", ""),
 ])
 def test_platform_codes_map_to_romarr_slugs(code, slug):
@@ -278,3 +278,52 @@ def test_a_dead_link_falls_through_to_the_next_mirror():
     route = HosterRoute(debrid=[debrid])
     assert route.add("https://1fichier.com/?dead", name="G", mirrors=("https://gofile.io/d/alive",))
     assert debrid.calls == [("https://gofile.io/d/alive", "G")]
+
+
+def test_a_two_machine_tag_gives_no_exclusive_platform():
+    rows = parse_source({"downloads": [
+        {"title": "Pokemon - Crystal Version (USA, Europe)", "platform": "GB/GBC",
+         "uris": ["https://archive.org/download/x/Pokemon%20Crystal.gbc"]}]})
+    assert rows[0].platform_hint == ""
+    gbc = resolve("gbc")
+    assert judge(rows[0], "Pokemon - Crystal Version", gbc).verdict == "" or \
+        "another platform" not in judge(rows[0], "Pokemon - Crystal Version", gbc).verdict
+
+
+def test_search_folds_accents_both_ways():
+    src, _ = _source(body={"downloads": [
+        {"title": "Pokemon Emerald (USA)", "uris": [MAGNET]},
+        {"title": "Pokémon Ruby (USA)", "uris": [MAGNET]}]})
+    assert [r.title for r in src.search("Pokémon Emerald")] == ["Pokemon Emerald (USA)"]
+    assert [r.title for r in src.search("Pokemon Ruby")] == ["Pokémon Ruby (USA)"]
+
+
+def test_an_edited_indexer_reparses_without_refetching():
+    session = _Session(json.dumps(DOC).encode())
+    first = HydraSource(HydraSourceConfig(url="https://example.org/s.json", name="Old"), session=session)
+    assert {r.indexer for r in first.releases()} == {"Old"}
+    edited = HydraSource(HydraSourceConfig(url="https://example.org/s.json", name="New",
+                                           categories=(1080,)), session=session)
+    rows = edited.releases()
+    assert {r.indexer for r in rows} == {"New"} and {r.categories for r in rows} == {(1080,)}
+    assert session.calls == 1
+
+
+def test_an_empty_query_returns_rows_for_rss_sync():
+    src, _ = _source()
+    assert len(src.search("", limit=2)) == 2
+
+
+def test_a_magnet_with_no_torrent_client_is_fetched_from_a_mirror(tmp_path):
+    from romarr.app import ROMarr
+    from romarr.selection import Release
+    svc = ROMarr({"ROMARR_DATA": str(tmp_path / "s.json")})
+    direct = _Client("direct", rid="mdm")
+    direct.name = "Mister Download Manager"
+    svc.clients = [direct]
+    pick = Release(title="Hades Free Download (Build 1)", size=1, seeders=1, categories=(4050,),
+                   download_url=MAGNET, protocol="torrent",
+                   mirrors=("https://pixeldrain.com/u/xyz",))
+    out = svc._grab_impl(pick, "Hades", "win")
+    assert out.get("ok"), out
+    assert direct.calls == [("https://pixeldrain.com/api/file/xyz?download", "Hades Free Download (Build 1)")]

@@ -32,6 +32,7 @@ import json
 import logging
 import re
 import time
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
 from threading import Lock
@@ -40,7 +41,7 @@ from urllib.parse import unquote, urlsplit
 import requests
 
 from .hosters import is_file_host, looks_like_file
-from .platforms import resolve
+from .platforms import resolve, same_machine
 from .selection import Release
 
 log = logging.getLogger(__name__)
@@ -55,7 +56,7 @@ LIBRARY_API = "https://api.hydralibrary.com/sources"
 CONSOLE_CATEGORY = 1000
 PC_CATEGORY = 4050
 
-_CACHE: dict[str, tuple[float, list]] = {}
+_CACHE: dict[str, tuple] = {}   # url -> (fetched, document, (name, categories), releases)
 _CACHE_LOCK = Lock()
 
 # Hydra platform codes that ROMarr's resolver does not already read. Codes it
@@ -86,17 +87,21 @@ def platform_slug(code) -> str:
     found = resolve(raw)
     if found is not None:
         return found.slug
+    slugs = []
     for part in re.split(r"\s*[/|]\s*|\s+-\s*|-(?=[A-Z])", raw):
         part = part.strip()
         if not part:
             continue
         known = _PLATFORM_CODES.get(part.lower())
-        if known:
-            return known
-        found = resolve(part)
-        if found is not None:
-            return found.slug
-    return ""
+        found = known or (resolve(part).slug if resolve(part) is not None else "")
+        if found:
+            slugs.append(found)
+    if not slugs:
+        return ""
+    # "GB/GBC" names two machines: claiming either one would refuse the
+    # other's releases. Only a tag whose parts agree gives a hint.
+    first = slugs[0]
+    return first if all(same_machine(first, s) for s in slugs[1:]) else ""
 
 
 _SIZE_RE = re.compile(r"(\d+(?:[.,]\d+)?)\s*([KMGT]?i?B)\b", re.IGNORECASE)
@@ -204,7 +209,9 @@ def parse_source(document, *, indexer: str = "Hydra source",
 
 
 def _words(text: str) -> list[str]:
-    return re.sub(r"[^a-z0-9]+", " ", unquote(str(text or "")).lower()).split()
+    folded = unicodedata.normalize("NFKD", unquote(str(text or "")))
+    folded = "".join(ch for ch in folded if not unicodedata.combining(ch))
+    return re.sub(r"[^a-z0-9]+", " ", folded.lower()).split()
 
 
 @dataclass
@@ -254,24 +261,33 @@ class HydraSource:
         finally:
             response.close()
         try:
-            document = json.loads(b"".join(chunks).decode("utf-8-sig"))
+            return json.loads(b"".join(chunks).decode("utf-8-sig"))
         except ValueError as err:
             raise ValueError(f"{self.name} did not return a Hydra source "
                              f"(not JSON: {err.__class__.__name__})") from None
-        return parse_source(document, indexer=self.name,
-                            categories=self._config.categories)
 
     def releases(self) -> list:
-        """The whole source, read at most once an hour per URL."""
-        key = self._config.url
+        """The whole source: the document is fetched at most once an hour per
+        URL, and parsed again whenever this indexer's name or categories
+        differ from the last parse, so an edit takes effect at once."""
+        url = self._config.url
+        shape = (self._config.name, tuple(self._config.categories))
         with _CACHE_LOCK:
-            hit = _CACHE.get(key)
-            if hit and time.monotonic() - hit[0] < CACHE_SECONDS:
-                return hit[1]
-        fresh = self._fetch()
+            hit = _CACHE.get(url)
+            fresh = hit is not None and time.monotonic() - hit[0] < CACHE_SECONDS
+            if fresh and hit[2] == shape:
+                return hit[3]
+            document = hit[1] if fresh else None
+        if document is None:
+            document = self._fetch()
+            stamp = time.monotonic()
+        else:
+            stamp = hit[0]
+        parsed = parse_source(document, indexer=self._config.name,
+                              categories=self._config.categories)
         with _CACHE_LOCK:
-            _CACHE[key] = (time.monotonic(), fresh)
-        return fresh
+            _CACHE[url] = (stamp, document, shape, parsed)
+        return parsed
 
     def caps(self) -> bool:
         """A source that parses to at least one usable release is reachable."""
@@ -281,10 +297,12 @@ class HydraSource:
 
     def search(self, term: str, *, limit: int = 100) -> list[Release]:
         wanted = [w for w in _words(term) if len(w) > 2] or _words(term)
+        if not wanted:   # RSS sync asks with an empty query: the newest rows
+            return list(self.releases())[:limit]
         out = []
         for release in self.releases():
             haystack = set(_words(release.title))
-            if wanted and all(w in haystack for w in wanted):
+            if all(w in haystack for w in wanted):
                 out.append(release)
                 if len(out) >= limit:
                     break

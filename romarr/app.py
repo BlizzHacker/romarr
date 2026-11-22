@@ -32,6 +32,7 @@ Routes:
 from __future__ import annotations
 
 import inspect
+import dataclasses
 import json
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
@@ -2946,6 +2947,15 @@ class ROMarr:
         except ValueError as err:
             return {"ok": False, "error": str(err)}
         client = pick_client(pick.protocol, self.clients)
+        if client is None and getattr(pick, "mirrors", ()):
+            # A Hydra row offers its other links too: with no client for the
+            # magnet, a mirror the file-host route can fetch still gets it.
+            route = pick_client("hoster", self.clients)
+            if route is not None:
+                pick = dataclasses.replace(pick, protocol="hoster",
+                                           download_url=pick.mirrors[0],
+                                           mirrors=tuple(pick.mirrors[1:]))
+                client = route
         if client is None:
             # Not the release's fault -- blocklisting it here would punish a
             # perfectly good torrent because the operator has not set up a
