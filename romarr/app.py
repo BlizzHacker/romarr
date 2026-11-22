@@ -11901,9 +11901,10 @@ def serve(port: int = 6868, env: dict[str, str] | None = None):
     # Plugins ROMarr ships with are installed once, the first time ROM Hub is
     # available; never again, so one the operator disabled stays disabled.
     try:
-        from . import compressatorium_plugin, mdm_plugin
+        from . import compressatorium_plugin, mdm_plugin, preinstalled_plugins
         compressatorium_plugin.preinstall_in_background()
         mdm_plugin.preinstall_in_background()
+        preinstalled_plugins.preinstall_defaults_in_background()
     except Exception:
         log.exception("plugin preinstall skipped (non-fatal)")
 

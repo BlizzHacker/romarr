@@ -20,6 +20,10 @@ A second plugin comes preinstalled the same way: **Mister Download Manager (dire
 
 The top of the Plugins page reports whether plugins can run confined on your host. Installing a plugin runs third-party code with access available to the ROMarr process, so read its repository and install sources you trust.
 
+## Plugins installed with ROMarr
+
+A new ROMarr installs these source plugins on its first start, alongside the Compressatorium and Mister Download Manager plugins: **Archive.org**, **Homebrew** (gbdev), **libretro content**, **ScummVM freeware** and **Universal-DB**. Each was checked against its live source before it was added. They are installed once; disable any of them on the **ROM Hub** page and ROMarr leaves it disabled.
+
 ## Install and use a searchable plugin
 
 1. Open **Hub → Plugins**.

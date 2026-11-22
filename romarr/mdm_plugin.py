@@ -217,10 +217,16 @@ def configure(*, mode: str | None = None, remote_url: str | None = None,
     try:
         _, registry = hub._import()
         reg = registry.Registry(home)
-        plugin = reg.get(SLUG)
     except Exception:
         return {"ok": False, "error": f"Install the {LABEL} plugin first"}
     with _config_lock:
+        # Read the plugin under the lock: Registry.get returns a snapshot, and
+        # two overlapping saves merging into an older one could pair one
+        # save's token with the other's address.
+        try:
+            plugin = reg.get(SLUG)
+        except Exception:
+            return {"ok": False, "error": f"Install the {LABEL} plugin first"}
         config = dict(getattr(plugin, "config", None) or {})
         for key, value in (("mode", mode), ("remote_url", remote_url),
                            ("connections", connections), ("category", category)):
@@ -312,10 +318,15 @@ def for_test(submitted: dict, merged: dict) -> dict:
     """
     out = dict(merged)
     kind = str(merged.get("type") or "").strip().lower()
-    if kind in CLIENT_TYPES and submitted.get("api_token") == SECRET_PLACEHOLDER:
+    if kind in CLIENT_TYPES and "api_token" in submitted:
         current = settings()
         if current is not None:
-            out["api_token"] = current.api_token
+            if submitted.get("api_token") == SECRET_PLACEHOLDER:
+                out["api_token"] = current.api_token
+            elif submitted.get("api_token") == "":
+                # An emptied field tests as no token, exactly as Save would
+                # clear it -- not as the row's old token merge_secrets restored.
+                out["api_token"] = ""
     return out
 
 

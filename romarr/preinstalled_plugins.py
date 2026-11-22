@@ -124,6 +124,39 @@ def _install_bundled(reg, bundled: Path, home: Path, slug: str) -> None:
     reg.install(str(target))
 
 
+#: Source plugins every install gets out of the box, as (slug, repository,
+#: pinned release). Each was proven against its live source before it was
+#: listed (a real search returning rows), and each offers material its
+#: publisher distributes freely: Archive.org's software library, homebrew
+#: from its authors, libretro's own content downloads, ScummVM's freeware
+#: releases and Universal-DB's homebrew index. Like the other preinstalled
+#: plugins they are installed once and can be disabled.
+DEFAULT_PLUGINS: tuple[tuple[str, str, str], ...] = (
+    ("archive-org", "https://github.com/BlizzHacker/rom-hub-archive-org", "v0.4.1"),
+    ("homebrew", "https://github.com/BlizzHacker/rom-hub-homebrew", "v0.3.0"),
+    ("libretro-content", "https://github.com/BlizzHacker/rom-hub-libretro-content", "v0.2.0"),
+    ("scummvm-freeware", "https://github.com/BlizzHacker/rom-hub-scummvm-freeware", "v0.2.0"),
+    ("universal-db", "https://github.com/BlizzHacker/rom-hub-universal-db", "v0.2.0"),
+)
+
+
+def preinstall_defaults(*, home: Path | None = None,
+                        env: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Preinstall every default source plugin; {slug: outcome}.
+
+    One failure never stops the rest: each is tried, and a failed one is
+    retried on the next start because `preinstall` records only successes.
+    """
+    return {slug: preinstall(slug, repo, ref, home=home, env=env)
+            for slug, repo, ref in DEFAULT_PLUGINS}
+
+
+def preinstall_defaults_in_background() -> None:
+    """`preinstall_defaults` on a daemon thread, after the integrations."""
+    threading.Thread(target=preinstall_defaults, name="preinstall-defaults",
+                     daemon=True).start()
+
+
 def preinstall_in_background(slug: str, repo: str, ref: str) -> None:
     """`preinstall` on a daemon thread, so a slow git never delays serving."""
     threading.Thread(target=preinstall, args=(slug, repo, ref),

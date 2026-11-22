@@ -373,6 +373,10 @@ def test_test_uses_the_plugin_token_for_a_placeholder(installed):
         "plugin-token"
     assert mp.for_test({"type": "mdm_http", "api_token": "typed"},
                        {"type": "mdm_http", "api_token": "typed"})["api_token"] == "typed"
+    # An emptied field tests as no token, even though merge_secrets put the
+    # row's old token back into the merged row.
+    assert mp.for_test({"type": "mdm_http", "api_token": ""},
+                       {"type": "mdm_http", "api_token": "row-token"})["api_token"] == ""
 
 
 # ------------------------------------------------------------------ HTTP --

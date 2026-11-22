@@ -1397,7 +1397,11 @@ RENDER.hub=async()=>{
     const md=hs.mdm||{};
     const mdOpt=(value,label,current)=>'<option value="'+esc(value)+'"'
       +(current===value?' selected':'')+'>'+esc(label)+'</option>';
-    const mdForm=(pl.slug==='mdm'&&pl.installed)
+    // A failed status request must not show an editable form full of
+    // defaults: saving it would overwrite the shared configuration.
+    const mdForm=(pl.slug==='mdm'&&pl.installed&&!hs.mdm)
+      ?'<div style="margin-top:12px"><p class="help">Mister Download Manager settings could not be loaded. Reload the page to change them.</p></div>'
+      :(pl.slug==='mdm'&&pl.installed)
       ?'<div style="margin-top:12px"><b>Mister Download Manager settings</b>'
         +'<p class="help">'+(md.configured
           ?'The Standalone Direct HTTP and BitTorrent (MDM) download clients use these settings ('
