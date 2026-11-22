@@ -2306,11 +2306,14 @@ RENDER.missing=async()=>{
       <span style="color:var(--dim);font-size:12.5px">
         ${d.items.length} game(s) requested but not yet imported</span></div>
     ${d.items.length?`<div class="tablewrap"><table><thead><tr><th>Game</th><th>Platform</th>
-      <th>Monitored</th><th>Added</th><th>Attempts</th><th>Last error</th><th></th></tr></thead><tbody>
+      <th>Monitored</th><th>Group</th><th>Added</th><th>Attempts</th><th>Last error</th><th></th></tr></thead><tbody>
       ${d.items.map(w=>`<tr${w.monitored===false?' style="opacity:.62"':''}><td><a href="${esc(gameHref(w.platform,'',w.game))}">${esc(w.game)}</a></td><td>${esc(w.platform||'—')}</td>
         <td><button class="mini" data-mon-game="${esc(w.game)}" data-mon-platform="${esc(w.platform)}"
           data-mon="${w.monitored===false?'0':'1'}" aria-pressed="${w.monitored!==false}"
           title="Monitored games are searched by the sweep and watched in RSS">${w.monitored===false?'Off':'On'}</button></td>
+        <td><button class="mini" data-group-game="${esc(w.game)}" data-group-platform="${esc(w.platform)}"
+          data-group="${esc(w.preferred_group||'')}"
+          title="Favour releases by this group for this game">${esc(w.preferred_group||'Any')}</button></td>
         <td title="${esc(w.added)}">${esc(fmtDate(w.added))}</td><td>${w.attempts}</td>
         <td style="color:var(--dim)">${esc(w.last_error||'—')}</td>
         <td><button class="mini" data-drop-game="${esc(w.game)}"
@@ -2334,6 +2337,15 @@ RENDER.missing=async()=>{
       body:JSON.stringify({game:x.dataset.monGame,platform:x.dataset.monPlatform,monitored:x.dataset.mon!=='1'})});
     if(version!==pageVersion||activePage!=='missing')return;
     if(r.ok) go('missing'); else {x.disabled=false; toast('Could not change monitoring');}
+  });
+  $('#page').querySelectorAll('button[data-group-game]').forEach(x=>x.onclick=async()=>{
+    const typed=prompt(`Release group to favour for "${x.dataset.groupGame}" (empty for any):`,x.dataset.group||'');
+    if(typed===null)return;
+    x.disabled=true;
+    const r=await j('/api/v1/wanted/preferred-group',{method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({game:x.dataset.groupGame,platform:x.dataset.groupPlatform,group:typed})});
+    if(version!==pageVersion||activePage!=='missing')return;
+    if(r.ok) go('missing'); else {x.disabled=false; toast(r.error||'Could not set the group');}
   });
   // Dropping a request, which Wanted could not do at all: the list was only
   // ever emptied by an import, so a typo went on being searched for forever.
@@ -4934,6 +4946,8 @@ RENDER.profiles=async()=>{
       ?rawGlobalMax
       :(rawPlatMax||(platInfo?(rawGlobalMax>0?Math.min(platInfo.max_size_mb,rawGlobalMax):platInfo.max_size_mb):rawGlobalMax));
     const minSeeders=getVal('min_seeders',1);
+    const usenetMinAge=getVal('usenet_minimum_age_minutes',0);
+    const usenetRetention=getVal('usenet_retention_days',0);
     const sizePref=getVal('size_preference','auto');
     const sizeWeight=getVal('size_weight',0);
     const regions=getVal('preferred_regions',['USA','World','Europe','Japan']);
@@ -5014,6 +5028,20 @@ RENDER.profiles=async()=>{
             <input type="number" id="prof-min-seeders" value="${esc(minSeeders)}" placeholder="1">
             <div style="color:var(--dim);font-size:11.5px;margin-top:4px">
               Required seeders on public torrent trackers.
+            </div>
+          </div>
+          <div class="field">
+            <label>Usenet Minimum Age (minutes)</label>
+            <input type="number" min="0" id="prof-usenet-min-age" value="${esc(usenetMinAge)}" placeholder="0">
+            <div style="color:var(--dim);font-size:11.5px;margin-top:4px">
+              Skip posts younger than this, so they can reach your news server first. 0 is off.
+            </div>
+          </div>
+          <div class="field">
+            <label>Usenet Retention (days)</label>
+            <input type="number" min="0" id="prof-usenet-retention" value="${esc(usenetRetention)}" placeholder="0">
+            <div style="color:var(--dim);font-size:11.5px;margin-top:4px">
+              Skip posts older than your news server keeps. 0 is off.
             </div>
           </div>
         </div>
@@ -5134,6 +5162,8 @@ RENDER.profiles=async()=>{
       const inputMaxSz=Number($('#prof-max-size').value)||0;
       const maxSz=(!isGlobal&&!maxSizeDirty&&!rawPlatMax)?0:inputMaxSz;
       const seeders=Number($('#prof-min-seeders').value)||1;
+      const usenetAge=Math.max(0,Math.floor(Number($('#prof-usenet-min-age').value)||0));
+      const usenetKeep=Math.max(0,Math.floor(Number($('#prof-usenet-retention').value)||0));
       const sPref=$('#prof-size-pref').value;
       const sWeight=Number($('#prof-size-weight').value)||0;
       const regList=$('#prof-regions').value.split(',').map(s=>s.trim()).filter(Boolean);
@@ -5172,6 +5202,8 @@ RENDER.profiles=async()=>{
         patch.min_size_mb=minSz;
         patch.max_size_mb=maxSz;
         patch.min_seeders=seeders;
+        patch.usenet_minimum_age_minutes=usenetAge;
+        patch.usenet_retention_days=usenetKeep;
         patch.size_preference=sPref;
         patch.size_weight=sWeight;
         patch.preferred_regions=regList;
@@ -5190,6 +5222,8 @@ RENDER.profiles=async()=>{
           min_size_mb:minSz,
           max_size_mb:maxSz,
           min_seeders:seeders,
+          usenet_minimum_age_minutes:usenetAge,
+          usenet_retention_days:usenetKeep,
           size_preference:sPref,
           size_weight:sWeight,
           preferred_regions:regList,

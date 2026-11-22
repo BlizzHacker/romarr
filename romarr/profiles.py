@@ -159,6 +159,10 @@ class ReleaseProfile:
     max_size_mb: float | None = None
     #: Minimum seeders required on torrents (None or <=1 means normal check).
     min_seeders: int | None = None
+    #: Usenet posts younger than this many minutes are refused (0 = off).
+    usenet_minimum_age_minutes: int = 0
+    #: Usenet posts older than this many days are refused (0 = off).
+    usenet_retention_days: int = 0
     #: Preferred regions in ranking order.
     preferred_regions: list[str] = field(default_factory=list)
     #: Custom scores per region: {"japan": 100, "usa": 40, "europe": 20}.
@@ -268,6 +272,18 @@ class ReleaseProfile:
         except (ValueError, TypeError):
             min_seeders = None
 
+        def _whole(key: str) -> int:
+            value = platform_cfg.get(key)
+            if value is None or value == "":
+                value = settings.get(key)
+            try:
+                return max(0, int(value or 0))
+            except (ValueError, TypeError):
+                return 0
+
+        usenet_min_age = _whole("usenet_minimum_age_minutes")
+        usenet_retention = _whole("usenet_retention_days")
+
         preferred_regions = platform_cfg.get("preferred_regions")
         if not preferred_regions:
             preferred_regions = settings.get("preferred_regions") or []
@@ -333,6 +349,8 @@ class ReleaseProfile:
             min_size_mb=min_size,
             max_size_mb=max_size,
             min_seeders=min_seeders,
+            usenet_minimum_age_minutes=usenet_min_age,
+            usenet_retention_days=usenet_retention,
             preferred_regions=preferred_regions,
             region_scores=region_scores,
             size_preference=size_preference,

@@ -14,6 +14,7 @@ import re
 import unicodedata
 from dataclasses import dataclass
 
+from .release_guards import demo_refusal, executable_refusal, release_age_minutes
 from .platforms import DISC, PLATFORMS, Platform, all_extensions, by_slug, resolve, same_machine
 from .game_packages import (BASE, DLC, PACKAGE_PLATFORMS, UPDATE, describe_parts,
                            PLATFORM_CATEGORIES, extras_are_parts, held_parts, names_platform,
@@ -140,7 +141,7 @@ _DUMP_PROJECT_BONUS = 40
 # catches "translated", "retranslated" and "retranslation", and RetroWithin
 # publishes "Chrono Trigger (Retranslated)" -- a hack the exact word missed.
 _JUNK_MARKERS = (
-    "beta", "proto", "prototype", "demo", "sample", "hack", "patched",
+    "beta", "proto", "prototype", "sample", "hack", "patched",
     "translat", "trainer", "repack", "update only", "dlc",
 )
 
@@ -149,8 +150,11 @@ _JUNK_MARKERS = (
 #: catalogue. What still marks junk on PC: betas, demos, trainers, bare
 #: updates and DLC-only uploads.
 _JUNK_MARKERS_DIGITAL = (
-    "beta", "demo", "sample", "trainer", "update only", "dlc only",
+    "beta", "sample", "trainer", "update only", "dlc only",
 )
+# "demo" is in neither list: as a substring it docked *Demon's Souls* as much
+# as a real demo. `release_guards.demo_refusal` reads demos as words and
+# refuses them outright, because a demo is never the game somebody asked for.
 
 #: Markers the package step answers instead (see `_package_step`). On a
 #: PS4, Switch or PC search "Game + Update v1.05 + DLC" is the best release
@@ -315,6 +319,42 @@ _CREDITED_TO_A_GROUP = re.compile(r"\bby\s+\S")
 # though at -150 it will usually fall below the zero floor best_release applies.
 _TRANSLATION_PENALTY = 150
 _CREDIT_PENALTY = 80
+# A group the operator asked for on this game. As strong as a verified dump:
+# it is the operator's own choice, so it should decide between otherwise equal
+# releases, but it never makes an unusable release usable.
+PREFERRED_GROUP_BONUS = 50
+PREFERRED_GROUP_MAX = 100
+
+
+def clean_group_name(raw) -> str:
+    """A preferred release group as stored: trimmed, one line, at most 100 characters.
+
+    Raises ValueError for anything else, so a bad value is refused rather than
+    silently cut down to something the operator did not type.
+    """
+    if raw is None:
+        return ""
+    if not isinstance(raw, str):
+        raise ValueError("group must be a string")
+    group = raw.strip()
+    if len(group) > PREFERRED_GROUP_MAX:
+        raise ValueError(f"group must be {PREFERRED_GROUP_MAX} characters or fewer")
+    if any(ord(c) < 32 or ord(c) == 127 for c in group):
+        raise ValueError("group must be a single line")
+    return group
+
+
+def names_group(title: str, group: str) -> bool:
+    """True when `title` names `group` as a whole word, ignoring case.
+
+    Whole words, so a preference for "CPY" is not met by "CPYX" and "BAT" is
+    not met by "Batman".
+    """
+    group = (group or "").strip().lower()
+    if not group:
+        return False
+    return re.search(r"(?<![a-z0-9])" + re.escape(group) + r"(?![a-z0-9])",
+                     title.lower()) is not None
 _GOOD_DUMP_BONUS = 50
 # A .nup is a decrypted dump in one file: RomM reads it, but Tinfoil and the
 # console cannot install it. 45 beats the 40-point seeder cap, so an otherwise
@@ -374,6 +414,9 @@ class Release:
     torrent_file_path: str = ""
     file_selection_required: bool = False
     content_kind: str = ""
+    # When the indexer says the release was posted, as ISO-8601 UTC, or ""
+    # when it did not say. Usenet minimum age and retention read it.
+    published: str = ""
 
 
 def collection_content_kind(path: str) -> str:
@@ -792,9 +835,31 @@ def _package_step(release: Release, wanted: str, platform: Platform,
     return None, reasons, held
 
 
+def usenet_age_refusal(release: Release, profile) -> str:
+    """Why a Usenet post is too young or too old for this profile, or "".
+
+    Minimum age gives a fresh post time to propagate to the news server
+    before a client asks for it; retention skips posts the server has
+    already expired. A post with no date passes both: refusing every
+    undated result would turn a missing field into an empty search.
+    """
+    age = release_age_minutes(release.published)
+    if age is None:
+        return ""
+    minimum = int(getattr(profile, "usenet_minimum_age_minutes", 0) or 0)
+    if minimum > 0 and age < minimum:
+        return (f"posted {int(age)} minutes ago; Usenet minimum age is "
+                f"{minimum} minutes")
+    retention = int(getattr(profile, "usenet_retention_days", 0) or 0)
+    if retention > 0 and age > retention * 1440:
+        return f"older than the {retention}-day Usenet retention"
+    return ""
+
+
 def judge(release: Release, wanted: str,
           platform: Platform | None = None, *,
-          profile=None, blocklist=None, parts=None) -> Judgement:
+          profile=None, blocklist=None, parts=None,
+          preferred_group: str = "") -> Judgement:
     """Rank a release and record why. Higher is better; negative means no.
 
     `profile` and `blocklist` are operator policy and are applied before any
@@ -806,6 +871,10 @@ def judge(release: Release, wanted: str,
     `parts` is what a request wants (base, update, DLC) on a platform whose
     games have updates and DLC; see `game_packages.normalise_parts`.
     Platforms without them ignore it.
+
+    `preferred_group` is the release group the operator favours for this game.
+    A release naming it scores PREFERRED_GROUP_BONUS more and is not docked
+    for being credited to a group. It ranks; it never rescues a refusal.
     """
     content_refusal = collection_content_refusal(release)
     if content_refusal:
@@ -813,6 +882,9 @@ def judge(release: Release, wanted: str,
     if blocklist is not None and release in blocklist:
         return Judgement(-2000,
                          verdict=f"blocklisted: {blocklist.reason_for(release)}")
+    executable = executable_refusal(release.title, platform.slug if platform else "")
+    if executable:
+        return Judgement(-1500, verdict=executable)
     if profile:
         refusal = profile.refusal(release.title.lower(), getattr(release, "size", 0),
                                   content_path=release.torrent_file_path)
@@ -827,6 +899,9 @@ def judge(release: Release, wanted: str,
     if not (title_matches(release.title, wanted)
             or (packaged and _package_title_matches(release.title, wanted))):
         return Judgement(-500, verdict=f"title does not match {wanted!r}")
+    demo = demo_refusal(release.title, wanted)
+    if demo:
+        return Judgement(-1000, verdict=demo)
 
     points = 0
     reasons: list[tuple[int, str]] = []
@@ -866,6 +941,10 @@ def judge(release: Release, wanted: str,
             add(-20, "no seeders (private tracker, often temporary)")
         else:
             add(min(release.seeders, 20) * 2, f"{release.seeders} seeders")
+    elif release.protocol == "usenet" and profile is not None:
+        refusal = usenet_age_refusal(release, profile)
+        if refusal:
+            return Judgement(-350, verdict=refusal)
 
     detected_regions = detect_regions(release.title)
     pref_list = getattr(profile, "preferred_regions", None) or ["usa", "world", "europe", "japan"]
@@ -943,7 +1022,8 @@ def judge(release: Release, wanted: str,
     if translated:
         add(-_TRANSLATION_PENALTY, "not English, or a fan translation")
 
-    if _CREDITED_TO_A_GROUP.search(lowered) and not _digital:
+    preferred = names_group(release.title, preferred_group)
+    if _CREDITED_TO_A_GROUP.search(lowered) and not _digital and not preferred:
         # On a cartridge a group credit usually means a hack; on PC it is
         # how every release is signed.
         add(-_CREDIT_PENALTY, "credited to a group, which usually means a hack")
@@ -1175,6 +1255,9 @@ def judge(release: Release, wanted: str,
                                                platform_evidence=has_platform_evidence):
             add(delta, text)
 
+    if preferred:
+        add(PREFERRED_GROUP_BONUS, f"preferred group ({preferred_group.strip()})")
+
     # Last, and never below 1: it ranks a NUP under an equal installable
     # release, but is not on its own the reason a lone NUP is refused. A title
     # tagged "(NUP)" without the extension has no +60 for it to come out of.
@@ -1267,18 +1350,19 @@ def _size_floor(platform: Platform) -> int:
 
 
 def score(release: Release, wanted: str, platform: Platform | None = None,
-          *, profile=None, blocklist=None, parts=None) -> int:
+          *, profile=None, blocklist=None, parts=None, preferred_group: str = "") -> int:
     """Rank a release. Higher is better; negative means "do not take this"."""
     return judge(release, wanted, platform, profile=profile, blocklist=blocklist,
-                 parts=parts).points
+                 parts=parts, preferred_group=preferred_group).points
 
 
 def explain(release: Release, wanted: str,
             platform: Platform | None = None,
-            *, profile=None, blocklist=None, parts=None) -> list[str]:
+            *, profile=None, blocklist=None, parts=None,
+            preferred_group: str = "") -> list[str]:
     """Why this release scored what it did, worst reason first."""
     return judge(release, wanted, platform, profile=profile, blocklist=blocklist,
-                 parts=parts).why()
+                 parts=parts, preferred_group=preferred_group).why()
 
 
 def package_class(release: Release, wanted: str, platform: Platform | None) -> str:
@@ -1290,10 +1374,12 @@ def package_class(release: Release, wanted: str, platform: Platform | None) -> s
 
 def best_release(releases: list[Release], wanted: str,
                  platform: Platform | None = None, *,
-                 profile=None, blocklist=None, parts=None) -> Release | None:
+                 profile=None, blocklist=None, parts=None,
+                 preferred_group: str = "") -> Release | None:
     """The highest-scoring usable release, or None if nothing qualifies."""
     ranked = [(judge(r, wanted, platform, profile=profile,
-                     blocklist=blocklist, parts=parts).points, r) for r in releases]
+                     blocklist=blocklist, parts=parts,
+                     preferred_group=preferred_group).points, r) for r in releases]
     ranked = [(s, r) for s, r in ranked if s > 0]
     if not ranked:
         return None

@@ -91,7 +91,7 @@ from .capture import status as capture_status
 from .catalogue import (Submission, check_source, facets as hub_facets,
                         search as hub_search, submission_link)
 from .frontends import FORMATS as FRONTEND_FORMATS
-from .metadata import PROVIDERS as METADATA_PROVIDERS
+from .metadata import PROVIDERS as METADATA_PROVIDERS, SECRET_FIELDS as METADATA_SECRET_FIELDS
 from .notify import (NOTIFIERS, Message, Notifier, failed, grabbed, imported,
                      FIELD_HELP, FIELD_LABELS, send_test,
                      update_available)
@@ -121,7 +121,8 @@ LIST_SECRETS = ("api_key", "openxbl_key", "npsso", "itchio_key",
                 "epic_code", "epic_refresh", "ea_token",
                 "battlenet_cookie", "humble_cookie")
 from .scheduler import Scheduler, next_search_due
-from .selection import (Release, best_release, infer_platform, judge, score,
+from .selection import (Release, best_release, clean_group_name, infer_platform,
+                        judge, score,
                         collection_content_kind, collection_content_refusal,
                         package_class)
 from .game_packages import (BASE, DEFAULT_PARTS, GAME_FOLDER_LIBRARIES, PACKAGE_PLATFORMS, PARTS,
@@ -181,8 +182,8 @@ SECRET_MASK = "********"
 #: providers and connections are also served by dedicated endpoints that mask
 #: the same names; import lists use LIST_SECRETS above.
 MASKED_ITEM_FIELDS = {
-    "metadata_providers": ("api_key", "token", "client_id", "client_secret"),
-    "connections": ("url", "urls", "token", "password", "key"),
+    "metadata_providers": METADATA_SECRET_FIELDS,
+    "connections": ("url", "urls", "token", "password", "key", "secret"),
     "import_lists": LIST_SECRETS,
 }
 _SECRET_KEY_WORDS = ("secret", "password", "token", "passkey", "api_key", "apikey")
@@ -2509,11 +2510,13 @@ class ROMarr:
             # different question than the request path it claims to mirror.
             releases = releases + self._hub_releases(game, None)
         asked = self._request_parts(game, platform)
+        favoured = self._preferred_group(game, platform)
         pick = best_release(releases, game, platform,
                            profile=self.profile_for(platform), blocklist=self.blocklist,
-                           parts=asked)
+                           parts=asked, preferred_group=favoured)
         scored = sorted(
-            ((score(r, game, platform, profile=self.profile_for(platform), parts=asked), r)
+            ((score(r, game, platform, profile=self.profile_for(platform), parts=asked,
+                    preferred_group=favoured), r)
              for r in releases),
             key=lambda pair: -pair[0])
         # Which indexers actually contributed, and how many of their results
@@ -2727,6 +2730,12 @@ class ROMarr:
                     merged.append(release)
         return merged
 
+    def _preferred_group(self, game: str, platform) -> str:
+        """The release group the Wanted entry for this game favours, or ""."""
+        if platform is None:
+            return ""
+        return self.store.preferred_group(game, platform.slug)
+
     def _request_parts(self, game: str, platform, parts=None):
         """What a request wants (base, update, DLC) on a package platform; None elsewhere.
 
@@ -2770,7 +2779,7 @@ class ROMarr:
         releases = self._search_releases(game, platform)
         pick = best_release(releases, game, platform,
                            profile=self.profile_for(platform), blocklist=self.blocklist,
-                           parts=asked)
+                           parts=asked, preferred_group=self._preferred_group(game, platform))
         if pick is None:
             item = QueueItem(game, platform.slug, "", 0, "failed",
                              f"no usable release among {len(releases)} result(s)",
@@ -3052,7 +3061,9 @@ class ROMarr:
             # A failure to explain must never fail the grab it explains.
             try:
                 reasons = judge(pick, game, resolve(platform_slug),
-                                profile=self.profile_for(platform_slug), parts=asked).why()
+                                profile=self.profile_for(platform_slug), parts=asked,
+                                preferred_group=self.store.preferred_group(
+                                    game, platform_slug)).why()
             except Exception:
                 reasons = ()
             self.notify(grabbed(pick.title, platform_slug,
@@ -3107,15 +3118,18 @@ class ROMarr:
 
         judged = []
         parts_for = {}   # one Wanted lookup per platform, not per release
+        group_for = {}
         for r in releases:
             inferred = platform or infer_platform(r)
             plat_prof = self.profile_for(inferred)
             slug = inferred.slug if inferred is not None else ""
             if slug not in parts_for:
                 parts_for[slug] = self._request_parts(game, inferred)
+                group_for[slug] = self._preferred_group(game, inferred)
             judged.append((judge(r, game, inferred,
                                  profile=plat_prof, blocklist=self.blocklist,
-                                 parts=parts_for[slug]), r))
+                                 parts=parts_for[slug],
+                                 preferred_group=group_for[slug]), r))
         judged.sort(key=lambda pair: (-pair[0].points, pair[1].size))
 
         key = f"{game}|{platform.slug if platform else ''}"
@@ -4326,7 +4340,10 @@ class ROMarr:
         self.profile = ReleaseProfile.from_settings(self.store.settings)
         self.blocklist = Blocklist.from_items(
             self.store.list_items("blocklist"))
-        self.notifier = Notifier(self.store.list_items("connections"))
+        self.notifier = Notifier(
+            self.store.list_items("connections"),
+            base_url=(os.environ.get("ROMARR_PUBLIC_URL")
+                      or str(self.store.settings.get("public_url") or "")))
 
     def profile_for(self, platform: Any = None) -> ReleaseProfile:
         """Resolve the release profile for a given platform, with fallback to global."""
@@ -5889,7 +5906,7 @@ class ROMarr:
                 metadata, snapshot, uuid.uuid4().hex)
             return True
 
-    def identify(self, filename: str = "", verification=None) -> dict:
+    def identify(self, filename: str = "", verification=None, platform: str = "") -> dict:
         """Name a game, and say how confidently.
 
         `matched_by` travels with the answer because "we matched a DAT name"
@@ -5900,7 +5917,7 @@ class ROMarr:
         with self._metadata_lock:
             metadata = self.metadata
         info = metadata.identify(verification=verification,
-                                 filename=filename)
+                                 filename=filename, platform=platform)
         return {
             "found": info.found,
             "title": info.title,
@@ -7738,7 +7755,8 @@ class ROMarr:
             pick = best_release(releases, item.game, platform,
                                profile=self.profile_for(platform), blocklist=self.blocklist,
                                parts=(self._request_parts(item.game, platform, item.parts)
-                                      if item.parts else None))
+                                      if item.parts else None),
+                               preferred_group=item.preferred_group or "")
             if pick is None or not pick.download_url:
                 continue
             result = self._automatic_grab(pick, item.game, platform.slug)
@@ -10047,7 +10065,7 @@ def make_handler(service: ROMarr):
             if route.path == "/api/v1/blocklist":
                 return self._json(200, {"items": service.blocklist.as_items()})
             if route.path == "/api/v1/connection":
-                secrets = {"url", "urls", "token", "password", "key"}
+                secrets = {"url", "urls", "token", "password", "key", "secret"}
                 items = []
                 for cfg in service.store.list_items("connections"):
                     items.append({k: ("********" if k in secrets and v else v)
@@ -10070,7 +10088,7 @@ def make_handler(service: ROMarr):
                         ] + [
                             {"name": f, "label": FIELD_LABELS.get(f, f.replace("_", " ").title()),
                              "type": ("secret" if f in ("url", "token",
-                                                        "password", "key")
+                                                        "password", "key", "secret")
                                       else "text"),
                              "default": "",
                              "help": (spec["help"] if f == "url" else
@@ -10160,7 +10178,7 @@ def make_handler(service: ROMarr):
                 return self._json(200, openapi_spec(VERSION))
             if route.path == "/api/v1/metadataprovider":
                 from .metadata import PROVIDERS as _MP
-                secrets = {"api_key", "token", "client_id"}
+                secrets = set(METADATA_SECRET_FIELDS)
                 with service._metadata_lock:
                     providers = service.store.list_items("metadata_providers")
                     revision = service.metadata_revision
@@ -10207,8 +10225,26 @@ def make_handler(service: ROMarr):
                      "fields": list(spec["fields"]), "help": spec["help"]}
                     for name, spec in METADATA_PROVIDERS.items()]})
             if route.path == "/api/v1/metadata/lookup":
+                # A caller holding a verified dump's hashes (and its DAT name)
+                # passes them, and hash-aware providers such as ScreenScraper
+                # look the file up by hash instead of by name.
+                hashes = {}
+                for name, size in (("crc", 8), ("md5", 32), ("sha1", 40)):
+                    value = (query.get(name, [""])[0] or "").strip().lower()
+                    if value:
+                        if not re.fullmatch(r"[0-9a-f]{%d}" % size, value):
+                            return self._json(400, {"error": f"{name} must be {size} hex characters"})
+                        hashes[name] = value
+                filename = query.get("filename", [""])[0]
+                verification = None
+                if hashes:
+                    from types import SimpleNamespace
+                    verification = SimpleNamespace(
+                        status="verified", game=query.get("dat_name", [""])[0][:300],
+                        rom=SimpleNamespace(name=filename, **{k: hashes.get(k, "") for k in ("crc", "md5", "sha1")}))
                 return self._json(200, service.identify(
-                    filename=query.get("filename", [""])[0]))
+                    filename=filename, verification=verification,
+                    platform=query.get("platform", [""])[0][:64]))
             if route.path == "/api/v1/frontend/formats":
                 return self._json(200, {"formats": [
                     {"name": name, "label": spec["label"],
@@ -10825,7 +10861,7 @@ def make_handler(service: ROMarr):
                     str(body.get("platform") or ""),
                     force=bool(body.get("force"))))
             if route.path == "/api/v1/metadataprovider":
-                secrets = {"api_key", "token", "client_id"}
+                secrets = set(METADATA_SECRET_FIELDS)
                 if not isinstance(body, dict):
                     return self._json(400, {"error": "invalid provider configuration"})
                 with service._metadata_lock:
@@ -10879,7 +10915,7 @@ def make_handler(service: ROMarr):
                 service.auth.totp = _Totp(secret="", backup=[])
                 return self._json(200, {"ok": True, "enabled": False})
             if route.path == "/api/v1/connection":
-                secrets = {"url", "urls", "token", "password", "key"}
+                secrets = {"url", "urls", "token", "password", "key", "secret"}
                 cfg = dict(body or {})
                 if cfg.get("id"):
                     old_cfg = service.store.get_item("connections",
@@ -10889,6 +10925,10 @@ def make_handler(service: ROMarr):
                             cfg[key] = old_cfg.get(key, "")
                 if not cfg.get("events"):
                     cfg.pop("events", None)   # absent means every event
+                secret = str(cfg.get("secret") or "")
+                if secret and len(secret) < 16:
+                    return self._json(400, {"error": "A webhook signing secret "
+                                                     "needs at least 16 characters."})
                 saved = service.store.put_item("connections", cfg)
                 service.reload_policy()
                 return self._json(200, {k: ("********" if k in secrets and v
@@ -10904,14 +10944,21 @@ def make_handler(service: ROMarr):
                 if cfg.get("id"):
                     old_cfg = service.store.get_item("metadata_providers",
                                                      str(cfg["id"])) or {}
-                    for key in ("api_key", "token", "client_id"):
+                    for key in METADATA_SECRET_FIELDS:
                         # Absent as well as masked, so testing a saved
                         # provider by id alone reports on the credential
                         # that is stored rather than on an empty one.
                         if cfg.get(key, "") in ("********", ""):
                             cfg[key] = old_cfg.get(key, "")
+                    # Identity fields that are not secret (ScreenScraper's
+                    # dev_id, a username) come back too when the request left
+                    # them out; a value the form sent is kept as sent.
+                    for key, value in old_cfg.items():
+                        cfg.setdefault(key, value)
                 try:
-                    info = spec["lookup"](cfg, "Chrono Trigger")
+                    info = (spec["lookup"](cfg, "Chrono Trigger", {"platform": "snes"})
+                            if spec.get("context") else
+                            spec["lookup"](cfg, "Chrono Trigger"))
                 except Exception as exc:
                     return self._json(200, {
                         "ok": False,
@@ -11302,7 +11349,9 @@ def make_handler(service: ROMarr):
                 if cfg.get("id"):
                     old_cfg = service.store.get_item("connections",
                                                      str(cfg["id"])) or {}
-                    for key in ("url", "token", "password", "key"):
+                    # `secret` too: the GET masks a webhook's signing secret,
+                    # and a test signed with the placeholder fails verification.
+                    for key in ("url", "token", "password", "key", "secret"):
                         if cfg.get(key, "") in ("********", ""):
                             cfg[key] = old_cfg.get(key, "")
                 ok, detail = send_test(cfg)
@@ -11448,6 +11497,17 @@ def make_handler(service: ROMarr):
                 return self._json(200, service.add_wanted(
                     game, platform, monitored=bool(body.get("monitored", True)),
                     search=bool(body.get("search")), parts=body.get("parts")))
+            if route.path == "/api/v1/wanted/preferred-group":
+                game = str(body.get("game") or "").strip()
+                platform = resolve(str(body.get("platform") or ""))
+                if not game or platform is None:
+                    return self._json(400, {"error": "game and platform are required"})
+                try:
+                    group = clean_group_name(body.get("group"))
+                except ValueError as err:
+                    return self._json(400, {"error": str(err)})
+                ok = service.store.set_preferred_group(game, platform.slug, group)
+                return self._json(200 if ok else 404, {"ok": ok, "preferred_group": group})
             if route.path == "/api/v1/wanted/monitor":
                 game = str(body.get("game") or "").strip()
                 platform = resolve(str(body.get("platform") or ""))

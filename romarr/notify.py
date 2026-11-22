@@ -25,8 +25,12 @@ arriving an hour late is worse than none.
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import logging
+import time
+import uuid
 import urllib.error
 import urllib.parse
 import threading
@@ -63,18 +67,24 @@ class Message:
     #: do not have and cannot add: it comes from `Judgement.why()`.
     reasons: tuple[str, ...] = ()
     url: str = ""
+    #: The ROMarr page this is about, as a path such as "/#queue". The
+    #: Notifier turns it into `url` when the install knows its public address.
+    path: str = ""
 
     def text(self) -> str:
         lines = [self.title]
         if self.body:
             lines.append(self.body)
         lines.extend(self.reasons)
+        if self.url:
+            lines.append(self.url)
         return "\n".join(lines)
 
 
 def _post(url: str, *, data: bytes | None = None, headers: dict | None = None,
           method: str = "POST") -> bool:
     _last.reason = ""
+    _last.status = 0
     try:
         request = urllib.request.Request(url, data=data, method=method)
     except ValueError as exc:
@@ -85,8 +95,10 @@ def _post(url: str, *, data: bytes | None = None, headers: dict | None = None,
         request.add_header(name, value)
     try:
         with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
+            _last.status = response.status
             return 200 <= response.status < 300
     except urllib.error.HTTPError as exc:
+        _last.status = exc.code
         detail = ""
         try:
             text = exc.read(4096).decode("utf-8", "replace")
@@ -145,17 +157,84 @@ def _slack(cfg: dict, message: Message) -> bool:
     return _json_post(cfg.get("url", ""), {"text": message.text()})
 
 
+#: Seconds to wait before the second and third webhook attempts.
+WEBHOOK_RETRY_DELAYS = (2, 10)
+#: Answers worth trying again: the receiver was busy or briefly down. Any
+#: other 4xx is the receiver saying no, and asking again will not change it.
+_RETRY_STATUSES = frozenset({408, 429})
+
+
+def _retriable(status: int) -> bool:
+    return status == 0 or status in _RETRY_STATUSES or status >= 500
+
+
+def sign_webhook(secret: str, timestamp: int, body: bytes) -> str:
+    """`sha256=<hex>` over "<timestamp>.<raw body>", keyed by the secret.
+
+    The timestamp is inside the signature so a receiver can refuse a replayed
+    delivery; the body is signed exactly as sent, so a receiver must verify
+    the raw bytes before parsing them.
+    """
+    digest = hmac.new(str(secret).encode(), f"{timestamp}.".encode() + body,
+                      hashlib.sha256).hexdigest()
+    return f"sha256={digest}"
+
+
+def _later(delay: float, call) -> None:
+    """Run `call` after `delay` seconds without holding up the caller.
+
+    Notifications are sent from the grab and import paths; a receiver that is
+    down must not stall an import for twelve seconds of retries.
+    """
+    timer = threading.Timer(delay, call)
+    timer.daemon = True
+    timer.start()
+
+
 def _webhook(cfg: dict, message: Message) -> bool:
     """A generic webhook gets the structured event, not a rendered string.
 
     Anything consuming this is a program, and handing it prose to parse back
     into fields is the thing that makes generic webhooks useless.
+
+    With a `secret` the delivery is signed (behaviour learned from Questarr,
+    GPL-3.0; nothing copied): `X-ROMarr-Signature` is an HMAC-SHA256 of
+    "<X-ROMarr-Timestamp>.<body>". `X-ROMarr-Delivery` stays the same on
+    every attempt, so a receiver can drop a retry it already handled. A
+    network error, 408, 429 or 5xx is retried twice in the background.
     """
-    return _json_post(cfg.get("url", ""), {
+    delivery = uuid.uuid4().hex
+    created = int(time.time())
+    body = json.dumps({
+        "id": delivery, "createdAt": created,
         "event": message.event, "title": message.title,
         "body": message.body, "reasons": list(message.reasons),
         "url": message.url,
-    })
+    }).encode()
+    url = cfg.get("url", "")
+    secret = str(cfg.get("secret") or "")
+
+    def attempt() -> bool:
+        headers = {"Content-Type": "application/json",
+                   "User-Agent": "ROMarr (+https://github.com/BlizzHacker/romarr)",
+                   "X-ROMarr-Event": message.event,
+                   "X-ROMarr-Delivery": delivery}
+        if secret:
+            stamp = int(time.time())
+            headers["X-ROMarr-Timestamp"] = str(stamp)
+            headers["X-ROMarr-Signature"] = sign_webhook(secret, stamp, body)
+        return _post(url, data=body, headers=headers)
+
+    def retry(remaining: tuple) -> None:
+        if attempt() or not remaining or not _retriable(getattr(_last, "status", 0)):
+            return
+        _later(remaining[0], lambda: retry(remaining[1:]))
+
+    if attempt():
+        return True
+    if _retriable(getattr(_last, "status", 0)) and WEBHOOK_RETRY_DELAYS:
+        _later(WEBHOOK_RETRY_DELAYS[0], lambda: retry(WEBHOOK_RETRY_DELAYS[1:]))
+    return False
 
 
 def _ntfy(cfg: dict, message: Message) -> bool:
@@ -164,6 +243,8 @@ def _ntfy(cfg: dict, message: Message) -> bool:
         headers["Authorization"] = f"Bearer {cfg['token']}"
     if cfg.get("priority"):
         headers["Priority"] = str(cfg["priority"])
+    if message.url:
+        headers["Click"] = message.url
     body = "\n".join([message.body, *message.reasons]).strip() or message.title
     return _post(cfg.get("url", ""), data=body.encode(),
                  headers={"User-Agent": "ROMarr (+https://github.com/BlizzHacker/romarr)",
@@ -215,7 +296,8 @@ def _apprise(cfg: dict, message: Message) -> bool:
 #: Hints for the fields that are not the main address. Without these the
 #: editor repeated the provider's URL hint under every field, so Discord's
 #: Username box said "A Discord channel webhook URL."
-FIELD_LABELS = {"url": "URL", "chat_id": "Chat ID", "urls": "Apprise URLs"}
+FIELD_LABELS = {"url": "URL", "chat_id": "Chat ID", "urls": "Apprise URLs",
+                "secret": "Signing Secret"}
 
 FIELD_HELP = {
     "username": "Optional. Overrides the webhook's display name.",
@@ -224,6 +306,8 @@ FIELD_HELP = {
     "chat_id": "The chat id to post into.",
     "user": "Your user key.",
     "urls": "Optional. Apprise URLs to notify, one per line or comma separated.",
+    "secret": "Optional, 16 characters or more. Signs every delivery with "
+              "HMAC-SHA256 in the X-ROMarr-Signature header.",
 }
 
 NOTIFIERS: dict[str, dict] = {
@@ -232,7 +316,7 @@ NOTIFIERS: dict[str, dict] = {
                 "help": "A Discord channel webhook URL."},
     "slack": {"label": "Slack", "send": _slack, "fields": ("url",),
               "help": "A Slack incoming-webhook URL."},
-    "webhook": {"label": "Webhook", "send": _webhook, "fields": ("url",),
+    "webhook": {"label": "Webhook", "send": _webhook, "fields": ("url", "secret"),
                 "help": "Receives the structured event as JSON."},
     "ntfy": {"label": "ntfy.sh", "send": _ntfy,
              "fields": ("url", "token", "priority"),
@@ -258,6 +342,16 @@ class Notifier:
     """Every configured connection, fanned out to."""
 
     connections: list[dict] = field(default_factory=list)
+    #: This install's public address, e.g. https://romarr.example.com. When
+    #: set, a message about a page links to it.
+    base_url: str = ""
+
+    def link(self, message: Message) -> Message:
+        """The message with `url` filled from its page, when that is possible."""
+        base = str(self.base_url or "").strip().rstrip("/")
+        if message.url or not message.path or not base.startswith(("http://", "https://")):
+            return message
+        return Message(**{**message.__dict__, "url": base + message.path})
 
     def send(self, message: Message) -> list[dict]:
         """Deliver to every connection subscribed to this event.
@@ -266,6 +360,7 @@ class Notifier:
         already succeeded -- the delivery is a courtesy, the import is the
         work.
         """
+        message = self.link(message)
         out = []
         for cfg in self.connections:
             if not cfg.get("enable", True):
@@ -309,6 +404,7 @@ def grabbed(title: str, platform: str, indexer: str, reasons) -> Message:
         title=f"Grabbed {title}",
         body=f"{platform} — from {indexer}" if platform else f"from {indexer}",
         reasons=tuple(reasons or ()),
+        path="/#queue",
     )
 
 
@@ -326,11 +422,13 @@ def imported(title: str, platform: str, verification) -> Message:
         note = "not in any loaded DAT"
         event = ON_IMPORT
     return Message(event=event, title=f"Imported {title}",
-                   body=f"{platform} — {note}" if platform else note)
+                   body=f"{platform} — {note}" if platform else note,
+                   path="/#history")
 
 
 def failed(title: str, reason: str) -> Message:
-    return Message(event=ON_FAILURE, title=f"Failed {title}", body=reason)
+    return Message(event=ON_FAILURE, title=f"Failed {title}", body=reason,
+                   path="/#history")
 
 
 def update_available(current: str, latest: str, url: str = "") -> Message:

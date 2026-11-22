@@ -161,8 +161,32 @@ def title_before_parts(title: str, wanted: str = "") -> str:
         core = core[:connector.start()]
 
 
+#: Editions that ship the game with its DLC: "GOTY", "Game of the Year",
+#: "Complete/Definitive/Ultimate/Gold/Legendary/Premium Edition". Behaviour
+#: learned from Gamarr (GPL-3.0; the word list is written here).
+_COMPLETE_EDITION_RE = re.compile(
+    r"\b(?:goty|game\s+of\s+the\s+year|"
+    r"(?:complete|definitive|ultimate|gold|legendary|premium)\s+edition)\b")
+
+
+def _edition_words(text: str) -> str:
+    return " ".join(re.sub(r"[._\-]+", " ", str(text or "").lower()).split())
+
+
+def _complete_edition(lowered: str, wanted: str) -> bool:
+    found = _COMPLETE_EDITION_RE.search(_edition_words(lowered))
+    if not found:
+        return False
+    # A game asked for by its edition's name ("Tomb Raider Definitive
+    # Edition", "Game_Gold_Edition") is that game, not the game plus its DLC.
+    # Whole words only: "GOTYcoon" does not name a GOTY edition.
+    phrase = " ".join(found.group(0).split())
+    return re.search(r"(?<![a-z0-9])" + re.escape(phrase) + r"(?![a-z0-9])",
+                     _edition_words(wanted)) is None
+
+
 @functools.lru_cache(maxsize=4096)
-def release_parts(title: str, wanted: str = "") -> frozenset[str]:
+def release_parts(title: str, wanted: str = "", editions: bool = True) -> frozenset[str]:
     """Which parts of a game a release title says it holds.
 
     ``{"base"}`` is a plain game upload, ``{"update"}`` or ``{"dlc"}`` an
@@ -190,6 +214,14 @@ def release_parts(title: str, wanted: str = "") -> frozenset[str]:
         parts.update(kind for kind, _ in markers)
         if markers[0][1]:
             parts.add(BASE)
+    # A complete edition is the game and its DLC -- unless the title already
+    # said it is an extra on its own: "Update v2.5 incl DLC" stays an update,
+    # and so does "Game.Gold.Edition.A0100-V0200.pkg", whose version pair or
+    # package-ID suffix already says UPDATE or DLC without the game.
+    standalone_extra = bool(parts) and BASE not in parts
+    if (editions and not standalone_extra and (not markers or markers[0][1])
+            and _complete_edition(lowered, wanted)):
+        parts.update((BASE, DLC))
     return frozenset(parts or {BASE})
 
 
@@ -383,7 +415,12 @@ def held_parts(title: str, wanted: str, platform_slug: str) -> frozenset[str]:
     """
     parts = release_parts(title, wanted)
     by_id = identify(title, platform_slug)[1]
-    return frozenset({by_id}) if by_id and len(parts) == 1 else parts
+    # The title ID decides unless the words name a real combined pack. An
+    # edition name alone ("Game Complete Edition [0004000E001B4000]") does
+    # not: that is still the update its ID says it is.
+    if by_id and len(release_parts(title, wanted, editions=False)) == 1:
+        return frozenset({by_id})
+    return parts
 
 
 _JOIN_RE = re.compile(r"\s*\+\s*|\s+&\s+")

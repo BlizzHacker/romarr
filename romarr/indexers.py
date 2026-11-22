@@ -17,6 +17,7 @@ Two things here are load-bearing and easy to get wrong:
 
 from __future__ import annotations
 
+import html
 import logging
 import math
 import time
@@ -30,6 +31,7 @@ from urllib.parse import (
 
 import requests
 
+from .release_guards import is_nzb_link, published_iso
 from .selection import CONSOLE_CATEGORIES, PC_GAME_CATEGORIES, Release
 
 log = logging.getLogger(__name__)
@@ -528,7 +530,9 @@ class Prowlarr:
             info_url = ""
 
         return Release(
-            title=row.get("title") or "",
+            # Indexers HTML-escape titles more often than they should, and
+            # "Ratchet &amp; Clank" matches nothing anybody asked for.
+            title=html.unescape(row.get("title") or ""),
             size=int(row.get("size") or 0),
             seeders=int(row.get("seeders") or 0),
             categories=tuple(
@@ -539,6 +543,7 @@ class Prowlarr:
             indexer=row.get("indexer") or "",
             private=private,
             info_url=info_url,
+            published=published_iso(row.get("publishDate")),
         )
 
     def indexers(self) -> list[dict]:
@@ -707,9 +712,11 @@ class Torznab:
         # An enclosure url is the conventional place for the .torrent or .nzb;
         # <link> is the fallback and is sometimes a details page.
         enclosure = ""
+        enclosure_type = ""
         for child in item:
             if child.tag.split("}")[-1] == "enclosure" and child.get("url"):
                 enclosure = child.get("url")
+                enclosure_type = child.get("type") or ""
                 break
 
         row = {
@@ -728,16 +735,26 @@ class Torznab:
             guid = text("guid") or ""
             info_url = guid if guid.startswith(("http://", "https://")) else ""
 
+        # The protocol is read from the raw link, before _download_link can
+        # rewrite it: an NZB in a Torznab feed belongs to the Usenet client.
+        protocol = self._config.protocol
+        if is_nzb_link(row["downloadUrl"], enclosure_type):
+            protocol = "usenet"
+
         return Release(
-            title=row["title"],
+            title=html.unescape(row["title"]),
             size=as_int(attr("size")) or as_int(text("size")),
             seeders=as_int(attr("seeders")),
             categories=categories,
-            download_url=_download_link(row, private=self._config.private),
-            protocol=self._config.protocol,
+            # A Usenet release is fetched from its NZB; _download_link prefers
+            # a magnet, which a Usenet client cannot use.
+            download_url=(row["downloadUrl"] if protocol == "usenet"
+                          else _download_link(row, private=self._config.private)),
+            protocol=protocol,
             indexer=self._config.name,
             private=self._config.private,
             info_url=info_url,
+            published=published_iso(attr("usenetdate") or text("pubDate")),
         )
 
 
@@ -829,13 +846,14 @@ class TorrentRss:
             if not title or not link:
                 continue
             out.append(Release(
-                title=title, size=size,
+                title=html.unescape(title), size=size,
                 # See the class docstring: a feed publishes no seeder count,
                 # and 0 on a public tracker means "dead".
                 seeders=1,
                 categories=(SEARCH_CATEGORIES[0],),
                 download_url=link, protocol="torrent",
                 indexer=self.name, private=True,
+                published=published_iso(item.findtext("pubDate")),
             ))
         return out
 

@@ -105,6 +105,7 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "/api/v1/lookup": ("GET", "Find games by IGDB title, with per-platform library, download and monitoring state. Requires q; optional platform."),
     "/api/v1/game/detail": ("GET", "Read one game and its cached metadata, wanted entry, queue and history; platform plus id or title."),
     "/api/v1/wanted/add": ("POST", "Save a game/platform with boolean monitored (default true) and search (default false). Wishlist entries use monitored=false and are skipped by automatic searches. On platforms whose games have updates and DLC (PlayStation 3/4/5, PSP, Vita, 3DS, Wii U, Switch, Xbox 360, PC), entries may add parts, a list of base, update and dlc (default: the game)."),
+    "/api/v1/wanted/preferred-group": ("POST", "Favour releases by one release group for an existing game/platform on Wanted (whole-word match in the release title, +50); an empty group clears it."),
     "/api/v1/wanted/monitor": ("POST", "Set boolean monitored for an existing game/platform; false pauses automatic searches without removing the entry."),
     "/api/v1/queue": ("GET", "Active downloads, import-preview availability and client-scoped progress/ETA when available."),
     "/api/queue": ("GET", "Active downloads (legacy path)."),
@@ -134,8 +135,10 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
                                "reason for each score."),
     "/api/v1/indexer/schema": ("GET", "The nine indexer types and their fields."),
     "/api/v1/metadata/schema": ("GET", "Metadata providers and their fields."),
-    "/api/v1/metadata/lookup": ("GET", "Identify a file. Reports matched_by as "
-                                       "'dat' or 'filename'."),
+    "/api/v1/metadata/lookup": ("GET", "Identify a file by ?filename=. Reports matched_by as "
+                                       "'dat' or 'filename'. Pass a verified dump's "
+                                       "crc/md5/sha1 (and dat_name, platform) to let hash-aware "
+                                       "providers such as ScreenScraper look it up by hash."),
     "/api/v1/calendar": ("GET", "Games released recently or due soon, from "
                                 "the first configured metadata provider that "
                                 "can answer a date range (RAWG or IGDB). "
