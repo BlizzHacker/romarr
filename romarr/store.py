@@ -255,6 +255,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # used by ROM Hub's broker/downloader when an allowed HTTPS source answers
     # with a Cloudflare challenge. Never passed to untrusted plugin code.
     "flaresolverr_url": "",
+    # Extra git forges plugins may be installed from, comma separated. They
+    # add to catalogue.DEFAULT_ALLOWED_HOSTS; they never replace it.
+    "plugin_hosts": "",
     "romm_public_url": "",
     # --- OpenID Connect sign-in (Authentik or any OIDC IdP) ---
     # Off until an issuer + client id exist. Distinct from forward-auth SSO
@@ -870,6 +873,9 @@ class Store:
                 if parts.scheme.lower() not in ("http", "https") or not parts.hostname:
                     raise ValueError("FlareSolverr URL must start with http:// or https://")
             patch = dict(patch, flaresolverr_url=raw_solver)
+        if "plugin_hosts" in patch:
+            from .catalogue import parse_hosts
+            patch = dict(patch, plugin_hosts=", ".join(parse_hosts(patch["plugin_hosts"])))
         with self._lock:
             # No catalog provenance can be trusted without a selected DAT root.
             # Refuse the whole patch before changing memory or the saved file.

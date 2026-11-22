@@ -42,7 +42,45 @@ SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 #: possible. Self-hosted forges are common in this crowd, so the list is
 #: configurable -- but it is a list, never "anything".
 DEFAULT_ALLOWED_HOSTS = ("github.com", "gitlab.com", "codeberg.org",
-                         "git.sr.ht", "bitbucket.org")
+                         "git.sr.ht", "bitbucket.org",
+                         # ROMarr's own forges: the plugin catalogue lists
+                         # plugins hosted there, so refusing them refused them.
+                         "git.moveweight.com", "git.romarr.app")
+
+_HOST_RE = re.compile(r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
+
+
+def parse_hosts(value) -> list[str]:
+    """Extra forge hosts from a setting: a list, or text split on commas,
+    spaces or newlines. Raises ValueError naming any entry that is not a
+    plain hostname (no scheme, path or port)."""
+    if value is None:
+        return []
+    items = value if isinstance(value, (list, tuple)) else re.split(r"[\s,]+", str(value))
+    out, bad = [], []
+    for item in items:
+        host = str(item or "").strip().lower().rstrip(".")
+        if not host:
+            continue
+        if _HOST_RE.match(host):
+            if host not in out:
+                out.append(host)
+        else:
+            bad.append(str(item).strip())
+    if bad:
+        raise ValueError("not a hostname: " + ", ".join(bad[:5])
+                         + " (enter just the host, e.g. git.example.com)")
+    return out
+
+
+def merged_hosts(extra=None) -> list[str]:
+    """The built-in forges plus any the operator added. Extra hosts add to
+    the defaults; they never replace them. Unreadable entries are skipped."""
+    items = extra if isinstance(extra, (list, tuple)) else re.split(r"[\s,]+", str(extra or ""))
+    added = [h for h in (str(i or "").strip().lower().rstrip(".") for i in items)
+             if h and _HOST_RE.match(h)]
+    return list(DEFAULT_ALLOWED_HOSTS) + [h for h in dict.fromkeys(added)
+                                          if h not in DEFAULT_ALLOWED_HOSTS]
 
 
 def search(items: list[dict], query: str = "", *, capability: str = "",
@@ -142,13 +180,13 @@ def check_source(url: str, allowed_hosts=None) -> SourceCheck:
     host = (parts.hostname or "").lower()
     if not host:
         return SourceCheck(False, url=raw, reason="no host in the URL")
-    allowed = [h.lower() for h in (allowed_hosts or DEFAULT_ALLOWED_HOSTS)]
+    allowed = merged_hosts(allowed_hosts)
     if host not in allowed:
         return SourceCheck(
             False, url=raw, host=host,
             reason=f"{host} is not an allowed source. Allowed: "
-                   f"{', '.join(allowed)}. Add it under Settings if you host "
-                   "your own forge.")
+                   f"{', '.join(allowed)}. If you host your own forge, add it "
+                   "under Settings -> General -> Extra plugin sources.")
     if not parts.path.strip("/"):
         return SourceCheck(False, url=raw, host=host,
                            reason="that is a host, not a repository")
