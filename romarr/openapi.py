@@ -216,6 +216,14 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "/api/v1/mcp": ("GET", "MCP connection manifest (GET), or authenticated stateless JSON-RPC MCP transport (POST). GET text/event-stream returns 405; no standalone SSE stream is offered."),
     "/api/v1/hub/archive-org/auth": ("POST", "Save or clear host-managed Archive.org credentials; returns status without credentials."),
     "/api/v1/hub/plugin": ("POST", "Install, enable, disable or uninstall a plugin."),
+    "/api/v1/hub/plugin/detail": ("GET", "One installed plugin's dashboard: what it does, its "
+                                         "settings (secrets as set/not set), how to use it "
+                                         "and its README."),
+    "/api/v1/hub/plugin/config": ("POST", "Save an installed plugin's settings; secrets go "
+                                          "to ROM Hub's secret store."),
+    "/api/v1/hub/plugin/run": ("POST", "Use a plugin from its dashboard: search it alone, "
+                                       "enrich a RomM game, or list its cores, assets or "
+                                       "firmware."),
     "/api/v1/hub/source/check": ("POST", "Whether a repository URL may be "
                                          "installed from."),
     "/api/v1/hub/source/install": ("POST", "Validate a repository against configured "
