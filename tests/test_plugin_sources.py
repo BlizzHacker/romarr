@@ -6,7 +6,7 @@ from romarr.store import Store
 
 
 def test_romarrs_own_forge_is_allowed_out_of_the_box():
-    assert "git.moveweight.com" in DEFAULT_ALLOWED_HOSTS
+    assert DEFAULT_ALLOWED_HOSTS[-1] == "git.moveweight.com"
     assert check_source("https://git.moveweight.com/BlizzHacker/rom-hub-theromdepot").ok
 
 
