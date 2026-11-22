@@ -5736,8 +5736,8 @@ RENDER.general=async()=>{
        value="${esc(SETTINGS.plugin_hosts||'')}"
        placeholder="git.example.com, forge.example.org">
      <div style="color:var(--dim);font-size:11.5px;margin-top:4px">
-       Plugins install from GitHub, GitLab, Codeberg, sourcehut, Bitbucket and
-       git.moveweight.com. Add the host of your own git forge here, comma separated.
+       Plugins install from GitHub, GitLab, Codeberg, sourcehut, Bitbucket,
+       git.moveweight.com and git.romarr.app. Add the host of your own git forge here, comma separated.
        Only https sources are accepted.</div></div>`
   +chk('auto_import','Import completed downloads automatically',SETTINGS.auto_import)
   +`<div class="field"><label>Protocol</label>

@@ -43,9 +43,9 @@ SLUG = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 #: configurable -- but it is a list, never "anything".
 DEFAULT_ALLOWED_HOSTS = ("github.com", "gitlab.com", "codeberg.org",
                          "git.sr.ht", "bitbucket.org",
-                         # ROMarr's own forge: the plugin catalogue lists
-                         # plugins hosted here, so refusing it refused them.
-                         "git.moveweight.com")
+                         # ROMarr's own forges: the plugin catalogue lists
+                         # plugins hosted there, so refusing them refused them.
+                         "git.moveweight.com", "git.romarr.app")
 
 _HOST_RE = re.compile(r"^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$")
 
