@@ -4566,6 +4566,10 @@ class ROMarr:
                 log.warning("%s failed_jobs() failed: %s", name, err)
         return jobs
 
+    #: qBittorrent states for a torrent that is waiting its turn or was paused
+    #: by the operator -- not stalled, whatever its age (see below).
+    _WAITING_TORRENT_STATES = frozenset({"queuedDL", "pausedDL", "stoppedDL"})
+
     def _is_download_active_or_complete(self, row: QueueItem) -> bool:
         """Return True if a download client reports `row` is completed or actively transferring (#108).
 
@@ -4606,6 +4610,17 @@ class ROMarr:
                             return True
                         dlspeed = int(item.get("dlspeed", 0) or 0)
                         state = str(item.get("state") or "")
+                        # Waiting, not dead. With queueing on, qBittorrent
+                        # holds every torrent past `max_active_downloads` (4
+                        # by default) in queuedDL, and one the operator
+                        # paused sits in pausedDL/stoppedDL. Neither has had
+                        # a chance to download, so the grab's age says
+                        # nothing about the release: retiring them after the
+                        # stall timeout blocklisted and deleted 2,240 queued
+                        # torrents on one install.
+                        if state in self._WAITING_TORRENT_STATES:
+                            row.waited_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+                            return True
                         if dlspeed > 0 or state in (
                             "downloading", "forcedDL", "checkingDL",
                             "checkingUP", "allocating", "moving",
@@ -4652,13 +4667,29 @@ class ROMarr:
 
     @staticmethod
     def _row_age_minutes(row, now) -> float | None:
-        """How long this row has been waiting, or None if it will not say."""
+        """How long this row has been eligible to download, or None if it will not say.
+
+        Measured from the grab, or from the last time a client reported the
+        download waiting in its queue or paused, whichever is later: a
+        torrent that waited out the whole stall timeout behind qBittorrent's
+        active-download limit must not be retired the moment it starts.
+        """
         try:
             stamped = datetime.fromisoformat(row.at)
         except (TypeError, ValueError):
             return None
         if stamped.tzinfo is None:
             stamped = stamped.replace(tzinfo=timezone.utc)
+        waited = getattr(row, "waited_at", "") or ""
+        if waited:
+            try:
+                left = datetime.fromisoformat(waited)
+            except (TypeError, ValueError):
+                left = None
+            if left is not None:
+                if left.tzinfo is None:
+                    left = left.replace(tzinfo=timezone.utc)
+                stamped = max(stamped, left)
         return (now - stamped).total_seconds() / 60.0
 
     def unblock(self, entry_id: str) -> bool:
