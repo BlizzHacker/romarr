@@ -4314,8 +4314,11 @@ class ROMarr:
                            or (cfg.get("name") or getattr(backend, "name", "library")) == source)]
         url = ""
         if len(candidates) == 1:
-            url = str(candidates[0].get("public_url") or candidates[0].get("url") or "")
-            if len(self.game_libraries) == 1:
+            # A library's own Browser URL wins; the global public URL is only
+            # the fallback for a single library that names none.
+            own = str(candidates[0].get("public_url") or "")
+            url = own or str(candidates[0].get("url") or "")
+            if not own and len(self.game_libraries) == 1:
                 url = str(settings.get("romm_public_url") or url)
         elif len(self.game_libraries) <= 1 and not source:
             url = str(settings.get("romm_public_url") or settings.get("_romm_url") or "")
@@ -4557,7 +4560,14 @@ class ROMarr:
             try:
                 completed = getattr(client, "completed", None)
                 if callable(completed):
-                    for item in completed():
+                    # Look, don't fetch: the site, hub and debrid lanes download
+                    # inside completed(), and a stall check must not start (or
+                    # fail) the very download it is judging.
+                    try:
+                        finished = completed(fetch=False)
+                    except TypeError:
+                        finished = completed()
+                    for item in finished:
                         if match_queue_item([row], item, client_id=client_id, client_protocol=client_protocol) is not None:
                             return True
             except Exception:

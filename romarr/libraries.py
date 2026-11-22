@@ -919,6 +919,11 @@ LIBRARY_TYPES = {
         "label": "RomM",
         "default_port": 8080,
         "fields": _COMMON_LIBRARY_FIELDS + [
+            _FIELD("public_url", "Browser URL",
+                   help="The address you open RomM at, e.g. https://romm.example.com. "
+                        "Open in RomM links use it; the URL above stays the address "
+                        "ROMarr connects to. Set it when RomM signs in through OIDC: "
+                        "a login started on the LAN address cannot finish on the public one."),
             _FIELD("username", "Username"),
             _FIELD("password", "Password", "secret"),
             _FIELD("api_key", "API Token", "secret"),

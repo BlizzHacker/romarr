@@ -2299,6 +2299,24 @@ class DebridClient:
 
     # -- the client interface -----------------------------------------------
 
+    def active_downloads(self) -> list[dict]:
+        """Items the cloud has finished that are still being fetched here.
+
+        `completed(fetch=False)` reports an item only once every file is on
+        disk, so an item the service finished while its local download is
+        still running was neither complete nor active to the stalled-download
+        sweep -- and was blocklisted for being slow to copy. An item the
+        cloud has not finished is not reported: that is the stall to catch.
+        """
+        if not self.configured:
+            return []
+        try:
+            finished = self._finished()
+        except Exception:
+            return []
+        return [{"name": str(item[0]), "worker_active": True, "progress": 1.0}
+                for item in finished if item]
+
     def _finished(self) -> list[tuple[str, list]]:
         """`(name, links)` for every one of our items the cloud has finished.
 
@@ -3783,6 +3801,19 @@ class SiteDownloader:
         self._write(rows)
         return True
 
+    def active_downloads(self) -> list[dict]:
+        """Jobs still waiting their turn or being fetched, as active downloads.
+
+        This lane fetches `max_active` files per sweep, one by default, so a
+        job can wait hours behind others with nothing wrong. Without this the
+        stalled-download sweep saw a queued job as neither active nor
+        complete, called it stalled three hours after the grab, and
+        blocklisted a release that had simply not been reached yet.
+        """
+        return [{"name": str(r.get("name") or ""), "state": "queued",
+                 "worker_active": True, "progress": 0.0}
+                for r in self._read() if r.get("state") == "pending"]
+
     def completed(self, *, fetch=True) -> list[dict]:
         """Fetch what is pending, then report everything already here.
 
@@ -4089,6 +4120,19 @@ class HubDownloader:
         })
         self._write(rows)
         return True
+
+    def active_downloads(self) -> list[dict]:
+        """Jobs still waiting their turn or being fetched, as active downloads.
+
+        This lane fetches `max_active` files per sweep, one by default, so a
+        job can wait hours behind others with nothing wrong. Without this the
+        stalled-download sweep saw a queued job as neither active nor
+        complete, called it stalled three hours after the grab, and
+        blocklisted a release that had simply not been reached yet.
+        """
+        return [{"name": str(r.get("name") or ""), "state": "queued",
+                 "worker_active": True, "progress": 0.0}
+                for r in self._read() if r.get("state") == "pending"]
 
     def completed(self, *, fetch=True) -> list[dict]:
         """Fetch what is pending, then report everything already here."""
