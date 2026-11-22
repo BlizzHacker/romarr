@@ -2104,6 +2104,11 @@ class ROMarr:
             if (isinstance(value, str) and value
                     and any(t in key.lower() for t in _SECRET_KEY_WORDS)):
                 out[key] = SECRET_MASK
+        if isinstance(out.get("chat_agent"), dict):
+            # The chat agent's provider key is nested, so the rule above misses it.
+            chat = dict(out["chat_agent"])
+            chat["api_key"] = SECRET_MASK if chat.get("api_key") else ""
+            out["chat_agent"] = chat
         return out
 
     def restore_masked_items(self, patch: dict) -> dict:
@@ -2129,6 +2134,9 @@ class ROMarr:
             if (isinstance(patch[key], str) and patch[key] == SECRET_MASK
                     and any(t in key.lower() for t in _SECRET_KEY_WORDS)):
                 patch[key] = self.store.settings.get(key, "")
+        if "chat_agent" in patch:
+            # A settings save echoes this masked; /api/v1/chat/config is where it changes.
+            patch["chat_agent"] = self.store.settings.get("chat_agent", {})
         return patch
 
 
@@ -9505,6 +9513,66 @@ def make_handler(service: ROMarr):
                                    or "The plugin could not be installed. Check ROM Hub availability and try again.")
             return self._json(200 if result.get("ok") else 500, result)
 
+        def _chat_identity(self) -> str:
+            """Whose chat history this request reads: the SSO or OIDC account, else the owner."""
+            if service.sso is not None:
+                identity = service.sso.identify(self.headers, peer=self.client_address[0])
+                if identity.ok and identity.user:
+                    return "sso:" + identity.user
+            cookies = parse_cookies(self.headers.get("Cookie", ""))
+            subject = service.auth.session_subject(cookies.get(SESSION_COOKIE))
+            return "oidc:" + subject if subject else "owner"
+
+        def _chat_stream(self, events):
+            """Stream chat events as newline-delimited JSON, flushing each one."""
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("X-Accel-Buffering", "no")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.close_connection = True
+            try:
+                for event in events:
+                    self.wfile.write((json.dumps(event, ensure_ascii=False) + "\n").encode("utf-8"))
+                    self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                pass
+            finally:
+                close = getattr(events, "close", None)
+                if close is not None:
+                    close()
+
+        def _chat_post(self, path: str, length: int):
+            """POST /api/v1/chat*: a bounded JSON body, then the chat agent."""
+            from . import chat_agent
+            if length < 0 or length > 65536:
+                self.close_connection = True
+                return self._json(413, {"error": "Chat request exceeds 64 KiB"})
+            try:
+                body = json.loads(self.rfile.read(length) or b"{}")
+            except (ValueError, UnicodeDecodeError):
+                return self._json(400, {"error": "invalid json"})
+            if not isinstance(body, dict):
+                return self._json(400, {"error": "Send a JSON object"})
+            if path == "/api/v1/chat/config":
+                try:
+                    return self._json(200, chat_agent.save_config(service, body))
+                except ValueError as exc:
+                    return self._json(400, {"error": str(exc)})
+            if path == "/api/v1/chat/models":
+                return self._json(200, chat_agent.models(service, body))
+            if path == "/api/v1/chat/test":
+                return self._json(200, chat_agent.test(service, body))
+            if path == "/api/v1/chat/confirm":
+                if not isinstance(body.get("approve"), bool) or not isinstance(body.get("id"), str):
+                    return self._json(400, {"error": "id and a boolean approve are required"})
+                return self._chat_stream(chat_agent.confirm(
+                    service, self._chat_identity(), body["id"], body["approve"]))
+            if not isinstance(body.get("message"), str):
+                return self._json(400, {"error": "message is required"})
+            return self._chat_stream(chat_agent.chat(service, self._chat_identity(), body["message"]))
+
         def _guard(self, handler):
             """Turn an unhandled failure into a reply instead of a dead socket.
 
@@ -10560,6 +10628,12 @@ def make_handler(service: ROMarr):
                 return self._json(200, _mdm_status())
             if route.path == "/api/v1/hub/fleet":
                 return self._json(200, hub.fleet_profiles())
+            if route.path == "/api/v1/chat/config":
+                from . import chat_agent
+                return self._json(200, chat_agent.public_config(service))
+            if route.path == "/api/v1/chat/history":
+                from . import chat_agent
+                return self._json(200, chat_agent.view_history(service, self._chat_identity()))
             if route.path == "/api/v1/mcp":
                 from . import mcp
                 if "text/event-stream" in self.headers.get("Accept", ""):
@@ -10637,6 +10711,9 @@ def make_handler(service: ROMarr):
             length = int(self.headers.get("Content-Length") or 0)
             if route.path.startswith("/api/v1/soundtracks/") and (length < 0 or length > 65536):
                 return self._json(413, {"error": "Soundtrack request exceeds size limit"})
+            if route.path in ("/api/v1/chat", "/api/v1/chat/confirm", "/api/v1/chat/config",
+                              "/api/v1/chat/models", "/api/v1/chat/test"):
+                return self._chat_post(route.path, length)
 
 
 
@@ -11719,6 +11796,10 @@ def make_handler(service: ROMarr):
             """Dispatch DELETE requests and serialize backend removal with restore."""
             route = urlparse(self.path)
             query_del = parse_qs(route.query)
+            if route.path == "/api/v1/chat/history":
+                from . import chat_agent
+                chat_agent.clear_history(service, chat_agent.user_key(self._chat_identity()))
+                return self._json(200, {"ok": True})
             if route.path == "/api/v1/portal/proxy":
                 length = int(self.headers.get("Content-Length") or 0)
                 raw_body = self.rfile.read(min(length, 25 * 1024 * 1024)) if length > 0 else b""

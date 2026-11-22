@@ -241,6 +241,9 @@ class SeerrRequest:
 # Defaults are spelled out here rather than scattered through the UI so a fresh
 # install and a configured one disagree about nothing.
 DEFAULT_SETTINGS: dict[str, Any] = {
+    # The built-in chat agent (romarr/chat_agent.py): provider, model and a
+    # masked API key. Written only through /api/v1/chat/config.
+    "chat_agent": {},
     "soundtrack_sources": "zophar,archive",
     "music_library_root": "",
     # How a friend's server reaches this one, e.g. https://romarr.example.com.
