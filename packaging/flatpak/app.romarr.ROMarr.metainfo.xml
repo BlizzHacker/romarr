@@ -87,6 +87,18 @@
   </keywords>
 
   <releases>
+    <release version="1.12.0" date="2026-11-22">
+      <url type="details">https://github.com/BlizzHacker/romarr/releases/tag/v1.12.0</url>
+      <description>
+        <ul>
+          <li>Hydra Launcher download sources, with console platforms and file-host routing.</li>
+          <li>The Mister Download Manager plugin, plus Archive.org and four free-content source plugins installed by default.</li>
+          <li>A built-in chat agent for Ollama, OpenAI-compatible endpoints and Anthropic.</li>
+          <li>Larger text and buttons, and notices you can dismiss.</li>
+          <li>Queued ROM Hub downloads are no longer blocklisted as stalled.</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.11.4" date="2026-11-18">
       <url type="details">https://github.com/BlizzHacker/romarr/releases/tag/v1.11.4</url>
       <description>
