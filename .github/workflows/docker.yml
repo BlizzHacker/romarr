@@ -235,6 +235,14 @@ jobs:
           test "$(awk '/^Umask:/ {print $2}' /proc/$(docker inspect -f '{{.State.Pid}}' smoke)/status)" = "0002" \
             || { echo "server process did not inherit UMASK=002"; exit 1; }
 
+          echo "--- a PUID user can mount a cloud folder with FUSE ---"
+          # fusermount3 refuses a caller with no /etc/passwd entry, which
+          # every numeric PUID used to be; the entrypoint now names it.
+          docker run --rm --device /dev/fuse --cap-add SYS_ADMIN \
+            --security-opt apparmor=unconfined -e PUID=1026 -e PGID=100 \
+            romarr:smoke sh -c 'mkdir -p /tmp/src /tmp/mnt && echo ok > /tmp/src/f && rclone mount /tmp/src /tmp/mnt --allow-other --daemon --daemon-wait 10s && test "$(cat /tmp/mnt/f)" = ok && fusermount3 -u /tmp/mnt' \
+            || { echo "a PUID user cannot mount with FUSE"; exit 1; }
+
           docker rm -f smoke
 
       - name: Build and push

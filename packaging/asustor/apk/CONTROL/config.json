@@ -1,0 +1,48 @@
+{
+  "general": {
+    "package": "romarr",
+    "name": "ROMarr",
+    "version": "1.13.2",
+    "depends": [
+      "docker-ce(>=20.10.17.r1)"
+    ],
+    "conflicts": [],
+    "developer": "Move Weight",
+    "maintainer": "BlizzHacker",
+    "email": "",
+    "website": "https://romarr.app",
+    "architecture": "any",
+    "firmware": "4.1.0"
+  },
+  "adm-desktop": {
+    "app": {
+      "port": 6868,
+      "protocol": "http",
+      "type": "custom",
+      "url": "/"
+    },
+    "privilege": {
+      "accessible": "users",
+      "customizable": true
+    }
+  },
+  "register": {
+    "share-folder": [
+      {
+        "name": "Docker",
+        "description": "Data and files for Docker apps"
+      },
+      {
+        "name": "Media",
+        "description": "Media for apps and users"
+      }
+    ],
+    "boot-priority": {
+      "start-order": 70,
+      "stop-order": 30
+    },
+    "port": [
+      "T6868"
+    ]
+  }
+}

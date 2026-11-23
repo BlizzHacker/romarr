@@ -6,7 +6,7 @@ exact steps left to publish each one. The packaging itself lives in
 validation log and submission guide. Live listings (Unraid CA, Google Play beta,
 Microsoft Store, GHCR) are tracked in [SUBMISSIONS.md](SUBMISSIONS.md).
 
-Status as of 2026-11-16, packaging ROMarr **1.10.0**. Submitted: TrueNAS,
+Status as of 2026-11-23, packaging ROMarr **1.13.2**. Every NAS has a package or a template; the per-platform install guide is [NAS.md](NAS.md). Submitted: TrueNAS,
 CasaOS, Umbrel, winget and the Homebrew tap. Flathub's checklist requires the
 submitter to confirm the PR was not made by an AI agent, so a maintainer opens
 it by hand. Proxmox community-scripts waits for their eligibility rules.
@@ -15,6 +15,14 @@ it by hand. Proxmox community-scripts waits for their eligibility rules.
 |---|---|---|---|---|
 | **Flathub** (Linux, Steam Deck, ChromeOS) | [`packaging/flatpak`](../packaging/flatpak/) `app.romarr.ROMarr` | `org.flatpak.Builder` build, `flatpak-builder-lint` manifest + repo + appstream, `desktop-file-validate`, app run | Ready | Maintainer opens the PR to `flathub/flathub` `new-pr` (needs a demo video) |
 | **Proxmox VE Community Scripts** | [`packaging/proxmox`](../packaging/proxmox/) `ct/` `install/` `json/` | `bash -n`, `shellcheck`, real install + update on PVE 8.4 with the current engine | Ready, **not yet eligible** | Submit after 2027-01-28 **and** 1,000 stars |
+| **Synology** (DSM 7, native) | [`packaging/synology/spksrc`](../packaging/synology/spksrc/) `romarr_noarch-dsm7` | SynoCommunity `spksrc` build (`arch-noarch-7.1`), `dsm-spk-smoke.sh` install / start / upgrade / remove, `shellcheck` | Ready; PR to SynoCommunity | See [Synology](#synology) |
+| **Synology** (Container Manager) | [`packaging/synology/container-manager`](../packaging/synology/container-manager/) | `docker compose config`, real run with DSM paths and 1026:100 | Ready (template) | None; users paste it |
+| **QNAP** (QTS / QuTS hero) | [`packaging/qnap`](../packaging/qnap/) QPKG + Container Station template | QDK `qbuild` (checksum trailer), `qts-qpkg-smoke.sh`, `shellcheck` | Ready; QPKG on GitHub releases | Wade: QNAP developer account for App Center, or a MyQNAP.org submitter account |
+| **Asustor** (ADM) | [`packaging/asustor`](../packaging/asustor/) App Central APK + Portainer template | Asustor `apkg-tools.py create`, `adm-apk-smoke.sh`, `shellcheck` | Ready; APK on GitHub releases | Wade: Asustor developer account, then submit `romarr_<v>_any.apk` |
+| **TerraMaster** (TOS 6) | [`packaging/terramaster`](../packaging/terramaster/) Docker Manager template | `docker compose config` | Ready (template) | No self-submission: TOS App Center takes registered developers only |
+| **UGREEN** (UGOS Pro) | [`packaging/ugreen`](../packaging/ugreen/) Docker project template | `docker compose config` | Ready (template) | No third-party store to submit to |
+| **openmediavault** (compose plugin) | [`packaging/openmediavault`](../packaging/openmediavault/) | `docker compose config` | Ready (template) | No store to submit to |
+| **Unraid** (Community Applications) | [BlizzHacker/cartridge-unraid](https://github.com/BlizzHacker/cartridge-unraid) `templates/romarr.xml` | `xmllint`, CA listing | **Live** | Template follows `latest`; see [Unraid](#unraid) |
 | **TrueNAS SCALE** (Community train) | [`packaging/truenas`](../packaging/truenas/) `ix-dev/community/romarr` | `port_validation.py`, `check_metadata.py`, `ci.py` render + run (healthy) | **Submitted** | [truenas/apps#6524](https://github.com/truenas/apps/pull/6524) |
 | **CasaOS / ZimaOS** | [`packaging/casaos`](../packaging/casaos/) `Apps/ROMarr` | `validate_compose.py` (0 issues), `build_dist.sh`, real compose run | **Submitted** | [IceWhaleTech/CasaOS-AppStore#1156](https://github.com/IceWhaleTech/CasaOS-AppStore/pull/1156) |
 | **Umbrel** | [`packaging/umbrel`](../packaging/umbrel/) `romarr/` | `lint-apps.mjs --check-images` (no issues) | **Submitted** | [getumbrel/umbrel-apps#5947](https://github.com/getumbrel/umbrel-apps/pull/5947), updated to 1.10.0 |
@@ -34,6 +42,39 @@ Built and run once on 2026-11-15; the window showed the first-run password scree
    library and download folders are wherever the user keeps them.
 5. After merge, put Flathub's verification token at
    `https://romarr.app/.well-known/org.flathub.VerifiedApps.txt`.
+
+## Synology
+
+Two installs, both from [`packaging/synology`](../packaging/synology/):
+
+- **Container Manager.** A compose project, for models that have Container Manager.
+- **Native package.** `romarr_noarch-dsm7_<v>.spk`, for every DSM 7 model, including ARM models without Container Manager. It's built with SynoCommunity's own spksrc. It's pure Python on their `python312` package, so `.7z`/`.rar` imports and ROM Hub need the Docker install.
+
+The `.spk` is built by `.github/workflows/nas-packages.yml` and attached to each release. SynoCommunity accepts new packages as pull requests, so it was submitted there. Their checklist asks for an install on real DSM; nobody has done that yet, and the PR says so. Once it's merged, Package Center installs and updates it from `packages.synocommunity.com`.
+
+**Wade:** answer SynoCommunity review on the PR. If you have a DiskStation, run the install once and tick the checklist.
+
+## QNAP and Asustor
+
+Both ship a native package that runs the published image on the vendor's Docker:
+
+- **QNAP:** a QPKG built with QDK, needing Container Station.
+- **Asustor:** an APK built with Asustor's apkg-tools, needing Docker Engine.
+
+CI attaches both to every release, so users can install them by hand today.
+
+**Wade:**
+
+1. **QNAP App Center.** Join the QNAP developer program. QNAP signs and lists QPKGs from there; unsigned packages warn on install. Alternatively, open a submitter account at MyQNAP.org, the community store.
+2. **Asustor App Central.** Register as an Asustor developer, then upload `romarr_<v>_any.apk` from the release.
+
+## TerraMaster, UGREEN, openmediavault
+
+Compose templates, linked from [NAS.md](NAS.md). None of them can be self-submitted: TerraMaster's App Center takes registered developers only, and UGREEN and openmediavault have no third-party store.
+
+## Unraid
+
+The Community Applications template is in [BlizzHacker/cartridge-unraid](https://github.com/BlizzHacker/cartridge-unraid). It follows `latest`, so it's always current. For 1.13.2 it gained a `UMASK` setting, an optional DAT folder, and the `/dev/fuse` device for cloud mounts (BlizzHacker/cartridge-unraid#4).
 
 ## Proxmox VE Community Scripts
 
@@ -104,5 +145,9 @@ packages, so a release bump has to touch all of them together. Per release:
 - Flatpak: Flathub's checker opens the bump PR; add a `<release>` to the metainfo.
 - TrueNAS: their Renovate bot bumps the image; CasaOS/Umbrel: one PR each with the new
   tag and digest.
+- NAS packages: bump `SPK_VERS`/`PKG_VERS` (and `make digests`), `QPKG_VER`, the APK's
+  `config.json` version and the compose templates' tag; `tests/test_nas_packaging.py`
+  fails until they match. Publishing the release builds and attaches the `.spk`,
+  `.qpkg` and `.apk`.
 - winget: `wingetcreate update MoveWeight.ROMarr --version <v> --urls <zip> --submit`.
 - Homebrew: `brew bump-formula-pr --url=<tarball> blizzhacker/romarr/romarr`.

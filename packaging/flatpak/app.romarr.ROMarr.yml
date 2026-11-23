@@ -39,8 +39,8 @@ modules:
       - install -Dm644 app.romarr.ROMarr.svg -t ${FLATPAK_DEST}/share/icons/hicolor/scalable/apps
     sources:
       - type: archive
-        url: https://github.com/BlizzHacker/romarr/archive/refs/tags/v1.12.0.tar.gz
-        sha256: 775c2c334986f6ed40c2cd0b58bd051389cd520f2764a26f82b1eef4cde4251b
+        url: https://github.com/BlizzHacker/romarr/archive/refs/tags/v1.13.2.tar.gz
+        sha256: b30efb504c7dbcd6d352eef15a13fa244db3cf8b3190498abd2d2118d0e2405a
         x-checker-data:
           type: json
           url: https://api.github.com/repos/BlizzHacker/romarr/releases/latest

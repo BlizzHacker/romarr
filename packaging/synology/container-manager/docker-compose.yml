@@ -1,0 +1,45 @@
+# ROMarr for Synology DSM 7.2+ Container Manager.
+#
+# Container Manager -> Project -> Create. Project name: romarr. Path: create
+# /volume1/docker/romarr. Source: "Create docker-compose.yml" and paste this.
+# Full guide: https://github.com/BlizzHacker/romarr/blob/main/docs/NAS.md#synology-dsm-72
+#
+# Before you paste, create the folders below in File Station and edit the left
+# side of each path if yours differ. The library and downloads mounts refuse to
+# start when their folder is missing, rather than filing games into a new empty
+# folder nothing else reads.
+
+services:
+  romarr:
+    image: ghcr.io/blizzhacker/romarr:1.13.2
+    container_name: romarr
+    restart: unless-stopped
+    ports:
+      - "6868:6868"
+    environment:
+      # The DSM user that should own the games ROMarr files. 1026 is the first
+      # user created on a DiskStation and 100 is its "users" group; check yours
+      # over SSH with `id <user>` and use the same ids as RomM or Plex.
+      PUID: 1026
+      PGID: 100
+      UMASK: "002"
+      TZ: Etc/UTC
+      LIBRARY_PATH: /roms
+      # Optional: claim the install before the first visit.
+      # ROMARR_PASSWORD: choose-something-long
+    volumes:
+      # Settings, history, API key and plugins. Back this folder up.
+      - /volume1/docker/romarr:/config
+      # Your game library: the shared folder RomM, Gaseous or your frontend reads.
+      - type: bind
+        source: /volume1/games
+        target: /roms
+        bind:
+          create_host_path: false
+      # Your download client's completed folder. The right side must be the
+      # path the client reports (Download Station: /volume1/downloads).
+      - type: bind
+        source: /volume1/downloads
+        target: /volume1/downloads
+        bind:
+          create_host_path: false

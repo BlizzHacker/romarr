@@ -1,0 +1,49 @@
+# ROMarr for openmediavault 7 with the openmediavault-compose plugin.
+#
+# Services -> Compose -> Files -> Create. Name: romarr. Paste this into File and
+# the three lines below into Environment, edited to your shared folders' paths
+# (Storage -> Shared Folders shows each one's absolute path):
+#
+#     ROMARR_CONFIG=/srv/dev-disk-by-uuid-XXXX/appdata/romarr
+#     ROMARR_ROMS=/srv/dev-disk-by-uuid-XXXX/games
+#     ROMARR_DOWNLOADS=/srv/dev-disk-by-uuid-XXXX/downloads
+#
+# Full guide: https://github.com/BlizzHacker/romarr/blob/main/docs/NAS.md#openmediavault
+#
+# The three paths have no defaults on purpose: an unset one stops the run
+# instead of filing games into a folder nothing else reads.
+
+services:
+  romarr:
+    image: ghcr.io/blizzhacker/romarr:1.13.2
+    container_name: romarr
+    restart: unless-stopped
+    ports:
+      - "6868:6868"
+    environment:
+      # The user that should own the games ROMarr files. The compose plugin's
+      # appuser is 1000 and "users" is 100; check yours with `id <user>`.
+      PUID: 1000
+      PGID: 100
+      UMASK: "002"
+      TZ: Etc/UTC
+      LIBRARY_PATH: /roms
+      # Optional: claim the install before the first visit.
+      # ROMARR_PASSWORD: choose-something-long
+    volumes:
+      # Settings, history, API key and plugins. Back this folder up.
+      - ${ROMARR_CONFIG:?set ROMARR_CONFIG to a folder for ROMarr's settings}:/config
+      # Your game library: the folder RomM, Gaseous or your frontend reads.
+      - type: bind
+        source: ${ROMARR_ROMS:?set ROMARR_ROMS to your game library folder}
+        target: /roms
+        bind:
+          create_host_path: false
+      # Your download client's completed folder. The right side must be the
+      # path the client reports: /downloads for a qBittorrent or SABnzbd
+      # container that mounts it there. Change target to match yours.
+      - type: bind
+        source: ${ROMARR_DOWNLOADS:?set ROMARR_DOWNLOADS to your download client's completed folder}
+        target: /downloads
+        bind:
+          create_host_path: false
