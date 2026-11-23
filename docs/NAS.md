@@ -53,7 +53,7 @@ DATs are loaded only when `DAT_PATH` is set. Their memory grows with what you gi
 
 To mount a cloud folder as a library (see [CLOUD-STORAGE.md](CLOUD-STORAGE.md#mounts)), the container needs `/dev/fuse` and `SYS_ADMIN`. On hosts with AppArmor, including Ubuntu and Debian-based NAS systems, it also needs `apparmor=unconfined`. Without `/dev/fuse` everything else works, and the Cloud page says mounts are unavailable. Backup, mirror, offload and import don't need FUSE.
 
-In 1.13.2 and earlier, mounts failed in every Docker container that ran as a PUID, with *fusermount3: could not determine username*. The entrypoint now gives your PUID a name inside the container. Mounts were checked with 1026:100 (Synology), 99:100 (Unraid), 568:568 (TrueNAS), 1000:1000 and 0:0.
+In 1.13.2 and earlier, mounts fail in every Docker container that runs as a PUID, with *fusermount3: could not determine username*. The entrypoint fix that gives your PUID a name inside the container ships in the first release after 1.13.2. The NAS templates pin 1.13.2 until then, so to mount cloud folders now, use the `latest` tag once that release is out. Mounts were checked with 1026:100 (Synology), 99:100 (Unraid), 568:568 (TrueNAS), 1000:1000 and 0:0.
 
 Compose:
 
@@ -209,7 +209,7 @@ ROMarr is in IceWhale's App Store submission ([CasaOS-AppStore#1156](https://git
 
 ## TrueNAS SCALE
 
-ROMarr is submitted to the Community train ([truenas/apps#6524](https://github.com/truenas/apps/pull/6524)). Until it's listed, use **Apps → Discover → Install via YAML** with [`packaging/truenas/custom-app.yaml`](../packaging/truenas/custom-app.yaml).
+ROMarr is in the Community train ([truenas/apps#6524](https://github.com/truenas/apps/pull/6524)): **Apps → Discover**, search ROMarr. You can also use **Install via YAML** with [`packaging/truenas/custom-app.yaml`](../packaging/truenas/custom-app.yaml).
 
 - **PUID/PGID.** `568:568`, the `apps` user. Give `apps` read/write on the library dataset and read on downloads in the dataset's ACL.
 - **Folders.** Use datasets you create: for example `apps/romarr` for config, and your games and downloads datasets.

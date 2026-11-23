@@ -243,7 +243,7 @@ def test_the_guide_links_every_package_folder():
 
 def test_fuse_check_names_an_unnamed_uid(monkeypatch):
     """`--user` runs and bare-metal installs get a reason, not fusermount's error."""
-    import pwd
+    pwd = pytest.importorskip("pwd")
 
     from romarr import cloud_rclone
 

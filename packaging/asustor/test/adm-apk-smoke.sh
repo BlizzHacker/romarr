@@ -13,6 +13,12 @@ set -eu
 
 APK=$(realpath "$1")
 PORT="${PORT:-16870}"
+# The scripts manage a container named romarr. Never touch one this test did
+# not create: refuse to run instead.
+if docker inspect romarr >/dev/null 2>&1; then
+    echo "a container named romarr already exists; stop and rename it first" >&2
+    exit 1
+fi
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/adm.XXXXXX")
 trap 'docker rm -f romarr >/dev/null 2>&1 || true; rm -rf "$WORK"' EXIT
 
@@ -55,6 +61,13 @@ grep -q '^# edited$' "$WORK/share/Docker/romarr/romarr.env"
 
 echo "== reload"
 sh "$PKG/CONTROL/start-stop.sh" reload; health; echo
+
+echo "== a changed setting gets a new container that has it"
+before=$(docker inspect -f '{{.Id}}' romarr)
+sed -i "s#^TZ=.*#TZ=America/Chicago#" "$WORK/share/Docker/romarr/romarr.env"
+sh "$PKG/CONTROL/start-stop.sh" reload; health; echo
+test "$(docker inspect -f '{{.Id}}' romarr)" != "$before"
+docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' romarr | grep -qx "TZ=America/Chicago"
 
 echo "== a mistyped downloads folder refuses to start"
 sh "$PKG/CONTROL/start-stop.sh" stop

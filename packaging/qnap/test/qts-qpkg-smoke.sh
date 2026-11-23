@@ -12,6 +12,12 @@ set -eu
 
 QPKG=$(realpath "$1")
 PORT="${PORT:-16869}"
+# The scripts manage a container named romarr. Never touch one this test did
+# not create: refuse to run instead.
+if docker inspect romarr >/dev/null 2>&1; then
+    echo "a container named romarr already exists; stop and rename it first" >&2
+    exit 1
+fi
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/qts.XXXXXX")
 trap 'docker rm -f romarr >/dev/null 2>&1 || true; rm -rf "$WORK"' EXIT
 
@@ -36,7 +42,8 @@ case "\$1 \$2" in
 esac
 GETCFG
 printf '#!/bin/sh\nexit 0\n' > "$WORK/sbin/log_tool"
-chmod +x "$WORK/sbin/getcfg" "$WORK/sbin/log_tool"
+printf '#!/bin/sh\necho "$*" >> %s/setcfg.log\n' "$WORK" > "$WORK/sbin/setcfg"
+chmod +x "$WORK/sbin/getcfg" "$WORK/sbin/log_tool" "$WORK/sbin/setcfg"
 # The script calls /sbin/getcfg by absolute path; run it with /sbin rewritten.
 sed "s#/sbin/#$WORK/sbin/#g" "$WORK/root/romarr.sh" > "$WORK/romarr.sh"
 chmod +x "$WORK/romarr.sh"
@@ -62,13 +69,23 @@ docker exec romarr sh -c 'ps -o user,args | grep "[p]ython -m romarr"' | grep -q
 test -s "$WORK/share/Container/romarr/romarr.json"
 docker inspect -f '{{range .Mounts}}{{.Destination}} {{end}}' romarr | grep -q "$WORK/share/Download"
 
+grep -q "^romarr Web_Port $PORT " "$WORK/setcfg.log"
+
 echo "== restart keeps the container and settings"
 before=$(docker inspect -f '{{.Id}}' romarr)
 "$WORK/romarr.sh" restart; health; echo
 test "$(docker inspect -f '{{.Id}}' romarr)" = "$before"
 
-echo "== a missing library folder refuses to start"
+echo "== a changed setting gets a new container that has it"
+sed -i "s#^TZ=.*#TZ=America/Chicago#" "$WORK/root/romarr.env"
+"$WORK/romarr.sh" restart; health; echo
+test "$(docker inspect -f '{{.Id}}' romarr)" != "$before"
+docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' romarr | grep -qx "TZ=America/Chicago"
+test -s "$WORK/share/Container/romarr/romarr.json"
 "$WORK/romarr.sh" stop
+if "$WORK/romarr.sh" status; then echo "status reported a stopped container as running"; exit 1; fi
+
+echo "== a missing library folder refuses to start"
 mv "$WORK/share/Multimedia/Games" "$WORK/share/Multimedia/Games.off"
 if "$WORK/romarr.sh" start; then echo "started without a library"; exit 1; fi
 mv "$WORK/share/Multimedia/Games.off" "$WORK/share/Multimedia/Games"

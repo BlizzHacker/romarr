@@ -36,8 +36,17 @@ if [ -z "${LIBRARY_PATH}" ] && [ -z "${ROMM_LIBRARY}" ]; then
     export LIBRARY_PATH=/roms
 fi
 
-# The ids go into chown, su-exec and /etc/passwd below; refuse anything but
-# a number rather than let a typo become a user name or a passwd field.
+if [ "$(id -u)" != "0" ]; then
+    # Already unprivileged: `docker run --user`, rootless Docker, Kubernetes
+    # runAsUser, or a Podman userns. There is nothing to drop to and no
+    # authority to chown with, so respect the decision and start.
+    echo "ROMarr: running as uid $(id -u), PUID/PGID ignored; umask ${UMASK}"
+    exec "$@"
+fi
+
+# Running as root, so the ids go into chown, su-exec and /etc/passwd below
+# (a --user run above ignores them, inherited values and all). Refuse anything
+# but a number rather than let a typo become a user name or a passwd field.
 for id_value in "$PUID" "$PGID"; do
     case "$id_value" in
         ''|*[!0-9]*)
@@ -46,14 +55,6 @@ for id_value in "$PUID" "$PGID"; do
             ;;
     esac
 done
-
-if [ "$(id -u)" != "0" ]; then
-    # Already unprivileged: `docker run --user`, rootless Docker, Kubernetes
-    # runAsUser, or a Podman userns. There is nothing to drop to and no
-    # authority to chown with, so respect the decision and start.
-    echo "ROMarr: running as uid $(id -u), PUID/PGID ignored; umask ${UMASK}"
-    exec "$@"
-fi
 
 # /config only. Never the library or the downloads volume: those can be
 # multiple terabytes on a NAS, and a recursive chown at every boot would take

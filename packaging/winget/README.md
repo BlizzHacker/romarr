@@ -36,7 +36,7 @@ check that the pipeline's run starts the app.
 Either with Microsoft's tool (it forks, branches and opens the PR for you):
 
 ```powershell
-wingetcreate submit --prtitle "New package: MoveWeight.ROMarr version 1.13.2" packaging\winget\manifests\m\MoveWeight\ROMarr\1.12.0
+wingetcreate submit --prtitle "New package: MoveWeight.ROMarr version 1.13.2" packaging\winget\manifests\m\MoveWeight\ROMarr\1.13.2
 ```
 
 or by hand: fork `microsoft/winget-pkgs`, copy the `1.13.2` folder to

@@ -24,6 +24,8 @@ read_env() {
             ROMARR_HOST_PORT) CFG_ROMARR_HOST_PORT=$value ;;
         esac
     done < "$ENV_FILE"
+    CFG_PUID=${CFG_PUID:-1000} CFG_PGID=${CFG_PGID:-100} CFG_TZ=${CFG_TZ:-Etc/UTC}
+    CFG_ROMARR_HOST_PORT=${CFG_ROMARR_HOST_PORT:-6868}
 }
 
 start() {
@@ -39,16 +41,25 @@ start() {
         fi
     done
     mkdir -p "$CFG_ROMARR_CONFIG"
-    if [ "$("$DOCKER" inspect -f '{{.Config.Image}}' "$NAME" 2>/dev/null)" = "$IMAGE" ]; then
+
+    # docker start never applies new mounts or environment, so the existing
+    # container is reused only when the image and every setting match the
+    # fingerprint it was created with. Anything edited gets a new container.
+    spec=$(printf '%s|' "$IMAGE" "$CFG_PUID" "$CFG_PGID" "$CFG_TZ" "$CFG_ROMARR_CONFIG" \
+        "$CFG_ROMARR_ROMS" "$CFG_ROMARR_DOWNLOADS" "$CFG_ROMARR_HOST_PORT" | cksum | cut -d' ' -f1)
+    if [ "$("$DOCKER" inspect -f '{{index .Config.Labels "org.romarr.spec"}}' "$NAME" 2>/dev/null)" = "$spec" ]; then
         "$DOCKER" start "$NAME" >/dev/null && return 0
     fi
-    "$DOCKER" rm -f "$NAME" >/dev/null 2>&1
+    # Have the image before touching the old container: a registry outage
+    # then leaves the previous one in place.
     "$DOCKER" image inspect "$IMAGE" >/dev/null 2>&1 || "$DOCKER" pull "$IMAGE" >/dev/null || \
         { echo "ROMarr: could not pull $IMAGE"; exit 1; }
+    "$DOCKER" rm -f "$NAME" >/dev/null 2>&1
     "$DOCKER" run -d --name "$NAME" --restart unless-stopped \
-        -p "${CFG_ROMARR_HOST_PORT:-6868}:6868" \
-        -e PUID="${CFG_PUID:-1000}" -e PGID="${CFG_PGID:-100}" -e UMASK=002 \
-        -e TZ="${CFG_TZ:-Etc/UTC}" -e LIBRARY_PATH=/roms \
+        --label "org.romarr.spec=$spec" \
+        -p "${CFG_ROMARR_HOST_PORT}:6868" \
+        -e PUID="$CFG_PUID" -e PGID="$CFG_PGID" -e UMASK=002 \
+        -e TZ="$CFG_TZ" -e LIBRARY_PATH=/roms \
         -v "${CFG_ROMARR_CONFIG}:/config" \
         -v "${CFG_ROMARR_ROMS}:/roms" \
         -v "${CFG_ROMARR_DOWNLOADS}:${CFG_ROMARR_DOWNLOADS}" \
