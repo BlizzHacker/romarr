@@ -70,6 +70,8 @@ services:
       QBITTORRENT_URL: http://qbittorrent:8080
       QBITTORRENT_USER: ""
       QBITTORRENT_PASS: ""
+      # qBittorrent 5.2+: an API key replaces USER/PASS when set.
+      # QBITTORRENT_API_KEY: ""
 
       # Optional usenet clients.
       # SABNZBD_URL: http://sabnzbd:8080

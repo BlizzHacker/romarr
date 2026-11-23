@@ -105,6 +105,8 @@ class QbitConfig:
     password: str = ""
     category: str = "romarr"
     timeout: int = 30
+    # qBittorrent 5.2+ WebUI API key
+    api_key: str = ""
 
 
 class QbitAuthenticationError(requests.RequestException):
@@ -185,6 +187,8 @@ class QBittorrent:
         """Initialize a qBittorrent API client with its config and HTTP session."""
         self._config = config
         self._session = session or requests.Session()
+        if config.api_key:
+            self._session.headers["Authorization"] = f"Bearer {config.api_key}"
         self._authed = False
         self._added = threading.local()
         self._selection_lock = threading.RLock()
@@ -213,6 +217,11 @@ class QBittorrent:
     def last_error(self) -> str:
         return getattr(self._added, "error", "")
 
+    @property
+    def _uses_login(self) -> bool:
+        """Whether auth is a cookie session (vs. API key or no auth at all)."""
+        return bool(self._config.username) and not self._config.api_key
+
     def _url(self, path: str) -> str:
         return f"{self._config.base_url.rstrip('/')}/api/v2/{path.lstrip('/')}"
 
@@ -231,7 +240,8 @@ class QBittorrent:
         """Authenticate with qBittorrent WebUI, honoring any active probe deadline."""
         # A qBittorrent with WebUI auth disabled for localhost answers every
         # endpoint without a session cookie, so a failed login is not fatal.
-        if not self._config.username:
+        # An API key needs no login either: it rides on every request.
+        if not self._uses_login:
             self._authed = True
             return True
         response = self._session.post(
@@ -258,7 +268,7 @@ class QBittorrent:
         if deadline is not None:
             req_kwargs["timeout"] = self._deadline_timeout(deadline, base_timeout)
         response = self._session.get(self._url(path), **req_kwargs)
-        if response.status_code not in (401, 403) or not self._config.username:
+        if response.status_code not in (401, 403) or not self._uses_login:
             return response
         self._authed = False
         logged_in = self.login() if deadline is None else self.login(_deadline=deadline)
@@ -276,7 +286,7 @@ class QBittorrent:
         if deadline is not None:
             req_kwargs["timeout"] = self._deadline_timeout(deadline, base_timeout)
         response = self._session.post(self._url(path), **req_kwargs)
-        if response.status_code not in (401, 403) or not self._config.username:
+        if response.status_code not in (401, 403) or not self._uses_login:
             return response
         self._authed = False
         logged_in = self.login() if deadline is None else self.login(_deadline=deadline)

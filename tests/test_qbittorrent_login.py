@@ -164,3 +164,14 @@ def test_an_add_is_retried_after_refreshing_an_expired_session():
     assert [path.rsplit('/api/v2/', 1)[-1] for path in session.paths] == [
         "torrents/add", "auth/login", "torrents/add"
     ]
+
+
+def test_api_key_is_sent_as_bearer_and_skips_cookie_login():
+    import requests
+    session = requests.Session()
+    qbit = QBittorrent(QbitConfig(base_url="http://qbit:8080", username="admin",
+                                  password="pw", api_key="qbt_abc"),
+                       session=session)
+    assert session.headers["Authorization"] == "Bearer qbt_abc"
+    assert qbit.login() is True
+    assert not qbit._uses_login

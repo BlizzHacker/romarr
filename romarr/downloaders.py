@@ -4646,6 +4646,9 @@ CLIENT_TYPES = {
         "fields": _COMMON + [
             FIELD("username", "Username"),
             FIELD("password", "Password", "secret"),
+            FIELD("api_key", "API Key", "secret",
+                  help="qBittorrent 5.2+ (WebUI options). Used instead of "
+                       "username and password when set."),
             FIELD("category", "Category", default="romarr"),
         ],
     },
@@ -5096,7 +5099,8 @@ def build_client(cfg: dict, *, data_dir: str = ""):
         from .clients import QBittorrent, QbitConfig
         client = QBittorrent(QbitConfig(
             base_url=url, username=cfg.get("username", ""),
-            password=cfg.get("password", ""), category=category))
+            password=cfg.get("password", ""), category=category,
+            api_key=cfg.get("api_key", "")))
     elif kind == "transmission":
         client = Transmission(TransmissionConfig(
             base_url=url, username=cfg.get("username", ""),
