@@ -295,8 +295,14 @@ class Rclone:
             state = result.get("State") or ""
             if not state:
                 return
-            answer = _answer(result.get("Option") or {}, token=token,
-                             shared_client=shared_client)
+            option = result.get("Option") or {}
+            answer = _answer(option, token=token, shared_client=shared_client)
+            if rtype == "onedrive" and option.get("Name") == "config_driveid" and token:
+                # rclone offers the account's drives and defaults to the first,
+                # which for some personal accounts is one Graph then refuses
+                # ("ObjectHandle is Invalid"). The account's own drive is the
+                # one people mean.
+                answer = default_onedrive(token) or answer
             if answer is None:
                 self.delete_remote(name)
                 raise RcloneError("this provider needs a browser sign-in first")
@@ -399,6 +405,18 @@ class Rclone:
         except RcloneError:
             return []
         return [{"fs": r.get("Fs", ""), "mount_point": r.get("MountPoint", "")} for r in rows]
+
+
+def default_onedrive(token: str, *, session: requests.Session | None = None) -> str:
+    """The id of the signed-in account's own OneDrive (Graph /me/drive), or ""."""
+    try:
+        access = json.loads(token).get("access_token", "")
+        response = (session or requests).get(
+            "https://graph.microsoft.com/v1.0/me/drive", params={"$select": "id"},
+            headers={"Authorization": f"Bearer {access}"}, timeout=20)
+        return str(response.json().get("id") or "") if response.status_code == 200 else ""
+    except (requests.RequestException, ValueError, AttributeError):
+        return ""
 
 
 def fuse_available() -> tuple[bool, str]:

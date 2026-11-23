@@ -669,3 +669,31 @@ def test_a_sign_in_that_finished_by_itself_shows_up_without_a_paste(cloud, monke
     assert cloud.status()["last_signin"]["remote"]["id"] == "od"
     assert "access_token" not in json.dumps(cloud.status())
     assert cloud.signin_finish("http://127.0.0.1:53682/?state=s&code=c")["remote"]["id"] == "od"
+
+
+def test_onedrive_uses_the_accounts_own_drive(tmp_path, monkeypatch):
+    rc = _ScriptedRclone(tmp_path, [
+        {"State": "s1", "Option": {"Name": "config_is_local", "Default": True}},
+        {"State": "s2", "Option": {"Name": "config_token"}},
+        {"State": "s3", "Option": {"Name": "config_type", "Default": "onedrive"}},
+        {"State": "s4", "Option": {"Name": "config_driveid", "Default": "b!wrong"}},
+        {"State": ""}])
+    monkeypatch.setattr(cloud_rclone, "default_onedrive", lambda token, **kw: "a1b2c3d4e5f6")
+    rc.create_remote("od", "onedrive", {}, token='{"access_token":"t"}')
+    assert [s[1]["opt"]["result"] for s in rc.sent[1:]] == [
+        "false", '{"access_token":"t"}', "onedrive", "a1b2c3d4e5f6"]
+
+
+def test_default_onedrive_reads_me_drive():
+    class Resp:
+        status_code = 200
+
+        def json(self):
+            return {"id": "a1b2c3d4e5f6"}
+
+    class S:
+        def get(self, url, **kw):
+            assert url.endswith("/me/drive") and kw["headers"]["Authorization"] == "Bearer t"
+            return Resp()
+    assert cloud_rclone.default_onedrive('{"access_token":"t"}', session=S()) == "a1b2c3d4e5f6"
+    assert cloud_rclone.default_onedrive("not json") == ""
