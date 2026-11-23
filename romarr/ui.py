@@ -4027,7 +4027,7 @@ RENDER.assistant=async()=>{
 };
 // Cloud & File Hosts (romarr/cloud_storage.py, cloud_jobs.py, premium_hosts.py).
 const CLOUD_GUIDE='https://github.com/BlizzHacker/romarr/blob/main/docs/CLOUD-STORAGE.md';
-let CLOUD_TIMER=null, CLOUD_PROVIDERS=null, CLOUD_BROWSE={remote:'',path:''};
+let CLOUD_TIMER=null, CLOUD_SIGNIN_TIMER=null, CLOUD_PROVIDERS=null, CLOUD_BROWSE={remote:'',path:''};
 const cloudCur=v=>activePage==='cloud'&&pageVersion===v;
 const cloudPost=(path,body)=>fetch('/api/v1/cloud/'+path,{method:'POST',headers:{'Content-Type':'application/json'},
   body:JSON.stringify(body||{})}).then(async r=>{const d=await r.json().catch(()=>({}));
@@ -4053,6 +4053,7 @@ function cloudParams(){const out={};
 RENDER.cloud=async()=>{
   const version=pageVersion;
   if(CLOUD_TIMER){clearInterval(CLOUD_TIMER);CLOUD_TIMER=null;}
+  if(CLOUD_SIGNIN_TIMER){clearInterval(CLOUD_SIGNIN_TIMER);CLOUD_SIGNIN_TIMER=null;}
   $('#page').innerHTML='<div class="empty">Loading cloud storage…</div>';
   let st;
   try{ st=await j('/api/v1/cloud'); if(st.error) throw new Error(st.error); }
@@ -4155,18 +4156,23 @@ RENDER.cloud=async()=>{
     try{const r=await cloudPost('signin/start',{engine:eng==='n'?'native':'rclone',type,name,label,params,
         use_own_app:$('#cl-ownapp').checked,redirect:$('#cl-redirect').value,base_url:location.origin});
       if(tab) tab.location.href=r.url; else window.open(r.url,'_blank');
+      if(!cloudCur(version)) return;
       if(r.mode==='paste'){ $('#cl-paste').classList.remove('hide'); cloudSay('cl-msg','Waiting for you to approve and paste the address…');
-        const until=Date.now()+600000; if(CLOUD_TIMER) clearInterval(CLOUD_TIMER);
-        CLOUD_TIMER=setInterval(()=>{const el=$('#cl-left'); if(!cloudCur(version)||!el){clearInterval(CLOUD_TIMER);CLOUD_TIMER=null;return;}
+        // Its own handle: CLOUD_TIMER may be polling a running job.
+        const until=Date.now()+600000; if(CLOUD_SIGNIN_TIMER) clearInterval(CLOUD_SIGNIN_TIMER);
+        const tick=setInterval(()=>{const el=$('#cl-left'); if(!cloudCur(version)||!el){clearInterval(tick);if(CLOUD_SIGNIN_TIMER===tick)CLOUD_SIGNIN_TIMER=null;return;}
           const s=Math.max(0,Math.round((until-Date.now())/1000));
           el.textContent=s?`This sign-in waits ${Math.floor(s/60)}:${String(s%60).padStart(2,'0')} more.`:'This sign-in expired: press Sign in again.';
-          if(!s){clearInterval(CLOUD_TIMER);CLOUD_TIMER=null;}},1000); }
+          if(!s){clearInterval(tick);if(CLOUD_SIGNIN_TIMER===tick)CLOUD_SIGNIN_TIMER=null;}},1000);
+        CLOUD_SIGNIN_TIMER=tick; }
       else cloudSay('cl-msg','Approve in the new tab; it comes back here when done.');
-    }catch(e){ if(tab) tab.close(); cloudSay('cl-msg',e.message,true); }});
-  $('#cl-clip')&&($('#cl-clip').onclick=async()=>{try{const t=(await navigator.clipboard.readText()).trim();
+    }catch(e){ if(tab) tab.close(); if(cloudCur(version)) cloudSay('cl-msg',e.message,true); }});
+  $('#cl-clip')&&($('#cl-clip').onclick=async()=>{const form=$('#cl-paste');
+    try{const t=(await navigator.clipboard.readText()).trim();
+      if(!cloudCur(version)||$('#cl-paste')!==form) return;   // the page was re-rendered meanwhile
       if(!/^http:[/][/](127[.]0[.]0[.]1|localhost):53682[/]/.test(t)){cloudSay('cl-msg','The clipboard does not hold the 127.0.0.1:53682 address yet; copy it from the sign-in tab first.',true);return;}
       $('#cl-addr').value=t; $('#cl-finish').click();}
-    catch(e){cloudSay('cl-msg','The browser would not share the clipboard; paste into the box instead.',true);}});
+    catch(e){if(cloudCur(version)&&$('#cl-paste')===form) cloudSay('cl-msg','The browser would not share the clipboard; paste into the box instead.',true);}});
   $('#cl-finish')&&($('#cl-finish').onclick=()=>act(()=>cloudPost('signin/finish',{address:$('#cl-addr').value.trim()}),'cl-msg','Signed in and saved.',true));
   $('#cl-cancel')&&($('#cl-cancel').onclick=()=>act(()=>cloudPost('signin/cancel'),'cl-msg','Cancelled.',true));
   $('#cl-rsave').onclick=()=>act(()=>cloudPost('rclone',{path:$('#cl-rpath').value.trim()}),'cl-rmsg','Saved.',true);
