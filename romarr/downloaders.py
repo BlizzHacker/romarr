@@ -153,6 +153,37 @@ class SABnzbd:
         self._added.job_id = str(ids[0]) if ids else ""
         return True
 
+    def add_nzb(self, data: bytes, *, name: str = "") -> bool:
+        """Upload an NZB document (mode=addfile) rather than a URL to fetch.
+
+        For NZBs ROMarr fetched itself -- Arcade Punks ships its NZBs zipped,
+        and the zip is opened and checked here before anything is queued.
+        """
+        self._added.job_id = ""
+        if not self.configured or not data:
+            return False
+        filename = (str(name or "romarr").strip() or "romarr") + ".nzb"
+        params = {"mode": "addfile", "output": "json",
+                  "apikey": self._config.api_key, "cat": self._config.category}
+        if name:
+            params["nzbname"] = name
+        try:
+            response = self._session.post(
+                f"{self._config.base_url.rstrip('/')}/api", params=params,
+                files={"name": (filename, data, "application/x-nzb")},
+                timeout=max(self._config.timeout, 120))
+            response.raise_for_status()
+            out = response.json()
+        except (requests.RequestException, ValueError) as err:
+            log.warning("sabnzbd addfile failed: %s", err.__class__.__name__)
+            return False
+        if not out or not out.get("status"):
+            log.warning("sabnzbd rejected the nzb")
+            return False
+        ids = out.get("nzo_ids") or []
+        self._added.job_id = str(ids[0]) if ids else ""
+        return True
+
     def completed(self, timeout: float | None = None) -> list[dict]:
         """Finished items in our category, shaped like qBittorrent's."""
         if not self.configured:
@@ -310,13 +341,28 @@ class NZBGet:
         return bool(self.configured and self._rpc("version"))
 
     def add(self, url: str, *, name: str = "") -> bool:
+        """Queue an NZB by URL; NZBGet fetches it."""
+        return self._append(url, name)
+
+    def add_nzb(self, data: bytes, *, name: str = "") -> bool:
+        """Queue an NZB document ROMarr already holds (base64 in `append`).
+
+        NZBGet's `append` takes either a URL or the base64 of the NZB itself,
+        and only the second works for a zipped NZB: NZBGet does not open a
+        zip it fetched. ROMarr unzips and validates it first.
+        """
+        if not data:
+            return False
+        return self._append(base64.b64encode(data).decode("ascii"), name)
+
+    def _append(self, content: str, name: str) -> bool:
         # append(NZBFilename, Content, Category, Priority, AddToTop, AddPaused,
         #        DupeKey, DupeScore, DupeMode, PPParameters)
         filename = str(name or "romarr").strip() or "romarr"
         if not filename.lower().endswith(".nzb"):
             filename += ".nzb"
         result = self._rpc("append", [
-            filename, url, self._config.category, 0,
+            filename, content, self._config.category, 0,
             False, False, "", 0, "SCORE", [],
         ])
         # A new-enough NZBGet returns the new id; anything falsy is a refusal.

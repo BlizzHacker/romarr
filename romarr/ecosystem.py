@@ -84,6 +84,15 @@ ECOSYSTEM: dict[str, list[Project]] = {
             repo="https://github.com/pacnpal/compressatorium",
             site="https://github.com/BlizzHacker/rom-hub-compressatorium",
             tab="acquisition"),
+        Project(
+            "Arcade Punks",
+            "Pre-built Batocera, RetroBat, CoinOps, Raspberry Pi and handheld "
+            "images, released over Usenet. The preinstalled plugin searches the "
+            "catalogue; ROMarr downloads a member's NZB, torrent, Mega or "
+            "Rapidgator link with the right client.",
+            repo="https://github.com/BlizzHacker/rom-hub-arcade-punks",
+            site="https://www.arcadepunks.com",
+            tab="acquisition"),
     ],
     "First-party apps — maintained by the RomM team": [
         Project(

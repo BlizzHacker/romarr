@@ -43,3 +43,7 @@ Open **Interactive Search** and try one title and platform. Compare it with the 
 [ROM Hub plugins](PLUGINS.md) offer other supported sources, including direct downloads. Configure a ROM Hub download client and an enabled plugin that supports search. Each source has its own coverage and access requirements.
 
 You can also use **Manual Import** for files you already have, with no provider, indexer or download client. Start with one small import before adding a large Wanted list.
+
+## Arcade Punks
+
+Arcade Punks releases come as zipped NZBs rather than indexer results. Paste the link on the Arcade Punks card under **Hub → Plugins** and ROMarr unzips it and hands it to your Usenet client. See [Arcade Punks](ARCADE-PUNKS.md).

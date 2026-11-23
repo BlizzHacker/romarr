@@ -206,6 +206,9 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "/api/v1/hub/exo2romm": ("GET", "eXo2romm eXoDOS-to-RomM ZIP repackager status, attribution to derkommutator, and defaults (POST previews or repackages eXoDOS game zips)."),
     "/api/v1/hub/compressatorium": ("GET", "Compressatorium plugin status: whether it is installed and enabled, the service address batch decompression uses and where it comes from (env or plugin), whether an API key is saved, and credit to pacnpal/Compressatorium. Never returns the key (POST saves the address or key)."),
     "/api/v1/hub/mdm": ("GET", "Mister Download Manager (direct downloads) plugin status: whether it is installed and enabled, whether its mode is set (then the Standalone Direct HTTP and BitTorrent (MDM) clients use its settings), the mode, remote URL, connections and category, whether an API token is saved, and credit to anefzaoui/misterdownloadmanager. Never returns the token (POST saves the settings)."),
+    "/api/v1/arcade-punks": ("GET", "Arcade Punks status: whether its ROM Hub plugin is enabled, which configured client each link kind (nzb, torrent, mega, rapidgator) goes to, the NZBGet and Usenet setup from the Arcade Punks guides, and credit. Holds no credentials."),
+    "/api/v1/arcade-punks/search": ("GET", "Search the public Arcade Punks catalogue through its ROM Hub plugin (q, limit). Each item carries the post link, where members download, and the pack parsed from its title: kind, front end, device, capacity, platform."),
+    "/api/v1/arcade-punks/grab": ("POST", "Send one Arcade Punks NZB zip, .torrent, Mega or Rapidgator link to the client that can take it. Queued and imported like a grab when a platform is known; otherwise downloaded and recorded only."),
     "/api/v1/hub/fleet": ("GET", "Multi-device and network library sync profiles for ES-DE, RetroPie/ArcadePunks, Batocera, Argosy, Grout, Steam Deck, and RetroArch WebDAV (POST builds a 1G1R + gamelist.xml sync plan)."),
     "/api/v1/chat": ("POST", "Send one message to the built-in chat agent and stream its reply as NDJSON events (text, tool_call, tool_result, confirm, notice, error, done). Refused while the agent is disabled."),
     "/api/v1/chat/confirm": ("POST", "Approve or decline one action the chat agent proposed (`id`, boolean `approve`), then stream the rest of the reply as NDJSON. Single-use; only the user the action was proposed to can answer it."),
@@ -730,6 +733,31 @@ def spec(version: str = "0.0.0", *, base_url: str = "") -> dict:
             "type": "object", "required": ["id", "approve"],
             "properties": {"id": {"type": "string"}, "approve": {"type": "boolean"}},
         }}},
+    }
+    paths["/api/v1/arcade-punks/search"]["get"]["parameters"] = [
+        {"name": "q", "in": "query", "required": True, "schema": {"type": "string"},
+         "description": "Words from an Arcade Punks post title."},
+        {"name": "limit", "in": "query", "required": False,
+         "schema": {"type": "integer", "minimum": 1, "maximum": 50, "default": 25}},
+    ]
+    paths["/api/v1/arcade-punks/grab"]["post"]["requestBody"] = {
+        "required": True,
+        "content": {"application/json": {"schema": {
+            "type": "object",
+            "required": ["url"],
+            "properties": {
+                "url": {"type": "string",
+                        "description": "https://arcade-punks.com/arcadepunks/<YYYY-MM>/nzb/<name>.zip, "
+                                       ".../torrent/<name>.torrent, a mega.nz file or folder link "
+                                       "with its #key, or a rapidgator.net file or folder link."},
+                "game": {"type": "string", "description": "Name for the queue and history rows."},
+                "platform": {"type": "string",
+                             "description": "ROMarr platform to import into. Empty for a whole build."},
+            },
+        }}},
+    }
+    paths["/api/v1/arcade-punks/grab"]["post"]["responses"]["400"] = {
+        "description": "The link is not one ROMarr accepts, no client can take it, or the client refused it.",
     }
     _guide_contracts(paths)
 

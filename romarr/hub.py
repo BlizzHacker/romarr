@@ -648,11 +648,13 @@ def _search_platform(platform: str | None) -> str | None:
 
 
 def search(query: str, platform: str | None = None, limit: int = 25,
-           timeout: float = 90.0, only: str | None = None) -> tuple[list[dict], str]:
+           timeout: float = 90.0, only: str | tuple[str, ...] | None = None) -> tuple[list[dict], str]:
     """Search every enabled ROM Hub plugin, merged.
 
     Returns `(rows, error)`. Rows are plain dicts with the Hub's SearchResult
-    fields (source_id, title, platform, size_bytes, url, plugin). `error` is
+    fields (source_id, title, platform, size_bytes, url, plugin). `only`
+    limits the fan-out to those plugin slugs (one plugin's own search box).
+    `error` is
     a string when the Hub itself could not be used at all; a single plugin
     failing is not an error -- the Hub's fan-out already isolates those, and
     "two of three sources answered" is a normal search, not a fault.
@@ -666,7 +668,7 @@ def search(query: str, platform: str | None = None, limit: int = 25,
     try:
         plugins = [p for p in _registry.Registry(HOME).installed()
                    if getattr(p, "enabled", True)
-                   and (only is None or p.slug == only)
+                   and (only is None or (p.slug == only if isinstance(only, str) else p.slug in only))
                    and "search" in (getattr(p.manifest, "capabilities", ())
                                     or ())]
     except Exception as exc:

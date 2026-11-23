@@ -701,6 +701,13 @@ class BuiltinNzbClient:
                 _close_response(resp)
         raise NntpError("too many redirects while fetching NZB")
 
+    def add_nzb(self, data: bytes, *, name: str = "") -> bool:
+        """Queue an NZB document ROMarr already fetched and validated."""
+        if not data:
+            self.last_error = "empty NZB"
+            return False
+        return self.add(data.decode("utf-8", errors="replace"), name=name)
+
     def add(self, url: str, *, save_path: str | None = None, name: str = "") -> bool:
         """Fetch and validate an NZB (inline XML or allowed indexer URL) and enqueue download."""
         del save_path
