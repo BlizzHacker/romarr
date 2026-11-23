@@ -479,8 +479,8 @@ PLATFORMS: tuple[Platform, ...] = (
     # 15,557 is a hundred-odd games lost to a missing four characters.
     Platform("atari8bit", "Atari 8-bit",
              (".atr", ".xfd", ".xex", ".car", ".atx", ".cas", ".bin", ".zip"),
-             ("atari 8 bit computer", "atari 800", "atari 400", "atari xl",
-              "atari xe", "atari8bit"),
+             ("atari 8 bit computer", "atari 8 bit family", "atari 800",
+              "atari 400", "atari xl", "atari xe", "atari8bit"),
              max_size=16 * MB, media=COMPUTER),
     Platform("atari-st", "Atari ST",
              (".st", ".msa", ".stx", ".dim", ".ipf", ".zip"),

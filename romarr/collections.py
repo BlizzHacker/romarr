@@ -108,6 +108,13 @@ def is_translation(name: str) -> bool:
     return "translation" in flags_in(name)
 
 
+#: Bracketed DAT tags that mark a set of non-game media. Redump publishes
+#: "Sony - PlayStation Portable (UMD Video)" and "(UMD Music)": films and
+#: albums on PSP discs. Defaulting them to the PSP platform would plan a set
+#: of PSP "games" that are not games, so they get no default platform.
+_NON_GAME_DAT_TAGS = frozenset({"umd video", "umd music"})
+
+
 def platform_for_dat(dat_name: str, catalog: dict | None = None) -> str:
     """The ROMarr platform a No-Intro or Redump DAT most likely describes.
 
@@ -135,6 +142,9 @@ def platform_for_dat(dat_name: str, catalog: dict | None = None) -> str:
             chosen = resolve(str(slug or ""))
             if chosen is not None:
                 return chosen.slug
+    tags = {t.strip().casefold() for t in _PAREN.findall(name)}
+    if tags & _NON_GAME_DAT_TAGS:
+        return ""
     base = re.sub(r"\s*[\(\[][^\)\]]*[\)\]]", "", name).strip()
     candidates = [base]
     parts = [p.strip() for p in base.split(" - ") if p.strip()]
