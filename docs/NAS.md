@@ -53,7 +53,9 @@ DATs are loaded only when `DAT_PATH` is set. Their memory grows with what you gi
 
 To mount a cloud folder as a library (see [CLOUD-STORAGE.md](CLOUD-STORAGE.md#mounts)), the container needs `/dev/fuse` and `SYS_ADMIN`. On hosts with AppArmor, including Ubuntu and Debian-based NAS systems, it also needs `apparmor=unconfined`. Without `/dev/fuse` everything else works, and the Cloud page says mounts are unavailable. Backup, mirror, offload and import don't need FUSE.
 
-In 1.13.2 and earlier, mounts fail in every Docker container that runs as a PUID, with *fusermount3: could not determine username*. The entrypoint fix that gives your PUID a name inside the container ships in the first release after 1.13.2. The NAS templates pin 1.13.2 until then, so to mount cloud folders now, use the `latest` tag once that release is out. Mounts were checked with 1026:100 (Synology), 99:100 (Unraid), 568:568 (TrueNAS), 1000:1000 and 0:0.
+In 1.13.2 and earlier, mounts fail in every Docker container that runs as a PUID, with *fusermount3: could not determine username*. The entrypoint fix that gives your PUID a name inside the container ships in the first release after 1.13.2. The NAS templates pin 1.13.2 until then, so to mount cloud folders now, use the `latest` tag once that release is out. Mounts were checked with `PUID`/`PGID` set to 1026:100 (Synology), 99:100 (Unraid), 568:568 (the TrueNAS YAML install), 1000:1000 and 0:0.
+
+The fix applies only when the container starts as root and drops to `PUID`. A container started directly as another user — `docker run --user`, Kubernetes `runAsUser`, or the TrueNAS Community app, which runs as `568:568` — keeps an unnamed uid, so mounts still fail there. The Cloud page then says why. For cloud mounts on TrueNAS, use the YAML install, which sets `PUID`/`PGID` to 568.
 
 Compose:
 
@@ -214,6 +216,7 @@ ROMarr is in the Community train ([truenas/apps#6524](https://github.com/truenas
 - **PUID/PGID.** `568:568`, the `apps` user. Give `apps` read/write on the library dataset and read on downloads in the dataset's ACL.
 - **Folders.** Use datasets you create: for example `apps/romarr` for config, and your games and downloads datasets.
 - **Port.** 6868.
+- **Cloud folder mounts.** The Community app starts the container directly as `568:568`, so FUSE mounts can't work there (see [Cloud folders](#cloud-folders-fuse-in-a-container)). For mounts, use the YAML install: it sets `PUID`/`PGID` to 568 and needs `/dev/fuse`, `SYS_ADMIN` and `apparmor=unconfined` added.
 - **Updates.** The Community train is kept current by iX's Renovate bot. For a YAML install, edit the tag.
 
 ## Unraid
