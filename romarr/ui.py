@@ -5519,6 +5519,8 @@ RENDER.media=()=>settingsPage('Media Management',
   +chk('rename_on_import','Use DAT names for verified single-file imports (disc-set filenames stay intact)',SETTINGS.rename_on_import)
   +chk('prefer_hardlinks','Prefer hardlinks; copy when unavailable (unchanged files only)',SETTINGS.prefer_hardlinks)
   +chk('switch_attach_extras','File Switch updates and DLC inside their game\'s folder (update/, dlc/) when the game already has one',SETTINGS.switch_attach_extras!==false)
+  +chk('compress_switch_imports','Compress Switch imports (NSP/XCI to NSZ/XCZ) through Compressatorium; the original is removed only after the compressed file verifies',SETTINGS.compress_switch_imports)
+  +fld('nsz_compression','NSZ compression (solid or block, level 1-22; XCZ always uses block)',SETTINGS.nsz_compression||'block:18','text','placeholder="block:18" pattern="(solid|block):([1-9]|1[0-9]|2[0-2])"')
   +chk('game_package_folders','In RomM libraries, file games with updates and DLC (PlayStation, 3DS, Wii U, Switch) as one game folder: base game in &lt;Title&gt;/, update in update/, DLC in dlc/',SETTINGS.game_package_folders!==false)
   +`<p class="dim">Hardlinks share file contents with the download. Editing either file changes both. Archive members are extracted normally. Shared library read permissions are required; ROMarr never changes source permissions.</p>`
   +chk('retain_downloads_after_import','Keep completed downloads for seeding after import',SETTINGS.retain_downloads_after_import)

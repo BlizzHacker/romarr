@@ -336,6 +336,12 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "rename_on_import": True,
     "prefer_hardlinks": False,
     "switch_attach_extras": True,   # file Switch updates/DLC in <game>/update|dlc
+    # Compress each imported Switch .nsp/.xci to .nsz/.xcz through the
+    # configured Compressatorium (see switch_compress). Off by default: it
+    # needs the service and the operator's prod.keys mounted into it.
+    "compress_switch_imports": False,
+    # "<solid|block>:<level>", level 1-22. An .xci is always sent as block.
+    "nsz_compression": "block:18",
     "game_package_folders": True,   # RomM libraries: base/update/DLC in <Title>/, update/, dlc/
     "retain_downloads_after_import": True,
     "overwrite_existing": False,
@@ -897,6 +903,9 @@ class Store:
                 if parts.scheme.lower() not in ("http", "https") or not parts.hostname:
                     raise ValueError("FlareSolverr URL must start with http:// or https://")
             patch = dict(patch, flaresolverr_url=raw_solver)
+        if "nsz_compression" in patch:
+            from .switch_compress import parse_compression
+            patch = dict(patch, nsz_compression=parse_compression(patch["nsz_compression"]))
         if "plugin_hosts" in patch:
             from .catalogue import parse_hosts
             patch = dict(patch, plugin_hosts=", ".join(parse_hosts(patch["plugin_hosts"])))

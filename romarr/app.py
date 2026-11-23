@@ -72,6 +72,7 @@ from .cartridge import CartridgeHub
 from .emulator_catalog import resource_catalog
 from .dat import DatIndex, dat_from_record, parse_dat
 from .decompress import run_batch as run_decompress_batch
+from . import switch_compress
 from .switch_report import report as build_switch_report
 from .titled import classify_tid, TitleDBIndex, build_index as build_titled_index, validate_switch_rom
 from .downloaders import (
@@ -5056,6 +5057,7 @@ class ROMarr:
             self._index_hash(verdict, platform.slug, source.stem,
                              outcome.destination, sha1=outcome.sha1)
             self._identify_after_import(verdict, platform.slug, source.stem)
+            self._compress_after_import(outcome.destination, platform.slug, source.stem)
             self.store.record(Event(
                 kind="imported", game=source.stem, platform=platform.slug,
                 release=source.name, library=label,
@@ -7088,6 +7090,81 @@ class ROMarr:
             pool.submit(job)
         except RuntimeError:                       # interpreter shutting down
             pass
+
+    def _compress_after_import(self, destination, platform: str, game: str,
+                               queue_item=None) -> None:
+        """Compress an imported Switch .nsp/.xci to .nsz/.xcz, in the background (#278).
+
+        Off unless `compress_switch_imports` is set. Compressatorium does the
+        work and removes the original only after the compressed file passes
+        its round-trip, so the import itself is never slowed or failed by
+        this. One worker runs the jobs in order, each bounded by
+        `switch_compress.DEFAULT_JOB_TIMEOUT`. The outcome is recorded as a
+        `compress` event, which is where batch decompression records too.
+        """
+        if platform != "switch" or not destination:
+            return
+        if not self.store.settings.get("compress_switch_imports"):
+            return
+        path = Path(destination)
+        if not switch_compress.wants_compression(path):
+            return
+        compression = str(self.store.settings.get("nsz_compression")
+                          or switch_compress.DEFAULT_COMPRESSION)
+        from . import compressatorium_plugin
+        url, api_key, _source = compressatorium_plugin.connection(self._env)
+
+        def job():
+            try:
+                outcome = switch_compress.compress_import(
+                    path, url=url, api_key=api_key, compression=compression)
+            except Exception as exc:               # noqa: BLE001 - original stays
+                log.warning("compress: %s failed", path.name, exc_info=True)
+                outcome = switch_compress.CompressOutcome(
+                    str(path), switch_compress.FAILED_STATUS,
+                    error=f"unexpected error: {exc.__class__.__name__}")
+            try:
+                self._record_compress(outcome, platform, game, queue_item)
+            except Exception:                      # noqa: BLE001 - worker survives
+                log.warning("compress: could not record %s", path.name, exc_info=True)
+
+        with self._lock:
+            pool = getattr(self, "_compress_pool", None)
+            if pool is None:
+                pool = self._compress_pool = ThreadPoolExecutor(
+                    max_workers=1, thread_name_prefix="romarr-compress")
+        try:
+            pool.submit(job)
+        except RuntimeError:                       # interpreter shutting down
+            pass
+
+    def _record_compress(self, outcome, platform: str, game: str,
+                         queue_item=None) -> None:
+        """Record one compression outcome and point the library at the new file.
+
+        A compressed file replaces the original in the hash index and in the
+        queue row's imported paths, and the library server is asked to
+        rescan. Any other outcome leaves the library as the import left it.
+        """
+        label = ""
+        if outcome.status == switch_compress.COMPRESSED:
+            target = self.library_for(platform)
+            root = self.library_root(target[0]) if target else self.library
+            self.hashes.move_paths({outcome.source: outcome.output}, root=root)
+            if queue_item is not None and outcome.source in (queue_item.imported_paths or []):
+                queue_item.imported_paths = [
+                    outcome.output if p == outcome.source else p
+                    for p in queue_item.imported_paths]
+            if target is not None:
+                label = target[0].get("name") or getattr(target[1], "name", "library")
+                if self.store.settings.get("rescan_after_import", True):
+                    self._rescan_library(target[1], target[0], platform)
+            log.info("compress: %s", outcome.describe())
+        else:
+            log.warning("compress: %s", outcome.describe())
+        self.store.record(Event(kind="compress", game=game, platform=platform,
+                                release=Path(outcome.source).name, library=label,
+                                detail=outcome.describe()))
 
     def _index_hash(self, verdict, platform: str, fallback: str,
                     destination=None, *, sha1: str = "") -> None:
@@ -9584,6 +9661,8 @@ class ROMarr:
                         self._index_hash(outcome.verification, platform.slug, game_title,
                                          outcome.destination, sha1=outcome.sha1)
                         self._identify_after_import(outcome.verification, platform.slug, game_title)
+                    self._compress_after_import(outcome.destination, platform.slug,
+                                                game_title, queue_item)
                     self.store.record(Event(kind="imported", game=game_title,
                                             platform=platform.slug, release=name,
                                             library=label,
