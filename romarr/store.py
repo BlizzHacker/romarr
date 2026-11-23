@@ -755,8 +755,8 @@ class Store:
             if notes is not None:
                 row["notes"] = str(notes)
             fields = {k: v for k, v in row.items()
-                      if k in ("status", "rating", "notes")
-                      and v not in ("", 0, None)}
+                      if k in ("status", "rating", "notes", "identity")
+                      and v not in ("", 0, None, {})}
             if fields:
                 row = {**fields, "game": game, "platform": platform}
                 table[key] = row
@@ -768,6 +768,21 @@ class Store:
                 table.pop(key, None)
         self.save()
         return dict(row)
+
+    def set_game_identity(self, platform: str, game: str, identity: dict) -> None:
+        """What the metadata providers said a verified import is (#247).
+
+        Kept beside the operator's own status, rating and notes, under its
+        own key so a provider's rating never overwrites theirs.
+        """
+        key = self._meta_key(platform, game)
+        with self._lock:
+            table = self.settings.setdefault("game_meta", {})
+            row = dict(table.get(key) or {})
+            row.update({"identity": dict(identity), "game": row.get("game") or game,
+                        "platform": row.get("platform") or platform})
+            table[key] = row
+        self.save()
 
     def game_meta(self, platform: str, game: str) -> dict:
         with self._lock:
