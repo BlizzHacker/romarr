@@ -52,8 +52,14 @@ _config_lock = threading.Lock()
 
 
 def preinstall(*, home: Path | None = None,
-               env: Mapping[str, str] | None = None) -> str:
-    """Install the plugin once, if ROM Hub is here and it never was.
+               env: Mapping[str, str] | None = None,
+               slug: str = SLUG, repo: str = PLUGIN_REPO,
+               ref: str = PLUGIN_REF) -> str:
+    """Install a bundled plugin once, if ROM Hub is here and it never was.
+
+    Compressatorium by default; `slug`, `repo` and `ref` name another plugin
+    ROMarr ships preinstalled (Arcade Punks). They share one marker file, so
+    each plugin is offered exactly once.
 
     See `preinstalled_plugins.preinstall` for the outcomes it returns.
     """

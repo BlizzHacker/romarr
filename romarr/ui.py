@@ -1627,6 +1627,29 @@ RENDER.hub=async()=>{
         +(md.api_token_set?'<button class="mini" id="md-clear" type="button">Clear API token</button>':'')
         +'</div></form>'
         +'<p class="help">'+esc(md.credit||'')+'</p></div>' : '';
+    const ap=hs.arcade_punks||{};
+    const apRoutes=ap.routes||{};
+    const apKinds=[['nzb','NZB'],['torrent','Torrent'],['mega','Mega'],['rapidgator','Rapidgator']];
+    const apForm=(pl.slug==='arcade-punks'&&pl.installed)
+      ?'<div style="margin-top:12px"><b>Download an Arcade Punks link</b>'
+        +'<p class="help">Members: copy a link from the download area of a post and paste it here. '
+        +apKinds.map(([k,label])=>label+' &rarr; '+(apRoutes[k]?esc(apRoutes[k]):'no client set up')).join(' &middot; ')
+        +'</p>'
+        +'<form id="ap-form" autocomplete="off">'
+        +'<div class="row"><input id="ap-url" type="url" required maxlength="2048" '
+        +'placeholder="https://arcade-punks.com/arcadepunks/2025-01/nzb/name.zip"></div>'
+        +'<div class="row"><input id="ap-game" type="text" maxlength="200" placeholder="Name (optional)">'
+        +'<input id="ap-platform" type="text" maxlength="64" placeholder="Platform to import into (optional)"></div>'
+        +'<div class="row"><button class="mini accent" type="submit">Download</button></div></form>'
+        +'<p class="help" id="ap-msg" aria-live="polite"></p>'
+        +'<form id="ap-search" autocomplete="off"><div class="row">'
+        +'<input id="ap-q" type="search" maxlength="200" placeholder="Search Arcade Punks">'
+        +'<button class="mini" type="submit">Search</button></div></form>'
+        +'<ul id="ap-results" class="help"></ul>'
+        +'<details><summary>Usenet and NZBGet setup, from the Arcade Punks guides</summary><ol class="help">'
+        +((ap.hints||{}).nzbget||[]).map(step=>'<li>'+esc(step)+'</li>').join('')
+        +'<li>Newsgroup: '+esc(((ap.hints||{}).newsgroups||[]).join(', '))+'</li></ol></details>'
+        +'<p class="help">'+esc(ap.credit||'')+'</p></div>' : '';
     return '<div class="pcard'+(pl.installed?' installed':'')+'">'
       +'<h4>'+esc(pl.name)+(pl.author?'<span class="by">by '+esc(pl.author)+'</span>':'')+'</h4>'
       +'<div class="desc">'+esc(pl.description||'No description supplied.')+'</div>'
@@ -1636,7 +1659,7 @@ RENDER.hub=async()=>{
       +(pl.key_required?'<div class="help">Requires an account or key. Check the instructions before installing.</div>':'')
       +'<div class="foot">'+action
       +(net?'<span class="net">reaches '+esc(net)+'</span>':'')+'</div>'
-      +authForm+cmForm+mdForm+'</div>';
+      +authForm+cmForm+mdForm+apForm+'</div>';
   };
 
   const render=d=>{
@@ -1979,6 +2002,64 @@ RENDER.hub=async()=>{
 
     const backToHub=async()=>{hs=await j('/api/v1/hub/status').catch(()=>hs); render(await load());};
     p.querySelectorAll('button[data-open]').forEach(b=>b.onclick=()=>pluginDashboard(b.dataset.open,backToHub));
+    const apF=$('#ap-form');
+    if(apF) apF.onsubmit=async e=>{
+      e.preventDefault();
+      const opVer=typeof pageVersion==='number'?pageVersion:0;
+      const live=()=>isCurrentHub(opVer)&&apF.isConnected;
+      const btn=apF.querySelector('button[type="submit"]');
+      const msg=$('#ap-msg');
+      if(btn)btn.disabled=true;
+      if(msg)msg.textContent='Sending\u2026';
+      try{
+        const response=await fetch('/api/v1/arcade-punks/grab',{
+          method:'POST',headers:{'Content-Type':'application/json'},
+          body:JSON.stringify({url:$('#ap-url').value.trim(),
+            game:$('#ap-game').value.trim(),platform:$('#ap-platform').value.trim()})});
+        const result=await response.json();
+        if(!live()) return;
+        if(result.ok){
+          if(msg)msg.textContent='Sent to '+(result.client||'the download client')
+            +(result.queued?'. It imports into '+(result.platform||'the library')+' when it finishes.'
+                           :'. Download only: a whole build is not imported.');
+          toast('Arcade Punks link sent');
+          apF.reset();
+        }else if(msg){
+          msg.textContent=result.error||'Could not send the link';
+        }
+      }catch(e){
+        if(live()&&msg)msg.textContent='Could not send the link';
+      }finally{
+        if(live()&&btn)btn.disabled=false;
+      }
+    };
+    const apS=$('#ap-search');
+    if(apS) apS.onsubmit=async e=>{
+      e.preventDefault();
+      const opVer=typeof pageVersion==='number'?pageVersion:0;
+      const list=$('#ap-results');
+      const q=$('#ap-q').value.trim();
+      if(!list||!q)return;
+      list.textContent='Searching\u2026';
+      const found=await j('/api/v1/arcade-punks/search?q='+encodeURIComponent(q)).catch(()=>({items:[],error:'Search failed'}));
+      if(!isCurrentHub(opVer)||!list.isConnected) return;
+      list.textContent='';
+      if(found.error&&!(found.items||[]).length){list.textContent=found.error;return;}
+      if(!(found.items||[]).length){list.textContent='Nothing found.';return;}
+      for(const item of found.items){
+        const li=document.createElement('li');
+        const a=document.createElement('a');
+        a.textContent=item.title||'';
+        if(String(item.url||'').startsWith('https://www.arcadepunks.com/')){a.href=item.url;a.target='_blank';a.rel='noopener';}
+        li.appendChild(a);
+        const pack=item.pack||{};
+        const bits=[pack.kind,pack.frontend,pack.device,item.platform||pack.platform,
+          pack.capacity_bytes?Math.round(pack.capacity_bytes/1e9)+' GB':''].filter(Boolean);
+        if(bits.length){const span=document.createElement('span');span.textContent=' \u2014 '+bits.join(' \u00b7 ');li.appendChild(span);}
+        list.appendChild(li);
+      }
+    };
+
     p.querySelectorAll('button[data-act]').forEach(b=>b.onclick=async()=>{
       const slug=b.dataset.slug, action=b.dataset.act;
       b.disabled=true; b.textContent='Working…'; actionError='';

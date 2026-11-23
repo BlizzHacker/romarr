@@ -2678,6 +2678,12 @@ class ROMarr:
                 # Guides, videos, mods and tools are not the game.
                 continue
             extra = row.get("extra") if isinstance(row.get("extra"), dict) else {}
+            if str(extra.get("downloadable") or "") == "browser":
+                # Arcade Punks and The ROM Depot: the download needs the
+                # member's own browser session, so the Hub cannot fetch it
+                # and a grab would only ever fail. Shown on the plugin's
+                # card instead.
+                continue
             is_minerva = plugin_slug == "minerva-archive"
             magnet = str(row.get("magnet") or "")
             file_path = str(extra.get("path") or "")
@@ -3172,6 +3178,53 @@ class ROMarr:
         if not ok:
             result["error"] = failure_detail
         return result
+
+    def grab_arcade_punks(self, url: str, game: str = "", platform_slug: str = "") -> dict:
+        """Send one pasted Arcade Punks link to the client that can take it.
+
+        NZB zips go to the Usenet client, .torrent links to the torrent
+        client, Mega and Rapidgator links to a debrid service. With a
+        platform (given, or read from an Atomiswave-style title) the job is
+        queued like any grab and imported when it finishes. A whole build has
+        no platform to import into, so it is downloaded and recorded only.
+        """
+        from . import arcade_punks
+        try:
+            link = arcade_punks.classify(url)
+        except arcade_punks.LinkError as err:
+            return {"ok": False, "error": str(err)}
+        lane = arcade_punks.ArcadePunksLane(self.clients)
+        if lane.target(link.kind) is None:
+            return {"ok": False, "kind": link.kind, "error": arcade_punks.no_client(link.kind)}
+        label = arcade_punks.job_name(link)
+        pack = arcade_punks.parse_pack(game or link.name)
+        game = str(game or pack.game or label).strip()[:200]
+        platform = None
+        if platform_slug:
+            platform = resolve(platform_slug)
+            if platform is None:
+                return {"ok": False, "error": f"unknown platform: {platform_slug!r}"}
+        elif pack.platform:
+            platform = resolve(pack.platform)
+        out = {"kind": link.kind, "release": label, "pack": pack.as_dict()}
+        if platform is None:
+            ok = lane.add(link.url, name=label)
+            if not ok:
+                return {**out, "ok": False, "error": lane.last_error}
+            self.store.record(Event(
+                kind="grabbed", game=game, platform="", release=label,
+                indexer=f"arcade-punks:{link.kind}",
+                detail=f"sent to {lane.delegate_name}; download only, not imported "
+                       "(no platform)"))
+            return {**out, "ok": True, "queued": False, "client": lane.delegate_name}
+        pick = Release(title=label, size=0, seeders=0, categories=(1000,),
+                       download_url=link.url, protocol=lane.protocol,
+                       indexer=f"arcade-punks:{link.kind}")
+        result = self._submit_grab(lane, pick, game, platform.slug, True, "", None)
+        if not result.get("ok") and lane.last_error:
+            result["error"] = lane.last_error
+        return {**out, **result, "queued": bool(result.get("ok")),
+                "platform": platform.slug, "client": lane.delegate_name}
 
     # -- interactive search -------------------------------------------------
     #
@@ -10966,6 +11019,16 @@ def make_handler(service: ROMarr):
                 return self._json(200, _compressatorium_status(service))
             if route.path == "/api/v1/hub/mdm":
                 return self._json(200, _mdm_status())
+            if route.path == "/api/v1/arcade-punks":
+                return self._json(200, _arcade_punks_status(service))
+            if route.path == "/api/v1/arcade-punks/search":
+                from . import arcade_punks
+                try:
+                    limit = int(query.get("limit", ["25"])[0] or 25)
+                except ValueError:
+                    return self._json(400, {"error": "limit must be a number"})
+                return self._json(200, arcade_punks.search(
+                    query.get("q", [""])[0], limit=limit))
             if route.path == "/api/v1/hub/fleet":
                 return self._json(200, hub.fleet_profiles())
             if route.path == "/api/v1/chat/config":
@@ -10994,6 +11057,7 @@ def make_handler(service: ROMarr):
                                         "archive_org_auth": hub.archive_org_auth_status(),
                                         "compressatorium": _compressatorium_status(service),
                                         "mdm": _mdm_status(),
+                                        "arcade_punks": _arcade_punks_status(service),
                                         "flaresolverr_configured": bool(hub.flaresolverr_url()),
                                         "searchable_plugins": searchable,
                                         # The Plugins page says out loud what
@@ -11869,6 +11933,15 @@ def make_handler(service: ROMarr):
                 if result.get("ok"):
                     service.reload_clients()
                 return self._json(200 if result.get("ok") else 400, result)
+            if route.path == "/api/v1/arcade-punks/grab":
+                payload = body if isinstance(body, dict) else {}
+                fields = {k: payload.get(k, "") for k in ("url", "game", "platform")}
+                if any(not isinstance(v, str) for v in fields.values()):
+                    return self._json(400, {"ok": False,
+                                            "error": "url, game and platform must be strings"})
+                result = service.grab_arcade_punks(
+                    fields["url"], game=fields["game"], platform_slug=fields["platform"])
+                return self._json(200 if result.get("ok") else 400, result)
             if route.path == "/api/v1/hub/archive-org/auth":
                 payload = body if isinstance(body, dict) else {}
                 result = hub.archive_org_auth_configure(
@@ -12326,6 +12399,12 @@ def make_handler(service: ROMarr):
     return Handler
 
 
+def _arcade_punks_status(service) -> dict:
+    """The Arcade Punks card's state: plugin, link routes and setup hints."""
+    from . import arcade_punks
+    return arcade_punks.status(service._env, service.clients)
+
+
 def _compressatorium_status(service) -> dict:
     """The Compressatorium card's state; never the API key itself."""
     from . import compressatorium_plugin
@@ -12355,6 +12434,8 @@ def serve(port: int = 6868, env: dict[str, str] | None = None):
         compressatorium_plugin.preinstall_in_background()
         mdm_plugin.preinstall_in_background()
         preinstalled_plugins.preinstall_defaults_in_background()
+        from . import arcade_punks
+        arcade_punks.preinstall_in_background()
     except Exception:
         log.exception("plugin preinstall skipped (non-fatal)")
 

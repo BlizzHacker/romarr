@@ -52,15 +52,20 @@ ARG TARGETARCH
 # as a library root when the container is given /dev/fuse.
 RUN apk add --no-cache su-exec tzdata libarchive-tools libseccomp git rclone fuse3
 
-# Plugins ROMarr ships preinstalled (romarr/compressatorium_plugin.py). Each is
+# Plugins ROMarr ships preinstalled (romarr/compressatorium_plugin.py,
+# romarr/arcade_punks.py). Each is
 # a git checkout at a pinned tag, because ROM Hub installs plugins from git;
 # ROMarr installs it into ROM_HUB_HOME on first start, with no network.
 # Not on armv7, which has no ROM Hub.
 ARG COMPRESSATORIUM_PLUGIN_REF=v0.1.0
+ARG ARCADE_PUNKS_PLUGIN_REF=v0.1.0
 RUN if [ "$TARGETARCH" != "arm" ]; then \
       git clone --quiet --depth 1 --branch "$COMPRESSATORIUM_PLUGIN_REF" \
         https://github.com/BlizzHacker/rom-hub-compressatorium \
-        /opt/romarr/bundled-plugins/compressatorium; \
+        /opt/romarr/bundled-plugins/compressatorium && \
+      git clone --quiet --depth 1 --branch "$ARCADE_PUNKS_PLUGIN_REF" \
+        https://github.com/BlizzHacker/rom-hub-arcade-punks \
+        /opt/romarr/bundled-plugins/arcade-punks; \
     fi
 # The Mister Download Manager plugin (romarr/mdm_plugin.py), bundled the same way.
 ARG MDM_PLUGIN_REF=v0.1.0
