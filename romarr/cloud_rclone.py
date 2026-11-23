@@ -477,7 +477,15 @@ def simplify_provider(raw: dict) -> dict:
 
 
 class Authorizer:
-    """One browser sign-in at a time, through `rclone authorize` on the server."""
+    """One browser sign-in at a time, through `rclone authorize` on the server.
+
+    The provider sends the browser to ``127.0.0.1:53682``. Two ways reach the
+    listener: the operator pastes that address into ROMarr (`finish`), or the
+    browser reaches it directly -- ROMarr on the same machine as the browser,
+    or a tunnel to it. Either way rclone exits with the token, and `_watch`
+    hands it to `on_token` exactly once, so the connection is created without
+    anybody copying anything.
+    """
 
     def __init__(self, rclone: Rclone, *, popen=subprocess.Popen,
                  session: requests.Session | None = None):
@@ -490,6 +498,9 @@ class Authorizer:
         self._started = 0.0
         self._stdout: list[str] = []
         self._link_seen = threading.Event()
+        self._done = threading.Event()
+        self._token = ""
+        self._error = ""
         self.rtype = ""
 
     @property
@@ -497,7 +508,8 @@ class Authorizer:
         return (self._proc is not None and self._proc.poll() is None
                 and time.monotonic() - self._started < AUTH_SECONDS)
 
-    def start(self, rtype: str, *, client_id: str = "", client_secret: str = "") -> str:
+    def start(self, rtype: str, *, client_id: str = "", client_secret: str = "",
+              on_token=None) -> str:
         """Start `rclone authorize`; return the provider URL to open."""
         with self._lock:
             self.cancel()
@@ -509,20 +521,24 @@ class Authorizer:
                 env[_env_name(rtype, "client_id")] = client_id
             if client_secret:
                 env[_env_name(rtype, "client_secret")] = client_secret
-            self._stdout, self._state = [], ""
+            self._stdout, self._state, self._token, self._error = [], "", "", ""
             self._link_seen.clear()
+            self._done = threading.Event()
             self._proc = _spawn(self._popen, [binary, "authorize", rtype, "--auth-no-open-browser"],
                                 env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                                 stderr=subprocess.PIPE, text=True)
             self._started = time.monotonic()
             self.rtype = rtype
-            # An abandoned sign-in must not hold port 53682 until the next one.
             proc = self._proc
+            # An abandoned sign-in must not hold port 53682 until the next one.
             timer = threading.Timer(AUTH_SECONDS, self._expire, args=(proc,))
             timer.daemon = True
             timer.start()
-            threading.Thread(target=self._read, args=(self._proc.stderr, True), daemon=True).start()
-            threading.Thread(target=self._read, args=(self._proc.stdout, False), daemon=True).start()
+            threading.Thread(target=self._read, args=(proc.stderr, True), daemon=True).start()
+            reader = threading.Thread(target=self._read, args=(proc.stdout, False), daemon=True)
+            reader.start()
+            threading.Thread(target=self._watch, args=(proc, reader, self._done, on_token),
+                             name="romarr-cloud-signin", daemon=True).start()
             if not self._link_seen.wait(15) or not self._state:
                 self.cancel()
                 raise RcloneError("rclone did not start a sign-in (is port 53682 in use?)")
@@ -550,6 +566,31 @@ class Authorizer:
         if is_err:
             self._link_seen.set()
 
+    def _watch(self, proc, reader, done: threading.Event, on_token) -> None:
+        """When rclone exits, hand over its token -- however the code reached it."""
+        proc.wait()
+        if reader is not None:
+            reader.join(5)
+        found = _TOKEN_BLOCK.search("".join(self._stdout))
+        token = ""
+        if found:
+            try:
+                json.loads(found.group(1))   # it must be JSON; never echoed
+                token = found.group(1)
+            except ValueError:
+                token = ""
+        self._token = token
+        if token and on_token is not None:
+            try:
+                on_token(token)
+            except Exception as err:   # noqa: BLE001 - reported to whoever waits
+                self._error = str(err)[:300]
+        elif not token:
+            self._error = "the sign-in did not produce a token; start again"
+        if self._proc is proc:
+            self._proc = None
+        done.set()
+
     def finish(self, pasted: str) -> str:
         """Deliver the pasted redirect address to rclone; return the token JSON."""
         with self._lock:
@@ -567,23 +608,17 @@ class Authorizer:
             if not query.get("code"):
                 raise RcloneError("the address has no sign-in code in it")
             keep = {k: v for k, v in query.items() if k in ("state", "code", "scope")}
+            done = self._done
             try:
                 self._session.get(f"http://127.0.0.1:{AUTH_PORT}/?{urlencode(keep)}", timeout=30)
             except requests.RequestException:
                 pass  # rclone may close the socket after answering
-            try:
-                self._proc.wait(timeout=60)
-            except subprocess.TimeoutExpired:
-                self.cancel()
-                raise RcloneError("rclone did not finish the sign-in")
-            time.sleep(0.2)
-            found = _TOKEN_BLOCK.search("".join(self._stdout))
-            self._proc = None
-            if not found:
-                raise RcloneError("the sign-in did not produce a token; start again")
-            token = found.group(1)
-            json.loads(token)  # it must be JSON; never echoed
-            return token
+        if not done.wait(90):
+            self.cancel()
+            raise RcloneError("rclone did not finish the sign-in")
+        if self._error or not self._token:
+            raise RcloneError(self._error or "the sign-in did not produce a token; start again")
+        return self._token
 
     def _expire(self, proc) -> None:
         with self._lock:

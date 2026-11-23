@@ -126,6 +126,9 @@ class CloudStorage:
         self._lock = threading.RLock()
         self._pending: dict[str, dict] = {}
         self._accounts: list | None = None
+        #: The outcome of the latest rclone sign-in, for the page to notice a
+        #: sign-in that finished without a paste. Never holds a token.
+        self.last_signin: dict = {}
         from .hosters import register_accounts
         register_accounts(self.host_accounts)
 
@@ -173,6 +176,7 @@ class CloudStorage:
             "paste_redirect": PASTE_REDIRECT,
             "paste_redirects": PASTE_REDIRECTS,
             "signin_active": self.authorizer.active,
+            "last_signin": self.last_signin,
         }
 
     def providers(self) -> dict:
@@ -229,16 +233,19 @@ class CloudStorage:
                 client_id, client_secret = app.get("client_id", ""), app.get("client_secret", "")
                 if not client_id:
                     raise CloudError("Save your own app's client id first")
-            try:
-                url = self.authorizer.start(rtype, client_id=client_id, client_secret=client_secret)
-            except RcloneError as err:
-                raise CloudError(str(err)) from None
             params = _clean_params(body.get("params"))
             if client_id:
                 params.update({"client_id": client_id, "client_secret": client_secret})
             self._pending["rclone"] = {"engine": "rclone", "type": rtype, "name": name,
                                        "label": label, "params": params,
                                        "shared": not client_id, "at": time.monotonic()}
+            self.last_signin = {}
+            try:
+                url = self.authorizer.start(rtype, client_id=client_id, client_secret=client_secret,
+                                            on_token=self._complete_rclone)
+            except RcloneError as err:
+                self._pending.pop("rclone", None)
+                raise CloudError(str(err)) from None
             return {"url": url, "mode": "paste", "redirect": PASTE_REDIRECT}
         if engine == "native":
             rtype = str(body.get("type") or "")
@@ -269,21 +276,32 @@ class CloudStorage:
         state = query.get("state", "")
         if state and state in self._pending:
             return self.native_callback(query)
-        pending = self._pending.get("rclone")
-        if pending is None:
+        if self._pending.get("rclone") is None:
+            if self.last_signin.get("remote"):
+                return {"ok": True, "remote": self.last_signin["remote"]}
             raise CloudError("No sign-in is waiting; start again")
         try:
-            token = self.authorizer.finish(address)
+            self.authorizer.finish(address)   # the connection is made by _complete_rclone
         except RcloneError as err:
             raise CloudError(str(err)) from None
-        self._pending.pop("rclone", None)
+        if self.last_signin.get("error"):
+            raise CloudError(self.last_signin["error"])
+        return {"ok": True, "remote": self.last_signin.get("remote")}
+
+    def _complete_rclone(self, token: str) -> None:
+        """rclone has a token, by paste or directly from the browser: save the connection."""
+        pending = self._pending.pop("rclone", None)
+        if pending is None:
+            return
         try:
             self.rclone.create_remote(pending["name"], pending["type"], pending["params"],
                                       token=token, shared_client=pending["shared"])
         except RcloneError as err:
-            raise CloudError(f"Signed in, but rclone could not save it: {err}") from None
-        return self._add_record({"id": pending["name"], "label": pending["label"],
-                                 "engine": "rclone", "type": pending["type"]})
+            self.last_signin = {"error": f"Signed in, but rclone could not save it: {err}"}
+            raise
+        record = self._add_record({"id": pending["name"], "label": pending["label"],
+                                   "engine": "rclone", "type": pending["type"]})["remote"]
+        self.last_signin = {"remote": record}
 
     def native_callback(self, query: dict) -> dict:
         state = str(query.get("state") or "")

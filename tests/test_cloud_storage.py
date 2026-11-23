@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import stat
+import threading
 import time
 from pathlib import Path
 
@@ -284,25 +285,34 @@ def test_start_puts_no_secret_on_the_command_line(tmp_path):
 
 
 class _Proc:
+    """`rclone authorize`: exits once its listener has been called (`released`)."""
+
     def __init__(self):
         self.returncode = None
+        self.released = threading.Event()
 
     def poll(self):
         return self.returncode
 
     def wait(self, timeout=None):
-        self.returncode = 0
+        self.released.wait(timeout)
+        if self.returncode is None:
+            self.returncode = 0
 
     def terminate(self):
         self.returncode = -15
+        self.released.set()
 
     kill = terminate
 
 
-def _waiting_authorizer(tmp_path, stdout=""):
+def _waiting_authorizer(tmp_path, stdout="", on_token=None):
     auth = Authorizer(Rclone(tmp_path / "c.conf"))
-    auth._proc, auth._state, auth._started = _Proc(), "goodstate", time.monotonic()
+    proc = _Proc()
+    auth._proc, auth._state, auth._started = proc, "goodstate", time.monotonic()
     auth._stdout = [stdout]
+    threading.Thread(target=auth._watch, args=(proc, None, auth._done, on_token),
+                     daemon=True).start()
 
     class Session:
         def __init__(self):
@@ -310,8 +320,28 @@ def _waiting_authorizer(tmp_path, stdout=""):
 
         def get(self, url, **kw):
             self.urls.append(url)
+            proc.released.set()   # rclone answers the redirect, then exits
     auth._session = Session()
     return auth
+
+
+TOKEN_OUT = ('Paste the following into your remote machine --->\n'
+             '{"access_token":"a","expiry":"x"}\n<---End paste\n')
+
+
+def test_a_browser_reaching_the_listener_finishes_without_a_paste(tmp_path):
+    got = []
+    auth = _waiting_authorizer(tmp_path, TOKEN_OUT, on_token=got.append)
+    auth._proc.released.set()            # the browser delivered the code itself
+    assert auth._done.wait(5)
+    assert len(got) == 1 and json.loads(got[0])["access_token"] == "a"
+    assert auth._proc is None
+
+
+def test_a_sign_in_without_a_token_reports_it(tmp_path):
+    auth = _waiting_authorizer(tmp_path, "nothing useful\n")
+    with pytest.raises(RcloneError, match="did not produce a token"):
+        auth.finish("http://127.0.0.1:53682/?state=goodstate&code=abc")
 
 
 def test_finish_refuses_foreign_hosts_and_wrong_state(tmp_path):
@@ -326,8 +356,7 @@ def test_finish_refuses_foreign_hosts_and_wrong_state(tmp_path):
 
 
 def test_finish_relays_only_the_oauth_fields_and_reads_the_token(tmp_path):
-    out = 'Paste the following into your remote machine --->\n{"access_token":"a","expiry":"x"}\n<---End paste\n'
-    auth = _waiting_authorizer(tmp_path, out)
+    auth = _waiting_authorizer(tmp_path, TOKEN_OUT)
     token = auth.finish("http://127.0.0.1:53682/?state=goodstate&code=abc&scope=s&extra=evil")
     assert json.loads(token)["access_token"] == "a"
     assert auth._session.urls == ["http://127.0.0.1:53682/?state=goodstate&code=abc&scope=s"]
@@ -407,9 +436,26 @@ def test_clean_params_drops_tokens_and_odd_keys():
         "url": "x", "flag": "true"}
 
 
+def _fake_rclone_signin(cloud, monkeypatch, got=None):
+    """start() remembers on_token; finish() delivers the token through it, as rclone does."""
+    seen = {}
+
+    def start(rtype, **kw):
+        seen.update(kw)
+        if got is not None:
+            got.update({k: v for k, v in kw.items() if k != "on_token"})
+        return "https://accounts.google.com/o/oauth2/auth?x"
+
+    def finish(addr):
+        seen["on_token"]('{"access_token":"a"}')
+        return '{"access_token":"a"}'
+    monkeypatch.setattr(cloud.authorizer, "start", start)
+    monkeypatch.setattr(cloud.authorizer, "finish", finish)
+    return seen
+
+
 def test_rclone_signin_flow_creates_the_remote(cloud, monkeypatch):
-    monkeypatch.setattr(cloud.authorizer, "start", lambda rtype, **kw: "https://accounts.google.com/o/oauth2/auth?x")
-    monkeypatch.setattr(cloud.authorizer, "finish", lambda addr: '{"access_token":"a"}')
+    _fake_rclone_signin(cloud, monkeypatch)
     out = cloud.signin_start({"engine": "rclone", "type": "drive", "name": "gd", "label": "Drive"})
     assert out["mode"] == "paste" and out["url"].startswith("https://accounts.google.com/")
     done = cloud.signin_finish("http://127.0.0.1:53682/?state=s&code=c")
@@ -420,9 +466,7 @@ def test_rclone_signin_flow_creates_the_remote(cloud, monkeypatch):
 def test_own_app_signin_passes_client_and_stores_it_on_the_remote(cloud, monkeypatch):
     got = {}
     cloud.set_app("gdrive", "mine-123456.apps", "mysecret")
-    monkeypatch.setattr(cloud.authorizer, "start",
-                        lambda rtype, **kw: got.update(kw) or "https://accounts.google.com/x")
-    monkeypatch.setattr(cloud.authorizer, "finish", lambda addr: '{"access_token":"a"}')
+    _fake_rclone_signin(cloud, monkeypatch, got)
     cloud.signin_start({"engine": "rclone", "type": "drive", "name": "gd", "use_own_app": True})
     assert got == {"client_id": "mine-123456.apps", "client_secret": "mysecret"}
     cloud.signin_finish("http://127.0.0.1:53682/?state=s&code=c")
@@ -615,3 +659,13 @@ def test_an_abandoned_sign_in_stops_its_listener(tmp_path):
     assert auth._proc is proc
     auth._expire(proc)
     assert auth._proc is None and proc.poll() is not None   # terminated
+
+
+def test_a_sign_in_that_finished_by_itself_shows_up_without_a_paste(cloud, monkeypatch):
+    seen = _fake_rclone_signin(cloud, monkeypatch)
+    cloud.signin_start({"engine": "rclone", "type": "drive", "name": "od", "label": "Drive"})
+    seen["on_token"]('{"access_token":"a"}')          # browser reached the listener directly
+    assert cloud.remote("od")["type"] == "drive"
+    assert cloud.status()["last_signin"]["remote"]["id"] == "od"
+    assert "access_token" not in json.dumps(cloud.status())
+    assert cloud.signin_finish("http://127.0.0.1:53682/?state=s&code=c")["remote"]["id"] == "od"

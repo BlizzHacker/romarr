@@ -4163,7 +4163,14 @@ RENDER.cloud=async()=>{
         const tick=setInterval(()=>{const el=$('#cl-left'); if(!cloudCur(version)||!el){clearInterval(tick);if(CLOUD_SIGNIN_TIMER===tick)CLOUD_SIGNIN_TIMER=null;return;}
           const s=Math.max(0,Math.round((until-Date.now())/1000));
           el.textContent=s?`This sign-in waits ${Math.floor(s/60)}:${String(s%60).padStart(2,'0')} more.`:'This sign-in expired: press Sign in again.';
-          if(!s){clearInterval(tick);if(CLOUD_SIGNIN_TIMER===tick)CLOUD_SIGNIN_TIMER=null;}},1000);
+          if(!s){clearInterval(tick);if(CLOUD_SIGNIN_TIMER===tick)CLOUD_SIGNIN_TIMER=null;return;}
+          // A browser that reaches the server's listener directly finishes the
+          // sign-in with nothing pasted: notice it and show the new connection.
+          if(s%3===0) j('/api/v1/cloud').then(now=>{ if(!cloudCur(version)||CLOUD_SIGNIN_TIMER!==tick) return;
+            const done=now&&now.last_signin||{};
+            if(done.remote){clearInterval(tick);CLOUD_SIGNIN_TIMER=null;cloudSay('cl-msg','Signed in and saved.');setTimeout(reload,800);}
+            else if(done.error){clearInterval(tick);CLOUD_SIGNIN_TIMER=null;cloudSay('cl-msg',done.error,true);}
+          }).catch(()=>{});},1000);
         CLOUD_SIGNIN_TIMER=tick; }
       else cloudSay('cl-msg','Approve in the new tab; it comes back here when done.');
     }catch(e){ if(tab) tab.close(); if(cloudCur(version)) cloudSay('cl-msg',e.message,true); }});
