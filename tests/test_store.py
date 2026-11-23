@@ -484,3 +484,13 @@ def test_unicode_dat_catalog_name_is_preserved():
     """Explicit non-ASCII DAT names must not be folded into ASCII guesses."""
     assert validate_dat_catalog_platforms({"三國志 - SNES": "snes"}) == {
         "三國志 - SNES": "snes"}
+
+
+def test_an_emptied_qbittorrent_api_key_is_removed_but_the_placeholder_keeps_it():
+    """API key outranks username/password, so it must be removable."""
+    old = {"type": "qbittorrent", "api_key": "KEY", "password": "PW"}
+    cleared = merge_secrets({"type": "qbittorrent", "api_key": "", "password": ""}, old)
+    assert cleared["api_key"] == "" and cleared["password"] == "PW"
+    kept = merge_secrets({"type": "qbittorrent", "api_key": SECRET_PLACEHOLDER}, old)
+    assert kept["api_key"] == "KEY"
+    assert merge_secrets({"type": "qbittorrent"}, old)["api_key"] == "KEY"

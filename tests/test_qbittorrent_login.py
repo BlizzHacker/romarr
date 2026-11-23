@@ -172,6 +172,20 @@ def test_api_key_is_sent_as_bearer_and_skips_cookie_login():
     qbit = QBittorrent(QbitConfig(base_url="http://qbit:8080", username="admin",
                                   password="pw", api_key="qbt_abc"),
                        session=session)
-    assert session.headers["Authorization"] == "Bearer qbt_abc"
+    prepared = session.prepare_request(requests.Request("GET", "http://qbit:8080/api/v2/app/version"))
+    assert prepared.headers["Authorization"] == "Bearer qbt_abc"
+    assert session.auth is not None  # so Requests never falls back to .netrc
     assert qbit.login() is True
     assert not qbit._uses_login
+
+
+def test_api_key_with_a_line_break_is_refused_and_never_sent():
+    import requests
+    session = requests.Session()
+    bad = QBittorrent(QbitConfig(base_url="http://qbit:8080", api_key="qbt_a\nX-Evil: 1"),
+                      session=session)
+    assert session.auth is None
+    assert bad.login() is False
+    ok = QBittorrent(QbitConfig(base_url="http://qbit:8080", api_key="qbt_abc\n"),
+                     session=requests.Session())
+    assert ok.login() is True

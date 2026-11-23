@@ -187,8 +187,20 @@ class QBittorrent:
         """Initialize a qBittorrent API client with its config and HTTP session."""
         self._config = config
         self._session = session or requests.Session()
-        if config.api_key:
-            self._session.headers["Authorization"] = f"Bearer {config.api_key}"
+        key = config.api_key.strip()
+
+        self._bad_key = bool(key) and not key.isprintable()
+        if self._bad_key:
+            log.warning("qbittorrent API key ignored: it contains a line break "
+                        "or control character")
+        elif key:
+            header = f"Bearer {key}"
+
+            def bearer(request):
+                request.headers["Authorization"] = header
+                return request
+            
+        self._session.auth = bearer
         self._authed = False
         self._added = threading.local()
         self._selection_lock = threading.RLock()
@@ -241,6 +253,8 @@ class QBittorrent:
         # A qBittorrent with WebUI auth disabled for localhost answers every
         # endpoint without a session cookie, so a failed login is not fatal.
         # An API key needs no login either: it rides on every request.
+        if self._bad_key:
+            return False
         if not self._uses_login:
             self._authed = True
             return True
@@ -1137,7 +1151,8 @@ class QBittorrent:
             r = self._get("app/version", timeout=self._config.timeout)
             return r.ok
         except requests.RequestException as err:
-            log.warning("qbittorrent unreachable: %s", err)
+            # The class only: exception text can carry request details.
+            log.warning("qbittorrent unreachable: %s", err.__class__.__name__)
             return False
 
     def completed(self, *, repair=True, timeout: float | None = None) -> list[dict]:

@@ -4646,9 +4646,9 @@ CLIENT_TYPES = {
         "fields": _COMMON + [
             FIELD("username", "Username"),
             FIELD("password", "Password", "secret"),
-            FIELD("api_key", "API Key", "secret",
+            FIELD("api_key", "API Key", "secret", clearable=True,
                   help="qBittorrent 5.2+ (WebUI options). Used instead of "
-                       "username and password when set."),
+                       "username and password when set. Cleared when empty."),
             FIELD("category", "Category", default="romarr"),
         ],
     },
@@ -5290,6 +5290,10 @@ def merge_secrets(new: dict, old: dict | None) -> dict:
         if field["type"] != "secret":
             continue
         name = field["name"]
+        # A clearable secret takes an emptied field as "remove it"; only the
+        # placeholder or an omitted key keeps what is stored.
+        if field.get("clearable") and new.get(name) == "":
+            continue
         if new.get(name) in (SECRET_PLACEHOLDER, "", None):
             new[name] = old.get(name, "")
     return new
