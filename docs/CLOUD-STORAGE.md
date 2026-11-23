@@ -45,7 +45,7 @@ ROMarr usually runs on a server with no browser, and the OAuth providers send th
 1. Press **Sign in**. The provider's consent page opens in a new tab.
 2. Sign in and approve. **ROMarr never sees your password.**
 3. Your browser now tries to open an address starting with `http://127.0.0.1:53682/?state=…&code=…` (Microsoft: `http://localhost:53682/…`), and shows "This site can't be reached". That's expected.
-4. Copy that **whole address** from the address bar, paste it into ROMarr, then press **Finish sign-in**.
+4. Copy that **whole address** from the address bar. Back in ROMarr, press **Paste from clipboard**, or paste it into the box and press **Finish sign-in**. You have 10 minutes; the page counts down.
 
 ROMarr checks that the address belongs to the sign-in it started (the `state`) and hands it to rclone's sign-in listener on the server. rclone then exchanges it for a token, which goes straight into ROMarr's `rclone.conf`. Only one sign-in can be waiting at a time, and it expires after 10 minutes.
 

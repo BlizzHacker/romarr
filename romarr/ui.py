@@ -4087,8 +4087,12 @@ RENDER.cloud=async()=>{
       <div id="cloud-opts"></div>
       <label class="check" id="cl-advwrap"><input type="checkbox" id="cl-adv"> Show advanced options</label>
       <div class="row" style="gap:8px"><button class="btn" id="cl-add">Sign in</button></div>
-      <div id="cl-paste" class="hide"><p class="help">A sign-in page opened in a new tab. Approve access there. Your browser then lands on a page starting <code>http://127.0.0.1:53682/</code> or <code>http://localhost:53682/</code> that will not load: that is expected. Copy that whole address from the address bar and paste it here.</p>
-        <div class="row" style="gap:8px"><input id="cl-addr" type="text" placeholder="${esc(st.paste_redirect)}?state=…&amp;code=…" style="flex:1"><button class="btn" id="cl-finish">Finish sign-in</button><button class="btn ghost" id="cl-cancel">Cancel</button></div></div>
+      <div id="cl-paste" class="hide"><ol class="help" style="margin:6px 0 10px 18px">
+          <li>Approve access in the sign-in tab that just opened.</li>
+          <li>That tab then shows <b>"This site can't be reached — 127.0.0.1 refused to connect"</b>. <b>That means it worked</b>: the address points at this server, not your computer.</li>
+          <li>Copy the whole address from that tab's address bar (it starts <code>http://127.0.0.1:53682/</code> or <code>http://localhost:53682/</code>), come back here and press <b>Paste from clipboard</b>, or paste it into the box, then <b>Finish sign-in</b>.</li></ol>
+        <div class="row" style="gap:8px;flex-wrap:wrap"><input id="cl-addr" type="text" placeholder="${esc(st.paste_redirect)}?state=…&amp;code=…" style="flex:1;min-width:240px"><button class="btn ghost" id="cl-clip">Paste from clipboard</button><button class="btn" id="cl-finish">Finish sign-in</button><button class="btn ghost" id="cl-cancel">Cancel</button></div>
+        <div class="help" id="cl-left"></div></div>
       <div id="cl-msg" class="testline"></div>
     </details>
   </div>
@@ -4151,9 +4155,18 @@ RENDER.cloud=async()=>{
     try{const r=await cloudPost('signin/start',{engine:eng==='n'?'native':'rclone',type,name,label,params,
         use_own_app:$('#cl-ownapp').checked,redirect:$('#cl-redirect').value,base_url:location.origin});
       if(tab) tab.location.href=r.url; else window.open(r.url,'_blank');
-      if(r.mode==='paste'){ $('#cl-paste').classList.remove('hide'); cloudSay('cl-msg','Waiting for you to approve and paste the address…'); }
+      if(r.mode==='paste'){ $('#cl-paste').classList.remove('hide'); cloudSay('cl-msg','Waiting for you to approve and paste the address…');
+        const until=Date.now()+600000; if(CLOUD_TIMER) clearInterval(CLOUD_TIMER);
+        CLOUD_TIMER=setInterval(()=>{const el=$('#cl-left'); if(!cloudCur(version)||!el){clearInterval(CLOUD_TIMER);CLOUD_TIMER=null;return;}
+          const s=Math.max(0,Math.round((until-Date.now())/1000));
+          el.textContent=s?`This sign-in waits ${Math.floor(s/60)}:${String(s%60).padStart(2,'0')} more.`:'This sign-in expired: press Sign in again.';
+          if(!s){clearInterval(CLOUD_TIMER);CLOUD_TIMER=null;}},1000); }
       else cloudSay('cl-msg','Approve in the new tab; it comes back here when done.');
     }catch(e){ if(tab) tab.close(); cloudSay('cl-msg',e.message,true); }});
+  $('#cl-clip')&&($('#cl-clip').onclick=async()=>{try{const t=(await navigator.clipboard.readText()).trim();
+      if(!/^http:[/][/](127[.]0[.]0[.]1|localhost):53682[/]/.test(t)){cloudSay('cl-msg','The clipboard does not hold the 127.0.0.1:53682 address yet; copy it from the sign-in tab first.',true);return;}
+      $('#cl-addr').value=t; $('#cl-finish').click();}
+    catch(e){cloudSay('cl-msg','The browser would not share the clipboard; paste into the box instead.',true);}});
   $('#cl-finish')&&($('#cl-finish').onclick=()=>act(()=>cloudPost('signin/finish',{address:$('#cl-addr').value.trim()}),'cl-msg','Signed in and saved.',true));
   $('#cl-cancel')&&($('#cl-cancel').onclick=()=>act(()=>cloudPost('signin/cancel'),'cl-msg','Cancelled.',true));
   $('#cl-rsave').onclick=()=>act(()=>cloudPost('rclone',{path:$('#cl-rpath').value.trim()}),'cl-rmsg','Saved.',true);
