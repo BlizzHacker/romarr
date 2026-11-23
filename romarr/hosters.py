@@ -161,7 +161,26 @@ def premium_accounts() -> list:
         return []
 
 
-def _hand(client, url: str, name: str) -> bool:
+def fresh_link(link: str) -> str:
+    """A newly unlocked direct URL for a premium-host link, or "".
+
+    Some hosts' download URLs expire within minutes (1fichier's tokens last
+    five), so a queued download asks again just before it fetches.
+    """
+    host = host_of(link)
+    for account in premium_accounts():
+        supports = getattr(account, "supports_host", None)
+        if callable(supports) and supports(host):
+            try:
+                return str(account.resolve(link) or "")
+            except Exception as err:   # noqa: BLE001 - the queued URL is still tried
+                log.info("%s could not renew a link: %s", getattr(account, "label", "account"), err)
+    return ""
+
+
+def _hand(client, url: str, name: str, *, source: str = "") -> bool:
+    if source and getattr(client, "TAKES_SOURCE", False):
+        return bool(client.add(url, name=name, source=source))
     if name and getattr(client, "TAKES_NAME", False):
         return bool(client.add(url, name=name))
     return bool(client.add(url))
@@ -239,7 +258,9 @@ class HosterRoute:
             except Exception as err:   # noqa: BLE001 - one account's refusal is not fatal
                 log.info("%s could not unlock a link: %s", getattr(account, "label", "account"), err)
                 continue
-            if file_url and _hand(self._direct, file_url, name):
+            # The original link travels with the job, so a queued download can
+            # unlock it again if the first URL has expired by its turn.
+            if file_url and _hand(self._direct, file_url, name, source=link):
                 self._taken_by = self._direct
                 return True
         return False
@@ -275,7 +296,8 @@ class HosterRoute:
             tried.append(label)
             if host_label(link) in CONTAINERS:
                 continue
-            file_url = public_file_url(link) or (link if looks_like_file(link) else "")
+            file_url = public_file_url(link) or (
+                link if looks_like_file(link) and not is_file_host(link) else "")
             if file_url and self._direct is not None:
                 if _hand(self._direct, file_url, name):
                     self._taken_by = self._direct

@@ -2177,8 +2177,9 @@ class ROMarr:
         # Settings owned by their own endpoints (/api/v1/chat/config,
         # /api/v1/cloud/*): a settings save echoes them, and must not rewrite them.
         for key in SERVER_OWNED_SETTINGS:
-            if key in patch:
-                patch[key] = self.store.settings.get(key, {})
+            # Dropped rather than echoed back: writing a snapshot taken here
+            # could undo a change a dedicated endpoint saved a moment ago.
+            patch.pop(key, None)
         return patch
 
 
@@ -2196,6 +2197,9 @@ class ROMarr:
         """Unmount cloud mounts and stop rclone when ROMarr exits."""
         try:
             self.cloud_jobs.unmount_all()
+        except Exception:                          # noqa: BLE001 - exiting anyway
+            pass
+        try:
             self.cloud.close()
         except Exception:                          # noqa: BLE001 - exiting anyway
             pass
@@ -9973,7 +9977,12 @@ def make_handler(service: ROMarr):
         #: it takes no parameters, reads no invitation, touches no state and
         #: returns identical bytes to every caller. The invitation id is in
         #: the URL fragment, which never reaches this server at all.
+        # /api/v1/cloud/oauth/callback: a provider's redirect is a cross-site
+        # top-level GET, so the SameSite=Strict session cookie never comes
+        # with it. The pending sign-in's single-use, unguessable state is
+        # what authorises it, and the handler accepts nothing else.
         OPEN_PATHS = ("/", "/login", "/link", "/api/health", "/api/v1/login",
+                      "/api/v1/cloud/oauth/callback",
                       "/api/v1/setup", "/api/v1/connect/steam/return",
                       # The OIDC round trip: /oidc/login starts it (no session
                       # yet — that is the point), and /oidc/callback arrives as
@@ -12394,6 +12403,10 @@ def make_handler(service: ROMarr):
             # sender cannot attach an authentication header, so redact it
             # before it can reach either stdout or the in-app log ring.
             message = redact_query_credentials(fmt % args)
+            if "/api/v1/cloud/oauth/callback" in message:
+                # An authorization code and its state are credentials too.
+                message = re.sub(r"(/api/v1/cloud/oauth/callback)\?[^\s\"]*",
+                                 r"\1?[REDACTED]", message)
             log.info("%s %s", self.address_string(), message)
 
     return Handler
@@ -12467,4 +12480,16 @@ def serve(port: int = 6868, env: dict[str, str] | None = None):
              scheme, host, port, service.library)
     if service.load_dats_in_background():
         log.info("loading DATs in the background; verification waits for them")
+
+    # `docker stop` sends SIGTERM to PID 1, which is this process. Without a
+    # handler it is ignored until Docker gives up and sends SIGKILL, and the
+    # atexit cleanup (unmounting cloud mounts, stopping rclone) never runs.
+    import signal
+
+    def _terminate(signum, frame):
+        raise SystemExit(0)
+    try:
+        signal.signal(signal.SIGTERM, _terminate)
+    except (ValueError, AttributeError, OSError):   # not the main thread, or no SIGTERM
+        pass
     httpd.serve_forever()

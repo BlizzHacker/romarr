@@ -31,7 +31,7 @@ from urllib.parse import urlsplit
 
 import requests
 
-from .hosters import host_label
+from .hosters import host_label, looks_like_file
 
 log = logging.getLogger(__name__)
 
@@ -185,7 +185,8 @@ def multiup_mirrors(url: str, *, session: requests.Session | None = None) -> lis
     seen, mirrors = set(), []
     for link in links:
         label = host_label(link)
-        if label and label != "MultiUp" and link not in seen:
+        direct = not label and looks_like_file(link)   # a mirror that is the file itself
+        if ((label and label != "MultiUp") or direct) and link not in seen:
             seen.add(link)
             mirrors.append(link)
     return mirrors

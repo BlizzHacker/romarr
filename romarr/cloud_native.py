@@ -20,6 +20,7 @@ import base64
 import hashlib
 import logging
 import os
+import re
 import secrets
 import time
 from pathlib import Path
@@ -29,7 +30,9 @@ import requests
 
 log = logging.getLogger(__name__)
 
-CHUNK = 10 * 327680  # 3.125 MiB: a multiple of OneDrive's 320 KiB and Google's 256 KiB
+#: 2.5 MiB: a whole number of Google's 256 KiB units *and* OneDrive's 320 KiB
+#: units, so every non-final chunk is aligned for both.
+CHUNK = 8 * 327680
 TIMEOUT = 60
 
 PROVIDERS = {
@@ -161,8 +164,13 @@ class GoogleDrive(_Base):
         safe = name.replace("\\", "\\\\").replace("'", "\\'")
         rows = self._req("GET", f"{self.API}/files", params={
             "q": f"'{parent}' in parents and name = '{safe}' and trashed = false",
-            "fields": "files(id,name,mimeType,size)", "pageSize": 10,
+            "fields": "files(id,name,mimeType,size)", "pageSize": 2,
             "supportsAllDrives": "true", "includeItemsFromAllDrives": "true"}).json().get("files") or []
+        if len(rows) > 1:
+            # Drive allows two items with one name in a folder; a path cannot
+            # say which, and acting on the wrong one is worse than refusing.
+            raise NativeError(f"two items are named {name!r} in that Google Drive folder; "
+                              "rename one of them")
         return rows[0] if rows else None
 
     def _resolve(self, path: str, *, create: bool = False) -> dict | None:
@@ -255,7 +263,8 @@ class GoogleDrive(_Base):
                               json={"name": parts[-1], "parents": [parent["id"]]},
                               headers={"X-Upload-Content-Length": str(size)})
         _chunked_put(self._session, start.headers["Location"], Path(local), size,
-                     auth=lambda: {"Authorization": f"Bearer {self._access()}"})
+                     auth=lambda: {"Authorization": f"Bearer {self._access()}"},
+                     provider="gdrive")
 
     def delete(self, path: str) -> None:
         node = self._resolve(path)
@@ -306,10 +315,27 @@ class OneDrive(_Base):
         if not _parts(path):
             raise NativeError("give the file a name")
         size = Path(local).stat().st_size
+        self._ensure_folders(_parts(path)[:-1])
         session = self._req("POST", f"{self._item(path)}/createUploadSession", json={
             "item": {"@microsoft.graph.conflictBehavior": "replace"}}).json()
         # The upload URL is pre-authorised; sending a bearer token to it is refused.
-        _chunked_put(self._session, session["uploadUrl"], Path(local), size, auth=dict)
+        _chunked_put(self._session, session["uploadUrl"], Path(local), size, auth=dict,
+                     provider="onedrive")
+
+    def _ensure_folders(self, parts: list[str]) -> None:
+        """Create the missing folders of `parts`, reusing any that exist.
+
+        Graph's upload session needs an existing parent; a backup's first file
+        in a new subfolder otherwise fails.
+        """
+        for i in range(len(parts)):
+            here = "/".join(parts[:i + 1])
+            if self._req("GET", self._item(here), ok=(200, 404)).status_code == 200:
+                continue
+            parent = "/".join(parts[:i])
+            url = f"{self._item(parent)}/children" if parent else f"{self.API}/root/children"
+            self._req("POST", url, ok=(200, 201, 409), json={
+                "name": parts[i], "folder": {}, "@microsoft.graph.conflictBehavior": "fail"})
 
     def delete(self, path: str) -> None:
         if _parts(path):
@@ -318,10 +344,10 @@ class OneDrive(_Base):
 
 def _stream(response, dest: Path) -> int:
     dest = Path(dest)
-    dest.parent.mkdir(parents=True, exist_ok=True)
     partial = dest.with_name(dest.name + ".partial")
     written = 0
     try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
         with open(partial, "wb") as out:
             for block in response.iter_content(1024 * 1024):
                 if block:
@@ -335,7 +361,59 @@ def _stream(response, dest: Path) -> int:
     return written
 
 
-def _chunked_put(session: requests.Session, url: str, local: Path, size: int, *, auth) -> None:
+def _ranges_offset(body) -> int | None:
+    """The first missing byte from Graph's ``nextExpectedRanges``, or None."""
+    ranges = (body or {}).get("nextExpectedRanges") if isinstance(body, dict) else None
+    if not ranges:
+        return None
+    try:
+        return int(str(ranges[0]).split("-")[0])
+    except ValueError:
+        return None
+
+
+def _acknowledged(response, provider: str) -> int | None:
+    """The next byte a non-final chunk response asks for; None when it does not say."""
+    if provider == "gdrive" and response.status_code == 308:
+        match = re.match(r"^bytes=0-(\d+)$", response.headers.get("Range", "") or "")
+        return int(match.group(1)) + 1 if match else 0
+    if provider == "onedrive" and response.status_code == 202:
+        try:
+            return _ranges_offset(response.json())
+        except ValueError:
+            return None
+    return None
+
+
+def _ask_offset(session, url: str, size: int, provider: str, auth) -> int | None:
+    """After a lost or refused response, ask the upload session where it is.
+
+    Returns `size` when the provider says the upload is already complete.
+    """
+    try:
+        if provider == "gdrive":
+            r = session.put(url, data=b"", timeout=TIMEOUT,
+                            headers={**auth(), "Content-Length": "0",
+                                     "Content-Range": f"bytes */{size}"})
+            if r.status_code in (200, 201):
+                return size
+            return _acknowledged(r, provider) if r.status_code == 308 else None
+        r = session.get(url, timeout=TIMEOUT)
+        return _ranges_offset(r.json()) if r.status_code == 200 else None
+    except (requests.RequestException, ValueError):
+        return None
+
+
+def _chunked_put(session: requests.Session, url: str, local: Path, size: int, *, auth,
+                 provider: str = "gdrive") -> None:
+    """Upload `local` through a resumable session; return only once it is committed.
+
+    The next chunk always starts where the provider says it got to (Drive's
+    ``Range``, Graph's ``nextExpectedRanges``), not where this side assumed.
+    After a lost response or a 416, the session is asked for its offset and
+    the upload resumes from there. Success is only the provider's final
+    200/201; reaching the end of the file without one is an error.
+    """
     if size == 0:
         response = session.put(url, data=b"", headers={**auth(), "Content-Length": "0"},
                                timeout=TIMEOUT)
@@ -344,23 +422,40 @@ def _chunked_put(session: requests.Session, url: str, local: Path, size: int, *,
         return
     with open(local, "rb") as src:
         offset = 0
-        while offset < size:
+        while True:
+            src.seek(offset)
             block = src.read(CHUNK)
+            if not block:
+                raise NativeError("the provider did not confirm the upload; the file may have "
+                                  "changed while it was being sent")
             end = offset + len(block) - 1
             headers = {**auth(), "Content-Length": str(len(block)),
                        "Content-Range": f"bytes {offset}-{end}/{size}"}
+            moved = False
             for attempt in range(4):
                 try:
                     response = session.put(url, data=block, headers=headers, timeout=300)
                 except requests.RequestException:
                     response = None
-                if response is not None and response.status_code in (200, 201, 202, 308):
+                if response is not None and response.status_code in (200, 201):
+                    return
+                if response is not None and response.status_code in (202, 308):
+                    told = _acknowledged(response, provider)
+                    offset = end + 1 if told is None else told
+                    moved = True
+                    break
+                told = _ask_offset(session, url, size, provider, auth)
+                if told is not None and told >= size:
+                    return
+                if told is not None and told != offset:
+                    offset, moved = told, True
                     break
                 if attempt == 3:
                     code = getattr(response, "status_code", "no answer")
                     raise NativeError(f"upload failed at byte {offset}: {code}")
                 time.sleep(2 ** attempt)
-            offset = end + 1
+            if not moved:
+                raise NativeError(f"upload stalled at byte {offset}")
 
 
 def client(provider: str, app: dict, token: dict, *, on_token=None,

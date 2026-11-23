@@ -4157,7 +4157,7 @@ RENDER.cloud=async()=>{
       <div><b>rclone</b> ${st.rclone.available?`<span class="pill">${esc(st.rclone.version||'found')}</span> <span class="help">${esc(st.rclone.path)}</span>`:'<span class="pill" style="background:var(--bad);color:#2a0b0b">not installed</span> <span class="help">Built-in Google Drive and OneDrive still work. Install rclone for every other provider (see the guide).</span>'}</div>
       <div><b>Mounts</b> ${st.fuse.available?'<span class="pill">FUSE available</span>':`<span class="pill">unavailable</span> <span class="help">${esc(st.fuse.reason)}</span>`}</div>
     </div>
-    <details><summary class="help">rclone location</summary><div class="row" style="gap:8px"><input id="cl-rpath" type="text" value="${esc(st.rclone.configured_path)}" placeholder="Found on PATH when blank" style="flex:1"><button class="btn ghost" id="cl-rsave">Save</button></div><div id="cl-rmsg" class="testline"></div></details>
+    <p class="help">ROMarr uses the rclone on this server's PATH, or the one <code>ROMARR_RCLONE</code> names.${st.secrets_problem?` <b style="color:var(--bad)">${esc(st.secrets_problem)}</b>`:''}</p>
   </div>
   <div class="card"><b>Connections</b>
     ${remotes.length?`<table class="pd-table"><tr><th>Name</th><th>Provider</th><th>Engine</th><th>Space</th><th></th></tr>${remotes.map(r=>`<tr><td>${esc(r.label)}<div class="help">${esc(r.id)}</div></td><td>${esc(r.type)}</td><td>${esc(r.engine)}</td><td id="cl-q-${esc(r.id)}"><button class="btn ghost" data-quota="${esc(r.id)}">Check</button></td><td><button class="btn ghost" data-browse="${esc(r.id)}">Browse</button> <button class="btn danger" data-rdel="${esc(r.id)}">Remove</button></td></tr>`).join('')}</table>`:'<p class="help">No connections yet.</p>'}
@@ -4217,15 +4217,18 @@ RENDER.cloud=async()=>{
   const act=async(fn,msgId,okText,thenReload)=>{try{const r=await fn(); if(!cloudCur(version)) return r; cloudSay(msgId,r&&r.warning?r.warning:(okText||'Done.')); if(thenReload) setTimeout(reload,600); return r;}
     catch(e){ if(cloudCur(version)) cloudSay(msgId,e.message,true); }};
   // provider form
-  const pick=()=>{const v=$('#cl-prov').value||''; const [eng,type]=v.split(':');
+  const pick=(keep)=>{const v=$('#cl-prov').value||''; const [eng,type]=v.split(':');
     const p=eng==='r'?provs.find(x=>x.type===type):null;
+    const typed=keep?cloudParams():{};
     $('#cloud-opts').innerHTML=eng==='r'?cloudProviderForm(p,$('#cl-adv').checked):'';
+    document.querySelectorAll('#cloud-opts [data-opt]').forEach(el=>{const k=el.dataset.opt;
+      if(!(k in typed)) return; if(el.type==='checkbox') el.checked=typed[k]==='true'; else el.value=typed[k];});
     $('#cl-advwrap').classList.toggle('hide',eng!=='r');
     $('#cl-own').classList.toggle('hide',!(eng==='r'&&(type==='drive'||type==='onedrive')));
     $('#cl-redir').classList.toggle('hide',eng!=='n');
     $('#cl-add').textContent=(eng==='n'||(p&&p.oauth))?'Sign in':'Save connection';
     if(!$('#cl-name').value) $('#cl-name').placeholder=(type||'cloud').replace(/[^A-Za-z0-9_-]/g,'');};
-  if($('#cl-prov')){ $('#cl-prov').onchange=pick; $('#cl-adv').onchange=pick; pick(); }
+  if($('#cl-prov')){ $('#cl-prov').onchange=()=>pick(false); $('#cl-adv').onchange=()=>pick(true); pick(false); }
   $('#cl-add')&&($('#cl-add').onclick=async()=>{const [eng,type]=($('#cl-prov').value||'').split(':');
     const p=eng==='r'?provs.find(x=>x.type===type):null;
     const name=$('#cl-name').value.trim()||$('#cl-name').placeholder, label=$('#cl-label').value.trim();
@@ -4263,7 +4266,6 @@ RENDER.cloud=async()=>{
     catch(e){if(cloudCur(version)&&$('#cl-paste')===form) cloudSay('cl-msg','The browser would not share the clipboard; paste into the box instead.',true);}});
   $('#cl-finish')&&($('#cl-finish').onclick=()=>act(()=>cloudPost('signin/finish',{address:$('#cl-addr').value.trim()}),'cl-msg','Signed in and saved.',true));
   $('#cl-cancel')&&($('#cl-cancel').onclick=()=>act(()=>cloudPost('signin/cancel'),'cl-msg','Cancelled.',true));
-  $('#cl-rsave').onclick=()=>act(()=>cloudPost('rclone',{path:$('#cl-rpath').value.trim()}),'cl-rmsg','Saved.',true);
   document.querySelectorAll('[data-rdel]').forEach(b=>b.onclick=()=>{ if(confirm('Remove this connection? Files in the cloud are not touched.')) act(()=>cloudPost('remotes/delete',{id:b.dataset.rdel}),'cl-msg','Removed.',true);});
   document.querySelectorAll('[data-quota]').forEach(b=>b.onclick=async()=>{const cell=$('#cl-q-'+b.dataset.quota); cell.textContent='…';
     try{const a=await j('/api/v1/cloud/about?remote='+encodeURIComponent(b.dataset.quota)); if(a.error) throw new Error(a.error);
@@ -4271,10 +4273,12 @@ RENDER.cloud=async()=>{
         :`${cloudBytes(a.used)} used of ${a.total?cloudBytes(a.total):'unlimited'}${a.free!=null?' ('+cloudBytes(a.free)+' free)':''}`;}
     catch(e){cell.textContent=e.message;}});
   // browse
+  let browseSeq=0;
   const browse=async()=>{const remote=$('#cl-br-remote').value, path=$('#cl-br-path').value.trim().replace(/^\/+|\/+$/g,'');
     CLOUD_BROWSE={remote,path}; if(!remote) return; $('#cl-br-list').textContent='Loading…';
+    const mine=++browseSeq;
     const d=await j('/api/v1/cloud/browse?remote='+encodeURIComponent(remote)+'&path='+encodeURIComponent(path)).catch(e=>({error:String(e)}));
-    if(!cloudCur(version)) return;
+    if(!cloudCur(version)||mine!==browseSeq) return;   // a newer browse owns the list now
     if(d.error){ $('#cl-br-list').textContent=d.error; return; }
     const isRclone=(remotes.find(r=>r.id===remote)||{}).engine==='rclone';
     $('#cl-br-list').innerHTML=d.entries.length?`<table class="pd-table">${d.entries.map(e=>`<tr><td>${e.is_dir?'📁 <a href="#" data-open="'+esc(e.path)+'">'+esc(e.name)+'</a>':esc(e.name)}</td><td>${e.is_dir?'':cloudBytes(e.size)}</td><td><button class="btn ghost" data-imp="${esc(e.path)}">Import${e.is_dir?' folder':''}</button>${isRclone?` <button class="btn ghost" data-share="${esc(e.path)}">Share link</button>`:''}</td></tr>`).join('')}</table>${d.truncated?'<p class="help">Showing the first 5,000.</p>':''}`:'<p class="help">Empty folder.</p>';

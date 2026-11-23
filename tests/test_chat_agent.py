@@ -131,8 +131,11 @@ def test_key_is_masked_kept_on_blank_and_stripped_from_backups(service, provider
     assert SECRET not in json.dumps(service.safe_settings())
     from romarr.ops import make_backup
     assert SECRET not in json.dumps(make_backup(service.store.settings))
+    # A general settings save never carries the chat agent block: it is dropped,
+    # so a masked echo can neither overwrite nor resurrect the key.
     echoed = service.restore_masked_items({"chat_agent": service.safe_settings()["chat_agent"]})
-    assert echoed["chat_agent"]["api_key"] == SECRET
+    assert "chat_agent" not in echoed
+    assert chat_agent.config(service)["api_key"] == SECRET
     chat_agent.save_config(service, {"clear_api_key": True})
     assert chat_agent.config(service)["api_key"] == ""
 

@@ -43,7 +43,7 @@ def test_the_documented_open_paths_are_the_actual_open_paths(doc, tmp_path):
                       "/api/v1/connect/steam/return",
                       "/oidc/login", "/oidc/callback",
                       "/api/v1/peer/accept", "/api/v1/peer/shelf",
-                      "/api/v1/peer/netplay"}, (
+                      "/api/v1/peer/netplay", "/api/v1/cloud/oauth/callback"}, (
         "the set of unauthenticated routes changed; SECURITY.md lists them")
     for path in actual:
         assert path in doc, f"{path} answers without a credential and is undocumented"
@@ -51,7 +51,7 @@ def test_the_documented_open_paths_are_the_actual_open_paths(doc, tmp_path):
     # long enough that nobody noticed. A number in a security document is a
     # claim like any other.
     spelled = {5: "five", 6: "six", 7: "seven", 8: "eight", 9: "nine",
-               10: "ten", 11: "eleven", 12: "twelve"}[len(actual)]
+               10: "ten", 11: "eleven", 12: "twelve", 13: "thirteen"}[len(actual)]
     assert f"Exactly {spelled} routes answer without a credential" in doc
 
 

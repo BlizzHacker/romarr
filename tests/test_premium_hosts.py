@@ -246,9 +246,10 @@ def test_onedrive_upload_session_gets_no_bearer_token(tmp_path):
     f = tmp_path / "g.zip"
     f.write_bytes(b"x" * 10)
     token = {"access_token": "A", "expires_at": time.time() + 999}
-    s = Session(Resp({"uploadUrl": "https://upload.example/session"}), Resp({}, status=201))
+    s = Session(Resp({"id": "x"}, status=200),                      # ROMs/ exists
+                Resp({"uploadUrl": "https://upload.example/session"}), Resp({}, status=201))
     cloud_native.OneDrive({"client_id": "c"}, token, session=s).upload(f, "ROMs/g.zip")
-    put = s.sent[1]
+    put = s.sent[2]
     assert put[0] == "PUT" and "Authorization" not in put[2]["headers"]
     assert put[2]["headers"]["Content-Range"] == "bytes 0-9/10"
 
@@ -258,3 +259,108 @@ def test_native_paths_refuse_dot_segments():
                                session=Session())
     with pytest.raises(cloud_native.NativeError):
         od.list("a/../b")
+
+
+
+# -- CodeRabbit review fixes ------------------------------------------------------------
+
+
+class Headed(Resp):
+    def __init__(self, status, headers=None, body=None):
+        super().__init__(body, status=status, headers=headers or {})
+
+
+def test_drive_upload_follows_the_acknowledged_range(tmp_path):
+    f = tmp_path / "g.bin"
+    f.write_bytes(b"x" * (cloud_native.CHUNK + 100))
+    s = Session(Headed(308, {"Range": "bytes=0-99"}),           # Drive kept only 100 bytes
+                Headed(308, {"Range": f"bytes=0-{cloud_native.CHUNK - 1}"}),
+                Headed(200))
+    cloud_native._chunked_put(s, "https://up", f, f.stat().st_size, auth=dict, provider="gdrive")
+    ranges = [kw["headers"]["Content-Range"] for _, _, kw in s.sent]
+    assert ranges[1].startswith("bytes 100-")                  # resent from byte 100
+
+
+def test_upload_is_not_success_without_the_providers_final_answer(tmp_path):
+    f = tmp_path / "g.bin"
+    f.write_bytes(b"x" * 10)
+    s = Session(Headed(308, {"Range": "bytes=0-9"}))           # never a 200/201
+    with pytest.raises(cloud_native.NativeError, match="did not confirm"):
+        cloud_native._chunked_put(s, "https://up", f, 10, auth=dict, provider="gdrive")
+
+
+def test_graph_upload_resumes_after_a_lost_response(tmp_path):
+    f = tmp_path / "g.bin"
+    f.write_bytes(b"x" * (cloud_native.CHUNK * 2))
+    size = f.stat().st_size
+
+    class Flaky(Session):
+        def put(self, url, **kw):
+            self.sent.append(("PUT", url, kw))
+            if len(self.sent) == 1:
+                raise cloud_native.requests.ConnectionError("lost")
+            return self.answers.pop(0)
+    s = Flaky(Resp({"nextExpectedRanges": [f"{cloud_native.CHUNK}-"]}),   # session status
+              Resp({}, status=201))
+    cloud_native._chunked_put(s, "https://up", f, size, auth=dict, provider="onedrive")
+    assert s.sent[-1][2]["headers"]["Content-Range"].startswith(f"bytes {cloud_native.CHUNK}-")
+
+
+def test_chunks_fit_both_providers():
+    assert cloud_native.CHUNK % (256 * 1024) == 0 and cloud_native.CHUNK % (320 * 1024) == 0
+
+
+def test_drive_refuses_an_ambiguous_name():
+    token = {"access_token": "A", "expires_at": time.time() + 99}
+    s = Session(Resp({"files": [{"id": "1", "name": "Game.zip"}, {"id": "2", "name": "Game.zip"}]}))
+    drive = cloud_native.GoogleDrive({"client_id": "c"}, token, session=s)
+    with pytest.raises(cloud_native.NativeError, match="two items"):
+        drive._child("root", "Game.zip")
+
+
+def test_onedrive_creates_missing_parent_folders(tmp_path):
+    f = tmp_path / "g.zip"
+    f.write_bytes(b"x" * 10)
+    token = {"access_token": "A", "expires_at": time.time() + 99}
+    s = Session(Resp({}, status=404), Resp({"id": "new"}, status=201),          # ROMs
+                Resp({}, status=404), Resp({"id": "new2"}, status=201),         # ROMs/snes
+                Resp({"uploadUrl": "https://upload.example/s"}), Resp({}, status=201))
+    cloud_native.OneDrive({"client_id": "c"}, token, session=s).upload(f, "ROMs/snes/g.zip")
+    creates = [(m, u) for m, u, _ in s.sent if m == "POST" and u.endswith("/children")]
+    assert len(creates) == 2
+
+
+def test_a_file_host_page_is_not_a_direct_file():
+    direct = Direct()
+    route = HosterRoute(direct=direct)
+    assert not route.add("https://rapidgator.net/file/abc/Game.zip")
+    assert direct.added == []
+
+
+def test_queued_premium_jobs_carry_their_source_link():
+    class SourceDirect(Direct):
+        TAKES_SOURCE = True
+
+        def add(self, url, name="", source=""):
+            self.added.append((url, name, source))
+            return True
+    direct = SourceDirect()
+    route = HosterRoute(direct=direct, premium=[Account()])
+    assert route.add("https://rapidgator.net/file/abc/x.html", name="G")
+    assert direct.added == [("https://dl.rapidgator.net/file", "G", "https://rapidgator.net/file/abc/x.html")]
+
+
+def test_fresh_link_asks_the_account_again():
+    hosters.register_accounts(lambda: [Account()])
+    try:
+        assert hosters.fresh_link("https://rapidgator.net/file/abc/x.html") == "https://dl.rapidgator.net/file"
+        assert hosters.fresh_link("https://example.com/x") == ""
+    finally:
+        hosters.register_accounts(None)
+
+
+def test_multiup_keeps_mirrors_that_are_plain_files():
+    page = '<a href="https://cdn.example/files/game.zip">direct</a>'
+    s = Session(Resp({"error": "success", "hosts": {}}), Resp(text=page))
+    out = multiup_mirrors("https://multiup.io/en/mirror/0123456789abcdef0123456789abcdef/g.zip", session=s)
+    assert out == ["https://cdn.example/files/game.zip"]
