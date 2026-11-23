@@ -44,7 +44,7 @@ public final class MainActivity extends androidx.activity.ComponentActivity {
   toolbar=new LinearLayout(this); toolbar.setGravity(android.view.Gravity.CENTER_VERTICAL);
   toolbar.setPadding(dp(14),dp(6),dp(6),dp(6)); toolbar.setMinimumHeight(dp(60));
   toolbar.setBackgroundColor(android.graphics.Color.rgb(26,29,37));
-  ImageView mark=new ImageView(this);mark.setImageResource(R.drawable.ic_launcher);
+  ImageView mark=new ImageView(this);mark.setImageResource(R.mipmap.ic_launcher);
   mark.setImportantForAccessibility(android.view.View.IMPORTANT_FOR_ACCESSIBILITY_NO);
   toolbar.addView(mark,new LinearLayout.LayoutParams(dp(32),dp(32)));
   LinearLayout identity=new LinearLayout(this);identity.setOrientation(LinearLayout.VERTICAL);
