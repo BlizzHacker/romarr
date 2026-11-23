@@ -107,6 +107,10 @@ CAPTCHAs, access challenges and blocked downloads can stop a fetch. The client r
 
 `GET /api/v1/downloadclient/browser` reports availability and why the client cannot run when a requirement is missing.
 
+## Cloud storage and file-host accounts
+
+Connect Google Drive, OneDrive, Dropbox, MEGA, Box, pCloud, S3/B2/Wasabi/R2 and every other provider rclone supports, or use the built-in Google Drive and OneDrive clients. Jobs back up, mirror or offload library folders, import from a cloud folder or a Google Drive share link, and back up ROMarr's settings; an rclone mount can be a library root. Rapidgator and 1fichier premium accounts fetch those hosts' links, and MultiUp links are split into their mirrors. See [Cloud storage](CLOUD-STORAGE.md).
+
 ## Notifications
 
 ![Notification providers in Settings -> Connections](img/connect.png)

@@ -926,6 +926,7 @@ NAV = [
         ('indexers', 'Indexers', None),
         ('clients', 'Download Clients', None),
         ('libraries', 'Libraries', None),
+        ('cloud', 'Cloud & File Hosts', None),
         ('connections', 'Connections', None),
         ('metadata', 'Metadata', None),
         ('setup', 'Setup Guide', None),
@@ -1337,7 +1338,7 @@ function go(pageSpec){
     calendar:'Release Calendar',manualimport:'Manual Import',
     collections:'Collections \u2014 full sets and 1G1R',
     getstarted:'Get Started',setup:'Setup Guide',reports:'Reports & Help',
-    hub:'ROM Hub — Plugins',emulators:'Emulator Hub',portal:'Library & Devices',assistant:'Chat Agent',agents:'AI Agents (MCP)'};
+    hub:'ROM Hub — Plugins',emulators:'Emulator Hub',portal:'Library & Devices',assistant:'Chat Agent',cloud:'Cloud & File Hosts',agents:'AI Agents (MCP)'};
   $('#top h1').textContent=titles[page]||'ROMarr';
   $('#search').classList.toggle('hide', page !== 'library');
   (RENDER[page]||RENDER.library)();
@@ -4023,6 +4024,194 @@ RENDER.assistant=async()=>{
     box.value=''; chatAppend(esc(text),'chat-user'); chatSend('/api/v1/chat',{message:text},version);};
   $('#chat-send').onclick=submit;
   $('#chat-input').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();submit();}};
+};
+// Cloud & File Hosts (romarr/cloud_storage.py, cloud_jobs.py, premium_hosts.py).
+const CLOUD_GUIDE='https://github.com/BlizzHacker/romarr/blob/main/docs/CLOUD-STORAGE.md';
+let CLOUD_TIMER=null, CLOUD_PROVIDERS=null, CLOUD_BROWSE={remote:'',path:''};
+const cloudCur=v=>activePage==='cloud'&&pageVersion===v;
+const cloudPost=(path,body)=>fetch('/api/v1/cloud/'+path,{method:'POST',headers:{'Content-Type':'application/json'},
+  body:JSON.stringify(body||{})}).then(async r=>{const d=await r.json().catch(()=>({}));
+  if(!r.ok) throw new Error(d.error||('HTTP '+r.status)); return d;});
+const cloudBytes=n=>{if(n==null||n==='') return '—'; n=Number(n); const u=['B','KB','MB','GB','TB','PB'];
+  let i=0; while(n>=1024&&i<u.length-1){n/=1024;i++;} return (i?n.toFixed(1):n)+' '+u[i];};
+const cloudSay=(id,t,bad)=>{const m=$('#'+id); if(m){m.textContent=t; m.style.color=bad?'var(--bad)':'';}};
+const cloudField=(id,label,val,ph,type)=>`<div class="field"><label for="${id}">${label}</label><input id="${id}" type="${type||'text'}" value="${esc(val||'')}" placeholder="${esc(ph||'')}" autocomplete="off"></div>`;
+function cloudProviderForm(p,showAdv){
+  if(!p||!p.options) return '';
+  return p.options.filter(o=>(showAdv||!o.advanced)&&!['client_id','client_secret'].includes(o.name)).map(o=>{
+    const id='cp-'+o.name, ex=(o.examples||[]).filter(e=>e.value!=='');
+    const label=esc(o.name.replace(/_/g,' '))+(o.required?' *':'')+(o.provider?` <span class="help">(${esc(o.provider.slice(0,40))})</span>`:'');
+    if(o.type==='bool') return `<label class="check"><input type="checkbox" data-opt="${esc(o.name)}" id="${id}"${String(o.default)==='true'?' checked':''}> ${label} <span class="help">${esc(o.help)}</span></label>`;
+    const list=ex.length?`<datalist id="${id}-dl">${ex.map(e=>`<option value="${esc(e.value)}">${esc(e.help)}</option>`).join('')}</datalist>`:'';
+    return `<div class="field"><label for="${id}">${label}</label><input id="${id}" data-opt="${esc(o.name)}" type="${o.secret?'password':'text'}" autocomplete="off" placeholder="${esc(o.default||'')}"${ex.length?` list="${id}-dl"`:''}>${list}<div class="help">${esc(o.help)}</div></div>`;
+  }).join('');
+}
+function cloudParams(){const out={};
+  document.querySelectorAll('#cloud-opts [data-opt]').forEach(el=>{
+    const v=el.type==='checkbox'?(el.checked?'true':'false'):el.value.trim();
+    if(v!=='') out[el.dataset.opt]=v;}); return out;}
+RENDER.cloud=async()=>{
+  const version=pageVersion;
+  if(CLOUD_TIMER){clearInterval(CLOUD_TIMER);CLOUD_TIMER=null;}
+  $('#page').innerHTML='<div class="empty">Loading cloud storage…</div>';
+  let st;
+  try{ st=await j('/api/v1/cloud'); if(st.error) throw new Error(st.error); }
+  catch(e){ if(cloudCur(version)) $('#page').innerHTML=`<div class="empty">Could not load cloud storage: ${esc(e.message)}</div>`; return; }
+  if(!cloudCur(version)) return;
+  if(!CLOUD_PROVIDERS&&st.rclone.available){ const p=await j('/api/v1/cloud/providers').catch(()=>({rclone:[]})); CLOUD_PROVIDERS=p.rclone||[]; }
+  if(!cloudCur(version)) return;
+  const provs=CLOUD_PROVIDERS||[];
+  const remotes=st.remotes||[];
+  const ropt=(sel,filter)=>remotes.filter(filter||(()=>true)).map(r=>`<option value="${esc(r.id)}"${r.id===sel?' selected':''}>${esc(r.label)} (${esc(r.type)})</option>`).join('');
+  const popt=sel=>'<option value="">Detect from the file</option>'+PLATFORMS.map(p=>`<option value="${esc(p.slug)}"${p.slug===sel?' selected':''}>${esc(p.name)}</option>`).join('');
+  const kindOpt=Object.entries(st.kinds||{}).map(([k,l])=>`<option value="${k}">${esc(l)}</option>`).join('');
+  const provOpt=provs.map(p=>`<option value="r:${esc(p.type)}">${esc(p.description||p.type)}${p.oauth?' — browser sign-in':''}</option>`).join('')
+    +Object.entries(st.native_types||{}).map(([k,l])=>`<option value="n:${k}">${esc(l)}</option>`).join('');
+  const runRow=r=>`<tr><td>${esc(r.label)}</td><td><span class="pill">${esc(r.state)}</span></td><td>${r.files||0} file(s), ${cloudBytes(r.bytes)}${r.total_bytes?' of '+cloudBytes(r.total_bytes):''}</td><td>${esc(r.started)}</td><td class="help">${esc(r.message)}</td></tr>`;
+  $('#page').innerHTML=`
+  <div class="card"><div class="row" style="justify-content:space-between"><b>Cloud &amp; File Hosts</b><a href="${CLOUD_GUIDE}" target="_blank" rel="noopener">Guide</a></div>
+    <p class="help">Connect Google Drive, OneDrive, Dropbox, MEGA, Box, pCloud, S3/B2/Wasabi and dozens more. Back up or offload library folders, import games from a cloud folder or a Google Drive share link, back up ROMarr's settings, or mount a cloud folder as a library root. Premium Rapidgator and 1fichier accounts are used for file-host downloads; MultiUp links are split into their mirrors.</p>
+    <div class="row" style="gap:16px;flex-wrap:wrap">
+      <div><b>rclone</b> ${st.rclone.available?`<span class="pill">${esc(st.rclone.version||'found')}</span> <span class="help">${esc(st.rclone.path)}</span>`:'<span class="pill" style="background:var(--bad);color:#2a0b0b">not installed</span> <span class="help">Built-in Google Drive and OneDrive still work. Install rclone for every other provider (see the guide).</span>'}</div>
+      <div><b>Mounts</b> ${st.fuse.available?'<span class="pill">FUSE available</span>':`<span class="pill">unavailable</span> <span class="help">${esc(st.fuse.reason)}</span>`}</div>
+    </div>
+    <details><summary class="help">rclone location</summary><div class="row" style="gap:8px"><input id="cl-rpath" type="text" value="${esc(st.rclone.configured_path)}" placeholder="Found on PATH when blank" style="flex:1"><button class="btn ghost" id="cl-rsave">Save</button></div><div id="cl-rmsg" class="testline"></div></details>
+  </div>
+  <div class="card"><b>Connections</b>
+    ${remotes.length?`<table class="pd-table"><tr><th>Name</th><th>Provider</th><th>Engine</th><th>Space</th><th></th></tr>${remotes.map(r=>`<tr><td>${esc(r.label)}<div class="help">${esc(r.id)}</div></td><td>${esc(r.type)}</td><td>${esc(r.engine)}</td><td id="cl-q-${esc(r.id)}"><button class="btn ghost" data-quota="${esc(r.id)}">Check</button></td><td><button class="btn ghost" data-browse="${esc(r.id)}">Browse</button> <button class="btn danger" data-rdel="${esc(r.id)}">Remove</button></td></tr>`).join('')}</table>`:'<p class="help">No connections yet.</p>'}
+    <details ${remotes.length?'':'open'}><summary><b>Add a connection</b></summary>
+      <div class="field"><label for="cl-prov">Provider</label><select id="cl-prov">${provOpt}</select></div>
+      <div class="row" style="gap:10px;flex-wrap:wrap">${cloudField('cl-name','Name (letters, digits, - and _)','','gdrive')}${cloudField('cl-label','Label','','My Google Drive')}</div>
+      <div id="cl-own" class="hide"><label class="check"><input type="checkbox" id="cl-ownapp"> Use my own OAuth app (saved below) instead of rclone's shared one</label></div>
+      <div id="cl-redir" class="hide"><div class="field"><label for="cl-redirect">After approving, send the browser to</label><select id="cl-redirect"><option value="paste">127.0.0.1 (I paste the address back; works anywhere)</option><option value="callback">This ROMarr's callback URL</option></select></div></div>
+      <div id="cloud-opts"></div>
+      <label class="check" id="cl-advwrap"><input type="checkbox" id="cl-adv"> Show advanced options</label>
+      <div class="row" style="gap:8px"><button class="btn" id="cl-add">Sign in</button></div>
+      <div id="cl-paste" class="hide"><p class="help">A sign-in page opened in a new tab. Approve access there. Your browser then lands on a page starting <code>http://127.0.0.1:53682/</code> or <code>http://localhost:53682/</code> that will not load: that is expected. Copy that whole address from the address bar and paste it here.</p>
+        <div class="row" style="gap:8px"><input id="cl-addr" type="text" placeholder="${esc(st.paste_redirect)}?state=…&amp;code=…" style="flex:1"><button class="btn" id="cl-finish">Finish sign-in</button><button class="btn ghost" id="cl-cancel">Cancel</button></div></div>
+      <div id="cl-msg" class="testline"></div>
+    </details>
+  </div>
+  <div class="card"><b>Browse and import</b>
+    <div class="row" style="gap:8px;flex-wrap:wrap"><select id="cl-br-remote">${ropt(CLOUD_BROWSE.remote)}</select><input id="cl-br-path" type="text" value="${esc(CLOUD_BROWSE.path)}" placeholder="folder/sub-folder" style="flex:1"><button class="btn ghost" id="cl-br-go">Open</button><button class="btn ghost" id="cl-br-up">Up</button></div>
+    <div class="field"><label for="cl-br-plat">Import into platform</label><select id="cl-br-plat">${popt('')}</select></div>
+    <div id="cl-br-list" class="help">Choose a connection and press Open.</div>
+    <div class="row" style="gap:8px;margin-top:10px"><input id="cl-link" type="text" placeholder="https://drive.google.com/file/d/… or /drive/folders/…" style="flex:1"><button class="btn ghost" id="cl-link-go">Import share link</button></div>
+    <div id="cl-br-msg" class="testline"></div>
+  </div>
+  <div class="card"><b>Jobs</b>
+    ${(st.jobs||[]).length?`<table class="pd-table"><tr><th>Job</th><th>Kind</th><th>Connection</th><th>Every</th><th>Last run</th><th></th></tr>${st.jobs.map(x=>`<tr><td>${esc(x.name)}<div class="help">${esc(x.local_path||'')}${x.local_path?' → ':''}${esc(x.remote)}:${esc(x.remote_path||'/')}</div></td><td>${esc(x.kind)}</td><td>${esc(x.remote)}</td><td>${x.interval_hours?esc(x.interval_hours)+' h':'manual'}</td><td class="help">${esc(x.last_result||'never')}</td><td><button class="btn ghost" data-jrun="${esc(x.id)}">Run now</button> <button class="btn danger" data-jdel="${esc(x.id)}">Delete</button></td></tr>`).join('')}</table>`:'<p class="help">No jobs yet.</p>'}
+    <details><summary><b>Add a job</b></summary>
+      <div class="row" style="gap:10px;flex-wrap:wrap"><div class="field"><label for="cj-kind">Kind</label><select id="cj-kind">${kindOpt}</select></div>${cloudField('cj-name','Name','','Back up SNES')}<div class="field"><label for="cj-remote">Connection</label><select id="cj-remote">${ropt('')}</select></div></div>
+      <div class="row" style="gap:10px;flex-wrap:wrap">${cloudField('cj-rpath','Cloud folder','','ROMarr/snes')}<span id="cj-localw">${cloudField('cj-local','Local folder','','/library/roms/snes')}</span><span id="cj-platw" class="hide"><div class="field"><label for="cj-plat">Platform</label><select id="cj-plat">${popt('')}</select></div></span>${cloudField('cj-hours','Run every (hours, 0 = manual)','0','24','number')}<span id="cj-keepw" class="hide">${cloudField('cj-keep','Keep newest','14','14','number')}</span></div>
+      <label class="check hide" id="cj-confw"><input type="checkbox" id="cj-confirm"> I understand offload deletes each local file after it is uploaded and checked</label>
+      <button class="btn" id="cj-save">Save job</button><div id="cj-msg" class="testline"></div>
+    </details>
+    <div id="cl-runs">${(st.runs||[]).length?`<table class="pd-table"><tr><th>Run</th><th>State</th><th>Progress</th><th>Started</th><th>Result</th></tr>${st.runs.map(runRow).join('')}</table>`:''}</div>
+  </div>
+  <div class="card"><b>Mounts</b> <span class="help">An rclone mount makes a cloud folder a local folder, usable as a library root (Settings → Libraries).</span>
+    ${(st.mounts||[]).length?`<table class="pd-table"><tr><th>Folder</th><th>Cloud</th><th>Cache</th><th>State</th><th></th></tr>${st.mounts.map(m=>`<tr><td>${esc(m.mount_point)}</td><td>${esc(m.remote)}:${esc(m.remote_path||'/')}</td><td>${esc(m.cache_mode)}</td><td>${(st.mount_states||{})[m.id]?'<span class="pill">mounted</span>':'not mounted'}</td><td><button class="btn ghost" data-mon="${esc(m.id)}">${(st.mount_states||{})[m.id]?'Unmount':'Mount'}</button> <button class="btn danger" data-mdel="${esc(m.id)}">Delete</button></td></tr>`).join('')}</table>`:''}
+    <details><summary><b>Add a mount</b></summary>
+      <div class="row" style="gap:10px;flex-wrap:wrap"><div class="field"><label for="cm-remote">Connection</label><select id="cm-remote">${ropt('',r=>r.engine==='rclone')}</select></div>${cloudField('cm-rpath','Cloud folder','','ROMs')}${cloudField('cm-point','Mount folder (empty)','','/mnt/cloud-roms')}<div class="field"><label for="cm-cache">Cache</label><select id="cm-cache"><option>full</option><option>writes</option><option>minimal</option><option>off</option></select></div>${cloudField('cm-max','Cache limit (GB)','10','10','number')}</div>
+      <label class="check"><input type="checkbox" id="cm-auto" checked> Mount when ROMarr starts</label> <label class="check"><input type="checkbox" id="cm-other"> Let other users (RomM, Plex) read it (needs user_allow_other in /etc/fuse.conf)</label>
+      <button class="btn" id="cm-save">Save mount</button><div id="cm-msg" class="testline"></div>
+    </details>
+  </div>
+  <div class="card"><b>Your own OAuth apps</b> <span class="help">Optional for rclone; required for the built-in Google Drive and OneDrive. Register the paste-back address (Google: <code>${esc(st.paste_redirects.gdrive)}</code>, Microsoft: <code>${esc(st.paste_redirects.onedrive)}</code>) and, for the direct return, <code>${esc(location.origin)}/api/v1/cloud/oauth/callback</code></span>
+    ${['gdrive','onedrive'].map(p=>`<div class="row" style="gap:10px;flex-wrap:wrap;align-items:flex-end"><b style="min-width:110px">${p==='gdrive'?'Google':'Microsoft'}</b>${cloudField('ca-id-'+p,'Client id',st.apps[p].client_id,'')}${cloudField('ca-sec-'+p,'Client secret','',st.apps[p].secret_set?'Saved — leave blank to keep it':(p==='onedrive'?'Not needed for a public client':''),'password')}<button class="btn ghost" data-app="${p}">Save</button></div>`).join('')}
+    <div id="ca-msg" class="testline"></div>
+  </div>
+  <div class="card"><b>File-host accounts</b> <span class="help">Used when a release links to the host. Debrid services are set up under Download Clients.</span>
+    <div class="row" style="gap:10px;flex-wrap:wrap;align-items:flex-end"><b style="min-width:110px">Rapidgator ${st.hosts.rapidgator.set?'<span class="pill">saved</span>':''}</b>${cloudField('ch-rg-login','E-mail',st.hosts.rapidgator.login,'')}${cloudField('ch-rg-pass','Password','',st.hosts.rapidgator.set?'Saved — leave blank to keep it':'','password')}${cloudField('ch-rg-code','2FA code (if enabled)','','')}<button class="btn ghost" id="ch-rg-save">Save &amp; test</button>${st.hosts.rapidgator.set?'<button class="btn danger" data-hdel="rapidgator">Remove</button>':''}</div>
+    <div class="row" style="gap:10px;flex-wrap:wrap;align-items:flex-end"><b style="min-width:110px">1fichier ${st.hosts['1fichier'].set?'<span class="pill">saved</span>':''}</b>${cloudField('ch-1f-key','API key','',st.hosts['1fichier'].set?'Saved — leave blank to keep it':'Premium accounts: My account → Parameters','password')}<button class="btn ghost" id="ch-1f-save">Save &amp; test</button>${st.hosts['1fichier'].set?'<button class="btn danger" data-hdel="1fichier">Remove</button>':''}</div>
+    <p class="help">MultiUp links need no account: ROMarr reads the mirrors behind each link and tries them in turn.</p>
+    <div id="ch-msg" class="testline"></div>
+  </div>`;
+  const reload=()=>{ if(cloudCur(version)) go('cloud'); };
+  const act=async(fn,msgId,okText,thenReload)=>{try{const r=await fn(); if(!cloudCur(version)) return r; cloudSay(msgId,r&&r.warning?r.warning:(okText||'Done.')); if(thenReload) setTimeout(reload,600); return r;}
+    catch(e){ if(cloudCur(version)) cloudSay(msgId,e.message,true); }};
+  // provider form
+  const pick=()=>{const v=$('#cl-prov').value||''; const [eng,type]=v.split(':');
+    const p=eng==='r'?provs.find(x=>x.type===type):null;
+    $('#cloud-opts').innerHTML=eng==='r'?cloudProviderForm(p,$('#cl-adv').checked):'';
+    $('#cl-advwrap').classList.toggle('hide',eng!=='r');
+    $('#cl-own').classList.toggle('hide',!(eng==='r'&&(type==='drive'||type==='onedrive')));
+    $('#cl-redir').classList.toggle('hide',eng!=='n');
+    $('#cl-add').textContent=(eng==='n'||(p&&p.oauth))?'Sign in':'Save connection';
+    if(!$('#cl-name').value) $('#cl-name').placeholder=(type||'cloud').replace(/[^A-Za-z0-9_-]/g,'');};
+  if($('#cl-prov')){ $('#cl-prov').onchange=pick; $('#cl-adv').onchange=pick; pick(); }
+  $('#cl-add')&&($('#cl-add').onclick=async()=>{const [eng,type]=($('#cl-prov').value||'').split(':');
+    const p=eng==='r'?provs.find(x=>x.type===type):null;
+    const name=$('#cl-name').value.trim()||$('#cl-name').placeholder, label=$('#cl-label').value.trim();
+    const params=cloudParams();
+    // A Drive service account or a Box JWT config signs in without a browser.
+    if(eng==='r'&&p&&(!p.oauth||params.service_account_file||params.service_account_credentials||params.box_config_file)){
+      return act(()=>cloudPost('remotes',{name,label,type,params}),'cl-msg','Connected.',true); }
+    const tab=window.open('about:blank','_blank');
+    try{const r=await cloudPost('signin/start',{engine:eng==='n'?'native':'rclone',type,name,label,params,
+        use_own_app:$('#cl-ownapp').checked,redirect:$('#cl-redirect').value,base_url:location.origin});
+      if(tab) tab.location.href=r.url; else window.open(r.url,'_blank');
+      if(r.mode==='paste'){ $('#cl-paste').classList.remove('hide'); cloudSay('cl-msg','Waiting for you to approve and paste the address…'); }
+      else cloudSay('cl-msg','Approve in the new tab; it comes back here when done.');
+    }catch(e){ if(tab) tab.close(); cloudSay('cl-msg',e.message,true); }});
+  $('#cl-finish')&&($('#cl-finish').onclick=()=>act(()=>cloudPost('signin/finish',{address:$('#cl-addr').value.trim()}),'cl-msg','Signed in and saved.',true));
+  $('#cl-cancel')&&($('#cl-cancel').onclick=()=>act(()=>cloudPost('signin/cancel'),'cl-msg','Cancelled.',true));
+  $('#cl-rsave').onclick=()=>act(()=>cloudPost('rclone',{path:$('#cl-rpath').value.trim()}),'cl-rmsg','Saved.',true);
+  document.querySelectorAll('[data-rdel]').forEach(b=>b.onclick=()=>{ if(confirm('Remove this connection? Files in the cloud are not touched.')) act(()=>cloudPost('remotes/delete',{id:b.dataset.rdel}),'cl-msg','Removed.',true);});
+  document.querySelectorAll('[data-quota]').forEach(b=>b.onclick=async()=>{const cell=$('#cl-q-'+b.dataset.quota); cell.textContent='…';
+    try{const a=await j('/api/v1/cloud/about?remote='+encodeURIComponent(b.dataset.quota)); if(a.error) throw new Error(a.error);
+      cell.textContent=(a.used==null&&a.total==null&&a.free==null)?'Not reported by this provider'
+        :`${cloudBytes(a.used)} used of ${a.total?cloudBytes(a.total):'unlimited'}${a.free!=null?' ('+cloudBytes(a.free)+' free)':''}`;}
+    catch(e){cell.textContent=e.message;}});
+  // browse
+  const browse=async()=>{const remote=$('#cl-br-remote').value, path=$('#cl-br-path').value.trim().replace(/^\/+|\/+$/g,'');
+    CLOUD_BROWSE={remote,path}; if(!remote) return; $('#cl-br-list').textContent='Loading…';
+    const d=await j('/api/v1/cloud/browse?remote='+encodeURIComponent(remote)+'&path='+encodeURIComponent(path)).catch(e=>({error:String(e)}));
+    if(!cloudCur(version)) return;
+    if(d.error){ $('#cl-br-list').textContent=d.error; return; }
+    const isRclone=(remotes.find(r=>r.id===remote)||{}).engine==='rclone';
+    $('#cl-br-list').innerHTML=d.entries.length?`<table class="pd-table">${d.entries.map(e=>`<tr><td>${e.is_dir?'📁 <a href="#" data-open="'+esc(e.path)+'">'+esc(e.name)+'</a>':esc(e.name)}</td><td>${e.is_dir?'':cloudBytes(e.size)}</td><td><button class="btn ghost" data-imp="${esc(e.path)}">Import${e.is_dir?' folder':''}</button>${isRclone?` <button class="btn ghost" data-share="${esc(e.path)}">Share link</button>`:''}</td></tr>`).join('')}</table>${d.truncated?'<p class="help">Showing the first 5,000.</p>':''}`:'<p class="help">Empty folder.</p>';
+    document.querySelectorAll('[data-open]').forEach(a=>a.onclick=ev=>{ev.preventDefault(); $('#cl-br-path').value=a.dataset.open; browse();});
+    document.querySelectorAll('[data-imp]').forEach(b=>b.onclick=()=>act(()=>cloudPost('import',{remote,path:b.dataset.imp,platform:$('#cl-br-plat').value}),'cl-br-msg','Import started; see Jobs → runs below.',true));
+    document.querySelectorAll('[data-share]').forEach(b=>b.onclick=async()=>{const r=await act(()=>cloudPost('link',{remote,path:b.dataset.share}),'cl-br-msg','');
+      if(r&&r.url) cloudSay('cl-br-msg','Share link: '+r.url);});};
+  $('#cl-br-go').onclick=browse;
+  document.querySelectorAll('[data-browse]').forEach(b=>b.onclick=()=>{$('#cl-br-remote').value=b.dataset.browse;
+    $('#cl-br-path').value=''; browse(); $('#cl-br-remote').scrollIntoView({behavior:'smooth',block:'center'});});
+  $('#cl-br-up').onclick=()=>{const p=$('#cl-br-path').value.replace(/\/+$/,''); $('#cl-br-path').value=p.includes('/')?p.slice(0,p.lastIndexOf('/')):''; browse();};
+  if(CLOUD_BROWSE.remote&&remotes.some(r=>r.id===CLOUD_BROWSE.remote)) browse();
+  $('#cl-link-go').onclick=()=>act(()=>cloudPost('import',{remote:$('#cl-br-remote').value,link:$('#cl-link').value.trim(),platform:$('#cl-br-plat').value}),'cl-br-msg','Import started; see Jobs → runs below.',true);
+  // jobs
+  const kind=()=>{const k=$('#cj-kind').value; $('#cj-localw').classList.toggle('hide',k==='import'||k==='settings');
+    $('#cj-platw').classList.toggle('hide',k!=='import'); $('#cj-keepw').classList.toggle('hide',k!=='settings');
+    $('#cj-confw').classList.toggle('hide',k!=='offload');};
+  $('#cj-kind').onchange=kind; kind();
+  $('#cj-save').onclick=()=>act(()=>cloudPost('jobs',{kind:$('#cj-kind').value,name:$('#cj-name').value.trim(),remote:$('#cj-remote').value,
+    remote_path:$('#cj-rpath').value.trim(),local_path:$('#cj-local').value.trim(),platform:$('#cj-plat').value,
+    interval_hours:Number($('#cj-hours').value||0),keep:Number($('#cj-keep').value||14),confirm:$('#cj-confirm').checked}),'cj-msg','Saved.',true);
+  document.querySelectorAll('[data-jrun]').forEach(b=>b.onclick=()=>act(()=>cloudPost('jobs/run',{id:b.dataset.jrun}),'cj-msg','Started.',true));
+  document.querySelectorAll('[data-jdel]').forEach(b=>b.onclick=()=>{ if(confirm('Delete this job? Nothing in the cloud or the library is touched.')) act(()=>cloudPost('jobs/delete',{id:b.dataset.jdel}),'cj-msg','Deleted.',true);});
+  // mounts
+  $('#cm-save').onclick=()=>act(()=>cloudPost('mounts',{remote:$('#cm-remote').value,remote_path:$('#cm-rpath').value.trim(),mount_point:$('#cm-point').value.trim(),
+    cache_mode:$('#cm-cache').value,cache_max_gb:Number($('#cm-max').value||10),auto:$('#cm-auto').checked,allow_other:$('#cm-other').checked}),'cm-msg','Saved.',true);
+  document.querySelectorAll('[data-mon]').forEach(b=>b.onclick=()=>{const on=(st.mount_states||{})[b.dataset.mon];
+    act(()=>cloudPost(on?'mounts/unmount':'mounts/mount',{id:b.dataset.mon}),'cm-msg',on?'Unmounted.':'Mounted.',true);});
+  document.querySelectorAll('[data-mdel]').forEach(b=>b.onclick=()=>{ if(confirm('Delete this mount? It is unmounted first; cloud files are not touched.')) act(()=>cloudPost('mounts/delete',{id:b.dataset.mdel}),'cm-msg','Deleted.',true);});
+  // apps and hosts
+  document.querySelectorAll('[data-app]').forEach(b=>b.onclick=()=>{const p=b.dataset.app;
+    act(()=>cloudPost('apps',{provider:p,client_id:$('#ca-id-'+p).value.trim(),client_secret:$('#ca-sec-'+p).value}),'ca-msg','Saved.',true);});
+  $('#ch-rg-save').onclick=async()=>{const r=await act(()=>cloudPost('hosts',{kind:'rapidgator',login:$('#ch-rg-login').value.trim(),password:$('#ch-rg-pass').value,code:$('#ch-rg-code').value.trim()}),'ch-msg','');
+    if(r) {cloudSay('ch-msg',`Rapidgator signed in${r.premium?' (premium)':' — the account is not premium, so downloads will be refused'}.`); setTimeout(reload,1500);}};
+  $('#ch-1f-save').onclick=async()=>{const r=await act(()=>cloudPost('hosts',{kind:'1fichier',api_key:$('#ch-1f-key').value.trim()}),'ch-msg','');
+    if(r) {cloudSay('ch-msg',`1fichier key accepted${r.premium?' (premium)':' — downloads need a premium account'}.`); setTimeout(reload,1500);}};
+  document.querySelectorAll('[data-hdel]').forEach(b=>b.onclick=()=>{ if(confirm('Remove this account from ROMarr?')) act(()=>cloudPost('hosts/delete',{kind:b.dataset.hdel}),'ch-msg','Removed.',true);});
+  // live run progress
+  if((st.runs||[]).some(r=>r.state==='running')){
+    CLOUD_TIMER=setInterval(async()=>{ if(!cloudCur(version)){clearInterval(CLOUD_TIMER);CLOUD_TIMER=null;return;}
+      const d=await j('/api/v1/cloud/runs').catch(()=>null); if(!d||!cloudCur(version)) return;
+      $('#cl-runs').innerHTML=`<table class="pd-table"><tr><th>Run</th><th>State</th><th>Progress</th><th>Started</th><th>Result</th></tr>${d.runs.map(runRow).join('')}</table>`;
+      if(!d.runs.some(r=>r.state==='running')){clearInterval(CLOUD_TIMER);CLOUD_TIMER=null;}},3000);
+  }
 };
 RENDER.agents=async()=>{
   const version=pageVersion;

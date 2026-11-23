@@ -52,6 +52,7 @@ Forks and code reuse are welcome; independent projects should use their own bran
 | Report a suspicious or unwanted file | **Activity → Reports & Help** | A relative library path; available scanners record evidence, quarantine is your choice. [How reporting works](docs/REPORTING.md). |
 | Connect an AI assistant | **Hub → Library Shell → AI agents (MCP)** | Your server URL and API key. [Claude, Codex, Hermes and Antigravity setup](docs/MCP.md). |
 | Chat with your own model about your library | **Hub → Chat Agent** | Ollama, an OpenAI-compatible endpoint or an Anthropic key. Searches, explains refusals and finds set gaps; asks before grabbing or changing Wanted. [How it works](docs/CHAT-AGENT.md). |
+| Back up, offload, mount or import from cloud storage | **Settings → Cloud & File Hosts** | Google Drive, OneDrive, Dropbox, MEGA, S3 and 70+ more through rclone, or the built-in Google Drive and OneDrive. Also Rapidgator and 1fichier premium accounts and MultiUp mirrors for downloads. [Guide](docs/CLOUD-STORAGE.md). |
 | Reclaim space taken by exact duplicates | **Stats → Audit** | A local library; review the preview before moving duplicates to quarantine. Restore is available. |
 | Add another game source | **Hub → Plugins** | ROM Hub, included in the Windows app and amd64/arm64 Docker images. [Details](docs/PLUGINS.md). |
 | Adopt an existing RomM collection | **Settings → Library & Hub** | Point ROMarr at RomM's roms directory, keep DAT verification automatic, and pair with [Argosy Launcher](docs/ANDROID.md#argosy-launcher-and-frontend-integration). |
