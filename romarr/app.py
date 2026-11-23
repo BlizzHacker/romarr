@@ -7095,7 +7095,9 @@ class ROMarr:
                                queue_item=None) -> None:
         """Compress an imported Switch .nsp/.xci to .nsz/.xcz, in the background (#278).
 
-        Off unless `compress_switch_imports` is set. Compressatorium does the
+        Off unless `compress_switch_imports` is set, and an .xci only with
+        `compress_switch_xci` as well, because most XCI round-trips fail.
+        Compressatorium does the
         work and removes the original only after the compressed file passes
         its round-trip, so the import itself is never slowed or failed by
         this. One worker runs the jobs in order, each bounded by
@@ -7108,6 +7110,9 @@ class ROMarr:
             return
         path = Path(destination)
         if not switch_compress.wants_compression(path):
+            return
+        if (path.suffix.lower() == ".xci"
+                and not self.store.settings.get("compress_switch_xci")):
             return
         compression = str(self.store.settings.get("nsz_compression")
                           or switch_compress.DEFAULT_COMPRESSION)

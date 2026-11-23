@@ -17,7 +17,9 @@ compressed file.
 
 Compressatorium rebuilds an XCI from an XCZ that is rarely byte for byte the
 dump, so its round-trip refuses most XCI deletions and those jobs end failed
-with the original kept. The outcome says so in the service's words.
+with the original kept. The outcome says so in the service's words. That is
+why the app compresses an .xci only under its own `compress_switch_xci`
+setting, which the UI warns about when it is ticked.
 """
 
 from __future__ import annotations

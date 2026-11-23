@@ -336,10 +336,14 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "rename_on_import": True,
     "prefer_hardlinks": False,
     "switch_attach_extras": True,   # file Switch updates/DLC in <game>/update|dlc
-    # Compress each imported Switch .nsp/.xci to .nsz/.xcz through the
+    # Compress each imported Switch .nsp to .nsz through the
     # configured Compressatorium (see switch_compress). Off by default: it
     # needs the service and the operator's prod.keys mounted into it.
     "compress_switch_imports": False,
+    # Also compress .xci to .xcz. Separate and off by default: Compressatorium
+    # rarely rebuilds an XCI byte for byte, so most XCI jobs fail their
+    # round-trip and keep the original.
+    "compress_switch_xci": False,
     # "<solid|block>:<level>", level 1-22. An .xci is always sent as block.
     "nsz_compression": "block:18",
     "game_package_folders": True,   # RomM libraries: base/update/DLC in <Title>/, update/, dlc/

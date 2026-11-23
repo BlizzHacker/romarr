@@ -334,6 +334,33 @@ def test_the_setting_off_means_no_job(tmp_path, monkeypatch):
     assert s.store.history(kind="compress") == []
 
 
+def test_an_xci_waits_for_its_own_setting(tmp_path, monkeypatch):
+    s, calls = _svc(tmp_path, monkeypatch)
+    assert s.store.settings["compress_switch_xci"] is False
+    xci = _nsp(s.library, "Game.xci")
+    nsp = _nsp(s.library)
+    s._compress_after_import(xci, "switch", "Game")
+    s._compress_after_import(nsp, "switch", "Game")
+    assert [path for path, _ in calls] == [nsp]
+    s.store.update_settings({"compress_switch_xci": True})
+    s._compress_after_import(xci, "switch", "Game")
+    assert [path for path, _ in calls] == [nsp, xci]
+
+
+def test_xci_compression_alone_does_nothing(tmp_path, monkeypatch):
+    s, calls = _svc(tmp_path, monkeypatch, enabled=False)
+    s.store.update_settings({"compress_switch_xci": True})
+    s._compress_after_import(_nsp(s.library, "Game.xci"), "switch", "Game")
+    assert calls == []
+
+
+def test_the_settings_page_warns_when_xci_is_ticked():
+    from romarr import ui
+    source = ui.page()
+    assert "compress_switch_xci" in source
+    assert "XCI_WARNING" in source and "rarely rebuilds an XCI" in source
+
+
 def test_only_switch_nsp_and_xci_imports_are_compressed(tmp_path, monkeypatch):
     s, calls = _svc(tmp_path, monkeypatch)
     s._compress_after_import(_nsp(s.library), "3ds", "Game")
