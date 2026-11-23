@@ -263,3 +263,35 @@ def test_switching_to_a_dat_without_a_known_platform_clears_the_old_one():
   assert.equal($('#cplat').value,'snes');
 })().catch(error=>{console.error(error);process.exitCode=1;});
 """)
+
+
+def test_the_atari_8_bit_family_dat_maps_to_atari_8_bit():
+    assert platform_for_dat("Atari - 8-bit Family") == "atari8bit"
+
+
+def test_non_game_umd_dats_get_no_default_platform():
+    assert platform_for_dat("Sony - PlayStation Portable (UMD Video)") == ""
+    assert platform_for_dat("Sony - PlayStation Portable (UMD Music)") == ""
+    assert platform_for_dat("Sony - PlayStation Portable (PSN)") == "psp"
+    # The operator's own mapping still wins.
+    assert platform_for_dat("Sony - PlayStation Portable (UMD Video)",
+                            {"Sony - PlayStation Portable (UMD Video)": "psp"}) == "psp"
+
+
+def test_every_live_style_dat_name_maps_where_romarr_has_the_platform():
+    """Names as No-Intro and Redump publish them, against the platform table."""
+    expected = {
+        "Atari - 2600": "atari2600", "Atari - 8-bit Family": "atari8bit",
+        "Bandai - WonderSwan Color": "wonderswan-color",
+        "Commodore - Amiga": "amiga", "GCE - Vectrex": "vectrex",
+        "Magnavox - Odyssey2": "odyssey-2-slash-videopac-g7000",
+        "NEC - PC Engine - TurboGrafx 16": "turbografx16--1",
+        "NEC - PC Engine CD - TurboGrafx-CD": "turbografx-16-slash-pc-engine-cd",
+        "Nintendo - Family Computer Disk System": "fds",
+        "Nintendo - New Nintendo 3DS (Digital)": "3ds",
+        "Sega - Mega-CD - Sega CD": "segacd",
+        "The 3DO Company - 3DO": "3do",
+        # Systems ROMarr has no platform for stay blank rather than guessing.
+        "Nintendo - Pokemon Mini": "", "Sega - Naomi": "", "NEC - PC-98": "",
+    }
+    assert {name: platform_for_dat(name) for name in expected} == expected

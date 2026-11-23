@@ -215,7 +215,7 @@ Also note that a request that **finds** a release goes to the **Queue**, not to 
 
 ### The platform did not fill in by itself
 
-ROMarr matches the DAT name to a platform, first the whole name, then without the vendor ("Nintendo - Game Boy Advance" becomes "Game Boy Advance"). Unusual DAT names may not match. Pick the platform yourself. To make it stick, add a line to **Settings → Media Management → Trusted DAT catalog → platform mapping** (`Exact DAT name = platform-slug`).
+ROMarr matches the DAT name to a platform, first the whole name, then without the vendor ("Nintendo - Game Boy Advance" becomes "Game Boy Advance"). Unusual DAT names may not match. Pick the platform yourself. Two kinds of DAT stay blank on purpose: systems ROMarr has no platform for yet (for example Pokemon Mini, Satellaview, Sega Naomi or NEC PC-98), which Collections cannot request because there is nowhere to file them; and DATs of non-game media such as "PlayStation Portable (UMD Video)". To make it stick, add a line to **Settings → Media Management → Trusted DAT catalog → platform mapping** (`Exact DAT name = platform-slug`).
 
 ### Do I have to keep the page open?
 
