@@ -608,6 +608,10 @@ class Metadata:
                 return GameInfo(**{**info.__dict__, "matched_by": how})
         return GameInfo(matched_by=how)
 
+    def can_identify(self) -> bool:
+        """Whether any enabled provider can name a game (not artwork-only)."""
+        return any(not spec.get("artwork") for _cfg, spec in self._enabled())
+
     def artwork(self, title: str) -> str:
         """A cover for `title` from the artwork-only providers, or ""."""
         for cfg, spec in self._enabled():

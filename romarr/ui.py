@@ -6962,6 +6962,12 @@ RENDER.metadata=async()=>{
     +'<p class="help">A live lookup against whatever you have configured.</p>'
     +'<div class="field"><label>Filename</label>'
     +'<input id="mfn" value="'+esc(metadataFilename)+'"></div>'
+    +'<details><summary class="help">Look up by a verified dump\'s hashes (ScreenScraper)</summary>'
+    +'<div class="row" style="gap:8px;flex-wrap:wrap">'
+    +'<div class="field"><label>CRC</label><input id="mcrc" placeholder="8 hex"></div>'
+    +'<div class="field"><label>MD5</label><input id="mmd5" placeholder="32 hex"></div>'
+    +'<div class="field"><label>SHA-1</label><input id="msha1" placeholder="40 hex"></div>'
+    +'</div></details>'
     +'<button class="mini accent" id="mgo">Identify</button>'
     +'<div id="mout" role="status" style="margin-top:12px"></div></div>';
 
@@ -6981,8 +6987,10 @@ RENDER.metadata=async()=>{
     output.textContent='Looking up...';
     let result, failed=false;
     try{
+      const hashQuery=['crc','md5','sha1'].map(k=>{const v=($('#m'+k)?.value||'').trim().toLowerCase();
+        return v?'&'+k+'='+encodeURIComponent(v):'';}).join('');
       result=await j('/api/v1/metadata/lookup?filename='
-        +encodeURIComponent(filename),{signal:request.signal});
+        +encodeURIComponent(filename)+hashQuery,{signal:request.signal});
       if(result?.error) throw new Error('Lookup returned an error');
     }catch(e){failed=true;}
     if(metadataLookup!==request) return;

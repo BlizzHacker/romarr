@@ -4998,6 +4998,7 @@ class ROMarr:
             forced = force and status == BAD_DUMP
             self._index_hash(verdict, platform.slug, source.stem,
                              outcome.destination, sha1=outcome.sha1)
+            self._identify_after_import(verdict, platform.slug, source.stem)
             self.store.record(Event(
                 kind="imported", game=source.stem, platform=platform.slug,
                 release=source.name, library=label,
@@ -6985,6 +6986,51 @@ class ROMarr:
         roots = [self.library]
         roots.extend(self.library_root(cfg) for cfg, _ in self.game_libraries)
         return {"hash_index": index, "duplicate_roots": tuple(dict.fromkeys(roots))}
+
+    def _identify_after_import(self, verdict, platform: str, game: str) -> None:
+        """Name a verified import from its hashes, in the background (#247).
+
+        The import has already verified the file against a DAT, so it holds
+        the dump's CRC, MD5 and SHA-1; hash-aware providers (ScreenScraper)
+        identify by those far more reliably than by a file name. Queued on one
+        worker and never awaited: metadata must not slow, block or fail an
+        import, and a provider that is down costs nothing but the metadata.
+        """
+        from .dat import VERIFIED
+        if getattr(verdict, "status", "") != VERIFIED or not game:
+            return
+        with self._metadata_lock:
+            metadata = self.metadata
+        try:
+            if metadata is None or not metadata.can_identify():
+                return
+        except Exception:                          # noqa: BLE001 - enhancement only
+            return
+
+        def job():
+            try:
+                info = metadata.identify(verification=verdict, platform=platform)
+                if not info.found:
+                    return
+                self.store.set_game_identity(platform, game, {
+                    "title": info.title, "summary": info.summary,
+                    "released": info.released, "rating": info.rating,
+                    "genres": list(info.genres), "cover_url": info.cover_url,
+                    "source": info.source, "matched_by": info.matched_by,
+                    "identified_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                })
+            except Exception:                      # noqa: BLE001 - enhancement only
+                log.debug("metadata for %s could not be fetched", game, exc_info=True)
+
+        with self._lock:
+            pool = getattr(self, "_identify_pool", None)
+            if pool is None:
+                pool = self._identify_pool = ThreadPoolExecutor(
+                    max_workers=1, thread_name_prefix="romarr-identify")
+        try:
+            pool.submit(job)
+        except RuntimeError:                       # interpreter shutting down
+            pass
 
     def _index_hash(self, verdict, platform: str, fallback: str,
                     destination=None, *, sha1: str = "") -> None:
@@ -9480,6 +9526,7 @@ class ROMarr:
                     if outcome.sha1:
                         self._index_hash(outcome.verification, platform.slug, game_title,
                                          outcome.destination, sha1=outcome.sha1)
+                        self._identify_after_import(outcome.verification, platform.slug, game_title)
                     self.store.record(Event(kind="imported", game=game_title,
                                             platform=platform.slug, release=name,
                                             library=label,
