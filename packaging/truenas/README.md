@@ -3,7 +3,7 @@
 `ix-dev/community/romarr/` is a complete app for the official
 [truenas/apps](https://github.com/truenas/apps) catalog, built on their shared
 library (`lib_version 2.3.19`) and the official image
-`ghcr.io/blizzhacker/romarr:1.12.0`, pinned by its multi-arch digest.
+`ghcr.io/blizzhacker/romarr:1.13.2`, pinned by its multi-arch digest.
 
 - Runs as the `apps` user (568:568) by default; a permissions init container
   fixes ownership of the config and library datasets first.

@@ -1,0 +1,42 @@
+# ROMarr for Asustor ADM 4.3+ (Portainer CE or the Docker Engine app).
+#
+# App Central -> install Portainer CE -> Stacks -> Add stack. Name: romarr. Paste this.
+# Full guide: https://github.com/BlizzHacker/romarr/blob/main/docs/NAS.md#asustor-adm
+#
+# Create the folders below first and edit the left side of each path if yours
+# differ. The library and downloads mounts refuse to start when their folder is
+# missing, rather than filing games into a new empty folder nothing else reads.
+
+services:
+  romarr:
+    image: ghcr.io/blizzhacker/romarr:1.13.2
+    container_name: romarr
+    restart: unless-stopped
+    ports:
+      - "6868:6868"
+    environment:
+      # The user that should own the games ROMarr files. ADM's admin is uid 999; the first user you create is 1000 and
+      # 100 is "users". Check yours over SSH with `id <user>`.
+      PUID: 1000
+      PGID: 100
+      UMASK: "002"
+      TZ: Etc/UTC
+      LIBRARY_PATH: /roms
+      # Optional: claim the install before the first visit.
+      # ROMARR_PASSWORD: choose-something-long
+    volumes:
+      # Settings, history, API key and plugins. Back this folder up.
+      - /volume1/Docker/romarr:/config
+      # Your game library: the folder RomM, Gaseous or your frontend reads.
+      - type: bind
+        source: /volume1/Media/Games
+        target: /roms
+        bind:
+          create_host_path: false
+      # Your download client's completed folder. The right side must be the
+      # path the client reports (Download Center reports /volume1/Download).
+      - type: bind
+        source: /volume1/Download
+        target: /volume1/Download
+        bind:
+          create_host_path: false

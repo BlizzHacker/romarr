@@ -25,6 +25,14 @@ import pytest
 ROOT = Path(__file__).resolve().parent.parent
 PKG = ROOT / "packaging"
 PORT = "6868"
+NAS_COMPOSE = (
+    "synology/container-manager/docker-compose.yml",
+    "qnap/container-station/docker-compose.yml",
+    "asustor/portainer/docker-compose.yml",
+    "terramaster/docker-compose.yml",
+    "ugreen/docker-compose.yml",
+    "openmediavault/docker-compose.yml",
+)
 TRUENAS_IMAGE = r'repository: ghcr\.io/blizzhacker/romarr\n\s+tag: "[\d.]+@(sha256:[0-9a-f]{64})"'
 
 
@@ -69,6 +77,13 @@ def package_versions() -> dict[str, str]:
         "winget zip": only(r"ROMarr-([\d.]+)-win-x64\.zip", winget_text),
         "winget nested exe": only(r"ROMarr-([\d.]+)-win-x64\\ROMarr\.exe", winget_text),
         "homebrew tarball": only(r"refs/tags/v([\d.]+)\.tar\.gz", read("homebrew/Formula/romarr.rb")),
+        "synology spk": only(r"^SPK_VERS = ([\d.]+)$", read("synology/spksrc/spk/romarr/Makefile")),
+        "synology source": only(r"^PKG_VERS = ([\d.]+)$", read("synology/spksrc/cross/romarr/Makefile")),
+        "synology digest": only(r"^romarr-([\d.]+)\.tar\.gz SHA256", read("synology/spksrc/cross/romarr/digests")),
+        "qnap qpkg": only(r'^QPKG_VER="([\d.]+)"$', read("qnap/qpkg/romarr/qpkg.cfg")),
+        "asustor apk": json.loads(read("asustor/apk/CONTROL/config.json"))["general"]["version"],
+        **{f"{rel} image": only(r"image: ghcr\.io/blizzhacker/romarr:([\d.]+)$", read(rel))
+           for rel in NAS_COMPOSE},
     }
 
 
@@ -77,10 +92,12 @@ def test_every_store_package_names_the_same_release():
     assert len(set(versions.values())) == 1, versions
 
 
-def test_flatpak_and_homebrew_pin_the_same_tarball_hash():
+def test_flatpak_homebrew_and_synology_pin_the_same_tarball_hash():
     flatpak = only(r"sha256: ([0-9a-f]{64})", read("flatpak/app.romarr.ROMarr.yml"))
     brew = only(r'^  sha256 "([0-9a-f]{64})"$', read("homebrew/Formula/romarr.rb"))
-    assert flatpak == brew
+    spk = only(r"^romarr-[\d.]+\.tar\.gz SHA256 ([0-9a-f]{64})$",
+               read("synology/spksrc/cross/romarr/digests"))
+    assert flatpak == brew == spk
 
 
 def test_digest_pinned_images_agree():

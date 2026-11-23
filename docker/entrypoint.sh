@@ -44,6 +44,18 @@ if [ "$(id -u)" != "0" ]; then
     exec "$@"
 fi
 
+# Running as root, so the ids go into chown, su-exec and /etc/passwd below
+# (a --user run above ignores them, inherited values and all). Refuse anything
+# but a number rather than let a typo become a user name or a passwd field.
+for id_value in "$PUID" "$PGID"; do
+    case "$id_value" in
+        ''|*[!0-9]*)
+            echo "ROMarr: PUID and PGID must be numbers, got '${PUID}:${PGID}'." >&2
+            exit 1
+            ;;
+    esac
+done
+
 # /config only. Never the library or the downloads volume: those can be
 # multiple terabytes on a NAS, and a recursive chown at every boot would take
 # hours and rewrite ownership the operator chose on purpose.
@@ -64,6 +76,20 @@ if ! chown -R "${PUID}:${PGID}" /config 2>/dev/null; then
     echo "SMB/CIFS shares). Mount /config from a directory this container can" >&2
     echo "own, or run the container with --user so no chown is attempted." >&2
     exit 1
+fi
+
+# Give PUID and PGID names. su-exec takes numeric ids, so ROMarr never needed
+# one -- but fusermount3, which rclone runs to mount a cloud folder, looks its
+# caller up in /etc/passwd and refuses with "could not determine username"
+# when there is no entry. Every cloud mount in Docker failed that way, with
+# /dev/fuse and SYS_ADMIN both granted. Only unnamed ids get an entry; an
+# existing account (Alpine's gid 100 is "users") is never renamed.
+if ! { getent group "${PGID}" >/dev/null 2>&1 \
+         || echo "romarr:x:${PGID}:" >> /etc/group; } 2>/dev/null \
+   || ! { getent passwd "${PUID}" >/dev/null 2>&1 \
+         || echo "romarr:x:${PUID}:${PGID}:ROMarr:/config:/sbin/nologin" >> /etc/passwd; } 2>/dev/null; then
+    echo "ROMarr: cannot name ${PUID}:${PGID} in /etc/passwd (read-only root" >&2
+    echo "filesystem?); everything works except cloud folder mounts." >&2
 fi
 
 # Tested as the user that will actually run, not as root. Root passes `test -w`

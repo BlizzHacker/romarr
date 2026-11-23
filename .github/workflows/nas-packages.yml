@@ -1,0 +1,171 @@
+name: nas-packages
+
+# Builds the native NAS packages with each vendor's own tool, replays each
+# vendor's install sequence against the published image, and attaches the
+# packages to the release they were built for. See docs/NAS.md.
+#
+#   Synology  .spk   SynoCommunity spksrc       packaging/synology/test/dsm-spk-smoke.sh
+#   QNAP      .qpkg  QNAP QDK (qbuild)          packaging/qnap/test/qts-qpkg-smoke.sh
+#   Asustor   .apk   Asustor apkg-tools.py      packaging/asustor/test/adm-apk-smoke.sh
+
+on:
+  pull_request:
+    paths:
+      - "packaging/synology/**"
+      - "packaging/qnap/**"
+      - "packaging/asustor/**"
+      - "packaging/terramaster/**"
+      - "packaging/ugreen/**"
+      - "packaging/openmediavault/**"
+      - ".github/workflows/nas-packages.yml"
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  # Pinned build tools. spksrc and QDK are GPL tools used only to build;
+  # apkg-tools.py is Asustor's packer, fetched at a pinned commit and checked.
+  SPKSRC_REF: f81c39402e8afc46604a05c4b432bce0eb55a040
+  QDK_REF: b7b5f4c86ebe95b10a62d64725515e7cdcf4bb35
+  APKG_TOOLS_URL: https://raw.githubusercontent.com/Orbernator/asustor-apps/ffc6857d9a381df1ee4e857f5ad5ddcb995760f2/romm-adm/tools/apkg-tools.py
+  APKG_TOOLS_SHA256: 4a3915571fd6568d4471c5cba612beb29ae0f22ad605c68666e568808a480a62
+
+jobs:
+  compose:
+    name: compose templates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: docker compose config, and a missing library refuses to start
+        run: |
+          set -eu
+          for f in packaging/synology/container-manager/docker-compose.yml \
+                   packaging/qnap/container-station/docker-compose.yml \
+                   packaging/asustor/portainer/docker-compose.yml \
+                   packaging/terramaster/docker-compose.yml \
+                   packaging/ugreen/docker-compose.yml \
+                   packaging/openmediavault/docker-compose.yml; do
+            echo "--- $f"
+            ROMARR_CONFIG=/tmp/c ROMARR_ROMS=/tmp/r ROMARR_DOWNLOADS=/tmp/d \
+              docker compose -f "$f" config -q
+          done
+          # The bind mounts that must not be created silently fail instead.
+          work="$RUNNER_TEMP/nas"
+          sed -e "s#/volume1#$work/volume1#g" -e 's#"6868:6868"#"127.0.0.1:16868:6868"#' \
+            packaging/synology/container-manager/docker-compose.yml > "$RUNNER_TEMP/syno.yml"
+          mkdir -p "$work/volume1/downloads"
+          if docker compose -p syno -f "$RUNNER_TEMP/syno.yml" up -d 2>"$RUNNER_TEMP/err"; then
+            echo "started without the games folder"; exit 1
+          fi
+          grep -q "bind source path does not exist" "$RUNNER_TEMP/err"
+          mkdir -p "$work/volume1/games"
+          docker compose -p syno -f "$RUNNER_TEMP/syno.yml" up -d
+          for _ in $(seq 1 40); do curl -fs http://127.0.0.1:16868/api/health && break; sleep 2; done
+          curl -fsS http://127.0.0.1:16868/api/health
+          docker compose -p syno -f "$RUNNER_TEMP/syno.yml" down
+
+  synology:
+    name: Synology SPK (spksrc)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Build with spksrc
+        run: |
+          set -eu
+          git init -q "$RUNNER_TEMP/spksrc"
+          git -C "$RUNNER_TEMP/spksrc" fetch -q --depth 1 https://github.com/SynoCommunity/spksrc.git "$SPKSRC_REF"
+          git -C "$RUNNER_TEMP/spksrc" checkout -q FETCH_HEAD
+          cp -r packaging/synology/spksrc/spk/romarr "$RUNNER_TEMP/spksrc/spk/"
+          cp -r packaging/synology/spksrc/cross/romarr "$RUNNER_TEMP/spksrc/cross/"
+          docker run --rm -v "$RUNNER_TEMP/spksrc:/spksrc" -w /spksrc ghcr.io/synocommunity/spksrc \
+            make -C spk/romarr arch-noarch-7.1
+          mkdir -p dist && cp "$RUNNER_TEMP"/spksrc/packages/romarr_noarch-dsm7_*.spk dist/
+      - name: Install, start, upgrade and remove it the way DSM does
+        run: sudo packaging/synology/test/dsm-spk-smoke.sh dist/romarr_noarch-dsm7_*.spk
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: synology-spk
+          path: dist/*.spk
+
+  qnap:
+    name: QNAP QPKG (QDK)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Build with QDK
+        run: |
+          set -eu
+          git init -q "$RUNNER_TEMP/qdk"
+          git -C "$RUNNER_TEMP/qdk" fetch -q --depth 1 https://github.com/qnap-dev/QDK.git "$QDK_REF"
+          git -C "$RUNNER_TEMP/qdk" checkout -q FETCH_HEAD
+          mkdir -p dist
+          docker run --rm -v "$RUNNER_TEMP/qdk:/qdk:ro" -v "$PWD/packaging/qnap/qpkg/romarr:/src:ro" \
+            -v "$PWD/dist:/out" debian:12 bash -ec '
+              apt-get -qq update >/dev/null
+              apt-get -qq install -y build-essential bsdmainutils rsync xz-utils >/dev/null
+              # qpkg_encrypt writes the checksum trailer QTS verifies on install.
+              cp -r /qdk/src /tmp/qsrc && make -s -C /tmp/qsrc
+              install -m 755 /tmp/qsrc/bin/qpkg_encrypt /usr/local/bin/
+              cp -r /qdk/shared /usr/share/QDK && mkdir -p /etc/config
+              sed -e 2d /qdk/shared/qdk.conf > /etc/config/qdk.conf
+              sed -i "2iQDK_PATH_P=/usr/share" /etc/config/qdk.conf
+              cp -r /src /build && cd /build && /usr/share/QDK/bin/qbuild
+              cp build/*.qpkg /out/'
+      - name: Run it the way QTS does
+        run: sudo PORT=16869 packaging/qnap/test/qts-qpkg-smoke.sh dist/romarr_*.qpkg
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: qnap-qpkg
+          path: dist/*.qpkg
+
+  asustor:
+    name: Asustor APK (apkg-tools)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+      - name: Build with apkg-tools
+        run: |
+          set -eu
+          curl -fsSL -o "$RUNNER_TEMP/apkg-tools.py" "$APKG_TOOLS_URL"
+          echo "$APKG_TOOLS_SHA256  $RUNNER_TEMP/apkg-tools.py" | sha256sum -c -
+          cp -r packaging/asustor/apk "$RUNNER_TEMP/apk"
+          mkdir -p dist
+          (cd "$RUNNER_TEMP" && python3 apkg-tools.py create apk --destination "$GITHUB_WORKSPACE/dist")
+      - name: Install and run it the way ADM does
+        run: sudo PORT=16870 packaging/asustor/test/adm-apk-smoke.sh dist/romarr_*_any.apk
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: asustor-apk
+          path: dist/*.apk
+
+  attach:
+    name: Attach to the release
+    if: github.event_name == 'release'
+    needs: [compose, synology, qnap, asustor]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"

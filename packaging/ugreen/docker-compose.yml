@@ -1,0 +1,43 @@
+# ROMarr for UGREEN UGOS Pro Docker.
+#
+# Docker -> Project -> Create. Project name: romarr. Storage path:
+# /volume1/docker/romarr. Paste this as the compose configuration.
+# Full guide: https://github.com/BlizzHacker/romarr/blob/main/docs/NAS.md#ugreen-ugos-pro
+#
+# Create the folders below first and edit the left side of each path if yours
+# differ. The library and downloads mounts refuse to start when their folder is
+# missing, rather than filing games into a new empty folder nothing else reads.
+
+services:
+  romarr:
+    image: ghcr.io/blizzhacker/romarr:1.13.2
+    container_name: romarr
+    restart: unless-stopped
+    ports:
+      - "6868:6868"
+    environment:
+      # The user that should own the games ROMarr files. UGOS Pro users are in group 10 (admin). Check yours over SSH
+      # with `id <user>`; some units number the first user 999.
+      PUID: 1000
+      PGID: 10
+      UMASK: "002"
+      TZ: Etc/UTC
+      LIBRARY_PATH: /roms
+      # Optional: claim the install before the first visit.
+      # ROMARR_PASSWORD: choose-something-long
+    volumes:
+      # Settings, history, API key and plugins. Back this folder up.
+      - /volume1/docker/romarr:/config
+      # Your game library: the folder RomM, Gaseous or your frontend reads.
+      - type: bind
+        source: /volume1/Games
+        target: /roms
+        bind:
+          create_host_path: false
+      # Your download client's completed folder. The right side must be the
+      # path the client reports (a client on the NAS reports its own path).
+      - type: bind
+        source: /volume1/Downloads
+        target: /volume1/Downloads
+        bind:
+          create_host_path: false

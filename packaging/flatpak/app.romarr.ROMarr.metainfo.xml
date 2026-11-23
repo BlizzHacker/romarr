@@ -87,6 +87,18 @@
   </keywords>
 
   <releases>
+    <release version="1.13.2" date="2026-11-23">
+      <url type="details">https://github.com/BlizzHacker/romarr/releases/tag/v1.13.2</url>
+      <description>
+        <ul>
+          <li>Rapidgator and 1fichier premium accounts, and MultiUp links split into their mirrors.</li>
+          <li>1fichier links are renewed just before they are fetched, so expiring links no longer fail.</li>
+          <li>Verified imports are identified by their hashes with ScreenScraper and other providers.</li>
+          <li>The Arcade Punks plugin is preinstalled, and member NZB, torrent and file-host links route to the right client.</li>
+          <li>Collections without a platform no longer finish at 100% having done nothing.</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.12.0" date="2026-11-22">
       <url type="details">https://github.com/BlizzHacker/romarr/releases/tag/v1.12.0</url>
       <description>

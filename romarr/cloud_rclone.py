@@ -459,6 +459,18 @@ def fuse_available() -> tuple[bool, str]:
                        "--cap-add SYS_ADMIN")
     if not (shutil.which("fusermount3") or shutil.which("fusermount")):
         return False, "fusermount is missing; install fuse3"
+    # fusermount3 looks its caller up and refuses an unnamed uid with "could
+    # not determine username" -- the state of every numeric Docker PUID before
+    # the entrypoint started naming it, and still of `--user` runs.
+    try:
+        import pwd
+        pwd.getpwuid(os.getuid())
+    except ImportError:
+        pass
+    except KeyError:
+        return False, (f"uid {os.getuid()} has no /etc/passwd entry, which "
+                       "fusermount requires. Run the container with PUID/PGID "
+                       "rather than --user, or mount a passwd file that names it")
     return True, ""
 
 

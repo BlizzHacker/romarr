@@ -2,7 +2,7 @@
 # Change the two host paths on the left of each volume to datasets you own.
 services:
   romarr:
-    image: ghcr.io/blizzhacker/romarr:1.12.0
+    image: ghcr.io/blizzhacker/romarr:1.13.2
     container_name: romarr
     restart: unless-stopped
     environment:

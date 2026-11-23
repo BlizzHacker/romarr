@@ -1,0 +1,3 @@
+ROMarr is the *arr for games. Request a title and ROMarr searches your indexers through Prowlarr, hands the best release to qBittorrent, SABnzbd or NZBGet, verifies what arrived against No-Intro and Redump, and files it into RomM, Gaseous, Retrom or a plain folder tree for ES-DE, Batocera, EmuDeck and RetroArch. ROMarr includes no games or BIOS files.
+
+Settings are in /share/Docker/romarr; edit /share/Docker/romarr/romarr.env to change the library or downloads folder, then restart ROMarr in App Central. There is no default password: the first visit sets it.

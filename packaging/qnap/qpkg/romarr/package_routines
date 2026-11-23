@@ -1,0 +1,7 @@
+# QDK install hooks for ROMarr. Sourced by QDK's generated installer.
+# romarr.env survives upgrades without help: qpkg.cfg lists it in QPKG_CONFIG,
+# and QDK keeps a file whose checksum differs from the one it shipped.
+
+PKG_PRE_REMOVE="{
+	\$SYS_INIT_DIR/romarr.sh remove
+}"
