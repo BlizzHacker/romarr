@@ -48,7 +48,6 @@ POST_ROUTES = {
     "/api/v1/cloud/signin/cancel": lambda s, b: s.cloud.signin_cancel(),
     "/api/v1/cloud/apps": lambda s, b: s.cloud.set_app(_str(b, "provider"), _str(b, "client_id"),
                                                        _str(b, "client_secret")),
-    "/api/v1/cloud/rclone": lambda s, b: s.cloud.set_rclone_path(_str(b, "path")),
     "/api/v1/cloud/link": lambda s, b: s.cloud.share_link(_str(b, "remote"), _str(b, "path")),
     "/api/v1/cloud/jobs": lambda s, b: s.cloud_jobs.save_job(b),
     "/api/v1/cloud/jobs/delete": lambda s, b: s.cloud_jobs.delete_job(_str(b, "id")),

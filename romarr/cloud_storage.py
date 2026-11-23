@@ -51,7 +51,7 @@ PENDING_SECONDS = 900
 NATIVE_TYPES = {"gdrive": "Google Drive (built in)", "onedrive": "OneDrive (built in)"}
 HOST_KINDS = {"rapidgator": "Rapidgator", "1fichier": "1fichier"}
 _LABEL = re.compile(r"^[^\x00-\x1f]{1,80}$")
-DEFAULTS = {"remotes": [], "jobs": [], "mounts": [], "rclone_path": ""}
+DEFAULTS = {"remotes": [], "jobs": [], "mounts": []}
 NO_BROWSER_KEYS = ("service_account_file", "service_account_credentials", "box_config_file")
 
 
@@ -67,12 +67,27 @@ class SecretStore:
         self._lock = threading.RLock()
 
     def load(self) -> dict:
+        """The stored secrets; {} only when the file does not exist yet.
+
+        A file that exists but cannot be read or parsed raises: writing a
+        fresh store over it would silently drop every credential in it.
+        """
         with self._lock:
             try:
-                data = json.loads(self.path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
+                text = self.path.read_text(encoding="utf-8")
+            except FileNotFoundError:
                 return {}
-            return data if isinstance(data, dict) else {}
+            except OSError as err:
+                raise CloudError(f"{self.path.name} cannot be read ({err.__class__.__name__}); "
+                                 "fix its permissions. ROMarr will not overwrite it.") from None
+            try:
+                data = json.loads(text)
+            except ValueError:
+                raise CloudError(f"{self.path.name} is damaged; restore it from a backup or move "
+                                 "it aside to start again. ROMarr will not overwrite it.") from None
+            if not isinstance(data, dict):
+                raise CloudError(f"{self.path.name} is not a ROMarr secret store")
+            return data
 
     def update(self, section: str, key: str, value) -> None:
         with self._lock:
@@ -116,9 +131,9 @@ class CloudStorage:
         # Mount caches can be large; ROMARR_RCLONE_CACHE puts them on a big disk
         # rather than beside romarr.json, which is often a small root filesystem.
         cache_dir = (getattr(service, "_env", {}) or {}).get("ROMARR_RCLONE_CACHE") or data_dir / "rclone-cache"
-        self.rclone = rclone or Rclone(data_dir / "rclone.conf",
-                                       binary=str(self.cfg().get("rclone_path") or ""),
-                                       cache_dir=cache_dir)
+        # Which rclone runs is the host's decision (ROMARR_RCLONE or PATH), never
+        # a web setting: a form must not choose an executable for this account.
+        self.rclone = rclone or Rclone(data_dir / "rclone.conf", cache_dir=cache_dir)
         self.authorizer = Authorizer(self.rclone)
         # One session for every provider and host call: connection reuse, and
         # host accounts are built once rather than on every grab.
@@ -141,10 +156,32 @@ class CloudStorage:
             out[key] = [dict(x) for x in out.get(key) or [] if isinstance(x, dict)]
         return out
 
-    def save_cfg(self, cfg: dict) -> None:
+    def update_cfg(self, change):
+        """Apply `change(cfg)` to the current settings and save, as one step.
+
+        Every writer goes through here under one lock, so two changes made at
+        the same moment (a job finishing while a connection is saved) cannot
+        overwrite each other. A save that fails is reported and the change is
+        undone in memory, rather than vanishing at the next restart.
+        """
         with self._lock:
+            before = self.svc.store.settings.get(SETTINGS_KEY)
+            cfg = self.cfg()
+            result = change(cfg)
             self.svc.store.settings[SETTINGS_KEY] = {k: cfg.get(k, DEFAULTS[k]) for k in DEFAULTS}
-            self.svc.store.save()
+            try:
+                self.svc.store.save(raise_on_error=True)
+            except OSError as err:
+                if before is None:
+                    self.svc.store.settings.pop(SETTINGS_KEY, None)
+                else:
+                    self.svc.store.settings[SETTINGS_KEY] = before
+                raise CloudError(f"The settings could not be saved: {err}") from None
+            return result
+
+    def save_cfg(self, cfg: dict) -> None:
+        self.update_cfg(lambda current: current.update(
+            {k: cfg.get(k, DEFAULTS[k]) for k in DEFAULTS}))
 
     def remote(self, remote_id: str) -> dict:
         found = next((r for r in self.cfg()["remotes"] if r.get("id") == remote_id), None)
@@ -157,13 +194,16 @@ class CloudStorage:
     def status(self) -> dict:
         cfg = self.cfg()
         fuse_ok, fuse_reason = fuse_available()
-        stored = self.secrets.load()
+        try:
+            stored, secrets_problem = self.secrets.load(), ""
+        except CloudError as err:
+            stored, secrets_problem = {}, str(err)
         apps = stored.get("apps") or {}
         hosts = stored.get("hosts") or {}
         return {
             "rclone": {"available": self.rclone.available, "path": self.rclone.binary(),
-                       "version": self.rclone.version() if self.rclone.available else "",
-                       "configured_path": cfg.get("rclone_path", "")},
+                       "version": self.rclone.version() if self.rclone.available else ""},
+            "secrets_problem": secrets_problem,
             "fuse": {"available": fuse_ok, "reason": fuse_reason},
             "remotes": cfg["remotes"], "jobs": cfg["jobs"], "mounts": cfg["mounts"],
             "native_types": NATIVE_TYPES,
@@ -185,17 +225,6 @@ class CloudStorage:
         except RcloneError as err:
             return {"rclone": [], "native": NATIVE_TYPES, "error": str(err)}
         return {"rclone": listed, "native": NATIVE_TYPES}
-
-    def set_rclone_path(self, path: str) -> dict:
-        path = str(path or "").strip()
-        if path and not (os.path.isfile(path) and os.access(path, os.X_OK)
-                         and os.path.basename(path).lower().startswith("rclone")):
-            raise CloudError("That is not an rclone executable")
-        cfg = self.cfg()
-        cfg["rclone_path"] = path
-        self.save_cfg(cfg)
-        self.rclone.set_binary(path)
-        return {"ok": True, "available": self.rclone.available}
 
     # -- OAuth apps (own client ids) ------------------------------------------------
 
@@ -236,13 +265,15 @@ class CloudStorage:
             params = _clean_params(body.get("params"))
             if client_id:
                 params.update({"client_id": client_id, "client_secret": client_secret})
-            self._pending["rclone"] = {"engine": "rclone", "type": rtype, "name": name,
-                                       "label": label, "params": params,
-                                       "shared": not client_id, "at": time.monotonic()}
-            self.last_signin = {}
+            pending = {"engine": "rclone", "type": rtype, "name": name, "label": label,
+                       "params": params, "shared": not client_id, "at": time.monotonic()}
+            with self._lock:
+                self._pending["rclone"] = pending
+                self.last_signin = {}
             try:
-                url = self.authorizer.start(rtype, client_id=client_id, client_secret=client_secret,
-                                            on_token=self._complete_rclone)
+                url = self.authorizer.start(
+                    rtype, client_id=client_id, client_secret=client_secret,
+                    on_token=lambda token, mine=pending: self._complete_rclone(token, mine))
             except RcloneError as err:
                 self._pending.pop("rclone", None)
                 raise CloudError(str(err)) from None
@@ -288,11 +319,16 @@ class CloudStorage:
             raise CloudError(self.last_signin["error"])
         return {"ok": True, "remote": self.last_signin.get("remote")}
 
-    def _complete_rclone(self, token: str) -> None:
-        """rclone has a token, by paste or directly from the browser: save the connection."""
-        pending = self._pending.pop("rclone", None)
-        if pending is None:
-            return
+    def _complete_rclone(self, token: str, pending: dict) -> None:
+        """rclone has a token, by paste or directly from the browser: save the connection.
+
+        Only for the sign-in it was started for: if another sign-in replaced
+        it meanwhile, this token belongs to nobody and is dropped.
+        """
+        with self._lock:
+            if self._pending.get("rclone") is not pending:
+                return
+            self._pending.pop("rclone", None)
         try:
             self.rclone.create_remote(pending["name"], pending["type"], pending["params"],
                                       token=token, shared_client=pending["shared"])
@@ -307,7 +343,8 @@ class CloudStorage:
         state = str(query.get("state") or "")
         with self._lock:
             pending = self._pending.pop(state, None)
-        if pending is None or pending.get("engine") != "native":
+        if (pending is None or pending.get("engine") != "native"
+                or time.monotonic() - pending["at"] > PENDING_SECONDS):
             raise CloudError("That sign-in is unknown or expired; start again")
         if query.get("error"):
             raise CloudError(f"The provider refused: {str(query['error'])[:100]}")
@@ -345,11 +382,12 @@ class CloudStorage:
             raise CloudError("A connection with that name already exists")
 
     def _add_record(self, record: dict) -> dict:
-        cfg = self.cfg()
-        cfg["remotes"] = [r for r in cfg["remotes"] if r.get("id") != record["id"]]
         record["created"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        cfg["remotes"].append(record)
-        self.save_cfg(cfg)
+
+        def add(cfg):
+            cfg["remotes"] = [r for r in cfg["remotes"] if r.get("id") != record["id"]]
+            cfg["remotes"].append(record)
+        self.update_cfg(add)
         return {"ok": True, "remote": record}
 
     def add_remote(self, body: dict) -> dict:
@@ -357,6 +395,7 @@ class CloudStorage:
         name = str(body.get("name") or "").strip()
         rtype = str(body.get("type") or "")
         self._check_new_name(name)
+        label = _clean_label(body.get("label"), name)
         provider = self.rclone.provider(rtype)
         if provider is None:
             raise CloudError("rclone has no such provider")
@@ -369,7 +408,7 @@ class CloudStorage:
         except RcloneError as err:
             raise CloudError(str(err)) from None
         record = self._add_record({"id": name, "engine": "rclone", "type": rtype,
-                                   "label": _clean_label(body.get("label"), name)})
+                                   "label": label})
         try:
             self.rclone.list(name, "")
         except RcloneError as err:
@@ -388,11 +427,21 @@ class CloudStorage:
             try:
                 self.rclone.delete_remote(remote_id)
             except RcloneError as err:
-                log.warning("rclone could not forget %s: %s", remote_id, err)
+                still_there = True
+                try:
+                    still_there = f"{remote_id}:" in self.rclone.remotes() or \
+                        remote_id in self.rclone.remotes()
+                except RcloneError:
+                    pass
+                if still_there:
+                    raise CloudError(f"rclone could not remove the connection ({err}); "
+                                     "its credentials are still saved. Try again.") from None
         else:
             self.secrets.update("native", remote_id, None)
-        cfg["remotes"] = [r for r in cfg["remotes"] if r.get("id") != remote_id]
-        self.save_cfg(cfg)
+
+        def drop(current):
+            current["remotes"] = [r for r in current["remotes"] if r.get("id") != remote_id]
+        self.update_cfg(drop)
         return {"ok": True}
 
     def native_client(self, record: dict):
@@ -459,17 +508,21 @@ class CloudStorage:
         out = []
         rg = hosts.get("rapidgator") or {}
         if rg.get("login"):
+            gen = rg.get("gen", "")
             out.append(Rapidgator(rg["login"], rg.get("password", ""), token=rg.get("token", ""),
-                                  on_token=self._keep_rg_token, session=self._session))
+                                  on_token=lambda token, g=gen: self._keep_rg_token(token, g),
+                                  session=self._session))
         fichier = hosts.get("1fichier") or {}
         if fichier.get("api_key"):
             out.append(OneFichier(fichier["api_key"], session=self._session))
         return out
 
-    def _keep_rg_token(self, token: str) -> None:
-        current = self.secrets.get("hosts", "rapidgator") or {}
-        if current:
-            self.secrets.update("hosts", "rapidgator", {**current, "token": token})
+    def _keep_rg_token(self, token: str, gen: str) -> None:
+        """Keep a refreshed session token, if the account is still the one it was for."""
+        with self.secrets._lock:
+            current = self.secrets.get("hosts", "rapidgator") or {}
+            if current and current.get("gen", "") == gen:
+                self.secrets.update("hosts", "rapidgator", {**current, "token": token})
 
     def set_host_account(self, kind: str, body: dict) -> dict:
         if kind not in HOST_KINDS:
@@ -488,7 +541,8 @@ class CloudStorage:
             except HostAccountError as err:
                 raise CloudError(str(err)) from None
             self.secrets.update("hosts", kind, {"login": login, "password": password,
-                                                "token": account._token})
+                                                "token": account._token,
+                                                "gen": secrets.token_hex(4)})
             self._accounts = None
             return {"ok": True, **summary}
         key = str(body.get("api_key") or "").strip()

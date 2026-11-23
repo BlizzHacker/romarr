@@ -25,7 +25,9 @@ class FakeStore:
         self.settings = settings or {}
         self.saves = 0
 
-    def save(self):
+    def save(self, *, raise_on_error=False):
+        if getattr(self, "fail", False) and raise_on_error:
+            raise OSError("disk full")
         self.saves += 1
 
     def list_items(self, key):
@@ -228,7 +230,8 @@ class _ScriptedRclone(Rclone):
         return self._answers.pop(0)
 
 
-def test_create_remote_walks_rclones_questions(tmp_path):
+def test_create_remote_walks_rclones_questions(tmp_path, monkeypatch):
+    monkeypatch.setattr(cloud_rclone, "default_onedrive", lambda token, **kw: "")
     rc = _ScriptedRclone(tmp_path, [
         {"State": "s1", "Option": {"Name": "config_is_local", "Default": True}},
         {"State": "s2", "Option": {"Name": "config_token"}},
@@ -307,12 +310,13 @@ class _Proc:
 
 
 def _waiting_authorizer(tmp_path, stdout="", on_token=None):
+    from romarr.cloud_rclone import _Attempt
     auth = Authorizer(Rclone(tmp_path / "c.conf"))
     proc = _Proc()
-    auth._proc, auth._state, auth._started = proc, "goodstate", time.monotonic()
-    auth._stdout = [stdout]
-    threading.Thread(target=auth._watch, args=(proc, None, auth._done, on_token),
-                     daemon=True).start()
+    attempt = _Attempt(proc, on_token)
+    attempt.state, attempt.stdout = "goodstate", [stdout]
+    auth._attempt = attempt
+    threading.Thread(target=auth._watch, args=(attempt, None), daemon=True).start()
 
     class Session:
         def __init__(self):
@@ -332,10 +336,21 @@ TOKEN_OUT = ('Paste the following into your remote machine --->\n'
 def test_a_browser_reaching_the_listener_finishes_without_a_paste(tmp_path):
     got = []
     auth = _waiting_authorizer(tmp_path, TOKEN_OUT, on_token=got.append)
-    auth._proc.released.set()            # the browser delivered the code itself
-    assert auth._done.wait(5)
+    attempt = auth._attempt
+    attempt.proc.released.set()            # the browser delivered the code itself
+    assert attempt.done.wait(5)
     assert len(got) == 1 and json.loads(got[0])["access_token"] == "a"
-    assert auth._proc is None
+    assert auth._attempt is None
+
+
+def test_a_replaced_sign_in_never_commits_its_token(tmp_path):
+    got = []
+    auth = _waiting_authorizer(tmp_path, TOKEN_OUT, on_token=got.append)
+    old = auth._attempt
+    auth._attempt = object()               # a newer sign-in took over
+    old.proc.released.set()
+    assert old.done.wait(5)
+    assert got == [] and "newer sign-in" in old.error
 
 
 def test_a_sign_in_without_a_token_reports_it(tmp_path):
@@ -553,6 +568,10 @@ def test_backup_run_uses_rclone_copy(jobs, svc, cloud):
     run = _wait_runs(jobs)[0]
     assert run["state"] == "done", run
     assert ("copy", os.path.realpath(svc.lib / "snes"), "dav:ROMs/snes", "copy") in cloud.rclone.calls
+    for _ in range(100):                 # the outcome is saved just after the run ends
+        if "done" in (jobs._job(job["id"]).get("last_result") or ""):
+            break
+        time.sleep(0.02)
     assert "done" in jobs._job(job["id"])["last_result"]
 
 
@@ -654,11 +673,11 @@ def test_every_listed_cloud_route_is_handled(cloud, svc):
 
 def test_an_abandoned_sign_in_stops_its_listener(tmp_path):
     auth = _waiting_authorizer(tmp_path)
-    proc = auth._proc
+    attempt = auth._attempt
     auth._expire(object())          # a timer from an older sign-in: ignored
-    assert auth._proc is proc
-    auth._expire(proc)
-    assert auth._proc is None and proc.poll() is not None   # terminated
+    assert auth._attempt is attempt
+    auth._expire(attempt)
+    assert auth._attempt is None and attempt.proc.poll() is not None   # terminated
 
 
 def test_a_sign_in_that_finished_by_itself_shows_up_without_a_paste(cloud, monkeypatch):
@@ -697,3 +716,122 @@ def test_default_onedrive_reads_me_drive():
             return Resp()
     assert cloud_rclone.default_onedrive('{"access_token":"t"}', session=S()) == "a1b2c3d4e5f6"
     assert cloud_rclone.default_onedrive("not json") == ""
+
+
+
+# -- CodeRabbit review fixes ------------------------------------------------------------
+
+
+def test_an_unreadable_secret_store_is_never_overwritten(tmp_path):
+    store = SecretStore(tmp_path / "cloud-secrets.json")
+    store.path.write_text("{not json", encoding="utf-8")
+    with pytest.raises(CloudError, match="damaged"):
+        store.update("hosts", "1fichier", {"api_key": "k"})
+    assert store.path.read_text(encoding="utf-8") == "{not json"
+
+
+def test_status_reports_a_broken_secret_store(cloud):
+    cloud.secrets.path.write_text("[]", encoding="utf-8")
+    assert "secret store" in cloud.status()["secrets_problem"]
+
+
+def test_a_failed_settings_save_is_reported_and_undone(cloud, svc):
+    svc.store.fail = True
+    with pytest.raises(CloudError, match="could not be saved"):
+        cloud.add_remote({"name": "dav", "type": "webdav"})
+    assert "cloud_storage" not in svc.store.settings or not svc.store.settings["cloud_storage"].get("remotes")
+
+
+def test_native_connections_cannot_offload_or_mirror(cloud, svc):
+    cloud._add_record({"id": "n-1", "engine": "native", "type": "gdrive", "label": "GD"})
+    jobs = CloudJobs(cloud, svc)
+    for kind in ("offload", "sync"):
+        with pytest.raises(CloudError, match="needs an rclone connection"):
+            jobs.save_job({"kind": kind, "remote": "n-1", "local_path": str(svc.lib / "snes"),
+                           "confirm": True})
+
+
+def test_staging_paths_cannot_escape(tmp_path):
+    staging = tmp_path / "stage"
+    staging.mkdir()
+    assert cloud_jobs._inside(staging, "a/b.sfc") == staging / "a" / "b.sfc"
+    for bad in ("../x.sfc", "a/../../x", "./.", ""):
+        assert cloud_jobs._inside(staging, bad) is None
+
+
+def test_a_refused_import_is_tried_again_next_time(jobs, svc, cloud):
+    cloud.rclone.files = {"inbox/Bad (USA).sfc": b"bad"}
+    svc.adopt = lambda path, platform="": {"ok": False, "reason": "bad dump",
+                                           "refused": [{"reason": "bad dump"}]}
+    job = jobs.save_job({"kind": "import", "remote": "dav", "remote_path": "inbox"})["job"]
+    jobs.run(job["id"])
+    assert "bad dump" in _wait_runs(jobs)[0]["message"]
+    for _ in range(100):
+        if jobs._job(job["id"]).get("last_run"):
+            break
+        time.sleep(0.02)
+    assert jobs._job(job["id"]).get("seen", []) == []
+
+
+def test_settings_backup_is_restorable_and_has_no_2fa_codes(jobs, svc, cloud):
+    svc.store.settings.update({"_totp_secret": "TOTPSECRET", "_totp_backup": ["code-1", "code-2"]})
+    job = jobs.save_job({"kind": "settings", "remote": "dav", "remote_path": "b"})["job"]
+    jobs.run(job["id"])
+    assert _wait_runs(jobs)[0]["state"] == "done"
+    raw = next(v for k, v in cloud.rclone.files.items() if k.startswith("b/romarr-settings-"))
+    from romarr.ops import read_backup
+    settings, _warning = read_backup(json.loads(raw))
+    assert b"TOTPSECRET" not in raw and b"code-1" not in raw and b"secret-api-key" not in raw
+    assert "libraries" in settings
+
+
+def test_a_late_token_from_a_replaced_sign_in_saves_nothing(cloud, monkeypatch):
+    seen = _fake_rclone_signin(cloud, monkeypatch)
+    cloud.signin_start({"engine": "rclone", "type": "drive", "name": "first"})
+    first = seen["on_token"]
+    cloud.signin_start({"engine": "rclone", "type": "drive", "name": "second"})
+    first('{"access_token":"a"}')        # the first sign-in's token arrives late
+    assert [r["id"] for r in cloud.cfg()["remotes"]] == []
+
+
+def test_a_refreshed_rapidgator_token_never_lands_on_another_account(cloud):
+    cloud.secrets.update("hosts", "rapidgator", {"login": "a@x", "password": "p", "gen": "g1"})
+    cloud._keep_rg_token("TOKEN-A", "g1")
+    assert cloud.secrets.get("hosts", "rapidgator")["token"] == "TOKEN-A"
+    cloud.secrets.update("hosts", "rapidgator", {"login": "b@x", "password": "q", "gen": "g2"})
+    cloud._keep_rg_token("LATE-A", "g1")
+    assert "token" not in cloud.secrets.get("hosts", "rapidgator")
+
+
+def test_a_remote_rclone_cannot_delete_keeps_its_record(cloud, monkeypatch):
+    cloud.add_remote({"name": "dav", "type": "webdav"})
+
+    def refuse(name):
+        raise RcloneError("config locked")
+    monkeypatch.setattr(cloud.rclone, "delete_remote", refuse)
+    monkeypatch.setattr(cloud.rclone, "remotes", lambda: ["dav"], raising=False)
+    with pytest.raises(CloudError, match="still saved"):
+        cloud.delete_remote("dav")
+    assert cloud.remote("dav")
+
+
+def test_jobs_from_a_restarted_daemon_are_refused(tmp_path):
+    rc = Rclone(tmp_path / "c.conf")
+    rc._proc = type("P", (), {"poll": lambda self: None})()
+    rc._generation = 1
+    rc.call = lambda method, params=None, **kw: {"jobid": 7}
+    jobid = rc._async("sync/copy", {})
+    rc._generation = 2                     # rclone restarted; ids start again at 1
+    with pytest.raises(RcloneError, match="restarted"):
+        rc.job(jobid)
+
+
+def test_drive_folder_links_read_through_a_folder_rooted_remote():
+    assert Rclone.folder_fs("gd", "1AbCdEfGhIjKlMnOp") == "gd,root_folder_id=1AbCdEfGhIjKlMnOp:"
+    with pytest.raises(RcloneError):
+        Rclone.folder_fs("gd", "../etc")
+
+
+def test_the_web_cannot_choose_the_rclone_executable(cloud, svc):
+    svc.cloud, svc.cloud_jobs = cloud, CloudJobs(cloud, svc)
+    assert cloud_routes.post(svc, "/api/v1/cloud/rclone", {"path": "/bin/sh"})[0] == 404

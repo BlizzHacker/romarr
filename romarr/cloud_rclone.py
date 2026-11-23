@@ -55,6 +55,7 @@ MAX_STATES = 12
 _AUTH_LINK = re.compile(r"http://127\.0\.0\.1:53682/auth\?state=([A-Za-z0-9_-]+)")
 _TOKEN_BLOCK = re.compile(r"--->\s*(\{.*?\})\s*<---", re.S)
 REMOTE_NAME = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
+MAX_DEPTH = 8
 
 #: The providers people mean by "cloud storage", shown first. Every other
 #: backend rclone has is still offered, under "All providers".
@@ -77,28 +78,29 @@ class RcloneError(RuntimeError):
     """rclone refused or failed; the message is safe to show."""
 
 
-def _die_with_parent() -> None:
-    """Linux: ask the kernel to SIGTERM this child when ROMarr goes away.
+def _launcher() -> list[str]:
+    """`setpriv --pdeathsig TERM --` on Linux, so rclone dies with ROMarr.
 
-    Without it, `kill <romarr>` (no atexit on SIGTERM) leaves an orphaned
-    `rclone rcd` holding mounts and a port. PR_SET_PDEATHSIG fires when the
-    *thread* that forked exits, which is why every rclone is started from
+    Without it, killing ROMarr leaves an orphaned `rclone rcd` holding mounts
+    and a port. The signal is set by setpriv itself, after the fork, rather
+    than by a `preexec_fn`: Python warns that a `preexec_fn` in a threaded
+    process can deadlock the child before exec. PR_SET_PDEATHSIG fires when
+    the *thread* that forked exits, which is why every rclone is started from
     `_SPAWNER`'s one long-lived thread rather than a request thread.
     """
-    try:
-        import ctypes
-        import signal
-        ctypes.CDLL("libc.so.6", use_errno=True).prctl(1, signal.SIGTERM)  # PR_SET_PDEATHSIG
-    except Exception:   # noqa: BLE001 - best effort; not every libc has it
-        pass
+    if sys.platform.startswith("linux"):
+        setpriv = shutil.which("setpriv")
+        if setpriv:
+            return [setpriv, "--pdeathsig", "TERM", "--"]
+    return []
 
 
 _SPAWNER = ThreadPoolExecutor(max_workers=1, thread_name_prefix="romarr-rclone-spawn")
 
 
 def _spawn(popen, cmd: list, **kwargs):
-    if sys.platform.startswith("linux") and popen is subprocess.Popen:
-        kwargs["preexec_fn"] = _die_with_parent
+    if popen is subprocess.Popen:
+        cmd = _launcher() + list(cmd)
     return _SPAWNER.submit(popen, cmd, **kwargs).result()
 
 
@@ -139,6 +141,10 @@ class Rclone:
         self._lock = threading.RLock()
         self._providers: list | None = None
         self._version: str | None = None
+        #: Bumped each time a daemon starts. rclone numbers jobs from 1 again
+        #: after a restart, so a job id is only meaningful with its generation.
+        self._generation = 0
+        self._jobs: dict[int, int] = {}
 
     # -- the binary and the daemon -------------------------------------------
 
@@ -193,6 +199,7 @@ class Rclone:
                    "--cache-dir", str(self.cache_dir), "--log-level", "NOTICE"]
             self._proc = _spawn(self._popen, cmd, env=env, stdin=subprocess.DEVNULL,
                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self._generation += 1
             self._url = f"http://127.0.0.1:{port}/"
             self._auth = (user, password)
             deadline = time.monotonic() + START_SECONDS
@@ -320,9 +327,11 @@ class Rclone:
     def list(self, remote: str, path: str = "", *, recurse: bool = False) -> list[dict]:
         """One folder, or with `recurse` every file under it, in one call."""
         base = _rel(path)
-        opt = {"recurse": True, "filesOnly": True, "maxDepth": 8} if recurse else {"recurse": False}
-        rows = self.call("operations/list", {"fs": fs_string(remote), "remote": base,
-                                             "opt": opt}, timeout=600).get("list") or []
+        params = {"fs": fs_string(remote), "remote": base,
+                  "opt": {"recurse": True, "filesOnly": True} if recurse else {"recurse": False}}
+        if recurse:
+            params["_config"] = {"MaxDepth": MAX_DEPTH}
+        rows = self.call("operations/list", params, timeout=600).get("list") or []
         # Path is relative to the remote's root, so it already includes `base`.
         return [{"name": r.get("Name", ""), "path": r.get("Path", ""),
                  "size": int(r.get("Size") or 0) if not r.get("IsDir") else None,
@@ -339,19 +348,31 @@ class Rclone:
         params = {"srcFs": src_fs, "dstFs": dst_fs, "_async": True}
         if mode == "move":
             params["deleteEmptySrcDirs"] = True
-        return int(self.call(method, params)["jobid"])
+        return self._async(method, params)
 
     def copy_file(self, src_fs: str, src: str, dst_fs: str, dst: str, *,
                   move: bool = False) -> int:
         method = "operations/movefile" if move else "operations/copyfile"
-        return int(self.call(method, {"srcFs": src_fs, "srcRemote": src, "dstFs": dst_fs,
-                                      "dstRemote": dst, "_async": True})["jobid"])
+        return self._async(method, {"srcFs": src_fs, "srcRemote": src, "dstFs": dst_fs,
+                                    "dstRemote": dst, "_async": True})
 
     def check(self, src_fs: str, dst_fs: str) -> int:
-        return int(self.call("operations/check", {"srcFs": src_fs, "dstFs": dst_fs,
-                                                  "oneWay": True, "_async": True})["jobid"])
+        return self._async("operations/check", {"srcFs": src_fs, "dstFs": dst_fs,
+                                                "oneWay": True, "_async": True})
+
+    def _async(self, method: str, params: dict) -> int:
+        with self._lock:
+            jobid = int(self.call(method, params)["jobid"])
+            self._jobs[jobid] = self._generation
+            return jobid
+
+    def _own(self, jobid: int) -> None:
+        """Refuse a job id from a daemon that has since restarted."""
+        if self._jobs.get(int(jobid)) != self._generation or not self._running():
+            raise RcloneError("rclone restarted while this transfer ran; run it again")
 
     def job(self, jobid: int) -> dict:
+        self._own(jobid)
         status = self.call("job/status", {"jobid": int(jobid)})
         stats = {}
         try:
@@ -366,6 +387,7 @@ class Rclone:
                 "errors": int(stats.get("errors") or 0)}
 
     def stop_job(self, jobid: int) -> None:
+        self._own(jobid)
         self.call("job/stop", {"jobid": int(jobid)})
 
     def delete_file(self, remote: str, path: str) -> None:
@@ -380,8 +402,16 @@ class Rclone:
         if not re.match(r"^[A-Za-z0-9_-]{10,200}$", file_id or ""):
             raise RcloneError("that is not a Google Drive file id")
         self.call("backend/command", {"command": "copyid", "fs": fs_string(remote),
-                                      "arg": [file_id, _rel(dest).rstrip("/") + "/"]},
+                                      "arg": [file_id, fs_string(remote, dest).rstrip("/") + "/"]},
                   timeout=600)
+
+    @staticmethod
+    def folder_fs(remote: str, folder_id: str) -> str:
+        """A Drive remote rooted at a shared folder's id (folder share links)."""
+        if not REMOTE_NAME.match(remote or "") or not re.match(r"^[A-Za-z0-9_-]{10,200}$",
+                                                                 folder_id or ""):
+            raise RcloneError("that is not a Google Drive folder id")
+        return f"{remote},root_folder_id={folder_id}:"
 
     # -- mounts ----------------------------------------------------------------
 
@@ -494,6 +524,21 @@ def simplify_provider(raw: dict) -> dict:
             "options": options}
 
 
+class _Attempt:
+    """One `rclone authorize` run: its process, output and outcome."""
+
+    def __init__(self, proc, on_token):
+        self.proc = proc
+        self.on_token = on_token
+        self.state = ""
+        self.stdout: list[str] = []
+        self.link_seen = threading.Event()
+        self.done = threading.Event()
+        self.token = ""
+        self.error = ""
+        self.started = time.monotonic()
+
+
 class Authorizer:
     """One browser sign-in at a time, through `rclone authorize` on the server.
 
@@ -501,8 +546,11 @@ class Authorizer:
     listener: the operator pastes that address into ROMarr (`finish`), or the
     browser reaches it directly -- ROMarr on the same machine as the browser,
     or a tunnel to it. Either way rclone exits with the token, and `_watch`
-    hands it to `on_token` exactly once, so the connection is created without
-    anybody copying anything.
+    hands it to `on_token` exactly once.
+
+    Everything about one run lives on its `_Attempt`, so a run that ends after
+    a newer one started can neither read the newer run's output nor commit
+    its token: only the attempt that is still current may complete.
     """
 
     def __init__(self, rclone: Rclone, *, popen=subprocess.Popen,
@@ -511,20 +559,14 @@ class Authorizer:
         self._popen = popen
         self._session = session or requests.Session()
         self._lock = threading.Lock()
-        self._proc = None
-        self._state = ""
-        self._started = 0.0
-        self._stdout: list[str] = []
-        self._link_seen = threading.Event()
-        self._done = threading.Event()
-        self._token = ""
-        self._error = ""
+        self._attempt: _Attempt | None = None
         self.rtype = ""
 
     @property
     def active(self) -> bool:
-        return (self._proc is not None and self._proc.poll() is None
-                and time.monotonic() - self._started < AUTH_SECONDS)
+        a = self._attempt
+        return (a is not None and a.proc.poll() is None
+                and time.monotonic() - a.started < AUTH_SECONDS)
 
     def start(self, rtype: str, *, client_id: str = "", client_secret: str = "",
               on_token=None) -> str:
@@ -539,28 +581,26 @@ class Authorizer:
                 env[_env_name(rtype, "client_id")] = client_id
             if client_secret:
                 env[_env_name(rtype, "client_secret")] = client_secret
-            self._stdout, self._state, self._token, self._error = [], "", "", ""
-            self._link_seen.clear()
-            self._done = threading.Event()
-            self._proc = _spawn(self._popen, [binary, "authorize", rtype, "--auth-no-open-browser"],
-                                env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, text=True)
-            self._started = time.monotonic()
+            proc = _spawn(self._popen, [binary, "authorize", rtype, "--auth-no-open-browser"],
+                          env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                          stderr=subprocess.PIPE, text=True)
+            attempt = self._attempt = _Attempt(proc, on_token)
             self.rtype = rtype
-            proc = self._proc
             # An abandoned sign-in must not hold port 53682 until the next one.
-            timer = threading.Timer(AUTH_SECONDS, self._expire, args=(proc,))
+            timer = threading.Timer(AUTH_SECONDS, self._expire, args=(attempt,))
             timer.daemon = True
             timer.start()
-            threading.Thread(target=self._read, args=(proc.stderr, True), daemon=True).start()
-            reader = threading.Thread(target=self._read, args=(proc.stdout, False), daemon=True)
+            threading.Thread(target=self._read, args=(attempt, proc.stderr, True),
+                             daemon=True).start()
+            reader = threading.Thread(target=self._read, args=(attempt, proc.stdout, False),
+                                      daemon=True)
             reader.start()
-            threading.Thread(target=self._watch, args=(proc, reader, self._done, on_token),
+            threading.Thread(target=self._watch, args=(attempt, reader),
                              name="romarr-cloud-signin", daemon=True).start()
-            if not self._link_seen.wait(15) or not self._state:
+            if not attempt.link_seen.wait(15) or not attempt.state:
                 self.cancel()
                 raise RcloneError("rclone did not start a sign-in (is port 53682 in use?)")
-            local = f"http://127.0.0.1:{AUTH_PORT}/auth?state={self._state}"
+            local = f"http://127.0.0.1:{AUTH_PORT}/auth?state={attempt.state}"
             try:
                 response = self._session.get(local, allow_redirects=False, timeout=10)
             except requests.RequestException:
@@ -572,24 +612,25 @@ class Authorizer:
                 raise RcloneError("rclone gave no provider sign-in address")
             return target
 
-    def _read(self, stream, is_err: bool) -> None:
+    @staticmethod
+    def _read(attempt: _Attempt, stream, is_err: bool) -> None:
         for line in iter(stream.readline, ""):
             if is_err:
                 found = _AUTH_LINK.search(line)
-                if found and not self._state:
-                    self._state = found.group(1)
-                    self._link_seen.set()
+                if found and not attempt.state:
+                    attempt.state = found.group(1)
+                    attempt.link_seen.set()
             else:
-                self._stdout.append(line)
+                attempt.stdout.append(line)
         if is_err:
-            self._link_seen.set()
+            attempt.link_seen.set()
 
-    def _watch(self, proc, reader, done: threading.Event, on_token) -> None:
+    def _watch(self, attempt: _Attempt, reader) -> None:
         """When rclone exits, hand over its token -- however the code reached it."""
-        proc.wait()
+        attempt.proc.wait()
         if reader is not None:
             reader.join(5)
-        found = _TOKEN_BLOCK.search("".join(self._stdout))
+        found = _TOKEN_BLOCK.search("".join(attempt.stdout))
         token = ""
         if found:
             try:
@@ -597,28 +638,33 @@ class Authorizer:
                 token = found.group(1)
             except ValueError:
                 token = ""
-        self._token = token
-        if token and on_token is not None:
+        with self._lock:
+            current = self._attempt is attempt
+            if current:
+                self._attempt = None
+        attempt.token = token
+        if not token:
+            attempt.error = "the sign-in did not produce a token; start again"
+        elif not current:
+            attempt.error = "a newer sign-in replaced this one"
+        elif attempt.on_token is not None:
             try:
-                on_token(token)
+                attempt.on_token(token)
             except Exception as err:   # noqa: BLE001 - reported to whoever waits
-                self._error = str(err)[:300]
-        elif not token:
-            self._error = "the sign-in did not produce a token; start again"
-        if self._proc is proc:
-            self._proc = None
-        done.set()
+                attempt.error = str(err)[:300]
+        attempt.done.set()
 
     def finish(self, pasted: str) -> str:
         """Deliver the pasted redirect address to rclone; return the token JSON."""
         with self._lock:
-            if not self.active:
+            attempt = self._attempt
+            if attempt is None or not self.active:
                 raise RcloneError("no sign-in is waiting; start again")
             parts = urlsplit(str(pasted or "").strip())
             if parts.hostname not in ("127.0.0.1", "localhost") or parts.port != AUTH_PORT:
                 raise RcloneError("paste the whole address that starts with http://127.0.0.1:53682/")
             query = dict(parse_qsl(parts.query))
-            if query.get("state") != self._state:
+            if query.get("state") != attempt.state:
                 raise RcloneError("that address belongs to a different sign-in; start again")
             if query.get("error"):
                 self.cancel()
@@ -626,25 +672,27 @@ class Authorizer:
             if not query.get("code"):
                 raise RcloneError("the address has no sign-in code in it")
             keep = {k: v for k, v in query.items() if k in ("state", "code", "scope")}
-            done = self._done
             try:
                 self._session.get(f"http://127.0.0.1:{AUTH_PORT}/?{urlencode(keep)}", timeout=30)
             except requests.RequestException:
                 pass  # rclone may close the socket after answering
-        if not done.wait(90):
-            self.cancel()
+        if not attempt.done.wait(90):
+            with self._lock:
+                if self._attempt is attempt:
+                    self.cancel()
             raise RcloneError("rclone did not finish the sign-in")
-        if self._error or not self._token:
-            raise RcloneError(self._error or "the sign-in did not produce a token; start again")
-        return self._token
+        if attempt.error or not attempt.token:
+            raise RcloneError(attempt.error or "the sign-in did not produce a token; start again")
+        return attempt.token
 
-    def _expire(self, proc) -> None:
+    def _expire(self, attempt: _Attempt) -> None:
         with self._lock:
-            if self._proc is proc:
+            if self._attempt is attempt:
                 self.cancel()
 
     def cancel(self) -> None:
-        proc, self._proc = self._proc, None
+        attempt, self._attempt = self._attempt, None
+        proc = attempt.proc if attempt else None
         if proc is not None and proc.poll() is None:
             proc.terminate()
             try:

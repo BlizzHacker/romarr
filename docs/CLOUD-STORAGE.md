@@ -89,6 +89,8 @@ You need your own app for the built-in engine, and it's optional (but recommende
 | Import | Downloads new files and imports them like Manual Import | No |
 | Settings backup | Writes `romarr-settings-<time>.json` with all credentials masked, keeping the newest N | Its own older backups |
 
+**Offload and Mirror need an rclone connection.** They delete files, and rclone checks each one by checksum before anything is deleted. The built-in Google Drive and OneDrive clients do backup, import and settings backup only.
+
 Local folders are limited to the library and download folders ROMarr already knows. Offload is limited to library folders, and ROMarr's own data folder can never be offloaded or mirrored.
 
 Imports are staged in `<library>/.romarr-cloud-import/` (the same disk as the library, so the final move is cheap), then removed. A file the import refuses, such as a bad dump or one already in the library, is reported in the run's result.
@@ -106,7 +108,7 @@ A mount shows a cloud folder as a local folder, for example `/mnt/cloud-roms`, w
 
 - It needs rclone and FUSE. In a **Proxmox container**, enable *Options → Features → FUSE* and restart the container. In **Docker**, add `--device /dev/fuse --cap-add SYS_ADMIN` (on some hosts also `--security-opt apparmor:unconfined`).
 - Mount folders must be empty, and must sit under `/mnt`, `/media`, `/srv`, a library or download folder, or a folder listed in `ROMARR_MOUNT_ROOTS`.
-- **Cache `full`** is best for games. Files are cached on local disk when opened, so emulators can seek in them. The cache lives in `rclone-cache/` beside `romarr.json`. If that disk is small, set `ROMARR_RCLONE_CACHE` to a folder on a bigger one. **Cache limit** (10 GB by default) caps it; the oldest unused files are evicted first.
+- **Cache `full`** is best for games. Files are cached on local disk when opened, so emulators can seek in them. The cache lives in `rclone-cache/` beside `romarr.json`. If that disk is small, set `ROMARR_RCLONE_CACHE` to a folder on a bigger one. **Cache limit** (10 GB by default) is a target rather than a hard cap: rclone evicts the oldest unused files when it is over, so files open at that moment can push it above the limit for a while.
 - **Let other users read it** is needed when another program, such as RomM or a file server, reads the mount as a different user. It also needs `user_allow_other` in `/etc/fuse.conf`.
 - Mounts marked *Mount when ROMarr starts* come back after a restart. They are unmounted when ROMarr stops.
 
@@ -131,6 +133,7 @@ ROMarr never solves captchas or waits out free-user countdowns.
 
 - OAuth tokens for rclone connections are in `rclone.conf`, beside `romarr.json`, with mode `0600`.
 - Built-in tokens, your OAuth app secrets and file-host passwords and keys are in `cloud-secrets.json`, also beside `romarr.json` and mode `0600`.
+- On Windows, mode `0600` has no meaning; the two files rely on the folder's own permissions, so keep ROMarr's data folder in your user profile (the default) rather than a shared location.
 - None of these are in `romarr.json`, so the settings API, the settings backup job and support bundles never carry them. No API route returns them. Forms show "Saved — leave blank to keep it".
 - Nothing secret goes on a command line. rclone's control password is passed in its environment, and tokens go in request bodies to it.
 - Back up these two files yourself if you want your connections to survive a reinstall. Treat them like passwords.

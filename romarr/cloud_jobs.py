@@ -112,6 +112,9 @@ class CloudJobs:
         if kind not in KINDS:
             raise CloudError("Unknown job kind")
         remote = self.cloud.remote(str(body.get("remote") or ""))
+        if remote["engine"] != "rclone" and kind in ("offload", "sync"):
+            raise CloudError(f"{KINDS[kind]} needs an rclone connection: rclone checks each "
+                             "file by checksum before anything is deleted")
         job = {"id": str(body.get("id") or f"j-{secrets.token_hex(4)}"), "kind": kind,
                "name": _clean_label(body.get("name"), KINDS[kind]), "remote": remote["id"],
                "remote_path": str(body.get("remote_path") or "").strip().strip("/")[:500],
@@ -126,19 +129,19 @@ class CloudJobs:
             job["platform"] = str(body.get("platform") or "")[:40]
         if kind == "settings":
             job["keep"] = max(1, min(int(body.get("keep") or 14), 365))
-        cfg = self.cloud.cfg()
-        old = next((j for j in cfg["jobs"] if j.get("id") == job["id"]), {})
-        for carried in ("last_run", "last_result", "seen"):
-            if carried in old:
-                job[carried] = old[carried]
-        cfg["jobs"] = [j for j in cfg["jobs"] if j.get("id") != job["id"]] + [job]
-        self.cloud.save_cfg(cfg)
+        def upsert(cfg):
+            old = next((j for j in cfg["jobs"] if j.get("id") == job["id"]), {})
+            for carried in ("last_run", "last_result", "seen"):
+                if carried in old:
+                    job[carried] = old[carried]
+            cfg["jobs"] = [j for j in cfg["jobs"] if j.get("id") != job["id"]] + [job]
+        self.cloud.update_cfg(upsert)
         return {"ok": True, "job": job}
 
     def delete_job(self, job_id: str) -> dict:
-        cfg = self.cloud.cfg()
-        cfg["jobs"] = [j for j in cfg["jobs"] if j.get("id") != job_id]
-        self.cloud.save_cfg(cfg)
+        def drop(cfg):
+            cfg["jobs"] = [j for j in cfg["jobs"] if j.get("id") != job_id]
+        self.cloud.update_cfg(drop)
         return {"ok": True}
 
     def _job(self, job_id: str) -> dict:
@@ -148,12 +151,11 @@ class CloudJobs:
         return found
 
     def _record(self, job_id: str, **fields) -> None:
-        with self._lock:
-            cfg = self.cloud.cfg()
+        def apply(cfg):
             for job in cfg["jobs"]:
                 if job.get("id") == job_id:
                     job.update(fields)
-            self.cloud.save_cfg(cfg)
+        self.cloud.update_cfg(apply)
 
     # -- runs ---------------------------------------------------------------------------
 
@@ -193,9 +195,10 @@ class CloudJobs:
 
     def run(self, job_id: str) -> dict:
         job = self._job(job_id)
-        if self.running(job_id):
-            raise CloudError("That job is already running")
-        run = self._new_run(job["name"], job_id)
+        with self._lock:
+            if self.running(job_id):
+                raise CloudError("That job is already running")
+            run = self._new_run(job["name"], job_id)
         return self._spawn(run, lambda r: self._work(job, r))
 
     def _work(self, job: dict, run: dict) -> str:
@@ -211,7 +214,9 @@ class CloudJobs:
             mode = {"backup": "copy", "sync": "sync", "offload": "move"}[kind]
             self._wait(self.cloud.rclone.copy(local, dst, mode=mode), run)
             return f"{run['files']} file(s), {run['bytes']} bytes"
-        return self._native_upload(job, remote, local, run, delete=(kind == "offload"))
+        if kind != "backup":
+            raise CloudError(f"{KINDS[kind]} needs an rclone connection")
+        return self._native_upload(job, remote, local, run)
 
     def _wait(self, jobid: int, run: dict) -> dict:
         delay = FIRST_POLL
@@ -228,34 +233,41 @@ class CloudJobs:
 
     # -- native engine ------------------------------------------------------------------
 
-    def _native_upload(self, job, remote, local: str, run: dict, *, delete: bool) -> str:
+    def _native_upload(self, job, remote, local: str, run: dict) -> str:
+        """Back up a folder with a built-in client: new and changed files go up.
+
+        Only regular files inside the folders ROMarr was given are read: a
+        symlink to somewhere else is skipped, so a backup can never carry a
+        file from outside that boundary.
+        """
         client = self.cloud.native_client(remote)
+        roots = self.svc._host_roots()
         listings: dict[str, dict] = {}
         base = job["remote_path"]
+        skipped = 0
         for folder, _dirs, files in os.walk(local):
             rel_dir = os.path.relpath(folder, local).replace(os.sep, "/")
             rel_dir = "" if rel_dir == "." else rel_dir
             target_dir = "/".join(p for p in (base, rel_dir) if p)
-            if target_dir not in listings:
-                listings[target_dir] = self._sizes(client, target_dir)
-            sizes = {name: (Path(folder) / name).stat().st_size
-                     for name in files if not name.endswith(".partial")}
-            for name, size in sizes.items():
+            for name in files:
+                path = Path(folder) / name
+                if name.endswith(".partial") or path.is_symlink() or not path.is_file():
+                    skipped += path.is_symlink()
+                    continue
+                try:
+                    confined(str(path), roots)
+                except ValueError:
+                    skipped += 1
+                    continue
+                if target_dir not in listings:
+                    listings[target_dir] = self._sizes(client, target_dir)
+                size = path.stat().st_size
                 if listings[target_dir].get(name) != size:
-                    client.upload(Path(folder) / name, f"{target_dir}/{name}".lstrip("/"))
+                    client.upload(path, f"{target_dir}/{name}".lstrip("/"))
                     run["files"] += 1
                     run["bytes"] += size
-            if delete and sizes:
-                # One listing per folder checks every upload; only matches are deleted.
-                uploaded = self._sizes(client, target_dir)
-                wrong = [n for n, size in sizes.items() if uploaded.get(n) != size]
-                for name in sizes:
-                    if name not in wrong:
-                        (Path(folder) / name).unlink()
-                if wrong:
-                    raise CloudError(f"{', '.join(wrong[:3])}: the uploaded size does not match; "
-                                     "kept locally")
-        return f"{run['files']} file(s) uploaded, {run['bytes']} bytes"
+        note = f"; skipped {skipped} link(s) outside the allowed folders" if skipped else ""
+        return f"{run['files']} file(s) uploaded, {run['bytes']} bytes{note}"
 
     @staticmethod
     def _sizes(client, folder: str) -> dict:
@@ -301,15 +313,22 @@ class CloudJobs:
         else:
             run["bytes"] += self.cloud.native_client(remote).download(path, dest)
 
+    def _adopt_one(self, path: Path, platform: str) -> tuple[bool, str]:
+        """(in the library now, refusal reason). Already-present counts as in."""
+        result = self.svc.adopt(str(path), platform)
+        if result.get("ok") or result.get("imported"):
+            return True, ""
+        first = (result.get("refused") or [{}])[0]
+        reason = str(result.get("reason") or first.get("reason") or "refused")
+        return "already in the library" in reason, reason
+
     def _adopt_all(self, staging: Path, platform: str, run: dict) -> tuple[int, list[str]]:
         imported, refused = 0, []
         for path in sorted(p for p in staging.rglob("*") if p.is_file()):
-            result = self.svc.adopt(str(path), platform)
-            if result.get("ok") or result.get("imported"):
-                imported += max(1, len(result.get("imported") or []))
-            else:
-                first = (result.get("refused") or [{}])[0]
-                reason = result.get("reason") or first.get("reason") or "refused"
+            ok, reason = self._adopt_one(path, platform)
+            if ok and not reason:
+                imported += 1
+            elif reason:
                 refused.append(f"{path.name}: {reason}"[:200])
         run["files"] = imported
         return imported, refused
@@ -320,16 +339,34 @@ class CloudJobs:
                  if f"{f['path']}|{f['size']}" not in seen][:MAX_IMPORT_FILES]
         if not files:
             return "nothing new to import"
-        staging = self._staging(job.get("platform", ""), run["id"])
+        platform = job.get("platform", "")
+        staging = self._staging(platform, run["id"])
+        imported, refused, failed = 0, [], 0
         try:
             run["total_bytes"] = sum(int(f["size"] or 0) for f in files)
             for f in files:
                 rel = f["path"][len(job["remote_path"]):].strip("/") or f["name"]
-                dest = staging / rel
+                dest = _inside(staging, rel)
+                if dest is None:
+                    refused.append(f"{f['name']}: unsafe name")
+                    continue
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                self._fetch(remote, f["path"], dest, run)
-                seen.add(f"{f['path']}|{f['size']}")
-            imported, refused = self._adopt_all(staging, job.get("platform", ""), run)
+                try:
+                    self._fetch(remote, f["path"], dest, run)
+                except (CloudError, RcloneError, native.NativeError, OSError) as err:
+                    failed += 1
+                    refused.append(f"{f['name']}: download failed ({err})"[:200])
+                    continue
+                ok, reason = self._adopt_one(dest, platform)
+                if ok:
+                    # Seen only once it is in the library: a failed download or
+                    # a refusal is tried again on the next run.
+                    seen.add(f"{f['path']}|{f['size']}")
+                    imported += 0 if reason else 1
+                if reason:
+                    refused.append(f"{f['name']}: {reason}"[:200])
+                dest.unlink(missing_ok=True)
+            run["files"] = imported
         finally:
             _drop(staging)
             self._record(job["id"], seen=sorted(seen)[-MAX_SEEN:])
@@ -345,13 +382,15 @@ class CloudJobs:
             raise CloudError("Give a cloud path or a Google Drive share link")
         if link:
             file_id = drive_id(link)
+            is_folder = "/folders/" in link
             if not file_id:
                 raise CloudError("That is not a Google Drive share link")
             if remote["type"] not in ("drive", "gdrive"):
                 raise CloudError("Share links are copied through a Google Drive connection")
         run = self._new_run(f"Import {link or path}"[:120])
         if link:
-            return self._spawn(run, lambda r: self._import_link(remote, file_id, platform, r))
+            return self._spawn(run, lambda r: self._import_link(remote, file_id, platform, r,
+                                                                is_folder=is_folder))
 
         def work(r):
             parent, _, name = path.rpartition("/")
@@ -366,18 +405,25 @@ class CloudJobs:
             try:
                 for f in files[:MAX_IMPORT_FILES]:
                     rel = f["path"][len(parent):].strip("/") or f["name"]
-                    self._fetch(remote, f["path"], staging / rel, r)
+                    dest = _inside(staging, rel)
+                    if dest is not None:
+                        self._fetch(remote, f["path"], dest, r)
                 return _summary(*self._adopt_all(staging, platform, r))
             finally:
                 _drop(staging)
         return self._spawn(run, work)
 
-    def _import_link(self, remote: dict, file_id: str, platform: str, run: dict) -> str:
+    def _import_link(self, remote: dict, file_id: str, platform: str, run: dict, *,
+                     is_folder: bool = False) -> str:
         staging = self._staging(platform, run["id"])
         try:
             if remote["engine"] == "native":
                 client = self.cloud.native_client(remote)
                 self._native_tree(client, file_id, staging, run, 0)
+            elif is_folder:
+                # copyid takes files only; a folder is read through a remote rooted at it.
+                self._wait(self.cloud.rclone.copy(
+                    self.cloud.rclone.folder_fs(remote["id"], file_id), str(staging)), run)
             else:
                 temp = f"ROMarr import/{run['id']}"
                 self.cloud.rclone.copy_id(remote["id"], file_id, temp)
@@ -396,6 +442,8 @@ class CloudJobs:
     def _native_tree(self, client, file_id: str, dest: Path, run: dict, depth: int) -> None:
         info = client.info(file_id)
         name = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", info.get("name") or file_id)[:200]
+        if name.strip(". ") == "":
+            name = "_" + file_id[:12]      # "." and ".." must never become path steps
         if info.get("mimeType") == native.GoogleDrive.FOLDER:
             if depth >= MAX_DEPTH:
                 return
@@ -409,7 +457,11 @@ class CloudJobs:
     def _settings_backup(self, job: dict, remote: dict, run: dict) -> str:
         stamp = time.strftime("%Y%m%d-%H%M%S", time.gmtime())
         name = f"romarr-settings-{stamp}.json"
-        payload = json.dumps(self.svc.safe_settings(), indent=1, default=str)
+        from .ops import make_backup
+        # The same envelope Settings -> Backup writes and Restore reads, with
+        # every credential (API key, password hash, 2FA secret and recovery
+        # codes, client passwords) stripped.
+        payload = json.dumps(make_backup(dict(self.svc.store.settings)), indent=1, default=str)
         fd, tmp = tempfile.mkstemp(dir=str(self.cloud.data_dir), prefix=".cloud-settings-",
                                    suffix=".json")
         try:
@@ -493,13 +545,13 @@ class CloudJobs:
                  "cache_mode": cache, "auto": bool(body.get("auto", True)),
                  "cache_max_gb": max(0.0, min(float(body.get("cache_max_gb") or 10), 100000)),
                  "allow_other": bool(body.get("allow_other", False))}
-        cfg = self.cloud.cfg()
-        clash = [m for m in cfg["mounts"] if m["mount_point"] == mount["mount_point"]
-                 and m["id"] != mount["id"]]
-        if clash:
-            raise CloudError("Another mount already uses that folder")
-        cfg["mounts"] = [m for m in cfg["mounts"] if m.get("id") != mount["id"]] + [mount]
-        self.cloud.save_cfg(cfg)
+        def upsert(cfg):
+            clash = [m for m in cfg["mounts"] if m["mount_point"] == mount["mount_point"]
+                     and m["id"] != mount["id"]]
+            if clash:
+                raise CloudError("Another mount already uses that folder")
+            cfg["mounts"] = [m for m in cfg["mounts"] if m.get("id") != mount["id"]] + [mount]
+        self.cloud.update_cfg(upsert)
         return {"ok": True, "mount": mount}
 
     def _mount(self, mount_id: str) -> dict:
@@ -513,8 +565,9 @@ class CloudJobs:
         found = next((m for m in cfg["mounts"] if m.get("id") == mount_id), None)
         if found and self._is_mounted(found["mount_point"]):
             self.cloud.rclone.unmount(found["mount_point"])
-        cfg["mounts"] = [m for m in cfg["mounts"] if m.get("id") != mount_id]
-        self.cloud.save_cfg(cfg)
+        def drop(cfg):
+            cfg["mounts"] = [m for m in cfg["mounts"] if m.get("id") != mount_id]
+        self.cloud.update_cfg(drop)
         return {"ok": True}
 
     def _is_mounted(self, mount_point: str) -> bool:
@@ -590,3 +643,16 @@ def _drop(staging: Path) -> None:
         staging.parent.rmdir()
     except OSError:
         pass
+
+
+def _inside(staging: Path, rel: str) -> Path | None:
+    """`staging / rel`, or None when `rel` would leave the staging folder."""
+    parts = [p for p in str(rel).replace("\\", "/").split("/") if p]
+    if not parts or any(p in (".", "..") for p in parts):
+        return None
+    dest = staging.joinpath(*parts)
+    try:
+        dest.resolve().relative_to(staging.resolve())
+    except ValueError:
+        return None
+    return dest

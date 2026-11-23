@@ -228,7 +228,6 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "/api/v1/cloud/signin/finish": ("POST", "Finish a sign-in with the `address` the browser landed on (http://127.0.0.1:53682/?state=...&code=...). The state must match the waiting sign-in."),
     "/api/v1/cloud/signin/cancel": ("POST", "Abandon the sign-in in progress."),
     "/api/v1/cloud/apps": ("POST", "Save your own Google or Microsoft OAuth app (`provider` gdrive|onedrive, `client_id`, `client_secret`). A blank or masked secret keeps the saved one."),
-    "/api/v1/cloud/rclone": ("POST", "Set the rclone executable to use (`path`); blank means PATH or $ROMARR_RCLONE."),
     "/api/v1/cloud/link": ("POST", "Create a public share link for a file or folder on an rclone connection (`remote`, `path`), where the provider supports it."),
     "/api/v1/cloud/jobs": ("POST", "Create or update a job: `kind` backup|sync|offload|import|settings, `remote`, `remote_path`, `local_path` (confined to library and download folders; offload: library folders only and `confirm` true), `platform`, `interval_hours`, `keep`."),
     "/api/v1/cloud/jobs/delete": ("POST", "Delete a job (`id`). Nothing in the cloud or the library is touched."),

@@ -92,7 +92,7 @@ Constant public assets (`/favicon.ico`, `/favicon.svg`, `/manifest.webmanifest`,
 `/service-worker.js`, `/app-icon-192.png`, `/app-icon-512.png`) contain no user
 data. The service worker does not intercept requests or cache responses.
 
-Exactly twelve routes answer without a credential, apart from constant static assets (this count is
+Exactly thirteen routes answer without a credential, apart from constant static assets (this count is
 asserted against the code, not maintained by hand):
 
 | Route | Why |
@@ -109,6 +109,7 @@ asserted against the code, not maintained by hand):
 | `/api/v1/peer/accept` | A peer redeeming an invitation you minted. Carries the one-time secret or the claim code. |
 | `/api/v1/peer/shelf` | A peer reading what you share. Requires peer id + token. |
 | `/api/v1/peer/netplay` | A peer proposing a session. Requires peer id + token. |
+| `/api/v1/cloud/oauth/callback` | Google's or Microsoft's redirect back from a built-in cloud sign-in that uses this ROMarr's own address. Cross-site by nature, so the `SameSite=Strict` session cookie does not ride it; it completes only a sign-in this ROMarr started, matched by its single-use, unguessable `state` (with PKCE), and its query string is kept out of the access log. |
 
 **The three peer routes are open to the *session* gate and closed to
 everyone without a peer credential.** They are called by another server,

@@ -3955,7 +3955,12 @@ class SiteDownloader:
 
     # -- the client interface ----------------------------------------------
 
-    def add(self, url: str, *, save_path: str | None = None, name: str = "") -> bool:
+    #: `hosters.HosterRoute` passes the original file-host link with a job, so
+    #: an expiring download URL (1fichier: five minutes) is renewed at fetch time.
+    TAKES_SOURCE = True
+
+    def add(self, url: str, *, save_path: str | None = None, name: str = "",
+            source: str = "") -> bool:
         """Record a job. The bytes are fetched by the next `completed` sweep.
 
         Refusals that can be decided without touching the network are decided
@@ -3976,6 +3981,7 @@ class SiteDownloader:
             return True
         rows.append({
             "url": url,
+            "source": str(source or ""),
             "name": name,
             "save_path": save_path or self._config.save_path,
             "state": "pending",
@@ -4051,6 +4057,11 @@ class SiteDownloader:
     def _run(self, row: dict) -> None:
         """Fetch one job, in place, recording why if it did not work."""
         url = row.get("url", "")
+        if row.get("source"):
+            # Unlocked at grab time, but this job may have waited longer than
+            # the host's download URL lives; ask the account again now.
+            from .hosters import fresh_link
+            url = fresh_link(row["source"]) or url
         host = SitePolicy._host(url)
         if host in self._forbidden:
             row.update(state="failed",
