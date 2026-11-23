@@ -516,6 +516,11 @@ class Authorizer:
                                 stderr=subprocess.PIPE, text=True)
             self._started = time.monotonic()
             self.rtype = rtype
+            # An abandoned sign-in must not hold port 53682 until the next one.
+            proc = self._proc
+            timer = threading.Timer(AUTH_SECONDS, self._expire, args=(proc,))
+            timer.daemon = True
+            timer.start()
             threading.Thread(target=self._read, args=(self._proc.stderr, True), daemon=True).start()
             threading.Thread(target=self._read, args=(self._proc.stdout, False), daemon=True).start()
             if not self._link_seen.wait(15) or not self._state:
@@ -579,6 +584,11 @@ class Authorizer:
             token = found.group(1)
             json.loads(token)  # it must be JSON; never echoed
             return token
+
+    def _expire(self, proc) -> None:
+        with self._lock:
+            if self._proc is proc:
+                self.cancel()
 
     def cancel(self) -> None:
         proc, self._proc = self._proc, None

@@ -606,3 +606,12 @@ def test_every_listed_cloud_route_is_handled(cloud, svc):
         if path.endswith("/callback"):
             continue
         assert cloud_routes.get(svc, path, {})[0] != 404, path
+
+
+def test_an_abandoned_sign_in_stops_its_listener(tmp_path):
+    auth = _waiting_authorizer(tmp_path)
+    proc = auth._proc
+    auth._expire(object())          # a timer from an older sign-in: ignored
+    assert auth._proc is proc
+    auth._expire(proc)
+    assert auth._proc is None and proc.poll() is not None   # terminated
