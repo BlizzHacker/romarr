@@ -199,8 +199,8 @@ class QBittorrent:
             def bearer(request):
                 request.headers["Authorization"] = header
                 return request
+            self._session.auth = bearer
             
-        self._session.auth = bearer
         self._authed = False
         self._added = threading.local()
         self._selection_lock = threading.RLock()
