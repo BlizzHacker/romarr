@@ -860,6 +860,10 @@ class ROMarr:
             nightly.git_checkout_revision(startup_install)
             if startup_install.kind == "git" else "")
         self._collection_lock = threading.RLock()
+        # One set pass at a time. The scheduler and the page's "Run next"
+        # button both step batches; without this two passes could take the
+        # same slice and request every title in it twice.
+        self._collection_batch_lock = threading.RLock()
         self._probe_lock = threading.Lock()
         self._inflight_probes: dict[int, tuple[object, threading.Event, dict[str, object]]] = {}
         # Background sweeps overlap, and client I/O happens before the queue row
@@ -1231,6 +1235,16 @@ class ROMarr:
             lambda: (900 if self.store.settings.get(
                 "blocklist_failed_downloads", True) else 0),
             lambda: self.retire_dead_downloads()["message"])
+        # A set queued on the Collections page used to sit at 0% until someone
+        # pressed "Run next" for every slice -- 380 presses for a 1,900-title
+        # set. One slice per interval keeps the original promise (a set is
+        # not more important than the indexers' other traffic) without
+        # needing a person at the keyboard. Off when nothing is queued.
+        self.scheduler.add(
+            "CollectionSets", "Work through queued collection sets",
+            lambda: (60 * self._collection_interval_minutes()
+                     if self._collection_batches_active() else 0),
+            lambda: self.collection_tick()["message"])
         self.scheduler.add(
             "ListSync", "Sync import lists into Wanted",
             _hours("list_sync_interval_hours"),
@@ -5312,6 +5326,22 @@ class ROMarr:
 
         from .collections import Batch, BATCH_PENDING
 
+        # Every title in a set is requested for ONE platform. With none, the
+        # request has nowhere to go: each one failed as "unknown platform"
+        # and the batch still read 100% done. Default to the DAT's own
+        # platform, and refuse plainly when that cannot be worked out.
+        dat_name, dat_error = self._loaded_dat_name(str(dat_name or ""))
+        if dat_error:
+            return {"error": dat_error}
+        platform = str(platform or "").strip()
+        if not platform:
+            platform = self._dat_platform(dat_name)
+        chosen = resolve(platform) if platform else None
+        if chosen is None:
+            return {"error": "pick the platform this DAT is for before "
+                             "requesting a set; ROMarr could not work it "
+                             "out from the DAT's name"}
+        platform = chosen.slug
         plan = self.collection_plan(dat_name, platform, **policy_kw)
         if plan.get("error"):
             return plan
@@ -5334,6 +5364,10 @@ class ROMarr:
         other traffic. Draining the queue in one pass would also mean losing
         the lot if the process stopped halfway.
         """
+        with self._collection_batch_lock:
+            return self._collection_step(batch_id)
+
+    def _collection_step(self, batch_id: str) -> dict:
         from .collections import BATCH_DONE, BATCH_PAUSED, BATCH_RUNNING
 
         batches = self._batches()
@@ -5343,21 +5377,90 @@ class ROMarr:
         if batch.status == BATCH_PAUSED:
             return {"paused": True, **batch.progress()}
 
+        if not resolve(batch.platform or ""):
+            guess = self._dat_platform(batch.dat)
+            if guess:
+                batch.platform = guess
         batch.status = BATCH_RUNNING
         for name in batch.take():
+            if not resolve(batch.platform or ""):
+                batch.record(name, ok=False,
+                             reason="this set has no platform; cancel it and "
+                                    "request it again with a platform chosen")
+                continue
             try:
-                self.request(name, batch.platform)
-                batch.record(name, ok=True)
+                # The same once-only handoff RSS and the Wanted sweep use: a
+                # title already queued, downloading or awaiting import review
+                # (from any path, or another set) is not handed off again.
+                result = self._automatic_request(name, batch.platform)
             except Exception as err:  # noqa: BLE001 - one title must not stop the set
                 batch.record(name, ok=False,
                              reason=f"{err.__class__.__name__}: {err}")
+                continue
+            # `request` reports most failures in its result rather than
+            # raising. Counting those as done showed a set as complete when
+            # nothing had been grabbed.
+            if isinstance(result, dict) and result.get("skipped"):
+                # Already on its way. Counted as requested, never as failed.
+                batch.record(name, ok=True)
+                continue
+            if isinstance(result, dict) and result.get("ok") is False:
+                reason = str(result.get("error") or "request failed")
+                if reason.startswith("no usable release"):
+                    # `request` put the title on Wanted; say so, because
+                    # "failed" alone reads as "dropped".
+                    reason += " (kept on Wanted; the Wanted search retries it)"
+                batch.record(name, ok=False, reason=reason)
+            else:
+                batch.record(name, ok=True)
         if not batch.queue:
             batch.status = BATCH_DONE
         self.store.put_item("batches", batch.to_dict())
         self.store.save()
         return batch.progress()
 
+    #: Minutes between scheduled set passes when the setting is absent.
+    COLLECTION_INTERVAL_MINUTES = 10
+
+    def _collection_interval_minutes(self) -> int:
+        """Minutes between scheduled set passes (setting, at least 1)."""
+        try:
+            value = int(self.store.settings.get("collection_batch_interval_minutes")
+                        or self.COLLECTION_INTERVAL_MINUTES)
+        except (TypeError, ValueError):
+            value = self.COLLECTION_INTERVAL_MINUTES
+        return max(1, value)
+
+    def _collection_batches_active(self) -> bool:
+        """Whether any queued set still has titles to request."""
+        from .collections import BATCH_PENDING, BATCH_RUNNING
+        return any(raw.get("queue") and raw.get("status") in (BATCH_PENDING, BATCH_RUNNING)
+                   for raw in self.store.list_items("batches"))
+
+    def collection_tick(self) -> dict:
+        """One scheduled pass: the next slice of every set that is not paused."""
+        from .collections import BATCH_PENDING, BATCH_RUNNING
+        stepped, requested, failed = 0, 0, 0
+        for batch in list(self._batches().values()):
+            if batch.status not in (BATCH_PENDING, BATCH_RUNNING) or not batch.queue:
+                continue
+            before_done, before_failed = len(batch.done), len(batch.failed)
+            after = self.collection_step(batch.id)
+            if after.get("error") or after.get("paused"):
+                continue
+            stepped += 1
+            requested += max(0, int(after.get("done", 0)) - before_done)
+            failed += max(0, int(after.get("failed", 0)) - before_failed)
+        if not stepped:
+            return {"stepped": 0, "message": "no collection set is queued"}
+        return {"stepped": stepped, "requested": requested, "failed": failed,
+                "message": f"{stepped} set(s): {requested} requested, {failed} failed"}
+
     def collection_control(self, batch_id: str, action: str) -> dict:
+        with self._collection_batch_lock:
+            return self._collection_control(batch_id, action)
+
+    def _collection_control(self, batch_id: str, action: str) -> dict:
         from .collections import BATCH_PAUSED, BATCH_PENDING
 
         batches = self._batches()
@@ -5380,9 +5483,47 @@ class ROMarr:
         self.store.save()
         return batch.progress()
 
+    def _loaded_dat_name(self, dat_name: str) -> tuple[str, str]:
+        """The loaded DAT a set will use, as (name, error).
+
+        `collection_plan` falls back to the first loaded DAT when the name is
+        empty. A NAMED DAT that is not loaded must not take that fallback: the
+        platform would be inferred from the requested name while the titles
+        came from a different system's DAT.
+        """
+        names = self.dat_names()
+        if dat_name:
+            if dat_name in names:
+                return dat_name, ""
+            return "", (f"DAT {dat_name!r} is not loaded; pick one of the "
+                        "loaded DATs")
+        if not names:
+            return "", ("no DAT loaded. Point DAT_PATH at a No-Intro or "
+                        "Redump directory, or add one under Settings.")
+        return names[0], ""
+
+    def _dat_platform(self, dat_name: str) -> str:
+        """The platform slug a DAT most likely covers, or "" (a UI default)."""
+        from .collections import platform_for_dat
+        catalog = self.store.settings.get("dat_catalog_platforms")
+        return platform_for_dat(dat_name, catalog if isinstance(catalog, dict) else None)
+
+    #: How many failure reasons each batch row carries to the page. Enough
+    #: to see the pattern ("no usable release" forty times); the full list
+    #: stays in the store for Retry failed.
+    _BATCH_FAILURES_SHOWN = 20
+
     def collection_status(self) -> dict:
-        return {"batches": [b.progress() for b in self._batches().values()],
-                "dats": self.dat_names()}
+        dats = self.dat_names()
+        return {"batches": [
+                    {**b.progress(),
+                     "failures": [{"title": name, "reason": reason}
+                                  for name, reason in
+                                  list(b.failed.items())[:self._BATCH_FAILURES_SHOWN]]}
+                    for b in self._batches().values()],
+                "dats": dats,
+                "dat_platforms": {name: self._dat_platform(name) for name in dats},
+                "interval_minutes": self._collection_interval_minutes()}
 
     def _is_source_torrent(self, client, row) -> bool:
         """Keep active DAT sources out of ordinary completion and import previews."""
@@ -5516,7 +5657,10 @@ class ROMarr:
         import shutil
         import uuid
 
-        platform = str(platform or "").strip()
+        dat_name, dat_error = self._loaded_dat_name(str(dat_name or ""))
+        if dat_error:
+            return {"error": dat_error}
+        platform = str(platform or "").strip() or self._dat_platform(dat_name)
         if not platform:
             return {"error": "select a platform before starting source acquisition"}
         selected_platform = resolve(platform)

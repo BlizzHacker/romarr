@@ -38,7 +38,7 @@ RAR archives, split RAR sets (`.part01.rar`, `.rar` + `.r00`, `.001`) and any ot
 
 ![Collections 1G1R comparison and set torrent planner](img/collections.png)
 
-**Collections** compares a loaded DAT with the selected library/platform. You can review missing entries and apply the available region/1G1R policy. A DAT describes a set; it does not supply downloads.
+**Collections** compares a loaded DAT with the selected library/platform. You can review missing entries and apply the available region/1G1R policy. A DAT describes a set; it does not supply downloads. The [Collections guide](COLLECTIONS.md) walks through a first set, every option, worked examples and every status and error.
 
 For an existing qBittorrent or Transmission set torrent, selective acquisition first previews matched files and sidecars. ROMarr changes file priorities for a batch within your staging budget, verifies downloaded data before importing, and saves progress across restarts. Completion or cancellation restores the original file selection, priorities and paused state. The workflow does not delete the source torrent or its original downloaded data. Account for those source files separately from the staging budget.
 

@@ -22,7 +22,19 @@ def test_the_service_registers_its_jobs(tmp_path):
     names = {j["name"] for j in s.scheduler.status()}
     assert names == {"ImportCompleted", "MissingGameSearch", "RssSync",
                      "ListSync", "UpdateCheck", "PluginUpdate", "HashIndex",
-                     "FailedDownloads", "SoundtrackTorrents"}
+                     "FailedDownloads", "SoundtrackTorrents",
+                     "CollectionSets"}
+
+
+def test_collection_sets_job_is_off_until_a_set_is_queued(tmp_path):
+    s = svc(tmp_path)
+    jobs = {j["name"]: j for j in s.scheduler.status()}
+    assert not jobs["CollectionSets"]["enabled"]
+    s.store.put_item("batches", {"id": "b", "platform": "snes", "status": "pending",
+                                 "queue": ["A"], "done": [], "failed": {}, "per_pass": 5})
+    jobs = {j["name"]: j for j in s.scheduler.status()}
+    assert jobs["CollectionSets"]["enabled"]
+    assert jobs["CollectionSets"]["interval_seconds"] == 600
 
 
 def test_plugin_update_job_is_off_until_asked_and_toggles_live(tmp_path):
