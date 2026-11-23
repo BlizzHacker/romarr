@@ -34,6 +34,12 @@ DAT checksums distinguish **verified**, **bad dump** and **unknown**. Every memb
 
 RAR archives, split RAR sets (`.part01.rar`, `.rar` + `.r00`, `.001`) and any other `.7z`/`.zip` (a zipped cue/bin, a multi-disc set) have no Compressatorium mode, so ROMarr extracts them itself with the same readers the importer uses. These run without the sidecar. One file lands beside its archive; several land in a folder named after it. Nothing is overwritten, and partly extracted output is never left under a final name. Every output is checked against the loaded DATs. An original (for a RAR set, every volume) is deleted only when deletion was asked for and every output verified. A dry run lists which engine would handle each file.
 
+### Switch compression on import
+
+**Settings → Media Management → Compress Switch imports** sends each imported Switch `.nsp` and `.xci` to the same Compressatorium sidecar as an `nsz_compress` job. It is off by default. An `.nsz` or `.xcz` is already compressed and is left alone. **NSZ compression** takes `solid:<level>` or `block:<level>` with a level from 1 to 22, and defaults to `block:18`. Block mode keeps random access in an NSZ, and an `.xci` is always sent as block because an XCZ cannot be solid.
+
+Compressatorium removes the original only after the compressed file passes its round-trip check. ROMarr then points the hash index and the queue row at the `.nsz` or `.xcz` and asks the library server to rescan. A job that fails, or is still running after three hours and is cancelled, keeps the original. Every outcome is recorded in **History** as a `compress` event with the service's reason. Compressatorium rarely rebuilds an XCI byte for byte, so most `.xci` jobs end failed with the original kept. ROMarr handles no keys: the sidecar needs the operator's own `prod.keys` (its `SWITCH_KEYS`), and without them its nsz tool is reported unavailable and no job is submitted.
+
 ## Collections and existing set torrents
 
 ![Collections 1G1R comparison and set torrent planner](img/collections.png)
