@@ -213,6 +213,30 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "/api/v1/chat/models": ("POST", "Models the chat provider offers (Ollama reads /api/tags), using saved settings with any unsaved form values on top."),
     "/api/v1/chat/test": ("POST", "Check the chat provider answers with the key and that the chosen model exists. Never echoes the key."),
     "/api/v1/chat/history": ("GET", "This user's chat agent conversation and any action still waiting for confirmation (DELETE clears it)."),
+    "/api/v1/cloud": ("GET", "Cloud storage overview: whether rclone and FUSE are available, connections, jobs, mounts and their state, recent runs, saved OAuth app client ids and which file-host accounts are set. Never returns a token, password, API key or client secret."),
+    "/api/v1/cloud/providers": ("GET", "Every storage provider the installed rclone supports, with its configuration options, plus the built-in Google Drive and OneDrive clients."),
+    "/api/v1/cloud/browse": ("GET", "List one folder of a connection (`remote`, `path`); folders first, at most 5,000 entries."),
+    "/api/v1/cloud/about": ("GET", "Used, free and total space of a connection (`remote`), when the provider reports it."),
+    "/api/v1/cloud/runs": ("GET", "Recent cloud job and import runs with progress (files, bytes, errors) and their result."),
+    "/api/v1/cloud/oauth/callback": ("GET", "Where Google or Microsoft returns the browser after a built-in sign-in that uses this ROMarr's own address as the redirect; finishes the sign-in and redirects to the Cloud page."),
+    "/api/v1/cloud/remotes": ("POST", "Add an rclone connection that needs no browser sign-in (`name`, `type`, `label`, `params` from the provider's options). Passwords are obscured by rclone; tokens cannot be set here."),
+    "/api/v1/cloud/remotes/delete": ("POST", "Remove a connection (`id`). Refused while a job or mount uses it. Cloud files are not touched."),
+    "/api/v1/cloud/signin/start": ("POST", "Start a browser sign-in. rclone engine: `type`, `name`, optional `use_own_app`; built-in engine: `type` gdrive|onedrive and `redirect` paste|callback. Returns the provider URL to open."),
+    "/api/v1/cloud/signin/finish": ("POST", "Finish a sign-in with the `address` the browser landed on (http://127.0.0.1:53682/?state=...&code=...). The state must match the waiting sign-in."),
+    "/api/v1/cloud/signin/cancel": ("POST", "Abandon the sign-in in progress."),
+    "/api/v1/cloud/apps": ("POST", "Save your own Google or Microsoft OAuth app (`provider` gdrive|onedrive, `client_id`, `client_secret`). A blank or masked secret keeps the saved one."),
+    "/api/v1/cloud/rclone": ("POST", "Set the rclone executable to use (`path`); blank means PATH or $ROMARR_RCLONE."),
+    "/api/v1/cloud/link": ("POST", "Create a public share link for a file or folder on an rclone connection (`remote`, `path`), where the provider supports it."),
+    "/api/v1/cloud/jobs": ("POST", "Create or update a job: `kind` backup|sync|offload|import|settings, `remote`, `remote_path`, `local_path` (confined to library and download folders; offload: library folders only and `confirm` true), `platform`, `interval_hours`, `keep`."),
+    "/api/v1/cloud/jobs/delete": ("POST", "Delete a job (`id`). Nothing in the cloud or the library is touched."),
+    "/api/v1/cloud/jobs/run": ("POST", "Run a job now (`id`); returns the run, which /api/v1/cloud/runs then reports on."),
+    "/api/v1/cloud/import": ("POST", "Import once from a connection: a cloud `path` (file or folder) or a Google Drive share `link`, into `platform` (detected when blank), through the normal import with DAT verification."),
+    "/api/v1/cloud/mounts": ("POST", "Create or update a mount: `remote`, `remote_path`, `mount_point` (an empty folder under /mnt, /media, /srv, a library or download folder), `cache_mode`, `auto`, `allow_other`. Needs rclone and FUSE."),
+    "/api/v1/cloud/mounts/delete": ("POST", "Unmount and delete a mount (`id`)."),
+    "/api/v1/cloud/mounts/mount": ("POST", "Mount now (`id`)."),
+    "/api/v1/cloud/mounts/unmount": ("POST", "Unmount now (`id`)."),
+    "/api/v1/cloud/hosts": ("POST", "Save and test a file-host account: `kind` rapidgator (`login`, `password`, optional 2FA `code`) or 1fichier (`api_key`). Used to fetch that host's links on grabs. A blank or masked secret keeps the saved one."),
+    "/api/v1/cloud/hosts/delete": ("POST", "Remove a file-host account (`kind`)."),
     "/api/v1/mcp": ("GET", "MCP connection manifest (GET), or authenticated stateless JSON-RPC MCP transport (POST). GET text/event-stream returns 405; no standalone SSE stream is offered."),
     "/api/v1/hub/archive-org/auth": ("POST", "Save or clear host-managed Archive.org credentials; returns status without credentials."),
     "/api/v1/hub/plugin": ("POST", "Install, enable, disable or uninstall a plugin."),
@@ -477,6 +501,10 @@ def served_routes(source: str | None = None) -> set[str]:
     # exactly that with /api/v1/webhook.
     for group in re.findall(r'route\.path in \(([^)]*)\)', source):
         found.update(re.findall(r'"(/[^"]*)"', group))
+    if 'route.path.startswith("/api/v1/cloud/")' in source:
+        # Cloud storage dispatches through cloud_routes, which lists its paths.
+        from .cloud_routes import GET_PATHS, POST_PATHS
+        found.update(GET_PATHS + POST_PATHS)
     return found
 
 

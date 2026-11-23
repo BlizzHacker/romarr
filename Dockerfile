@@ -47,7 +47,10 @@ ARG TARGETARCH
 # libseccomp is the runtime half of the sandbox pyseccomp was built against.
 # ROM Hub installs catalogue plugins from pinned repository refs, so git is a
 # runtime dependency rather than builder cargo.
-RUN apk add --no-cache su-exec tzdata libarchive-tools libseccomp git
+# rclone is the cloud storage engine (romarr/cloud_rclone.py): Google Drive,
+# OneDrive, Dropbox, MEGA, S3 and the rest. fuse3 lets it mount a cloud folder
+# as a library root when the container is given /dev/fuse.
+RUN apk add --no-cache su-exec tzdata libarchive-tools libseccomp git rclone fuse3
 
 # Plugins ROMarr ships preinstalled (romarr/compressatorium_plugin.py). Each is
 # a git checkout at a pinned tag, because ROM Hub installs plugins from git;

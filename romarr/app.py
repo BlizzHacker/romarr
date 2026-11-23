@@ -188,6 +188,7 @@ MASKED_ITEM_FIELDS = {
     "connections": ("url", "urls", "token", "password", "key", "secret"),
     "import_lists": LIST_SECRETS,
 }
+SERVER_OWNED_SETTINGS = ("chat_agent", "cloud_storage")
 _SECRET_KEY_WORDS = ("secret", "password", "token", "passkey", "api_key", "apikey")
 
 
@@ -1212,6 +1213,20 @@ class ROMarr:
                 return float(self.store.settings.get(key) or 0) * 3600
             return read
 
+        # Cloud storage (romarr/cloud_storage.py, cloud_jobs.py). Built here so
+        # file-host accounts are registered for grabs before anyone opens the
+        # page; rclone itself starts only on first use.
+        from .cloud_storage import CloudStorage
+        from .cloud_jobs import CloudJobs
+        self.cloud = CloudStorage(self)
+        self.cloud_jobs = CloudJobs(self.cloud, self)
+        import atexit
+        atexit.register(self._cloud_close)
+        try:
+            self.cloud_jobs.automount()
+        except Exception:                          # noqa: BLE001 - never fatal
+            log.warning("cloud automount did not start", exc_info=True)
+
         self.scheduler = Scheduler()
         self.scheduler.add("SoundtrackTorrents", "Add finished soundtrack torrents to RomM",
                            lambda: 30 if self._soundtracks_watching() else 0,
@@ -1245,6 +1260,10 @@ class ROMarr:
             lambda: (60 * self._collection_interval_minutes()
                      if self._collection_batches_active() else 0),
             lambda: self.collection_tick()["message"])
+        self.scheduler.add(
+            "CloudJobs", "Run scheduled cloud storage jobs",
+            lambda: 60 if self.cloud_jobs.scheduled() else 0,
+            lambda: self.cloud_jobs.tick())
         self.scheduler.add(
             "ListSync", "Sync import lists into Wanted",
             _hours("list_sync_interval_hours"),
@@ -2155,9 +2174,11 @@ class ROMarr:
             if (isinstance(patch[key], str) and patch[key] == SECRET_MASK
                     and any(t in key.lower() for t in _SECRET_KEY_WORDS)):
                 patch[key] = self.store.settings.get(key, "")
-        if "chat_agent" in patch:
-            # A settings save echoes this masked; /api/v1/chat/config is where it changes.
-            patch["chat_agent"] = self.store.settings.get("chat_agent", {})
+        # Settings owned by their own endpoints (/api/v1/chat/config,
+        # /api/v1/cloud/*): a settings save echoes them, and must not rewrite them.
+        for key in SERVER_OWNED_SETTINGS:
+            if key in patch:
+                patch[key] = self.store.settings.get(key, {})
         return patch
 
 
@@ -2170,6 +2191,14 @@ class ROMarr:
                 self._reports_manager = FileReports(lambda: self.library, self.store.path.parent,
                     lambda: dict(self.store.settings), self._env, version=VERSION)
             return self._reports_manager
+
+    def _cloud_close(self) -> None:
+        """Unmount cloud mounts and stop rclone when ROMarr exits."""
+        try:
+            self.cloud_jobs.unmount_all()
+            self.cloud.close()
+        except Exception:                          # noqa: BLE001 - exiting anyway
+            pass
 
     def setup_status(self) -> dict:
         """A quick setup checklist, without probing services or returning secrets."""
@@ -9756,6 +9785,21 @@ def make_handler(service: ROMarr):
                 if close is not None:
                     close()
 
+        def _cloud_post(self, path: str, length: int):
+            """POST /api/v1/cloud/*: a bounded JSON body, then cloud storage."""
+            from .cloud_routes import post as cloud_post
+            if length < 0 or length > 65536:
+                self.close_connection = True
+                return self._json(413, {"error": "Cloud request exceeds 64 KiB"})
+            try:
+                body = json.loads(self.rfile.read(length) or b"{}")
+            except (ValueError, UnicodeDecodeError):
+                return self._json(400, {"error": "invalid json"})
+            if not isinstance(body, dict):
+                return self._json(400, {"error": "Send a JSON object"})
+            code, payload = cloud_post(service, path, body)
+            return self._json(code, payload)
+
         def _chat_post(self, path: str, length: int):
             """POST /api/v1/chat*: a bounded JSON body, then the chat agent."""
             from . import chat_agent
@@ -10087,6 +10131,21 @@ def make_handler(service: ROMarr):
             """Serve UI HTML pages and JSON API GET endpoints."""
             route = urlparse(self.path)
             query = parse_qs(route.query)
+            if route.path == "/api/v1/cloud/oauth/callback":
+                from .cloud_routes import oauth_callback
+                ok, message = oauth_callback(service, {k: v[0] for k, v in query.items()})
+                if ok:
+                    self.send_response(302)
+                    self.send_header("Location", "/#cloud")
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return None
+                return self._json(400, {"error": message})
+            if route.path == "/api/v1/cloud" or route.path.startswith("/api/v1/cloud/"):
+                from .cloud_routes import get as cloud_get
+                code, payload = cloud_get(service, route.path,
+                                          {k: v[0] for k, v in query.items()})
+                return self._json(code, payload)
 
 
 
@@ -10948,6 +11007,8 @@ def make_handler(service: ROMarr):
             if route.path in ("/api/v1/chat", "/api/v1/chat/confirm", "/api/v1/chat/config",
                               "/api/v1/chat/models", "/api/v1/chat/test"):
                 return self._chat_post(route.path, length)
+            if route.path.startswith("/api/v1/cloud/"):
+                return self._cloud_post(route.path, length)
 
 
 

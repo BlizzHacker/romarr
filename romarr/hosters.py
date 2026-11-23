@@ -10,8 +10,14 @@ name. So a release whose link is a file host's page has its own protocol,
    resulting file URL goes to the direct downloader -- Mister Download
    Manager or the Direct HTTP client -- like any other direct link.
 2. **A direct file** already (fileditch and similar serve the file itself).
-3. **A debrid service** (Real-Debrid, AllDebrid) that unlocks hoster links
+3. **A premium account on the host itself** (Rapidgator, 1fichier --
+   `premium_hosts`), which turns the link into a direct URL for the direct
+   downloader.
+4. **A debrid service** (Real-Debrid, AllDebrid) that unlocks hoster links
    on the account the operator configured.
+
+A MultiUp link is a list of mirrors rather than a file; it is replaced by
+the mirrors MultiUp reports, and each of those goes through the same steps.
 
 ROMarr never answers a captcha, waits out a countdown or replays a browser
 session to get round a host's free-user limits. A link no route can take
@@ -21,6 +27,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections import deque
 from urllib.parse import urlsplit
 
 log = logging.getLogger(__name__)
@@ -59,6 +66,9 @@ FILE_HOSTS = {
 #: Link containers: a page listing other links behind a challenge. Nothing
 #: can fetch these unattended, so they are never chosen when anything else is.
 CONTAINERS = frozenset({"FileCrypt"})
+
+#: Hosts a premium account on the host itself can unlock (`premium_hosts`).
+PREMIUM_LABELS = ("Rapidgator", "1fichier")
 
 #: Hosts that serve the file itself at the URL a source lists.
 DIRECT_HOSTS = ("fileditchfiles.st", "itsfileditchfiles.st", "fileditch.com")
@@ -130,6 +140,27 @@ def public_file_url(url: str) -> str:
     return ""
 
 
+#: Where `HosterRoute.for_clients` finds premium host accounts. The cloud
+#: storage service registers a callable at startup; until then there are none.
+_accounts_source = None
+
+
+def register_accounts(source) -> None:
+    """Set the callable that returns the configured premium host accounts."""
+    global _accounts_source
+    _accounts_source = source
+
+
+def premium_accounts() -> list:
+    if _accounts_source is None:
+        return []
+    try:
+        return [a for a in (_accounts_source() or []) if getattr(a, "configured", True)]
+    except Exception:   # an account store problem must never break a grab
+        log.warning("premium host accounts could not be read", exc_info=True)
+        return []
+
+
 def _hand(client, url: str, name: str) -> bool:
     if name and getattr(client, "TAKES_NAME", False):
         return bool(client.add(url, name=name))
@@ -151,14 +182,21 @@ class HosterRoute:
     TAKES_NAME = True
     name = "File host"
 
-    def __init__(self, *, direct=None, debrid=()):
+    def __init__(self, *, direct=None, debrid=(), premium=(), expand=None):
         self._direct = direct
         self._debrid = [c for c in debrid if c is not None]
+        # A list, or a callable that produces one: read only when a link's host
+        # could use an account, so ordinary grabs never touch the account store.
+        self._premium_source = premium
+        self._premium_cache: list | None = None
+        self._expand = expand
         self._taken_by = None
         self.last_error = ""
 
     @classmethod
     def for_clients(cls, clients) -> "HosterRoute | None":
+        from .premium_hosts import multiup_mirrors
+
         direct = next((c for c in clients
                        if getattr(c, "protocol", "") == "direct"
                        and getattr(c, "configured", True)), None)
@@ -167,7 +205,44 @@ class HosterRoute:
                   and getattr(c, "configured", True)]
         if direct is None and not debrid:
             return None
-        return cls(direct=direct, debrid=debrid)
+        premium = premium_accounts if direct is not None else ()
+        return cls(direct=direct, debrid=debrid, premium=premium, expand=multiup_mirrors)
+
+    @property
+    def _premium(self) -> list:
+        if self._premium_cache is None:
+            source = self._premium_source
+            items = source() if callable(source) else source
+            self._premium_cache = [a for a in items or () if a is not None]
+        return self._premium_cache
+
+    def _mirrors(self, link: str) -> list[str]:
+        """What a MultiUp link stands for; read only when its turn comes."""
+        try:
+            return list(self._expand(link) or [])
+        except Exception:   # MultiUp being down is "no mirrors", not a crash
+            log.warning("MultiUp mirrors could not be read", exc_info=True)
+            return []
+
+    def _premium_take(self, link: str, name: str) -> bool:
+        if self._direct is None:
+            return False
+        host = host_of(link)
+        if not any(host_label(f"https://{host}/") == label for label in PREMIUM_LABELS):
+            return False
+        for account in self._premium:
+            supports = getattr(account, "supports_host", None)
+            if not callable(supports) or not supports(host):
+                continue
+            try:
+                file_url = account.resolve(link)
+            except Exception as err:   # noqa: BLE001 - one account's refusal is not fatal
+                log.info("%s could not unlock a link: %s", getattr(account, "label", "account"), err)
+                continue
+            if file_url and _hand(self._direct, file_url, name):
+                self._taken_by = self._direct
+                return True
+        return False
 
     @property
     def configured(self) -> bool:
@@ -185,8 +260,17 @@ class HosterRoute:
         """Hand the first link some route can take; try mirrors in order."""
         candidates = [u for u in [url, *mirrors] if u]
         candidates.sort(key=lambda u: host_label(u) in CONTAINERS)
-        tried = []
-        for link in candidates:
+        queue, seen, tried = deque(candidates), set(), []
+        while queue:
+            link = queue.popleft()
+            if link in seen:
+                continue
+            seen.add(link)
+            if self._expand is not None and host_label(link) == "MultiUp":
+                expanded = [m for m in self._mirrors(link) if m not in seen]
+                if expanded:
+                    queue.extendleft(reversed(expanded))
+                    continue
             label = host_label(link) or host_of(link) or "link"
             tried.append(label)
             if host_label(link) in CONTAINERS:
@@ -196,6 +280,8 @@ class HosterRoute:
                 if _hand(self._direct, file_url, name):
                     self._taken_by = self._direct
                     return True
+            if self._premium_take(link, name):
+                return True
             for debrid in self._debrid:
                 supports = getattr(debrid, "supports_host", None)
                 if callable(supports) and not supports(host_of(link)):
@@ -212,8 +298,9 @@ class HosterRoute:
         needs = []
         if self._direct is None:
             needs.append("a direct download client (Mister Download Manager or Direct HTTP)")
-        if not self._debrid:
-            needs.append("Real-Debrid or AllDebrid for file hosts without a public API")
+        if not self._debrid and not self._premium:
+            needs.append("Real-Debrid or AllDebrid, or a Rapidgator or 1fichier account "
+                         "(Settings -> Cloud & File Hosts), for file hosts without a public API")
         self.last_error = (f"no route could fetch this release's file-host links ({hosts})"
                            + (f"; add {' or '.join(needs)}" if needs else ""))
         return False
