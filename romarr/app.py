@@ -2774,11 +2774,7 @@ class ROMarr:
         # limited or mid-login is the normal case across a dozen trackers, not
         # an outage worth abandoning the search for.
         prowlarr = self.prowlarr
-        # A Prowlarr with no address is not set up: asking it only logs an
-        # "Invalid URL" warning on every search of an install that uses
-        # direct indexers or Hydra sources instead.
-        unset = isinstance(prowlarr, Prowlarr) and not prowlarr._config.base_url
-        sources: list[tuple[str, object]] = [] if unset else [("prowlarr", prowlarr)]
+        sources: list[tuple[str, object]] = [("prowlarr", prowlarr)]
         sources += [(getattr(i, "name", "indexer"), i)
                     for i in getattr(self, "indexers", [])]
 
@@ -2807,7 +2803,7 @@ class ROMarr:
         with ThreadPoolExecutor(max_workers=3) as pool:
             hub_search = pool.submit(self._hub_releases, game, platform)
             privacy = {}
-            if isinstance(prowlarr, Prowlarr) and not unset:
+            if isinstance(prowlarr, Prowlarr) and prowlarr._config.base_url:
                 try:
                     privacy = prowlarr._private_ids()
                 except Exception as err:
@@ -3272,7 +3268,10 @@ class ROMarr:
                     "items": []}
 
         try:
-            releases = self._search_releases(game, platform)
+            if platform is None and not self.indexers:
+                releases = self.prowlarr.search(game) + self._hub_releases(game, None)
+            else:
+                releases = self._search_releases(game, platform)
         except Exception as err:
             log.warning("interactive search failed for %r: %s", game, err)
             return {"error": f"search failed: {type(err).__name__}",

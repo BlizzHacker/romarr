@@ -357,6 +357,8 @@ class Prowlarr:
         what it finds is only kept by the scorer when the title proves it is
         a ROM (selection.other_has_rom_evidence).
         """
+        if not self._config.base_url:
+            return []
         # One after the other, deliberately. Run concurrently (tried in #259)
         # the two fan-outs queue behind each other inside Prowlarr, which
         # limits requests per indexer: the Other query then hit the 60s

@@ -94,7 +94,7 @@ def _ok(document=None):
 def test_http_failures_name_the_host_and_the_next_step(status, words):
     with pytest.raises(SourceError, match=words) as failure:
         _source(_Reply(status)).releases()
-    assert "lists.example.org" in str(failure.value)
+    assert str(failure.value).split(maxsplit=1)[0] == "lists.example.org"
 
 
 @pytest.mark.parametrize("error, words", [

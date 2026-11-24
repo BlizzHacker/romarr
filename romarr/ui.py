@@ -4113,7 +4113,6 @@ RENDER.assistant=async()=>{
 };
 // Cloud & File Hosts (romarr/cloud_storage.py, cloud_jobs.py, premium_hosts.py).
 const CLOUD_GUIDE='https://github.com/BlizzHacker/romarr/blob/main/docs/CLOUD-STORAGE.md';
-const HYDRA_GUIDE='https://github.com/BlizzHacker/romarr/blob/main/docs/HYDRA.md';
 let CLOUD_TIMER=null, CLOUD_SIGNIN_TIMER=null, CLOUD_PROVIDERS=null, CLOUD_BROWSE={remote:'',path:''};
 const cloudCur=v=>activePage==='cloud'&&pageVersion===v;
 const cloudPost=(path,body)=>fetch('/api/v1/cloud/'+path,{method:'POST',headers:{'Content-Type':'application/json'},
@@ -6149,6 +6148,7 @@ RENDER.libraries=async()=>{
 };
 
 RENDER.indexers=async()=>{
+  const HYDRA_GUIDE='https://github.com/BlizzHacker/romarr/blob/main/docs/HYDRA.md';
   const version=typeof pageVersion==='number'?pageVersion:null;
   const d=await j('/api/v1/indexer');
   if(version!==null&&(version!==pageVersion||activePage!=='indexers'))return;
