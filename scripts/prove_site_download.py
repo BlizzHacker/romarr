@@ -62,22 +62,21 @@ def prove(mode: str, url: str, root: Path) -> tuple[int, str] | None:
     save = root / mode
     client = build_client({"type": mode, "name": f"proof-{mode}",
                            "save_path": str(save), "delay": 5})
-    check("reachable()", client.reachable(), client.detail)
-    if not client.reachable():
+    reachable = client.reachable()
+    check("reachable()", reachable)
+    if not reachable:
         return None
     check("add() queues the job", client.add(url, name="NASA turntable"))
     done = client.completed()
     if not done:
-        rows = client._read()
-        check("completed() produced the file", False,
-              "; ".join(r.get("detail", "") for r in rows) or "nothing queued")
+        check("completed() produced the file", False)
         return None
     path = Path(done[0]["content_path"])
     size, sha = digest(path)
     check("completed() produced the file", True,
-          f"{path.name} {size} bytes sha256={sha}")
+          f"{size} bytes sha256={sha}")
     check("the queue row carries the release title, so it can be imported",
-          done[0]["name"] == "NASA turntable", done[0]["name"])
+          done[0]["name"] == "NASA turntable")
     return size, sha
 
 
