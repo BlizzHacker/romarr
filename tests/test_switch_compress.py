@@ -13,14 +13,15 @@ from pathlib import Path
 
 import pytest
 
-from romarr import switch_compress
+from romarr import compressatorium, switch_compress
 from romarr.app import ROMarr
 from romarr.compressatorium import (
     TOOL_BY_MODE, CompressatoriumClient, CompressatoriumConfig, compress_mode_for,
     mode_for,
 )
+from romarr.store import QueueItem, SeerrRequest, Store
 from romarr.switch_compress import (
-    COMPRESSED, FAILED_STATUS, KEPT, SKIPPED, CompressOutcome, compress_import,
+    COMPRESSED, FAILED_STATUS, KEPT, PENDING, SKIPPED, CompressOutcome, compress_import,
     compression_for, parse_compression,
 )
 
@@ -55,7 +56,8 @@ class _Service:
     """
 
     def __init__(self, *, tools=("nsz",), submit=None, status=None,
-                 finish=None):
+                 finish=None, cancel_status=200):
+        self.cancel_status = cancel_status
         self.tools = list(tools)
         self.submit = submit or _Response(200, {"id": "job-1", "status": "queued"})
         self.status = status or {"id": "job-1", "status": "completed"}
@@ -85,7 +87,9 @@ class _Service:
 
     def delete(self, url, **kwargs):
         self.calls.append(("DELETE", self._path(url), kwargs))
-        return _Response(200, {})
+        if self.cancel_status == 200:
+            self.status = {"id": "job-1", "status": "cancelled"}
+        return _Response(self.cancel_status, {})
 
     def posted(self):
         """The JSON bodies POSTed to /api/jobs."""
@@ -379,12 +383,14 @@ def test_a_compressed_import_moves_the_library_entry(tmp_path, monkeypatch):
     source = _nsp(s.library)
     s.hashes.add("a" * 40, "Game", "switch", True,
                  path=source.relative_to(s.library).as_posix())
-    queue_item = type("Q", (), {"imported_paths": [str(source)]})()
+    queue_item = s.store.enqueue(QueueItem(
+        "Game", "switch", "Game", 0, "imported", imported_paths=[str(source)]))
 
-    s._compress_after_import(source, "switch", "Game", queue_item)
+    s._compress_after_import(source, "switch", "Game")
 
     (path, kwargs), = calls
     assert path == source
+    assert callable(kwargs.pop("track_job"))
     assert kwargs == {"url": "http://comp:8080", "api_key": "",
                       "compression": "solid:12"}
     assert s.hashes.by_sha1("a" * 40).path == "switch/Game [0100000000010000][v0].nsz"
@@ -448,3 +454,88 @@ def test_a_manual_switch_import_reaches_the_compress_hook(tmp_path, monkeypatch)
     assert seen == [imported]
     assert imported.is_file()
     assert s.store.history(kind="compress")[0]["detail"].endswith("original kept: test")
+
+
+def test_a_failed_cancellation_is_reconciled_after_a_restart(tmp_path, monkeypatch):
+    """Keep a running job and atomically update stored paths when it later finishes."""
+    s, _ = _svc(tmp_path, monkeypatch)
+    source = _nsp(s.library)
+    output = switch_compress.expected_output(source)
+    s.store.enqueue(QueueItem("Game", "switch", "Game", 0, "imported",
+                             external_request_id="req", imported_paths=[str(source)]))
+    s.store.put_seerr_request(SeerrRequest(
+        external_request_id="req", game="Game", platform="switch",
+        status="available", assets=[str(source)]))
+    remote = _Service(status={"id": "job-1", "status": "processing"}, cancel_status=503)
+    monkeypatch.setattr(switch_compress, "compress_import",
+                        lambda path, **kw: compress_import(
+                            path, **kw, client=_client(remote), job_timeout=0, poll_interval=0))
+
+    s._compress_after_import(source, "switch", "Game")
+    pending, = Store(s.store.path).pending_switch_compression()
+    assert pending.job_id == "job-1"
+    assert source.is_file()
+    assert "still being tracked" in s.store.history(kind="compress")[0]["detail"]
+
+    restarted = ROMarr(s._env)
+    restarted.store.update_settings({"rescan_after_import": True})
+    monkeypatch.setattr(compressatorium, "CompressatoriumClient", lambda config: _client(remote))
+    remote.status = {"id": "job-1", "status": "completed", "output_path": str(output)}
+    remote.finish = _compressed(source)
+    monkeypatch.setattr(restarted, "library_for", lambda platform: ({"name": "Shelf"}, object()))
+    monkeypatch.setattr(restarted, "library_root", lambda cfg: s.library)
+
+    def unavailable(*args, **kwargs):
+        """A down library must leave the conversion recorded."""
+        raise OSError("offline")
+
+    monkeypatch.setattr(restarted, "_rescan_library", unavailable)
+    assert restarted._reconcile_switch_compression() == "Settled 1 Switch compression job(s)"
+    persisted = Store(s.store.path)
+    assert persisted.pending_switch_compression() == ()
+    assert persisted.queue[0].imported_paths == [str(output)]
+    request = persisted.get_seerr_request("req")
+    assert request.status == "available" and request.assets == [str(output)]
+    assert persisted.history(kind="compress")[0]["detail"].startswith("compressed ")
+    assert restarted._reconcile_switch_compression() == "Settled 0 Switch compression job(s)"
+
+
+def test_queue_import_publishes_paths_before_fast_compression(tmp_path, monkeypatch):
+    """An immediate worker sees durable queue and external request assets."""
+    s, _ = _svc(tmp_path, monkeypatch)
+    s.store.put_item("libraries", {"type": "folder", "name": "Shelf", "enable": True,
+                                   "path": str(s.library), "is_default": True})
+    s.reload_libraries()
+    source = _nsp(tmp_path / "incoming")
+    s.store.enqueue(QueueItem("Game", "switch", "release", 0, "grabbed",
+                             external_request_id="req", download_id="local-job"))
+    s.store.put_seerr_request(SeerrRequest(
+        external_request_id="req", game="Game", platform="switch", status="searching"))
+
+    class Download:
+        """One completed download to import into the test shelf."""
+
+        def completed(self):
+            return [{"id": "local-job", "name": "release", "content_path": str(source)}]
+
+    s.clients = [Download()]
+
+    def finish(path, **kwargs):
+        """Finish before the caller returns from submitting to the worker."""
+        persisted = Store(s.store.path)
+        assert persisted.queue[0].imported_paths == [str(path)]
+        assert persisted.get_seerr_request("req").assets == [str(path)]
+        _compressed(path)()
+        return CompressOutcome(str(path), COMPRESSED, str(switch_compress.expected_output(path)), "job-1")
+
+    monkeypatch.setattr(switch_compress, "compress_import", finish)
+    preview = s.queue_import_plan(0, {})["preview"]
+    planned = s.queue_import_plan(0, {
+        "confirm": True, "token": preview["token"],
+        "choices": [{"primary": preview["items"][0]["primary"], "role": "base"}],
+    })
+    assert planned["ok"], planned
+    result = s.import_finished()
+    assert result and result[0]["ok"], result
+    assert s.queue[0].imported_paths[0].endswith(".nsz")
+    assert s.store.get_seerr_request("req").assets == s.queue[0].imported_paths

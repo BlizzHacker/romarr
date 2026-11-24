@@ -10,10 +10,8 @@ ROMarr handles no keys. The service reads the operator's prod.keys from its
 own container (`SWITCH_KEYS`), and a service without them reports its nsz tool
 unavailable, which ends the job here before it is submitted.
 
-A job that fails, is cancelled, or outlives its deadline keeps the original.
-A job still running at the deadline is cancelled, because a job that finished
-later would delete the original with nobody left to point the library at the
-compressed file.
+Failed or cancelled jobs keep the original. At the wait deadline ROMarr asks
+the service to cancel and keeps tracking the job until its outcome is known.
 
 Compressatorium rebuilds an XCI from an XCZ that is rarely byte for byte the
 dump, so its round-trip refuses most XCI deletions and those jobs end failed
@@ -26,12 +24,13 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 from .compressatorium import (
     COMPLETED, TOOL_BY_MODE, UNAVAILABLE_REASON,
-    CompressatoriumClient, CompressatoriumConfig, compress_mode_for,
+    CompressatoriumClient, CompressatoriumConfig, JobResult, compress_mode_for,
 )
 
 log = logging.getLogger(__name__)
@@ -53,6 +52,7 @@ COMPRESSED = "compressed"   # output written, original removed by the service
 KEPT = "kept"               # output written, original still present
 FAILED_STATUS = "failed"    # no usable output, original kept
 SKIPPED = "skipped"         # nothing to do for this file
+PENDING = "pending"         # a submitted job may still finish
 
 _COMPRESSION = re.compile(r"^(solid|block):(\d{1,2})$")
 
@@ -115,18 +115,16 @@ class CompressOutcome:
                     f"{self.error or 'the service did not remove it'}")
         if self.status == SKIPPED:
             return f"skipped {name}: {self.error}"
+        if self.status == PENDING:
+            return f"compression of {name} is still being tracked: {self.error}"
         return f"compression of {name} failed, original kept: {self.error}"
 
 
-def _settle(source: Path, output_path: str, job_id: str,
-            warning: str = "") -> CompressOutcome:
-    """Read the filesystem after a completed job and say what it left."""
-    output = Path(output_path) if output_path else expected_output(source)
-    if not output.is_file():
-        fallback = expected_output(source)
-        output = fallback if fallback.is_file() else output
-    if not output.is_file():
-        return CompressOutcome(str(source), FAILED_STATUS, job_id=job_id,
+def _settle(source: Path, job_id: str, warning: str = "") -> CompressOutcome:
+    """Read the expected sibling output after a completed job."""
+    output = expected_output(source)
+    if output.is_symlink() or not output.is_file():
+        return CompressOutcome(str(source), PENDING, job_id=job_id,
                                error=f"job completed but {output.name} is not "
                                      "in the library")
     if source.exists():
@@ -134,15 +132,37 @@ def _settle(source: Path, output_path: str, job_id: str,
     return CompressOutcome(str(source), COMPRESSED, str(output), job_id)
 
 
+def _finished(source: Path, job_id: str, status: JobResult | None) -> CompressOutcome | None:
+    """Resolve a terminal reply or a completed replacement after a lost reply."""
+    output = expected_output(source)
+    if not source.exists() and output.is_file() and not output.is_symlink():
+        return _settle(source, job_id)
+    if status is None or not status.terminal:
+        return None
+    if status.status == COMPLETED:
+        return _settle(source, job_id, status.warning)
+    return CompressOutcome(str(source), FAILED_STATUS, job_id=job_id,
+                           error=status.error or f"job {status.status}")
+
+
+def reconcile_import(path: str, job_id: str,
+                     client: CompressatoriumClient | None) -> CompressOutcome | None:
+    """Check a tracked job once, using its sibling output if the reply was lost."""
+    status = client.job_status(job_id) if client is not None and job_id else None
+    outcome = _finished(Path(path), job_id, status)
+    return outcome if outcome is not None and outcome.status != PENDING else None
+
+
 def compress_import(path: str | Path, *, url: str, api_key: str = "",
                     compression: str = DEFAULT_COMPRESSION,
                     job_timeout: int = DEFAULT_JOB_TIMEOUT,
                     poll_interval: int = DEFAULT_POLL_INTERVAL,
-                    client: CompressatoriumClient | None = None) -> CompressOutcome:
-    """Compress one imported Switch file and wait, bounded, for the answer.
+                    client: CompressatoriumClient | None = None,
+                    track_job: Callable[[str], None] | None = None) -> CompressOutcome:
+    """Start compression and wait up to the deadline for a confirmed result.
 
-    Never raises for a service answer: every refusal is an outcome with the
-    original kept. `client` is for tests; otherwise one is built from `url`.
+    Record the source before submitting and the ID once returned. The caller
+    can then reconcile an unconfirmed job after a timeout or restart.
     """
     source = Path(path)
     mode = compress_mode_for(source.name)
@@ -169,29 +189,34 @@ def compress_import(path: str | Path, *, url: str, api_key: str = "",
         return CompressOutcome(str(source), FAILED_STATUS,
                                error=f"Compressatorium's {tool} tool is unavailable: {why}")
 
+    output = expected_output(source)
+    if output.exists() or output.is_symlink():
+        return CompressOutcome(str(source), SKIPPED, error=f"{output.name} already exists")
+    if track_job is not None:
+        track_job("")
     submitted = client.submit_job(file_path=str(source), mode=mode,
                                   duplicate_action="skip",
                                   delete_on_verify=True, compression=sent)
     if not submitted.job_id:
-        return CompressOutcome(str(source), FAILED_STATUS,
-                               error=submitted.error or "submission failed")
+        status = FAILED_STATUS if 400 <= submitted.http_status < 500 else PENDING
+        return CompressOutcome(str(source), status,
+                               error=submitted.error or "submission could not be confirmed")
     job_id = submitted.job_id
+    if track_job is not None:
+        track_job(job_id)
     log.info("compress: submitted %s as job %s (%s)", source.name, job_id, sent)
 
     final = client.wait_for_jobs([job_id], timeout=job_timeout,
                                  poll_interval=poll_interval).get(job_id)
-    if final is None or not final.terminal:
-        still = final.status if final is not None else "unknown"
-        client.cancel_job(job_id)
-        # A job may finish between the last poll and the cancel. Only a
-        # removed original with its output in place counts as done.
-        if not source.exists() and expected_output(source).is_file():
-            return _settle(source, "", job_id)
-        return CompressOutcome(str(source), FAILED_STATUS, job_id=job_id,
-                               error=f"still {still} after {job_timeout}s; "
-                                     "job cancelled")
-    if final.status == COMPLETED:
-        return _settle(source, final.output_path, job_id, final.warning)
-    # Terminal and not completed: failed or cancelled.
-    return CompressOutcome(str(source), FAILED_STATUS, job_id=job_id,
-                           error=final.error or f"job {final.status}")
+    outcome = _finished(source, job_id, final)
+    if outcome is not None:
+        return outcome
+
+    cancelled = client.cancel_job(job_id)
+    outcome = reconcile_import(str(source), job_id, client)
+    if outcome is not None:
+        return outcome
+    reason = ("awaiting cancellation confirmation" if cancelled
+              else "cancellation could not be confirmed")
+    return CompressOutcome(str(source), PENDING, job_id=job_id,
+                           error=f"after {job_timeout}s, {reason}")

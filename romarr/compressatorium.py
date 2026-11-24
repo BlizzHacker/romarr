@@ -241,6 +241,7 @@ class JobResult:
     warning: str = ""
     #: The files the service deleted after verifying the output.
     deleted_paths: tuple[str, ...] = ()
+    http_status: int = 0
 
     @property
     def terminal(self) -> bool:
@@ -506,7 +507,8 @@ class CompressatoriumClient:
             detail = _truncate(response.text, 200)
             log.warning("compressatorium rejected request: %s %s",
                         response.status_code, detail)
-            return JobResult(job_id="", error=f"status {response.status_code}")
+            return JobResult(job_id="", error=f"status {response.status_code}",
+                             http_status=response.status_code)
         try:
             payload = response.json()
         except ValueError:

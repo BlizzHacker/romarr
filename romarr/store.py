@@ -450,6 +450,17 @@ DEFAULT_SETTINGS: dict[str, Any] = {
 }
 
 
+@dataclass(frozen=True)
+class SwitchCompressionJob:
+    """A Switch compression submission that can outlive ROMarr."""
+
+    source: str
+    platform: str
+    game: str
+    endpoint: str
+    job_id: str
+
+
 class Store:
     """Everything ROMarr remembers."""
 
@@ -473,6 +484,7 @@ class Store:
         self.events: list[Event] = []
         self.wanted: list[WantedItem] = []
         self.queue: list[QueueItem] = []
+        self._switch_compression: dict[str, SwitchCompressionJob] = {}
         self.load()
 
     # -- persistence -------------------------------------------------------
@@ -519,6 +531,8 @@ class Store:
             # simply an empty queue -- the same thing those installs had after
             # every restart anyway.
             self.queue = _rows(raw.get("queue"), QueueItem)
+            self._switch_compression = {
+                job.source: job for job in _rows(raw.get("switch_compression"), SwitchCompressionJob)}
 
     def save(self, *, raise_on_error: bool = False) -> None:
         """Write state atomically while holding the Store lock through replacement.
@@ -531,6 +545,7 @@ class Store:
                 "events": [asdict(e) for e in self.events[-self.MAX_EVENTS:]],
                 "wanted": [asdict(w) for w in self.wanted],
                 "queue": [asdict(q) for q in self.queue[-self.MAX_QUEUE:]],
+                "switch_compression": [asdict(j) for j in self._switch_compression.values()],
             }
             tmp = None
             try:
@@ -552,6 +567,40 @@ class Store:
                         os.unlink(tmp)
                     except OSError:
                         pass
+
+    def track_switch_compression(self, job: SwitchCompressionJob) -> None:
+        """Persist the conversion before the service may remove the source."""
+        with self._lock:
+            previous = self._switch_compression.get(job.source)
+            self._switch_compression[job.source] = job
+            try:
+                self.save(raise_on_error=True)
+            except OSError:
+                if previous is None:
+                    self._switch_compression.pop(job.source, None)
+                else:
+                    self._switch_compression[job.source] = previous
+                raise
+
+    def pending_switch_compression(self) -> tuple[SwitchCompressionJob, ...]:
+        """Return tracked conversion jobs without exposing the mutable store."""
+        with self._lock:
+            return tuple(self._switch_compression.values())
+
+    def finish_switch_compression(self, event: Event, source: str, output: str) -> None:
+        """Replace existing references and retire the job in the same state write."""
+        with self._lock:
+            if output:
+                for row in self.queue:
+                    if source in row.imported_paths:
+                        row.imported_paths = [output if p == source else p for p in row.imported_paths]
+                for request in self.settings.get("integration_requests", []):
+                    assets = request.get("assets") or []
+                    if source in assets:
+                        request["assets"] = [output if p == source else p for p in assets]
+                        request["updated_at"] = now_iso()
+            self._switch_compression.pop(source, None)
+            self.record(event)
 
     # -- history -----------------------------------------------------------
 
