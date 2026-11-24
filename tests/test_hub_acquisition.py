@@ -342,6 +342,7 @@ class Import(ImportProvider):
 
     def serve(request):
         """Serve the fixture through the host's downloader."""
+        assert request.extensions.get("rom_hub_bypass_solver") is True
         calls.append(str(request.url))
         return httpx.Response(200, content=b"fixture")
 

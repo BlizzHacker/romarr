@@ -106,7 +106,7 @@ def _wrap_download_transport(base_transport):
 
         class _BinaryDownloadSolverTransport(FlareSolverrTransport):
             def handle_request(self, request: httpx.Request) -> httpx.Response:
-                if request.url.scheme != "https":
+                if request.url.scheme != "https" or request.extensions.get("rom_hub_bypass_solver"):
                     return self._inner.handle_request(request)
                 req = self._apply_cached(request)
                 response = self._inner.handle_request(req)
