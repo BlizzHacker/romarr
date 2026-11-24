@@ -1690,6 +1690,9 @@ RENDER.hub=async()=>{
       :acq==='ready'
         ?'<div class="panel-note" style="border-left:3px solid var(--ok)"><b>Ready for search.</b> Enabled sources: '
           +esc((hs.searchable_plugins||[]).join(', '))+'. Choose Interactive Search to try one.</div>'
+        :acq==='selective'
+          ?'<div class="panel-note"><b>MiNERVA is ready for search.</b> Exact files go to your torrent client. '
+            +'Set up ROM Hub downloads to use sources that fetch files directly.</div>'
         :'<div class="panel-note"><b>Finish connecting a source.</b> '
           +((hs.searchable_plugins||[]).length
             ?'Your sources are enabled. Use Set up ROM Hub downloads above to choose where downloads are saved.'
@@ -7872,7 +7875,8 @@ RENDER.collections=async()=>{
       :(sourceTorrents.length
         ?'<p class="help">Load a DAT before previewing missing collection files.</p>'
         :'<p class="help">No set torrents found. This part is optional: <b>Request missing</b> above '
-         +'searches your indexers instead. To use a set torrent you already have, add it to qBittorrent or '
+         +'searches your configured sources, including enabled game plugins with a download client. '
+         +'To use a set torrent you already have, add it to qBittorrent or '
          +'Transmission (and enable that client under <a href="#clients">Download Clients</a> if it is off), '
          +'then come back here.</p>'))
     +'<div id="csrc-jobs" style="margin-top:10px"></div></div>'

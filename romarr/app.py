@@ -2652,6 +2652,18 @@ class ROMarr:
             return False
         return bool(hub.searchable_plugins())
 
+    def _selective_torrent_client(self):
+        """Choose a configured torrent client that can select one exact file."""
+        return pick_client("torrent", [
+            client for client in self.clients
+            if isinstance(client, QBittorrent) or getattr(client, "supports_selective", False)
+        ])
+
+    def _minerva_search_ready(self, searchable: list[str]) -> bool:
+        """MiNERVA can search and grab with a selective torrent client alone."""
+        return ("minerva-archive" in searchable
+                and self._selective_torrent_client() is not None)
+
     def _hub_releases(self, game: str, platform=None) -> list:
         """Turn ROM Hub search rows into releases for the shared grab flow.
 
@@ -2665,12 +2677,16 @@ class ROMarr:
         Non-torrent plugin rows keep their hub download URL and are fetched
         through ROM Hub's bounded FetchPlan lane.
         """
+        only = None
         if not self._hub_enabled():
-            return []
+            if not self._minerva_search_ready(hub.searchable_plugins()):
+                return []
+            only = "minerva-archive"
         from .selection import Release
         try:
-            rows, err = hub.search(game,
-                                   platform=platform.slug if platform else None)
+            search_options = {"only": only} if only else {}
+            rows, err = hub.search(game, platform=platform.slug if platform else None,
+                                   **search_options)
         except Exception as exc:
             log.warning("rom hub search failed for %r: %s", game, exc)
             return []
@@ -2690,6 +2706,8 @@ class ROMarr:
             if not row.get("title"):
                 continue
             plugin_slug = str(row.get("plugin") or "")
+            if only is not None and plugin_slug != only:
+                continue
             if plugin_slug in hub.NON_GAME_PLUGINS:
                 # Guides, videos, mods and tools are not the game.
                 continue
@@ -3024,6 +3042,10 @@ class ROMarr:
         except ValueError as err:
             return {"ok": False, "error": str(err)}
         client = pick_client(pick.protocol, self.clients)
+        if pick.protocol == "torrent" and getattr(pick, "file_selection_required", False):
+            selective = self._selective_torrent_client()
+            if selective is not None:
+                client = selective
         if client is None and getattr(pick, "mirrors", ()):
             # A Hydra row offers its other links too: with no client for the
             # magnet, a mirror the file-host route can fetch still gets it.
@@ -11235,6 +11257,7 @@ def make_handler(service: ROMarr):
                 confined, why = hub.sandbox_state()
                 searchable = hub.searchable_plugins()
                 lane_ready = service._hub_enabled()
+                minerva_ready = service._minerva_search_ready(searchable)
                 return self._json(200, {"available": hub.available(),
                                         "sandboxed": confined,
                                         "sandbox_detail": why,
@@ -11244,15 +11267,12 @@ def make_handler(service: ROMarr):
                                         "arcade_punks": _arcade_punks_status(service),
                                         "flaresolverr_configured": bool(hub.flaresolverr_url()),
                                         "searchable_plugins": searchable,
-                                        # The Plugins page says out loud what
-                                        # enabling a plugin now does: its
-                                        # results join Interactive Search,
-                                        # provided the ROM Hub download client
-                                        # is configured to stage the fetches.
+                                        "minerva_search_ready": minerva_ready,
                                         "acquisition": ("ready" if lane_ready
-                                                        else ("no ROM Hub download client configured"
-                                                              if searchable else
-                                                              "no enabled plugin declares search"))})
+                                                        else "selective" if minerva_ready
+                                                        else "no ROM Hub download client configured"
+                                                        if searchable else
+                                                        "no enabled plugin declares search")})
             if route.path == "/api/search":
                 game = (query.get("game") or [""])[0]
                 if not game:
