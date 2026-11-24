@@ -17,6 +17,7 @@ ROMarr ("The \*arr for games") searches indexers, scores and grabs releases, ver
 - **`romarr/ui.py`**: Single-file vanilla HTML/CSS/JS SPA (`NAV`, CSS, `RENDER.<slug>` renderers, `page()`, `link_page()`). No bundler or external JS framework.
 - **`romarr/selection.py` & `romarr/platforms.py`**: Pure-function release scoring, foreign-platform/PC marker rejection, archive ROM/set selection (`pick_rom_set`), and platform catalogue (`PLATFORMS`).
 - **`romarr/dat.py`, `romarr/hashes.py`, `romarr/quarantine.py`**: Logiqx DAT verification (`verified` / `bad-dump` / `unknown`, copier-header handling), SHA1 library index, and reversible duplicate quarantine.
+  `romarr/dat_table.py` holds each loaded DAT packed into flat columns (`Dat.games` is a read-only `GameTable`). Keep first-hit lookup semantics, and prove changes against the frozen 1.13.2 oracle in `tests/test_dat_compact.py`.
 - **`romarr/library.py`, `romarr/selective_import.py`, `romarr/library_rename.py`**: Archive extraction (zip/7z/rar with traversal/zip-slip protection), selective imports, and preview-first library rename workflows.
 - **`romarr/clients.py`, `romarr/downloaders.py`, `romarr/indexers.py`, `romarr/retained_collection.py`**: Download client integrations (qBittorrent, SABnzbd, NZBGet, Transmission, Deluge, rTorrent, debrid, Direct/Browser/Hub, Blackhole), Prowlarr/Torznab/RSS indexers, and retained collection torrent ownership/selection.
 - **`romarr/libraries.py`**: Library backend adapters (RomM, Gaseous, Retrom, folder) and per-platform routing.

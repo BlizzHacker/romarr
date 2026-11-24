@@ -31,41 +31,16 @@ import hashlib
 import logging
 import re
 import zlib
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import dataclass
+
+from .dat_table import Game, GameTable, Rom
 
 log = logging.getLogger(__name__)
 
 VERIFIED = "verified"
 BAD_DUMP = "bad-dump"
 UNKNOWN = "unknown"
-
-
-@dataclass(frozen=True, slots=True)
-class Rom:
-    """One file inside a DAT entry.
-
-    A cartridge game has one. A Redump disc entry has one per track plus the
-    cue sheet, which is why verifying a disc means verifying a set rather than
-    a file -- and why `selection.pick_rom_set` exists upstream of this.
-    """
-
-    name: str
-    size: int = 0
-    crc: str = ""
-    md5: str = ""
-    sha1: str = ""
-
-
-@dataclass(frozen=True, slots=True)
-class Game:
-    name: str
-    roms: tuple[Rom, ...] = ()
-    #: No-Intro marks regional variants as clones of a parent entry. This is
-    #: what makes 1G1R possible at all.
-    cloneof: str = ""
-    #: Normalised two-letter language codes declared by the DAT's `language`
-    #: field (e.g. `("en", "fr")` from `language "English / French"`).
-    languages: tuple[str, ...] = ()
 
 
 #: Language codes and names normalised to two-letter ISO 639-1 codes so
@@ -348,20 +323,33 @@ def base_title(name: str) -> str:
     return " ".join([stripped] + [f"({k})" for k in kept]).strip()
 
 
-@dataclass
 class Dat:
-    """One parsed DAT -- normally one system."""
+    """One parsed DAT -- normally one system.
 
-    name: str = ""
-    version: str = ""
-    games: dict[str, Game] = field(default_factory=dict)
-    # Duplicate labels make request completeness ambiguous, even when hashes match.
-    _ambiguous_game_names: set[str] = field(default_factory=set)
-    _by_crc: dict[tuple[str, int], tuple[str, Rom]] = field(default_factory=dict)
-    _by_sha1: dict[str, tuple[str, Rom]] = field(default_factory=dict)
-    _by_md5: dict[str, tuple[str, Rom]] = field(default_factory=dict)
-    _sizes: dict[int, str] = field(default_factory=dict)
-    _declares_clones: bool | None = None
+    `games` is a read-only mapping of game name to `Game`, packed (see
+    `GameTable`). Build one from a parsed record with `dat_from_record`, or
+    pass `games` as a dict of `Game`s; either way the hash indexes are built
+    from the same rows, in the same order.
+    """
+
+    def __init__(self, name: str = "", version: str = "",
+                 games: Mapping[str, Game] | None = None) -> None:
+        self.name = name
+        self.version = version
+        self.games = GameTable(
+            (key, game.cloneof, game.languages,
+             [(rom.name, rom.size, rom.crc, rom.md5, rom.sha1) for rom in game.roms])
+            for key, game in (games or {}).items())
+
+    def __repr__(self) -> str:
+        return f"Dat(name={self.name!r}, version={self.version!r}, games={self.games!r})"
+
+    def _verified(self, row: int, sha1: str) -> Match | None:
+        """A verified match for `row`, unless its declared SHA1 contradicts `sha1`."""
+        game, rom = self.games.hit(row)
+        if sha1 and rom.sha1 and sha1 != rom.sha1:
+            return None
+        return Match(VERIFIED, game, rom, self.name)
 
     def lookup(self, *, crc: str = "", md5: str = "", sha1: str = "",
                size: int = 0) -> Match:
@@ -372,29 +360,29 @@ class Dat:
         theoretical -- so where the DAT published a SHA1 and the caller
         computed one, that is the answer and CRC is not consulted.
         """
+        table = self.games
         sha1 = str(sha1 or "").lower()
-        hit = self._by_sha1.get(sha1)
-        if hit:
-            return Match(VERIFIED, hit[0], hit[1], self.name)
+        row = table.sha1_row(sha1)
+        if row is not None:
+            return self._verified(row, "")
 
-        hit = self._by_md5.get(str(md5 or "").lower())
-        if hit and not (sha1 and hit[1].sha1 and sha1 != hit[1].sha1):
-            return Match(VERIFIED, hit[0], hit[1], self.name)
+        row = table.md5_row(str(md5 or "").lower())
+        if row is not None and (match := self._verified(row, sha1)):
+            return match
 
         crc = str(crc or "").lower()
         if crc:
-            hit = self._by_crc.get((crc, int(size or 0)))
-            if hit is None and not size:
-                hit = next((v for (c, _), v in self._by_crc.items() if c == crc),
-                           None)
-            if hit and not (sha1 and hit[1].sha1 and sha1 != hit[1].sha1):
-                return Match(VERIFIED, hit[0], hit[1], self.name)
+            row = table.crc_row(crc, int(size or 0))
+            if row is None and not size:
+                row = table.crc_any_size(crc)
+            if row is not None and (match := self._verified(row, sha1)):
+                return match
 
         # Nothing matched. A file the exact size of a known ROM is the case
         # worth separating out: that is a corrupt or altered copy of something
         # this DAT knows, not an unrecognised file.
-        if size and int(size) in self._sizes:
-            known = self._sizes[int(size)]
+        if size and (row := table.size_row(int(size))) is not None:
+            known = table.name_of(table.entry_of(row))
             return Match(BAD_DUMP, dat=self.name,
                          detail=f"{size} bytes matches {known!r} but the "
                                 f"checksum does not -- corrupt or altered")
@@ -406,17 +394,15 @@ class Dat:
         Answers a question about the DAT's own declarations. `group_key` is
         what decides which dumps are versions of one game.
         """
-        entry = self.games.get(game)
+        entry = self.games.entry(game)
         if entry is None:
             return game
-        return entry.cloneof or entry.name
+        return self.games.clone_of(entry) or self.games.name_of(entry)
 
     @property
     def declares_clones(self) -> bool:
         """Whether this DAT carries any parent/clone relationship at all."""
-        if self._declares_clones is None:
-            self._declares_clones = any(g.cloneof for g in self.games.values())
-        return self._declares_clones
+        return self.games.has_clones
 
     def group_key(self, game: str) -> str:
         """Which game a dump belongs to, for collapsing versions.
@@ -440,10 +426,7 @@ class Dat:
         full name -- would never equal the key its parent produces, and the two
         would land in different groups.
         """
-        entry = self.games.get(game)
-        if entry is None:
-            return base_title(game)
-        return base_title(entry.cloneof or entry.name)
+        return base_title(self.parent_of(game))
 
     def one_game_one_rom(
         self,
@@ -461,9 +444,13 @@ class Dat:
         Dropping it would silently lose titles from a "cleaned" set, which is
         the kind of loss nobody notices for months.
         """
-        groups: dict[str, list[Game]] = {}
-        for game in self.games.values():
-            groups.setdefault(self.group_key(game.name), []).append(game)
+        # Rank ROM-less summaries and build full Games only for the winners:
+        # the table makes Game and Rom objects on demand.
+        table = self.games
+        groups: dict[str, list[tuple[Game, int]]] = {}
+        for entry in table.entries():
+            game = table.summary(entry)
+            groups.setdefault(base_title(game.cloneof or game.name), []).append((game, entry))
 
         order = [r.lower() for r in regions]
         lang_order = [normalise_lang(l) for l in (languages or ()) if str(l).strip()]
@@ -488,8 +475,9 @@ class Dat:
                                      game.name, re.IGNORECASE))
             return (lang_best, best, int(variant), 0 if not game.cloneof else 1, game.name)
 
-        return {min(members, key=rank).name: min(members, key=rank)
-                for members in groups.values()}
+        winners = (min(members, key=lambda member: rank(member[0]))
+                   for members in groups.values())
+        return {game.name: table.game(entry) for game, entry in winners}
 
 
 _REGION_IN_NAME = re.compile(r"\(([^)]*)\)")
@@ -653,25 +641,7 @@ def dat_from_record(record) -> Dat:
     """
     name, version, entries = record
     dat = Dat(name=name, version=version)
-    games = dat.games
-    by_crc, by_sha1, by_md5, sizes = dat._by_crc, dat._by_sha1, dat._by_md5, dat._sizes
-    for game, clone, langs, rom_rows in entries:
-        roms = []
-        for rom_name, size, crc, md5, sha1 in rom_rows:
-            rom = Rom(name=rom_name, size=size, crc=crc, md5=md5, sha1=sha1)
-            roms.append(rom)
-            if crc:
-                by_crc.setdefault((crc, size), (game, rom))
-            if sha1:
-                by_sha1.setdefault(sha1, (game, rom))
-            if md5:
-                by_md5.setdefault(md5, (game, rom))
-            if size:
-                sizes.setdefault(size, game)
-        if game in games:
-            dat._ambiguous_game_names.add(game)
-        games[game] = Game(name=game, roms=tuple(roms), cloneof=clone,
-                           languages=tuple(langs))
+    dat.games = GameTable(entries)
     return dat
 
 
@@ -715,30 +685,17 @@ class DatIndex:
 
     def __init__(self):
         self.dats: list[Dat] = []
-        # Sparse collision indexes: the legacy per-hash indexes intentionally
-        # return their first entry. Request approval must retain other entries.
+        # Sparse collision indexes, keyed by first-hit row: the per-hash
+        # indexes intentionally return their first entry. Request approval
+        # must retain other entries.
         self._duplicate_hits: list[tuple[dict, dict, dict]] = []
 
     def add(self, dat: Dat) -> None:
+        """Index one DAT, recording which hashes it declares more than once."""
         if not dat.games:
             return
-        extra_crc: dict = {}
-        extra_md5: dict = {}
-        extra_sha1: dict = {}
-        for game_name, game in dat.games.items():
-            for rom in game.roms:
-                identity = (game_name, rom)
-                for key, first, extras in (
-                    ((rom.crc, rom.size) if rom.crc else None, dat._by_crc, extra_crc),
-                    (rom.md5 or None, dat._by_md5, extra_md5),
-                    (rom.sha1 or None, dat._by_sha1, extra_sha1),
-                ):
-                    if key is not None and key in first and first[key] != identity:
-                        hits = extras.setdefault(key, [])
-                        if identity not in hits:
-                            hits.append(identity)
         self.dats.append(dat)
-        self._duplicate_hits.append((extra_crc, extra_md5, extra_sha1))
+        self._duplicate_hits.append(dat.games.collisions())
 
     def verified_candidates(self, **hashes) -> tuple[Match, ...]:
         """Expose every matching DAT identity, including same-catalog collisions.
@@ -764,22 +721,23 @@ class DatIndex:
             match = dat.lookup(**hashes)
             if match.status != VERIFIED:
                 continue
-            if sha1 and sha1 in dat._by_sha1:
-                extra = extra_sha1.get(sha1, ())
-            elif md5 and md5 in dat._by_md5:
-                extra = extra_md5.get(md5, ())
-            elif crc and size and (crc, size) in dat._by_crc:
-                extra = extra_crc.get((crc, size), ())
+            table = dat.games
+            if sha1 and (first := table.sha1_row(sha1)) is not None:
+                extra = extra_sha1.get(first, ())
+            elif md5 and (first := table.md5_row(md5)) is not None:
+                extra = extra_md5.get(first, ())
+            elif crc and size and (first := table.crc_row(crc, size)) is not None:
+                extra = extra_crc.get(first, ())
             else:
                 # A CRC without file size is not enough to establish unique
                 # identity when distinct sizes may share that CRC.
                 continue
             if match.rom is not None and hashes_agree(match.rom):
                 candidates.append(match)
-            candidates.extend(
-                Match(VERIFIED, name, rom, dat.name)
-                for name, rom in extra if hashes_agree(rom)
-            )
+            for row in extra:
+                name, rom = table.hit(row)
+                if hashes_agree(rom):
+                    candidates.append(Match(VERIFIED, name, rom, dat.name))
         return tuple(candidates)
 
     def game_rom_count(self, match: Match) -> int | None:
@@ -794,7 +752,7 @@ class DatIndex:
             return None
         # A repeated game label can hide members in either DAT parser. Do not
         # certify a request from the surviving record, regardless of hash hit.
-        if any(dat.name == match.dat and match.game in dat._ambiguous_game_names
+        if any(dat.name == match.dat and dat.games.is_ambiguous(match.game)
                for dat in self.dats):
             return None
         games = [game for dat in self.dats if dat.name == match.dat

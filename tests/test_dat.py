@@ -325,11 +325,11 @@ def test_a_clrmamepro_dat_is_read_not_discarded():
 
 def test_clrmamepro_hashes_are_indexed_for_lookup():
     dat = parse_dat(CMP)
-    name, rom = dat._by_sha1["de5b7b0b1fa3e4e0dcecb0f7f5b8ee2e93a1f92c"]
-    assert name == "Chrono Trigger (USA)"
-    assert rom.size == 4194304
-    assert rom.crc == "2d206bf7", "crc is folded to lowercase like the XML path"
-    assert dat._by_crc[("2d206bf7", 4194304)][0] == "Chrono Trigger (USA)"
+    hit = dat.lookup(sha1="de5b7b0b1fa3e4e0dcecb0f7f5b8ee2e93a1f92c")
+    assert hit.game == "Chrono Trigger (USA)"
+    assert hit.rom.size == 4194304
+    assert hit.rom.crc == "2d206bf7", "crc is folded to lowercase like the XML path"
+    assert dat.lookup(crc="2D206BF7", size=4194304).game == "Chrono Trigger (USA)"
 
 
 def test_clrmamepro_carries_cloneof_so_1g1r_still_works():

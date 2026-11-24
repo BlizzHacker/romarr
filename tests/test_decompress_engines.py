@@ -30,17 +30,13 @@ UNLISTED = b"homebrew" * 1000
 def _index(files: dict[str, bytes]) -> DatIndex:
     """A DAT index that verifies exactly these name -> content pairs."""
     index = DatIndex()
-    dat = Dat(name="Test DAT")
+    games = {}
     for name, content in files.items():
         h = hash_bytes(content, suffix=Path(name).suffix)
         rom = Rom(name=name, size=h["size"], crc=h["crc"], md5=h["md5"],
                   sha1=h["sha1"])
-        dat.games[name] = Game(name=name, roms=(rom,))
-        dat._by_sha1[rom.sha1] = (name, rom)
-        dat._by_md5[rom.md5] = (name, rom)
-        dat._by_crc[(rom.crc, rom.size)] = (name, rom)
-        dat._sizes[rom.size] = name
-    index.add(dat)
+        games[name] = Game(name=name, roms=(rom,))
+    index.add(Dat(name="Test DAT", games=games))
     return index
 
 

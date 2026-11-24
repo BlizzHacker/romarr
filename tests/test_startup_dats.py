@@ -29,13 +29,14 @@ CMP = ('clrmamepro (\n\tname "Sega - Mega Drive"\n\tversion 1\n)\n\n'
 
 
 def _shape(d):
+    """Everything a DAT answers: its games, and the lookup for every hash it holds."""
     rom = lambda r: (r.name, r.size, r.crc, r.md5, r.sha1)
-    hit = lambda v: (v[0], rom(v[1]))
+    queries = [q for g in d.games.values() for r in g.roms
+               for q in ({"sha1": r.sha1}, {"md5": r.md5}, {"crc": r.crc, "size": r.size},
+                         {"crc": r.crc}, {"size": r.size})]
     return (d.name, d.version,
             [(g.name, [rom(r) for r in g.roms], g.cloneof, g.languages) for g in d.games.values()],
-            sorted(d._ambiguous_game_names),
-            {k: hit(v) for k, v in d._by_crc.items()}, {k: hit(v) for k, v in d._by_sha1.items()},
-            {k: hit(v) for k, v in d._by_md5.items()}, dict(d._sizes))
+            sorted(d.games.ambiguous), [d.lookup(**q) for q in queries])
 
 
 @pytest.mark.parametrize("body", [XML, CMP])
@@ -49,10 +50,10 @@ def test_logiqx_streaming_resolves_forward_clone_ids_and_keeps_duplicates():
     d = parse_dat(XML)
     assert d.games["Game (Europe)"].cloneof == "Game (USA)"
     assert d.games["Game (Europe)"].languages == ("en", "fr")
-    assert "Game (USA)" in d._ambiguous_game_names
+    assert "Game (USA)" in d.games.ambiguous
     # the first entry's ROM is still indexed even though the name repeats
-    assert d._by_crc[("01020304", 32768)][0] == "Game (USA)"
-    assert d._by_crc[("0a0b0c0d", 1)][0] == "Game (USA)"
+    assert d.lookup(crc="01020304", size=32768).game == "Game (USA)"
+    assert d.lookup(crc="0a0b0c0d", size=1).game == "Game (USA)"
 
 
 def test_rom_and_game_carry_no_per_instance_dict():
