@@ -19,11 +19,12 @@ def rel(title, **kw):
 
 def test_the_service_registers_its_jobs(tmp_path):
     s = svc(tmp_path)
-    names = {j["name"] for j in s.scheduler.status()}
-    assert names == {"ImportCompleted", "MissingGameSearch", "RssSync",
-                     "ListSync", "UpdateCheck", "PluginUpdate", "HashIndex",
-                     "FailedDownloads", "SoundtrackTorrents", "CloudJobs",
-                     "CollectionSets"}
+    jobs = {j["name"]: j for j in s.scheduler.status()}
+    assert set(jobs) == {"ImportCompleted", "MissingGameSearch", "RssSync",
+                         "ListSync", "UpdateCheck", "PluginUpdate", "HashIndex",
+                         "FailedDownloads", "SoundtrackTorrents", "CloudJobs",
+                         "CollectionSets", "SwitchCompression"}
+    assert not jobs["SwitchCompression"]["enabled"]
 
 
 def test_collection_sets_job_is_off_until_a_set_is_queued(tmp_path):
