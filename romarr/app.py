@@ -3751,6 +3751,7 @@ class ROMarr:
                 "name": getattr(c, "display_name", getattr(c, "name", type(c).__name__)),
                 "protocol": getattr(c, "protocol", ""),
                 "url": getattr(c, "_config").base_url,
+                "save_path": c._config.save_path if isinstance(c, HubDownloader) else "",
                 "category": getattr(getattr(c, "_config"), "category", ""),
                 "configured": configured,
                 "ok": bool(configured and c.reachable()),
@@ -12374,6 +12375,14 @@ def make_handler(service: ROMarr):
                 key = "indexers" if is_indexer else "download_clients"
                 with service._metadata_lock:
                     existing = service.store.get_item(key, body.get("id")) if body.get("id") else None
+                    if (not is_indexer
+                            and str(body.get("type") or "").lower() == "hub"
+                            and str((existing or {}).get("type") or "").lower() != "hub"
+                            and any(str(row.get("type") or "").lower() == "hub"
+                                    for row in service.store.list_items(key))):
+                        return self._json(409, {
+                            "error": "ROM Hub is already set up. Edit its existing download client."
+                        })
                     # Each family merges against its OWN type specs: the
                     # downloaders merge looks secrets up in CLIENT_TYPES, which
                     # has no entry for "prowlarr" -- it silently merged nothing

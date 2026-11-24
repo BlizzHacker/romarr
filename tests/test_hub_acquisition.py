@@ -7,11 +7,16 @@ network in these tests -- the Hub bridge is stubbed at its seams.
 """
 
 import json
+from http.server import ThreadingHTTPServer
 from pathlib import Path
+from threading import Thread
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 import pytest
 
 from romarr import hub
+from romarr.app import ROMarr, make_handler
 from romarr.downloaders import HubConfig, HubDownloader, build_client
 
 
@@ -53,6 +58,37 @@ def test_the_hub_client_is_a_download_client_type():
     assert client.protocol == "hub"
     assert client.configured
     assert build_client({"type": "hub", "save_path": ""}).configured is False
+
+
+def test_client_api_prevents_duplicate_hub_setup_and_allows_edits(tmp_path, monkeypatch):
+    monkeypatch.setattr(hub, "available", lambda: False)
+    service = ROMarr({"ROMARR_DATA": str(tmp_path / "state.json"),
+                      "ROMARR_API_KEY": "testkey"})
+    server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(service))
+    worker = Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    url = f"http://127.0.0.1:{server.server_address[1]}/api/v1/downloadclient"
+
+    def call(body=None):
+        request = Request(url, headers={"X-Api-Key": "testkey", "Content-Type": "application/json"},
+                          data=json.dumps(body).encode() if body is not None else None)
+        with urlopen(request, timeout=5) as response:
+            return json.load(response)
+
+    try:
+        first = call({"type": "hub", "save_path": str(tmp_path / "first")})
+        with pytest.raises(HTTPError) as duplicate:
+            call({"type": "HUB", "save_path": str(tmp_path / "second")})
+        assert duplicate.value.code == 409
+        duplicate.value.close()
+        revised_path = str(tmp_path / "moved")
+        updated = call({**first, "save_path": revised_path})
+        assert updated["id"] == first["id"]
+        [current] = call()["items"]
+        assert current["save_path"] == revised_path
+    finally:
+        server.shutdown()
+        server.server_close()
 
 
 def test_add_records_a_job_and_refuses_non_hub_urls(tmp_path):
