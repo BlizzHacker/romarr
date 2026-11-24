@@ -374,7 +374,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "video_standard_strict": False,
     "preferred_formats": {},
     "platform_profiles": {},         # slug -> {min_size_mb, max_size_mb, ...}
-    "protocol": "torrent",       # torrent | usenet
+    "protocol": "torrent",       # Legacy settings API key. Grabs use the release protocol.
     # Remote path mappings, the same concept Radarr and Sonarr expose.
     #
     # A download client reports the path it sees. When the client and this
