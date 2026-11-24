@@ -21,10 +21,11 @@ import json
 import pathlib
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from types import SimpleNamespace
 
 import pytest
 
-from romarr import browser
+from romarr import browser, downloaders
 from romarr.downloaders import (
     CLIENT_TYPES, SiteConfig, SiteDownloader, SitePolicy, build_client,
     hand_off, pick_client,
@@ -85,6 +86,29 @@ def make(tmp_path, mode="direct", session=None, driver=None, **cfg):
     return SiteDownloader(
         SiteConfig(save_path=str(tmp_path / "dl"), mode=mode, delay=0, **cfg),
         session=session or FakeSession(), policy=policy, driver=driver)
+
+
+@pytest.mark.parametrize("reachable", [False, True])
+def test_site_proof_omits_raw_download_client_details(tmp_path, monkeypatch, capsys, reachable):
+    """Health and queued-job diagnostics stay out of the proof transcript."""
+    from scripts import prove_site_download as proof
+
+    sensitive_text = "private fixture diagnostic"
+    client = SimpleNamespace(
+        reachable=lambda: reachable,
+        detail=sensitive_text,
+        add=lambda *args, **kwargs: True,
+        completed=list,
+        _read=lambda: [{"detail": sensitive_text}],
+    )
+    monkeypatch.setattr(downloaders, "build_client", lambda cfg: client)
+    monkeypatch.setattr(proof, "RESULTS", [])
+
+    assert proof.prove("direct", proof.FILE_URL, tmp_path) is None
+    output = capsys.readouterr().out
+    assert "[FAIL]" in output
+    assert sensitive_text not in output
+    assert all(not detail for _, _, detail in proof.RESULTS)
 
 
 # --- the registry -----------------------------------------------------------
