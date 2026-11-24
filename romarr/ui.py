@@ -5269,7 +5269,8 @@ RENDER.history=async()=>{
     ${d.items.map(e=>`<tr><td style="color:var(--dim)" title="${esc(e.at)}">${esc(fmtDateTime(e.at))}</td>
       <td><span class="pill ${esc(e.kind)}">${esc(e.kind)}</span></td>
       <td>${esc(e.game)}</td><td>${esc(e.platform)}</td>
-      <td style="color:var(--dim)">${esc(e.release||'—')}</td>
+      <td style="color:var(--dim)">${esc(e.release||'—')}
+        ${e.kind==='compress'&&e.detail?`<div class="help">${esc(e.detail)}</div>`:''}</td>
       <td style="color:var(--dim)">${esc(e.indexer||'—')}</td></tr>`).join('')}</tbody></table>`
     :'<div class="empty">No history yet.</div>';
 };

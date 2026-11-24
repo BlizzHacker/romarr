@@ -7132,8 +7132,8 @@ class ROMarr:
                         path, url=url, api_key=api_key, compression=compression, track_job=track_job)
                 except Exception as exc:  # noqa: BLE001 - the import stays successful
                     log.warning("compress: could not process %s", path.name, exc_info=True)
-                    tracked = any(row.source == source for row in self.store.pending_switch_compression())
-                    status = switch_compress.PENDING if tracked else switch_compress.FAILED_STATUS
+                    tracked = self.store.switch_compression_job(source)
+                    status = switch_compress.PENDING if tracked is not None else switch_compress.FAILED_STATUS
                     outcome = switch_compress.CompressOutcome(
                         source, status, error=f"unexpected error: {type(exc).__name__}")
                 self._record_compress(outcome, record)
@@ -7145,7 +7145,7 @@ class ROMarr:
 
         with self._lock:
             if (source in self._active_switch_compression
-                    or any(row.source == source for row in self.store.pending_switch_compression())):
+                    or self.store.switch_compression_job(source) is not None):
                 return
             self._active_switch_compression.add(source)
             pool = getattr(self, "_compress_pool", None)
@@ -7183,7 +7183,8 @@ class ROMarr:
         settled = 0
         for row in batch:
             with self._lock:
-                if row.source in self._active_switch_compression:
+                if (row.source in self._active_switch_compression
+                        or self.store.switch_compression_job(row.source) != row):
                     continue
                 self._active_switch_compression.add(row.source)
             try:
@@ -7228,8 +7229,9 @@ class ROMarr:
                       release=Path(outcome.source).name, library=label, detail=detail)
         if outcome.status == switch_compress.PENDING:
             self.store.record(event)
-        else:
-            self.store.finish_switch_compression(event, outcome.source, output)
+        elif not self.store.finish_switch_compression(
+                event, outcome.source, output, job_id=outcome.job_id):
+            return
         log.info("compress: %s", detail)
         if target is not None and self.store.settings.get("rescan_after_import", True):
             try:

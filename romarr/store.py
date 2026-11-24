@@ -587,14 +587,22 @@ class Store:
                     self._switch_compression[job.source] = previous
                 raise
 
+    def switch_compression_job(self, source: str) -> SwitchCompressionJob | None:
+        """Read the currently tracked job for an imported path."""
+        with self._lock:
+            return self._switch_compression.get(source)
+
     def pending_switch_compression(self) -> tuple[SwitchCompressionJob, ...]:
         """Return tracked conversion jobs without exposing the mutable store."""
         with self._lock:
             return tuple(self._switch_compression.values())
 
-    def finish_switch_compression(self, event: Event, source: str, output: str) -> None:
-        """Replace existing references and retire the job in the same state write."""
+    def finish_switch_compression(self, event: Event, source: str, output: str, *, job_id: str) -> bool:
+        """Replace existing references and retire only the matching job."""
         with self._lock:
+            tracked = self._switch_compression.get(source)
+            if tracked is not None and tracked.job_id != job_id:
+                return False
             if output:
                 for row in self.queue:
                     if source in row.imported_paths:
@@ -606,6 +614,7 @@ class Store:
                         request["updated_at"] = now_iso()
             self._switch_compression.pop(source, None)
             self.record(event)
+            return True
 
     # -- history -----------------------------------------------------------
 

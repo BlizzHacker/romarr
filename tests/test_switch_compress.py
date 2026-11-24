@@ -20,7 +20,7 @@ from romarr.compressatorium import (
     TOOL_BY_MODE, CompressatoriumClient, CompressatoriumConfig, compress_mode_for,
     mode_for,
 )
-from romarr.store import QueueItem, SeerrRequest, Store
+from romarr.store import Event, QueueItem, SeerrRequest, Store, SwitchCompressionJob
 from romarr.switch_compress import (
     COMPRESSED, FAILED_STATUS, KEPT, PENDING, SKIPPED, CompressOutcome, compress_import,
     compression_for, parse_compression,
@@ -523,6 +523,21 @@ def test_a_failed_cancellation_is_reconciled_after_a_restart(tmp_path, monkeypat
     assert request.status == "available" and request.assets == [str(output)]
     assert persisted.history(kind="compress")[0]["detail"].startswith("compressed ")
     assert restarted._reconcile_switch_compression() == "Settled 0 Switch compression job(s)"
+
+
+def test_a_stale_completion_cannot_retire_a_newer_job(tmp_path):
+    """A stale snapshot must preserve the newer tracked job and file references."""
+    store = Store(tmp_path / "s.json")
+    source = "/library/Game.nsp"
+    newer = SwitchCompressionJob(source, "switch", "Game", "endpoint", "new")
+    store.track_switch_compression(newer)
+    store.enqueue(QueueItem("Game", "switch", "release", 0, "imported", imported_paths=[source]))
+    event = Event(kind="compress", game="Game", platform="switch")
+
+    assert not store.finish_switch_compression(event, source, "/library/Game.nsz", job_id="old")
+    assert store.switch_compression_job(source) == newer
+    assert store.queue[0].imported_paths == [source]
+    assert store.history(kind="compress") == []
 
 
 def test_tracking_recovers_the_id_after_a_lost_submission_reply(tmp_path):
