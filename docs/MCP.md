@@ -117,6 +117,37 @@ client. This is a variable name, not the literal key. An alternative for clients
 using custom headers is `env_http_headers = { "X-Api-Key" = "ROMARR_API_KEY" }`.
 See [OpenAI's MCP configuration guide](https://learn.chatgpt.com/docs/extend/mcp).
 
+## Gemini CLI
+
+If Gemini CLI is already connected, run `gemini mcp list` on the machine
+running Gemini. Then try one read-only prompt:
+
+- “Use ROMarr to show the five most recent queue entries and their states.”
+- “Search my ROMarr library for Metroid and group the results by platform.”
+
+The answers use ROMarr's cached library and activity. Leave MCP writes off
+while exploring the tools.
+
+For direct setup, add a `romarr` entry under `mcpServers` in your private
+`~/.gemini/settings.json`. Use `httpUrl` for ROMarr's Streamable HTTP endpoint:
+
+```json
+{
+  "mcpServers": {
+    "romarr": {
+      "httpUrl": "https://YOUR-ROMARR-SERVER/api/v1/mcp",
+      "headers": {"X-Api-Key": "<YOUR_ROMARR_API_KEY>"}
+    }
+  }
+}
+```
+
+Keep this entry in user settings outside project repositories. If you prefer
+a shell environment variable for the key, use the [stdio bridge](#portable-stdio-bridge-including-claude-desktop)
+and set its `ROMARR_API_KEY` value in the `env` block to `$ROMARR_API_KEY`.
+A Gemini CLI process on a VPS needs its own network route to ROMarr. See the
+[Gemini CLI MCP guide](https://geminicli.com/docs/tools/mcp-server/).
+
 ## Hermes
 
 In Hermes' `config.yaml`:
