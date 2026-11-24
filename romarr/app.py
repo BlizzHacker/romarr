@@ -112,7 +112,7 @@ from .openapi import spec as openapi_spec
 from .ops import (LogRing, RateLimiter, make_backup, read_backup,
                   render_metrics, to_csv)
 from .platforms import PLATFORMS, by_slug, resolve, romm_fs_slug
-from .sso import ForwardAuth
+from .sso import ForwardAuth, trusted_peer
 from .totp import Totp
 from .playability import (
     DOWNLOAD, MOONLIGHT_KINDS, NCI_DEFAULT_PORT, PAIRING_IS_MANUAL, PLAYERS,
@@ -11319,9 +11319,11 @@ def make_handler(service: ROMarr):
                     or self.headers.get("Transfer-Encoding")
                     or not portal_socket.valid_path(sub_path)):
                 return self._json(400, {"error": "invalid library WebSocket upgrade"})
+            proxies = service._env.get("ROMARR_TRUSTED_PROXIES", "").split(",")
+            forwarded = (self.headers.get("X-Forwarded-Proto", "")
+                         if trusted_peer(self.client_address[0], proxies) else "")
             if not portal_socket.origin_allowed(
-                    self.headers.get("Origin", ""), self.headers.get("Host", ""),
-                    self.headers.get("X-Forwarded-Proto", ""),
+                    self.headers.get("Origin", ""), self.headers.get("Host", ""), forwarded,
                     str(service.store.settings.get("public_url") or ""),
                     "https" if isinstance(self.connection, ssl.SSLSocket) else "http"):
                 return self._json(403, {"error": "library WebSocket origin refused"})

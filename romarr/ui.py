@@ -1533,6 +1533,7 @@ RENDER.hub=async()=>{
   // rather than in a log the operator will never read.
   const version=typeof pageVersion==='number'?pageVersion:null;
   const current=()=>version===null||(version===pageVersion&&activePage==='hub');
+  let showingCatalogue=true;
   let hs=await j('/api/v1/hub/status').catch(()=>({}));
   if(!current())return;
   const p=$('#page');
@@ -1666,7 +1667,7 @@ RENDER.hub=async()=>{
   };
 
   const render=d=>{
-  if(!current())return;
+  if(!current()||!showingCatalogue)return;
   const confined=hs.sandboxed===true;
   const sandboxNote=hs.available===false ? '' :
     (confined
@@ -1865,7 +1866,7 @@ RENDER.hub=async()=>{
     if($('#exo-run')) $('#exo-run').onclick=()=>runExoJob(false);
     const qi=$('#pq');
     let t=null, hubLoadSeq=0;
-    const isCurrentHub=ver=>(typeof activePage==='undefined'||activePage==='hub')&&(typeof pageVersion!=='number'||pageVersion===ver);
+    const isCurrentHub=ver=>showingCatalogue&&(typeof activePage==='undefined'||activePage==='hub')&&(typeof pageVersion!=='number'||pageVersion===ver);
     const reloadAndRender=async(afterRender)=>{
       const seq=++hubLoadSeq;
       const loadVer=typeof pageVersion==='number'?pageVersion:0;
@@ -2004,8 +2005,21 @@ RENDER.hub=async()=>{
       await submitMd({clear_api_token:true},'Mister Download Manager API token cleared');
     };
 
-    const backToHub=async()=>{hs=await j('/api/v1/hub/status').catch(()=>hs); render(await load());};
-    p.querySelectorAll('button[data-open]').forEach(b=>b.onclick=()=>pluginDashboard(b.dataset.open,backToHub));
+    const backToHub=async()=>{
+      hs=await j('/api/v1/hub/status').catch(()=>hs);
+      const data=await load();
+      if(!current())return;
+      showingCatalogue=true;
+      render(data);
+    };
+    const openDashboard=slug=>{
+      if(!current()||!showingCatalogue)return;
+      showingCatalogue=false;
+      hubLoadSeq++;
+      clearTimeout(t);
+      return pluginDashboard(slug,backToHub);
+    };
+    p.querySelectorAll('button[data-open]').forEach(b=>b.onclick=()=>openDashboard(b.dataset.open));
     const apF=$('#ap-form');
     if(apF) apF.onsubmit=async e=>{
       e.preventDefault();
@@ -2084,7 +2098,7 @@ RENDER.hub=async()=>{
       hs=await j('/api/v1/hub/status').catch(()=>hs);
       if(action==='install'&&!actionError){
         toast('Installed. Here is what it does and how to set it up.');
-        return pluginDashboard(slug,backToHub);
+        return openDashboard(slug);
       }
       render(await load());
     });
@@ -2102,7 +2116,7 @@ RENDER.hub=async()=>{
       }catch(e){actionError='Could not reach ROMarr. Please try again.';}
       hs=await j('/api/v1/hub/status').catch(()=>hs);
       render(await load());
-      if(actionError)$('#ownurl').value=url;
+      if(actionError&&current()&&showingCatalogue)$('#ownurl').value=url;
     };
 
     $('#ssubmit').onclick=async()=>{
