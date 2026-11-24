@@ -19,6 +19,7 @@ back from the provider.
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Iterator
 from urllib.parse import urlsplit
 
@@ -29,6 +30,7 @@ LABELS = {"ollama": "Ollama", "openai": "OpenAI-compatible API", "anthropic": "A
 DEFAULT_URLS = {"ollama": "http://127.0.0.1:11434",
                 "openai": "https://api.openai.com/v1",
                 "anthropic": "https://api.anthropic.com"}
+URL_ENV = {provider: f"ROMARR_CHAT_{provider.upper()}_URLS" for provider in PROVIDERS}
 ANTHROPIC_VERSION = "2023-06-01"
 #: Connect fast, but give a local model on a small GPU time to load and think.
 TIMEOUT = (5, 180)
@@ -49,14 +51,40 @@ class ProviderError(Exception):
 def normalise_url(provider: str, url: str) -> str:
     """Return a clean base URL, or raise ValueError naming what is wrong."""
     url = str(url or "").strip().rstrip("/") or DEFAULT_URLS.get(provider, "")
+    if any(c.isspace() or ord(c) < 32 or c in ("\\", "\x7f") for c in url):
+        raise ValueError("Base URL contains invalid characters")
     parts = urlsplit(url)
     if parts.scheme not in ("http", "https") or not parts.hostname:
         raise ValueError("Base URL must start with http:// or https://")
-    if parts.username or parts.password:
+    if parts.username is not None or parts.password is not None:
         raise ValueError("Put the API key in the key field, not in the URL")
-    if parts.query or parts.fragment:
+    if "?" in url or "#" in url:
         raise ValueError("Base URL must not carry a query string or fragment")
+    try:
+        _ = parts.port  # Validate an explicitly specified port.
+    except ValueError:
+        raise ValueError("Base URL has an invalid port") from None
     return url
+
+
+def approved_base_url(provider: str, url: str) -> str:
+    """Select a built-in or deployment-approved URL for this provider."""
+    if provider not in DEFAULT_URLS:
+        raise ValueError("Unknown chat provider")
+    requested = normalise_url(provider, url)
+    default = DEFAULT_URLS[provider]
+    if requested == default:
+        return default
+    env_var = URL_ENV[provider]
+    for entry in os.environ.get(env_var, "").split():
+        try:
+            approved = normalise_url(provider, entry)
+        except ValueError:
+            continue
+        if requested == approved:
+            return approved
+    raise ValueError(f"Base URL is not approved for {LABELS[provider]}. "
+                     f"Add the exact URL to {env_var} on the ROMarr server and restart it.")
 
 
 def _scrub(text: str, cfg: dict) -> str:
@@ -81,7 +109,7 @@ def _headers(cfg: dict) -> dict:
 
 def _endpoint(cfg: dict, path: str) -> str:
     """Join a provider path onto the base URL without doubling `/v1`."""
-    base = normalise_url(cfg["provider"], cfg.get("base_url", ""))
+    base = approved_base_url(cfg["provider"], cfg.get("base_url", ""))
     if cfg["provider"] == "anthropic" and not base.endswith("/v1"):
         base += "/v1"
     return base + path
@@ -105,8 +133,11 @@ def _detail(response) -> str:
 
 def _request(cfg: dict, method: str, path: str, *, body=None, stream=False, timeout=TIMEOUT):
     """One provider request; every failure becomes a readable ProviderError."""
+    try:
+        url = _endpoint(cfg, path)
+    except ValueError as exc:
+        raise ProviderError(str(exc)) from None
     label = LABELS[cfg["provider"]]
-    url = _endpoint(cfg, path)
     try:
         response = requests.request(method, url, headers=_headers(cfg), json=body,
                                     stream=stream, timeout=timeout, allow_redirects=False)

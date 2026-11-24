@@ -140,6 +140,8 @@ def _merge(service, patch: dict) -> dict:
 def save_config(service, patch: dict) -> dict:
     """Store a validated patch. A blank or masked key leaves the saved key alone."""
     cfg = _merge(service, patch)
+    if cfg["enabled"]:
+        providers.approved_base_url(cfg["provider"], cfg["base_url"])
     service.store.update_settings({SETTINGS_KEY: cfg})
     return public_config(service)
 
