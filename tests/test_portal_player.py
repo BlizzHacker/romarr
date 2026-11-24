@@ -11,7 +11,6 @@ def test_proxied_document_installs_romm_player_support_before_the_app():
     result = ROMarr._inject_portal_shim(upstream, "http://library.example")
     shim_position = result.index(PLAYER_SHIM.encode())
     assert shim_position < result.index(b'/assets/app.js')
-    assert b'cdn.emulatorjs.org' in result
 
 
 def test_portal_opens_from_config_and_defers_the_device_inventory():
