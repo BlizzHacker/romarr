@@ -296,3 +296,61 @@ def test_clear_authentication_works_after_plugin_uninstall(tmp_path, monkeypatch
         "error": "Install the Archive.org plugin first",
     }
     assert hub.archive_org_auth_configure(clear=True) == {"ok": True, "cleared": True}
+
+
+def test_fetch_uses_the_brokers_operator_grant(monkeypatch, tmp_path):
+    """App staging uses the same grant that validated the plugin's plan."""
+    from types import SimpleNamespace
+
+    import httpx
+
+    from rom_hub import registry
+    from rom_hub.broker.fetcher import HttpxFetcher
+    from rom_hub.manifest import parse_manifest
+
+    shop = "http://127.0.0.1:8080"
+    monkeypatch.setenv("ROM_HUB_NETWORK_TEST_SHOP", shop)
+    manifest = parse_manifest("""
+[plugin]
+slug = "test-shop"
+name = "Fixture Shop"
+version = "1"
+rpp_version = "1"
+
+[capabilities]
+importer = "shop:Import"
+
+[permissions]
+network_from_env = true
+""")
+    (tmp_path / "shop.py").write_text("""
+from rom_hub_sdk import FetchFile, FetchPlan, ImportProvider
+
+class Import(ImportProvider):
+    def plan(self, result):
+        return FetchPlan(platform="nes", files=[
+            FetchFile(url=self.ctx.config["shop"] + "/fixture.nes", filename="fixture.nes")
+        ])
+""", encoding="utf-8")
+
+    plugin = SimpleNamespace(path=tmp_path, manifest=manifest, slug=manifest.slug,
+                             config={"shop": shop}, enabled=True)
+    monkeypatch.setattr(registry, "Registry", lambda _: SimpleNamespace(get=lambda _: plugin))
+    monkeypatch.setattr(hub, "_plugin_secrets", lambda _: {})
+    monkeypatch.setattr(hub, "_unsandboxed", lambda: True)
+    calls = []
+
+    def serve(request):
+        """Serve the fixture through the host's downloader."""
+        calls.append(str(request.url))
+        return httpx.Response(200, content=b"fixture")
+
+    transport = httpx.MockTransport(serve)
+    monkeypatch.setattr(hub, "_build_fetcher", lambda *args, **kwargs: HttpxFetcher(transport=transport))
+    monkeypatch.setattr(hub, "_wrap_download_transport", lambda _: transport)
+    row = dict(ROW, plugin=manifest.slug, title="Fixture", platform="nes")
+    result = hub.fetch(row, tmp_path / "out")
+
+    assert result["ok"], result
+    assert calls == [shop + "/fixture.nes"]
+    assert Path(result["files"][0]).read_bytes() == b"fixture"
