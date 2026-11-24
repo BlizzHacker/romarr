@@ -3710,15 +3710,13 @@ RENDER.portal=async()=>{
   if(window._portalTab==='mcp'){window._portalTab='shell'; go('agents'); return;}
   const version=pageVersion;
   const current=()=>version===pageVersion&&activePage==='portal';
-  const [libs, fleet, sys] = await Promise.all([
-    j('/api/v1/library').catch(()=>({items:[]})),
-    j('/api/v1/hub/fleet').catch(()=>({profiles:[],kinds:{},igir:{}})),
-    j('/api/v1/system/status').catch(()=>({}))
-  ]);
+  let fleet=null;
+  const fleetRequest=j('/api/v1/hub/fleet').catch(()=>({profiles:[],kinds:{},igir:{}}));
+  const libs=await j('/api/v1/library/config').catch(()=>({items:[]}));
   if(!current()) return;
   const servers=(libs.items||[]).filter(l=>l.url).map(l=>({...l}));
-  if(sys&&sys.ggrequestz&&sys.ggrequestz.url&&!servers.some(s=>s.url===sys.ggrequestz.url)){
-    servers.push({name:'GG Requestz',type:'ggrequestz',url:sys.ggrequestz.url,public_url:sys.ggrequestz.public_url||sys.ggrequestz.url,path:sys.library_path||'/roms'});
+  if(libs.ggrequestz_url&&!servers.some(s=>s.url===libs.ggrequestz_url)){
+    servers.push({name:'GG Requestz',type:'ggrequestz',url:libs.ggrequestz_url,path:libs.library_path||'/roms'});
   }
   let tab=window._portalTab||'shell';
   let currentUrl=window._portalTargetUrl||(servers[0]&&servers[0].url)||'';
@@ -3821,11 +3819,13 @@ RENDER.portal=async()=>{
       };
       $('#portal-1g1r').onclick=async()=>{
         const srv=servers.find(s=>s.url===currentUrl)||servers[0]||{};
-        const libPath=srv.path||(sys&&sys.library_path)||'/roms';
+        const libPath=srv.path||libs.library_path||'/roms';
         $('#portal-status').innerHTML='<div class="panel-note">Building Igir 1G1R verification preview for <code>'+esc(libPath)+'</code>…</div>';
         const r=await fetch('/api/v1/hub/igir',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({input_paths:[libPath],output_path:libPath+'/{romm}',dry_run:true,preview_only:true})}).then(x=>x.json()).catch(()=>({}));
         $('#portal-status').innerHTML='<div class="panel-note" style="border-left-color:var(--ok)"><b>Igir 1G1R Preview Command (changes nothing):</b><br><code>'+esc(r.command||'')+'</code></div>';
       };
+    } else if(!fleet){
+      $('#page').innerHTML=`<div class="card">${tabBar}<p class="help" role="status">Loading devices…</p></div>`;
     } else if(tab==='fleet'){
       const profiles=fleet.profiles||[];
       const fileProfiles=profiles.filter(p=>(p.kind||'files')==='files');
@@ -3834,7 +3834,7 @@ RENDER.portal=async()=>{
       const selected=profiles.find(p=>p.id===selectedId)||profiles[0]||{id:'es-de',kind:'files',default_path:'~/ROMs',default_ssh_host:'user@device.local',igir_token:'{es}'};
       const isApp=selected.kind==='app';
       const defaultLibUrl=(servers[0]&&(servers[0].public_url||servers[0].url))||location.origin;
-      const defaultSrc=(sys&&sys.library_path)||'/roms';
+      const defaultSrc=libs.library_path||'/roms';
       const igirInfo=fleet.igir||{};
       const igirBadge=igirInfo.available
         ? `<span class="pill" style="border-color:var(--ok);color:var(--ok)">Igir ${esc(igirInfo.version||'installed')} ready</span>`
@@ -3997,6 +3997,10 @@ RENDER.portal=async()=>{
     });
   };
   draw();
+  fleetRequest.then(data=>{
+    fleet=data;
+    if(current()&&tab==='fleet')draw();
+  });
 };
 
 // Chat Agent: provider setup and a streaming chat with ROMarr's own tools.
