@@ -106,6 +106,8 @@ def _wrap_download_transport(base_transport):
 
         class _BinaryDownloadSolverTransport(FlareSolverrTransport):
             def handle_request(self, request: httpx.Request) -> httpx.Response:
+                if request.url.scheme != "https" or request.extensions.get("rom_hub_bypass_solver"):
+                    return self._inner.handle_request(request)
                 req = self._apply_cached(request)
                 response = self._inner.handle_request(req)
                 if request.method.upper() != "GET" or response.status_code not in (403, 503):
@@ -914,10 +916,9 @@ def fetch(row: dict, dest_dir) -> dict:
                            secrets=_plugin_secrets(plugin),
                            allow_unsandboxed=_unsandboxed()) as proc:
             plan = proc.plan(result)
-            with HttpDownloader(
-                    allowlist=list(getattr(plugin.manifest, "network", [])
-                                   or []),
-                    transport=dl_transport) as downloader:
+            allowlist = getattr(proc, "network_policy",
+                                list(getattr(plugin.manifest, "network", []) or []))
+            with HttpDownloader(allowlist=allowlist, transport=dl_transport) as downloader:
                 files = []
                 for f in plan.files:
                     dl_kwargs = {"headers": f.headers} if getattr(f, "headers", None) else {}
