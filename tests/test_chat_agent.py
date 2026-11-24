@@ -67,11 +67,14 @@ def ollama_text(*parts):
 
 
 @pytest.fixture
-def provider():
+def provider(monkeypatch):
     FakeProvider.script, FakeProvider.seen = {}, []
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), FakeProvider)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
-    yield "http://127.0.0.1:" + str(httpd.server_port)
+    url = f"http://127.0.0.1:{httpd.server_port}"
+    for env_var in chat_providers.URL_ENV.values():
+        monkeypatch.setenv(env_var, f"{url} {url}/v1")
+    yield url
     httpd.shutdown()
     httpd.server_close()
 
@@ -167,12 +170,13 @@ def test_bad_key_is_reported_plainly_without_echoing_it(service, provider):
     assert FakeProvider.seen[-1]["headers"]["Authorization"] == f"Bearer {SECRET}"
 
 
-def test_saved_key_never_follows_an_unsaved_address(service, provider):
+def test_saved_key_never_follows_an_unsaved_address(service, provider, monkeypatch):
     configure(service, provider, provider="openai", api_key=SECRET)
     FakeProvider.script["/models"] = [(200, "application/json", b'{"data": [{"id": "m"}]}')]
     assert chat_agent.models(service, {})["ok"]
     assert FakeProvider.seen[-1]["headers"]["Authorization"] == f"Bearer {SECRET}"
     other = provider.replace("127.0.0.1", "localhost")
+    monkeypatch.setenv("ROMARR_CHAT_OPENAI_URLS", f"{provider} {other}")
     assert chat_agent.models(service, {"base_url": other})["ok"]
     assert "Authorization" not in FakeProvider.seen[-1]["headers"]
     assert chat_agent.models(service, {"base_url": other, "api_key": "typed-key"})["ok"]
@@ -191,7 +195,8 @@ def test_anthropic_turns_alternate_after_a_cancelled_action():
     assert messages[-1]["content"][-1] == {"type": "text", "text": "never mind"}
 
 
-def test_unreachable_provider_is_a_plain_error(service):
+def test_unreachable_provider_is_a_plain_error(service, monkeypatch):
+    monkeypatch.setenv("ROMARR_CHAT_OLLAMA_URLS", "http://127.0.0.1:9")
     chat_agent.save_config(service, {"enabled": True, "base_url": "http://127.0.0.1:9", "model": "m"})
     result = chat_agent.models(service, {})
     assert result["ok"] is False and "Could not connect to Ollama" in result["error"]
@@ -433,6 +438,29 @@ def test_chat_streams_ndjson_over_http(http, service, provider):
     assert refused.status_code == 400
 
 
+def test_only_server_approved_urls_are_used(http, service, provider, monkeypatch):
+    """Require the exact approved URL for probes and existing saved settings."""
+    configure(service, provider, provider="openai", api_key=SECRET)
+    monkeypatch.setenv("ROMARR_CHAT_OPENAI_URLS", f"{provider}/v1")
+    headers = {"X-Api-Key": KEY}
+    for route in ("config", "models", "test"):
+        response = requests.post(f"{http}/api/v1/chat/{route}", headers=headers,
+                                 json={"base_url": provider, "enabled": True}, timeout=5)
+        assert response.status_code == (400 if route == "config" else 200)
+        assert "ROMARR_CHAT_OPENAI_URLS" in response.json()["error"]
+    events = run(chat_agent.chat(service, "owner", "hello"))
+    assert events[0]["type"] == "error" and "ROMARR_CHAT_OPENAI_URLS" in events[0]["message"]
+    assert not FakeProvider.seen
+
+    approved = provider + "/v1"
+    FakeProvider.script["/v1/models"] = [(200, "application/json", b'{"data": [{"id": "m"}]}')]
+    assert chat_agent.models(service, {"base_url": approved + "/"})["models"] == ["m"]
+    assert FakeProvider.seen[-1]["path"] == "/v1/models"
+    assert "Authorization" not in FakeProvider.seen[-1]["headers"]
+
+
 def test_normalise_url_defaults():
     assert chat_providers.normalise_url("ollama", "") == "http://127.0.0.1:11434"
     assert chat_providers.normalise_url("anthropic", "https://api.anthropic.com/") == "https://api.anthropic.com"
+    for provider, url in chat_providers.DEFAULT_URLS.items():
+        assert chat_providers.approved_base_url(provider, "") == url

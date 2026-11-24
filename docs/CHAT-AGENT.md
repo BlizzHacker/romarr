@@ -10,6 +10,16 @@ It works with:
 | **OpenAI-compatible** | Base URL ending in `/v1`, API key, model | OpenAI, LiteLLM, LM Studio, vLLM, llama.cpp server, OpenRouter, and others. |
 | **Anthropic** | API key, model | Base URL defaults to `https://api.anthropic.com`. |
 
+Custom base URLs need approval in the ROMarr process environment before you can connect to them. Set the variable for your provider and restart ROMarr:
+
+| Provider | Environment variable | Example value |
+| --- | --- | --- |
+| Ollama | `ROMARR_CHAT_OLLAMA_URLS` | `http://192.168.0.50:11434` |
+| OpenAI-compatible | `ROMARR_CHAT_OPENAI_URLS` | `https://llm.example.com/v1` |
+| Anthropic | `ROMARR_CHAT_ANTHROPIC_URLS` | `https://anthropic-gateway.example.com` |
+
+Separate multiple full base URLs with spaces. Include the scheme, port if present, and any base path. The built-in defaults (local Ollama on port 11434, OpenAI, and Anthropic) already work. For an existing custom configuration, add its saved base URL to the corresponding environment variable when upgrading. In Docker, pass these variables to the ROMarr container. With systemd, set them in the service environment and restart the service.
+
 Fill in the provider, press **Test** (it lists the provider's models and says whether yours is among them), tick **Enable the chat agent** and **Save**.
 
 ## What it can do
