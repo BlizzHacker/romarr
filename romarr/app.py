@@ -11288,6 +11288,13 @@ def make_handler(service: ROMarr):
                         "Content-Disposition", "Access-Control-Allow-Origin"):
                 if hdr in resp_headers:
                     self.send_header(hdr, resp_headers[hdr])
+            # RomM uses these headers on its standalone emulator pages to
+            # make SharedArrayBuffer available for threaded cores.
+            if code == 200 and ctype.startswith("text/html"):
+                for name, value in (("Cross-Origin-Opener-Policy", "same-origin"),
+                                    ("Cross-Origin-Embedder-Policy", "require-corp")):
+                    if resp_headers.get(name) == value:
+                        self.send_header(name, value)
             if code == 200 and (sub_path.startswith("/assets/") or "/loader.js" in sub_path):
                 self.send_header("Cache-Control", "private, max-age=3600")
             self.end_headers()
