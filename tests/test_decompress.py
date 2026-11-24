@@ -133,15 +133,9 @@ def _dat_index_for(name: str, hashes: dict) -> DatIndex:
     from romarr.dat import Dat
 
     index = DatIndex()
-    dat = Dat(name="Test DAT")
     rom = Rom(name=name, size=hashes["size"], crc=hashes["crc"],
               md5=hashes["md5"], sha1=hashes["sha1"])
-    dat.games[name] = Game(name=name, roms=(rom,))
-    dat._by_sha1[rom.sha1] = (name, rom)
-    dat._by_md5[rom.md5] = (name, rom)
-    dat._by_crc[(rom.crc, rom.size)] = (name, rom)
-    dat._sizes[rom.size] = name
-    index.add(dat)
+    index.add(Dat(name="Test DAT", games={name: Game(name=name, roms=(rom,))}))
     return index
 
 

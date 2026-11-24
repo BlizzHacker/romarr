@@ -38,16 +38,17 @@ Store status and submission steps for each one are in [STORES.md](STORES.md).
 
 ### Memory and low-RAM models
 
-These are 1.13.2 numbers, measured in a container:
+Measured with `docker stats`, with `DAT_PATH` pointing at 111 No-Intro and Redump DATs from libretro-database (53 MB on disk):
 
-| Load | Resident memory |
-|---|---|
-| Idle, no DATs | about 50 MB |
-| 111 No-Intro + Redump DATs from libretro-database (53 MB on disk) | about 237 MB, steady, also after a restart |
-| Same DATs, container capped at 192 MB | killed for running out of memory while loading |
-| Same DATs, capped at 256 MB | runs |
+| Load | 1.13.2 | Releases after 1.13.2 |
+|---|---|---|
+| Idle, no DATs | about 50 MB | about 50 MB |
+| DATs loaded, first start | about 237 MB | about 99 MB (105 MB at peak while loading) |
+| DATs loaded, after a restart | about 234 MB | about 95 MB |
+| Container capped at 192 MB | killed for running out of memory while loading | runs |
+| Container capped at 128 MB | not tried | runs, on first start and after a restart |
 
-DATs are loaded only when `DAT_PATH` is set. Their memory grows with what you give ROMarr: roughly 3.5 times their size on disk. On a 512 MB or 1 GB NAS, point `DAT_PATH` at the systems you actually collect, not a whole DAT pack. Don't cap the container below 256 MB with DATs loaded. The full No-Intro and Redump XML packs are much larger than libretro's trimmed copies, so budget for that before loading them.
+DATs are loaded only when `DAT_PATH` is set, and their memory grows with what you give ROMarr. After 1.13.2, a loaded DAT takes about as much memory as its size on disk. In 1.13.2 and earlier it took about 3.5 times as much. With the DATs above, don't cap the container below 128 MB (256 MB on 1.13.2). On a 512 MB or 1 GB NAS, you can still point `DAT_PATH` at just the systems you collect. The full No-Intro and Redump XML packs are much larger than libretro's trimmed copies, so budget for that before loading them.
 
 ### Cloud folders (FUSE) in a container
 
