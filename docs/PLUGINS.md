@@ -30,7 +30,10 @@ A new ROMarr installs these source plugins on its first start, alongside the Com
 2. Search by name or use the `search` capability filter. Read the description and any key requirement.
 3. Click **Install**. Confirm the card shows **Enabled**; use **Enable** if needed.
 4. Open **Settings → Download Clients → Add** and choose **ROM Hub**. Set a writable save/staging directory as ROMarr sees it, such as `/downloads/rom-hub` in Docker. Test and save.
-5. Return to Plugins. It should say **Enabled plugins join search** and list the searchable plugins.
+5. Return to Plugins to see which sources are ready for search.
+
+MiNERVA Archive uses qBittorrent or Standalone BitTorrent (MDM in CLI mode)
+for exact-file selection. See [using MiNERVA to fill a set](COLLECTIONS.md#can-request-missing-use-minerva).
 6. Use **Interactive Search** with a title and platform. Plugin results can be grabbed through the ROM Hub client and then go through normal import and verification.
 
 A metadata-only plugin does not become a game search source. Other capabilities, including assets and cores, belong to ROM Hub and may require its CLI; installing them does not automatically configure an emulator or frontend. For a plugin marked **key needed**, follow that plugin's repository instructions for credentials/configuration.

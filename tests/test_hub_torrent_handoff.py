@@ -307,3 +307,59 @@ def test_an_unresolved_hub_row_still_rides_the_hub_lane(tmp_path, monkeypatch):
     out = svc._hub_releases("minerva 3", None)
     assert out[0].protocol == "hub"
     assert out[0].download_url.startswith("hub://")
+
+
+def test_collection_requests_minerva_without_a_hub_downloader(tmp_path, monkeypatch):
+    """A set uses the exact-file client even when a generic torrent client ranks first."""
+    from romarr.app import ROMarr
+    from romarr.clients import QBittorrent
+    from romarr.collections import Batch, BATCH_PENDING
+
+    service = ROMarr(env={"ROMARR_DATA": str(tmp_path / "s.json"),
+                          "QBITTORRENT_URL": "http://qbit.invalid"})
+    qbit = next(c for c in service.clients if isinstance(c, QBittorrent))
+
+    class GenericTorrent:
+        """A client that can download torrents without exact-file selection."""
+
+        protocol = "torrent"
+        configured = True
+
+        def add(self, *_args, **_kwargs):
+            pytest.fail("The set must never hand off the whole torrent")
+
+    service.clients = [GenericTorrent(), qbit]
+    path = "./TOSEC/Nintendo/SNES/Chrono Trigger (USA).zip"
+    row = _row(title="Chrono Trigger (USA).zip", size_bytes=524288,
+               extra={"path": path})
+    magnet = "magnet:?xt=urn:btih:" + "a" * 40
+    row["magnet"] = magnet
+    calls = []
+
+    def search(game, platform=None, only=None):
+        """Return one file from MiNERVA and one unavailable direct download."""
+        assert (game, platform, only) == ("Chrono Trigger", "snes", "minerva-archive")
+        return [row, _row(plugin="archive-org")], ""
+
+    def select(url, file_path, **_kwargs):
+        """Capture the actual handoff to the selected client."""
+        calls.append((url, file_path))
+        qbit._added.job_id = "qbit-tag:set-fixture"
+        qbit._added.selected_file = {"name": file_path}
+        return True
+
+    monkeypatch.setattr(hub, "searchable_plugins", lambda: ["archive-org", "minerva-archive"])
+    monkeypatch.setattr(hub, "search", search)
+    monkeypatch.setattr(hub, "resolve_torrents", lambda rows: rows)
+    monkeypatch.setattr(qbit, "add_magnet_selective", select)
+    service.store.put_item("batches", Batch(
+        id="set-fixture", platform="snes", dat="Fixture DAT",
+        status=BATCH_PENDING, queue=["Chrono Trigger"]).to_dict())
+
+    result = service.collection_step("set-fixture")
+
+    assert result["done"] == 1
+    assert result["failed"] == 0
+    assert calls == [(magnet, path)]
+    assert service.queue[0].selected_file == {"name": path}
+    assert service.queue[0].file_selection_required

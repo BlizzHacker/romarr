@@ -221,6 +221,20 @@ ROMarr matches the DAT name to a platform, first the whole name, then without th
 
 No. Sets advance on a schedule (the **Work through queued collection sets** task) whether the page is open or not. Torrent source jobs are advanced with **Run next**.
 
+### Can Request missing use MiNERVA?
+
+Yes. Enable **MiNERVA Archive** under **Hub → Plugins**, then test and save
+**qBittorrent** or **Standalone BitTorrent (MDM)** in CLI mode under **Settings →
+Download Clients**. ROMarr uses that client to select the exact file inside a
+collection torrent. Sources that fetch files directly use a ROM Hub download client.
+
+Try one missing title in **Interactive Search** with the same platform before
+starting the set. If no result is usable, inspect the rejection reason and try
+the game's title as it appears in the source. A DAT and a torrent may use
+different names or include different revisions. If you already have the torrent
+in qBittorrent or Transmission, **Preview source plan** can show which of its
+files match your DAT.
+
 ### Will it re-download games I already have?
 
 Only titles the plan marks *missing* are requested. If you have a game under a different name, the plan cannot see it: rename it to the DAT name (see [Existing library rename](EXISTING-LIBRARY-RENAME.md)) or adopt it with Manual Import before you request the set. Avoid queueing the same set twice: each **Request missing** creates a new set.
