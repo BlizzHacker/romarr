@@ -42,6 +42,7 @@ from copy import copy, deepcopy
 import logging
 from typing import NamedTuple
 import os
+import ssl
 import pathlib
 import re
 import threading
@@ -49,6 +50,7 @@ import subprocess
 import uuid
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
+from http import client as http_client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote, unquote_plus, urlparse, urlsplit, urlunsplit
@@ -110,7 +112,7 @@ from .openapi import spec as openapi_spec
 from .ops import (LogRing, RateLimiter, make_backup, read_backup,
                   render_metrics, to_csv)
 from .platforms import PLATFORMS, by_slug, resolve, romm_fs_slug
-from .sso import ForwardAuth
+from .sso import ForwardAuth, trusted_peer
 from .totp import Totp
 from .playability import (
     DOWNLOAD, MOONLIGHT_KINDS, NCI_DEFAULT_PORT, PAIRING_IS_MANUAL, PLAYERS,
@@ -131,6 +133,7 @@ from .selection import (Release, best_release, clean_group_name, infer_platform,
                         package_class)
 from .game_packages import (BASE, DEFAULT_PARTS, GAME_FOLDER_LIBRARIES, PACKAGE_PLATFORMS, PARTS,
                             describe_parts, imported_role, normalise_parts)
+from . import portal_socket
 from .store import Event, QueueItem, SeerrRequest, Store, SwitchCompressionJob
 from .ui import favicon_svg as ui_favicon_svg
 from .ui import web_manifest, service_worker, app_icon
@@ -8848,8 +8851,9 @@ class ROMarr:
             return html_bytes
         import re
         text = re.sub(r'\s+crossorigin(?:="[^"]*")?', '', text)
-        safe_origin = json.dumps(origin)
-        safe_path = json.dumps(initial_path if initial_path.startswith("/") else "/" + initial_path)
+        safe_origin = json.dumps(origin).replace("<", "\\u003c")
+        safe_path = json.dumps(initial_path if initial_path.startswith("/") else "/" + initial_path).replace("<", "\\u003c")
+        socket_paths = json.dumps(sorted(portal_socket.SOCKET_PATHS))
         shim = (
             "<script>(function(){"
             f"var TARGET={safe_origin};"
@@ -8874,6 +8878,15 @@ class ROMarr:
             "XMLHttpRequest.prototype.open=function(m,u){"
             "var a=Array.prototype.slice.call(arguments);a[1]=rw(u);"
             "return _o.apply(this,a);};"
+            "var WS=window.WebSocket;"
+            f"var SOCKETS={socket_paths};"
+            "if(WS){window.WebSocket=new Proxy(WS,{construct:function(c,a,n){"
+            "try{var u=new URL(a[0],location.href);"
+            "if(/^(https?|wss?):$/.test(u.protocol)&&SOCKETS.indexOf(u.pathname)!==-1&&"
+            "(u.host===location.host||u.host===new URL(TARGET).host)){"
+            "var relay=new URL(PROXY+encodeURIComponent(u.pathname+u.search),location.origin);"
+            "relay.protocol=location.protocol==='https:'?'wss:':'ws:';a[0]=relay.href;}"
+            "}catch(e){}return Reflect.construct(c,a,n);}});}"
             "})();</script>"
         )
         lower = text.lower()
@@ -11250,6 +11263,9 @@ def make_handler(service: ROMarr):
 
         def _serve_portal_proxy(self, target: str, sub_path: str,
                                 method: str = "GET", body: bytes | None = None):
+            upgrade = self.headers.get("Upgrade", "")
+            if upgrade and method == "GET":
+                return self._serve_portal_socket(target, sub_path)
             res = service.proxy_portal(
                 target,
                 sub_path,
@@ -11272,10 +11288,92 @@ def make_handler(service: ROMarr):
                         "Content-Disposition", "Access-Control-Allow-Origin"):
                 if hdr in resp_headers:
                     self.send_header(hdr, resp_headers[hdr])
+            # RomM uses these headers on its standalone emulator pages to
+            # make SharedArrayBuffer available for threaded cores.
+            if code == 200 and ctype.startswith("text/html"):
+                for name, value in (("Cross-Origin-Opener-Policy", "same-origin"),
+                                    ("Cross-Origin-Embedder-Policy", "require-corp")):
+                    if resp_headers.get(name) == value:
+                        self.send_header(name, value)
             if code == 200 and (sub_path.startswith("/assets/") or "/loader.js" in sub_path):
                 self.send_header("Cache-Control", "private, max-age=3600")
             self.end_headers()
             return self.wfile.write(raw)
+
+        def _serve_portal_socket(self, target: str, sub_path: str):
+            """Upgrade a same-origin, signed-in Socket.IO request to its library."""
+            from base64 import b64encode
+            from requests.cookies import get_cookie_header
+            from urllib.parse import urlsplit
+
+            self.close_connection = True
+            if not self._authorised():
+                return self._json(401, {"error": "unauthorised"})
+            key = self.headers.get("Sec-WebSocket-Key", "")
+            if (self.request_version != "HTTP/1.1"
+                    or self.headers.get("Upgrade", "").lower() != "websocket"
+                    or "upgrade" not in portal_socket.connection_tokens(self.headers.get("Connection", ""))
+                    or self.headers.get("Sec-WebSocket-Version", "") != portal_socket.WS_VERSION
+                    or not portal_socket.valid_key(key)
+                    or self.headers.get("Content-Length", "0") != "0"
+                    or self.headers.get("Transfer-Encoding")
+                    or not portal_socket.valid_path(sub_path)):
+                return self._json(400, {"error": "invalid library WebSocket upgrade"})
+            proxies = service._env.get("ROMARR_TRUSTED_PROXIES", "").split(",")
+            forwarded = (self.headers.get("X-Forwarded-Proto", "")
+                         if trusted_peer(self.client_address[0], proxies) else "")
+            if not portal_socket.origin_allowed(
+                    self.headers.get("Origin", ""), self.headers.get("Host", ""), forwarded,
+                    str(service.store.settings.get("public_url") or ""),
+                    "https" if isinstance(self.connection, ssl.SSLSocket) else "http"):
+                return self._json(403, {"error": "library WebSocket origin refused"})
+            try:
+                offered = portal_socket.protocols(self.headers.get("Sec-WebSocket-Protocol", ""))
+                parts = urlsplit(target or service.active_portal_url())
+            except ValueError:
+                return self._json(400, {"error": "invalid library WebSocket request"})
+            origin = f"{parts.scheme}://{parts.netloc}"
+            credentials = service._portal_targets().get(origin)
+            if credentials is None:
+                return self._json(403, {"error": "not a configured library origin"})
+            if not portal_socket.CONNECTIONS.acquire(blocking=False):
+                return self._json(503, {"error": "too many library WebSocket connections"})
+            try:
+                headers = {}
+                try:
+                    username, password = credentials.get("username"), credentials.get("password")
+                    if username and password:
+                        basic = b64encode(f"{username}:{password}".encode("latin-1")).decode("ascii")
+                        headers["Authorization"] = f"Basic {basic}"
+                    elif credentials.get("api_key"):
+                        api_key = credentials["api_key"]
+                        headers.update({"Authorization": f"Bearer {api_key}", "X-Api-Key": api_key})
+                    session = getattr(service, "_portal_sessions", {}).get(origin)
+                    if session is not None:
+                        cookie = get_cookie_header(
+                            session.cookies, requests.Request("GET", origin + sub_path).prepare())
+                        if cookie:
+                            headers["Cookie"] = cookie
+                    upstream, protocol, frames = portal_socket.open_upstream(
+                        origin, sub_path, key, offered, headers)
+                except (OSError, ValueError, http_client.HTTPException, portal_socket.HandshakeError) as exc:
+                    log.warning("library WebSocket handshake failed (%s)", type(exc).__name__)
+                    return self._json(502, {"error": "library WebSocket handshake failed"})
+                try:
+                    header = ("HTTP/1.1 101 Switching Protocols\r\n"
+                              "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+                              f"Sec-WebSocket-Accept: {portal_socket.accept_key(key)}\r\n")
+                    if protocol:
+                        header += f"Sec-WebSocket-Protocol: {protocol}\r\n"
+                    self.wfile.write((header + "\r\n").encode("ascii"))
+                    self.wfile.flush()
+                    portal_socket.relay(self.connection, upstream.sock, frames)
+                except OSError:
+                    pass
+                finally:
+                    upstream.close()
+            finally:
+                portal_socket.CONNECTIONS.release()
 
         def _post(self):
             """Dispatch POST requests, coordinating configuration writes and reloads."""

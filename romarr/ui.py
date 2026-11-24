@@ -1531,7 +1531,11 @@ RENDER.hub=async()=>{
   // Installing a plugin means running its author's code. Whether that code is
   // confined is the thing to know first, so it goes at the top of the page
   // rather than in a log the operator will never read.
+  const version=typeof pageVersion==='number'?pageVersion:null;
+  const current=()=>version===null||(version===pageVersion&&activePage==='hub');
+  let showingCatalogue=true;
   let hs=await j('/api/v1/hub/status').catch(()=>({}));
+  if(!current())return;
   const p=$('#page');
   p.innerHTML='<div class="empty">Reading the plugin catalogue…</div>';
 
@@ -1663,6 +1667,7 @@ RENDER.hub=async()=>{
   };
 
   const render=d=>{
+  if(!current()||!showingCatalogue)return;
   const confined=hs.sandboxed===true;
   const sandboxNote=hs.available===false ? '' :
     (confined
@@ -1861,7 +1866,7 @@ RENDER.hub=async()=>{
     if($('#exo-run')) $('#exo-run').onclick=()=>runExoJob(false);
     const qi=$('#pq');
     let t=null, hubLoadSeq=0;
-    const isCurrentHub=ver=>(typeof activePage==='undefined'||activePage==='hub')&&(typeof pageVersion!=='number'||pageVersion===ver);
+    const isCurrentHub=ver=>showingCatalogue&&(typeof activePage==='undefined'||activePage==='hub')&&(typeof pageVersion!=='number'||pageVersion===ver);
     const reloadAndRender=async(afterRender)=>{
       const seq=++hubLoadSeq;
       const loadVer=typeof pageVersion==='number'?pageVersion:0;
@@ -2000,8 +2005,21 @@ RENDER.hub=async()=>{
       await submitMd({clear_api_token:true},'Mister Download Manager API token cleared');
     };
 
-    const backToHub=async()=>{hs=await j('/api/v1/hub/status').catch(()=>hs); render(await load());};
-    p.querySelectorAll('button[data-open]').forEach(b=>b.onclick=()=>pluginDashboard(b.dataset.open,backToHub));
+    const backToHub=async()=>{
+      hs=await j('/api/v1/hub/status').catch(()=>hs);
+      const data=await load();
+      if(!current())return;
+      showingCatalogue=true;
+      render(data);
+    };
+    const openDashboard=slug=>{
+      if(!current()||!showingCatalogue)return;
+      showingCatalogue=false;
+      hubLoadSeq++;
+      clearTimeout(t);
+      return pluginDashboard(slug,backToHub);
+    };
+    p.querySelectorAll('button[data-open]').forEach(b=>b.onclick=()=>openDashboard(b.dataset.open));
     const apF=$('#ap-form');
     if(apF) apF.onsubmit=async e=>{
       e.preventDefault();
@@ -2080,7 +2098,7 @@ RENDER.hub=async()=>{
       hs=await j('/api/v1/hub/status').catch(()=>hs);
       if(action==='install'&&!actionError){
         toast('Installed. Here is what it does and how to set it up.');
-        return pluginDashboard(slug,backToHub);
+        return openDashboard(slug);
       }
       render(await load());
     });
@@ -2098,7 +2116,7 @@ RENDER.hub=async()=>{
       }catch(e){actionError='Could not reach ROMarr. Please try again.';}
       hs=await j('/api/v1/hub/status').catch(()=>hs);
       render(await load());
-      if(actionError)$('#ownurl').value=url;
+      if(actionError&&current()&&showingCatalogue)$('#ownurl').value=url;
     };
 
     $('#ssubmit').onclick=async()=>{
@@ -3728,7 +3746,7 @@ RENDER.portal=async()=>{
       const frameSrc=currentUrl
         ? (effectiveProxy ? ('/api/v1/portal/proxy?url='+encodeURIComponent(currentUrl)) : currentUrl)
         : '';
-      const popOutHref=activeSrv?(activeSrv.public_url||activeSrv.url):currentUrl;
+      const popOutHref=effectiveProxy?frameSrc:(activeSrv?(activeSrv.public_url||activeSrv.url):currentUrl);
 
       $('#page').innerHTML=`<div class="card">
         <h3>Your library app</h3>
@@ -3742,7 +3760,7 @@ RENDER.portal=async()=>{
           <button class="btn ghost" id="portal-1g1r">Preview 1G1R (Igir)</button>
           <button class="btn ghost" id="portal-hashes">Seed Netplay Hashes</button>
           <button class="btn ${effectiveProxy?'':'ghost'}" id="portal-shield" title="Toggle Same-Origin Authenticated Proxy">${effectiveProxy?'Proxy: Same-Origin (ON)':'Mode: Direct Iframe'}</button>
-          ${currentUrl?`<a class="btn ghost" href="${esc(popOutHref)}" target="_blank" rel="noopener noreferrer">Open in New Tab ↗</a>`:''}
+          ${currentUrl?`<a class="btn ghost" id="portal-popout" href="${esc(popOutHref)}" target="_blank" rel="noopener noreferrer">Open in New Tab ↗</a>`:''}
         </div>
         <div id="portal-status"></div>
         ${currentUrl&&!canProxy?`<div class="panel-note" style="margin-bottom:12px">
@@ -3760,6 +3778,14 @@ RENDER.portal=async()=>{
           : `<div class="empty-cat"><b>No library server selected</b>Choose a configured library above, add one in <a href="#libraries">Settings → Libraries</a>, or paste a URL to open it here.</div>`}
       </div>`;
 
+      if(effectiveProxy) $('#portal-popout').addEventListener('click',e=>{
+        try{
+          const opened=new URL($('#portal-frame').contentWindow.location.href);
+          if(opened.origin!==location.origin||opened.pathname==='/api/v1/portal/proxy')return;
+          const path=opened.pathname+opened.search;
+          e.currentTarget.href=frameSrc+'&path='+encodeURIComponent(path)+opened.hash;
+        }catch(_){ /* The default link opens the selected library. */ }
+      });
       document.querySelectorAll('[data-srvurl]').forEach(b=>b.onclick=()=>{
         currentUrl=b.dataset.srvurl; currentName=b.dataset.srvname;
         window._portalTargetUrl=currentUrl; window._portalTargetName=currentName;
