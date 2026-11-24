@@ -138,3 +138,41 @@ const j=(url,options)=>{
     result = subprocess.run([node, "-e", harness + JS[start:end] + checks],
                             capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stderr
+
+
+def test_rapid_hub_setup_clicks_open_one_existing_editor():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node is required for the download client editor harness")
+    start = JS.index("async function editItem(")
+    end = JS.index("/* ---------------- settings ---------------- */", start)
+    harness = """
+const assert=require('node:assert/strict');
+const dialogs=[];
+let pageVersion=1;
+const document={
+  querySelector:()=>dialogs[0]||null,
+  createElement:()=>({querySelector:()=>({})}),
+  body:{append:dialog=>dialogs.push(dialog)}
+};
+const esc=String;
+const loadSchema=async()=>({hub:{label:'ROM Hub', protocol:'hub', fields:[]}});
+const j=async()=>({download_clients:[{id:'saved',type:'hub',save_path:'/data/hub'}]});
+"""
+    checks = """
+(async()=>{
+  const open=()=>editItem('downloadclient',{type:'hub'});
+  await Promise.all([open(),open()]);
+  assert.equal(dialogs.length,1);
+  assert.match(dialogs[0].innerHTML,/Edit ROM Hub/);
+
+  dialogs.length=0;
+  const pending=open();
+  pageVersion++;
+  await pending;
+  assert.equal(dialogs.length,0);
+})().catch(error=>{console.error(error);process.exitCode=1;});
+"""
+    result = subprocess.run([node, "-e", harness + JS[start:end] + checks],
+                            capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stderr

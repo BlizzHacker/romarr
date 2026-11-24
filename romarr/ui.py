@@ -5394,6 +5394,7 @@ async function addItem(kind, afterSave){
 }
 
 async function editItem(kind, item, afterSave){
+  const openedOn=pageVersion;
   if(kind==='downloadclient'&&item.type==='hub'&&!item.id){
     const config=await j('/api/v1/config').catch(()=>null);
     if(!config||config.error){toast('Could not load ROM Hub settings');return;}
@@ -5403,6 +5404,8 @@ async function editItem(kind, item, afterSave){
     if(saved)item={...saved,type:'hub'};
   }
   const types = await loadSchema(kind);
+  // Several setup clicks can finish loading together. The first editor owns the form.
+  if(pageVersion!==openedOn||document.querySelector('.modal'))return;
   const spec = types[item.type];
   if(!spec){ toast('Unknown type: ' + item.type); return; }
   const isNew = !item.id;
