@@ -75,6 +75,11 @@ services:
       QBITTORRENT_URL: http://qbittorrent:8080
       QBITTORRENT_USER: ""
       QBITTORRENT_PASS: ""
+      # qBittorrent 5.2+: an API key (Tools > Options > WebUI) replaces
+      # USER/PASS when set. This value is only seeded on the first run. To
+      # migrate existing installs, update the client in Settings > Download
+      # Clients.
+      # QBITTORRENT_API_KEY: ""
 
       # Optional usenet clients.
       # SABNZBD_URL: http://sabnzbd:8080

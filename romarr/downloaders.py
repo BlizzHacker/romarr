@@ -4646,6 +4646,10 @@ CLIENT_TYPES = {
         "fields": _COMMON + [
             FIELD("username", "Username"),
             FIELD("password", "Password", "secret"),
+            FIELD("api_key", "API Key", "secret", clearable=True,
+                  help="qBittorrent 5.2+ (Tools > Options > WebUI). Used "
+                       "instead of the username and password when set; "
+                       "empty the field to remove a saved key."),
             FIELD("category", "Category", default="romarr"),
         ],
     },
@@ -5096,7 +5100,8 @@ def build_client(cfg: dict, *, data_dir: str = ""):
         from .clients import QBittorrent, QbitConfig
         client = QBittorrent(QbitConfig(
             base_url=url, username=cfg.get("username", ""),
-            password=cfg.get("password", ""), category=category))
+            password=cfg.get("password", ""), category=category,
+            api_key=cfg.get("api_key", "")))
     elif kind == "transmission":
         client = Transmission(TransmissionConfig(
             base_url=url, username=cfg.get("username", ""),
@@ -5286,6 +5291,10 @@ def merge_secrets(new: dict, old: dict | None) -> dict:
         if field["type"] != "secret":
             continue
         name = field["name"]
+        # A clearable secret takes an emptied field as "remove it"; only the
+        # placeholder or an omitted key keeps what is stored.
+        if field.get("clearable") and new.get(name) == "":
+            continue
         if new.get(name) in (SECRET_PLACEHOLDER, "", None):
             new[name] = old.get(name, "")
     return new

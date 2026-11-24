@@ -16,7 +16,7 @@ import secrets
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import re
 import requests
@@ -102,13 +102,31 @@ def _deselected(row: dict) -> bool:
 class QbitConfig:
     base_url: str
     username: str = ""
-    password: str = ""
+    # Credentials stay out of repr(): a config that reaches a log line or a
+    # traceback must not carry the password or the API key with it.
+    password: str = field(default="", repr=False)
     category: str = "romarr"
     timeout: int = 30
+    # qBittorrent 5.2+ WebUI API key (``qbt_...``). When set it replaces the
+    # username/password cookie login entirely.
+    api_key: str = field(default="", repr=False)
 
 
 class QbitAuthenticationError(requests.RequestException):
     """qBittorrent rejected configured credentials; no source list was read."""
+
+
+#: Shown by Test when qBittorrent refuses the configured API key. Pre-5.2
+#: builds have no API keys at all and answer a bearer header with the same
+#: 403 as a wrong key, so the message names both causes and the way back.
+QBIT_API_KEY_REJECTED = (
+    "qBittorrent rejected the API key (HTTP {status}). API keys need "
+    "qBittorrent 5.2 or newer: check the key under Tools > Options > WebUI, "
+    "or empty the field to sign in with the username and password instead.")
+QBIT_API_KEY_MALFORMED = (
+    "The API key contains a line break, space, or invalid character. "
+    "Paste it again from qBittorrent.")
+QBIT_LOGIN_REJECTED = "qBittorrent rejected the username or password"
 
 
 QBITTORRENT_ADD_CONFIRM_TIMEOUT = 10.0
@@ -185,6 +203,24 @@ class QBittorrent:
         """Initialize a qBittorrent API client with its config and HTTP session."""
         self._config = config
         self._session = session or requests.Session()
+        key = (config.api_key or "").strip()
+
+        self._bad_key = bool(key) and not re.fullmatch(r"[!-~]+", key)
+        self._has_key = bool(key) and not self._bad_key
+        self._bearer_auth = None
+        #: Why the last reachable() check failed (or what answered when it
+        #: passed), for the Download Clients Test line. Never holds a secret.
+        self.detail = ""
+        if self._bad_key:
+            log.warning("qbittorrent API key is malformed")
+        elif key:
+            header = f"Bearer {key}"
+
+            def bearer(request):
+                request.headers["Authorization"] = header
+                return request
+            self._bearer_auth = bearer
+
         self._authed = False
         self._added = threading.local()
         self._selection_lock = threading.RLock()
@@ -213,6 +249,11 @@ class QBittorrent:
     def last_error(self) -> str:
         return getattr(self._added, "error", "")
 
+    @property
+    def _uses_login(self) -> bool:
+        """Whether auth is a cookie session (vs. API key or no auth at all)."""
+        return bool(self._config.username) and not (self._has_key or self._bad_key)
+
     def _url(self, path: str) -> str:
         return f"{self._config.base_url.rstrip('/')}/api/v2/{path.lstrip('/')}"
 
@@ -231,7 +272,10 @@ class QBittorrent:
         """Authenticate with qBittorrent WebUI, honoring any active probe deadline."""
         # A qBittorrent with WebUI auth disabled for localhost answers every
         # endpoint without a session cookie, so a failed login is not fatal.
-        if not self._config.username:
+        # An API key needs no login either: it rides on every request.
+        if self._bad_key:
+            return False
+        if not self._uses_login:
             self._authed = True
             return True
         response = self._session.post(
@@ -255,10 +299,14 @@ class QBittorrent:
         deadline = kwargs.pop("_deadline", None)
         base_timeout = kwargs.get("timeout")
         req_kwargs = dict(kwargs)
+        if self._bad_key:
+            raise QbitAuthenticationError(QBIT_API_KEY_MALFORMED)
+        if self._bearer_auth is not None:
+            req_kwargs["auth"] = self._bearer_auth
         if deadline is not None:
             req_kwargs["timeout"] = self._deadline_timeout(deadline, base_timeout)
         response = self._session.get(self._url(path), **req_kwargs)
-        if response.status_code not in (401, 403) or not self._config.username:
+        if response.status_code not in (401, 403) or not self._uses_login:
             return response
         self._authed = False
         logged_in = self.login() if deadline is None else self.login(_deadline=deadline)
@@ -273,10 +321,14 @@ class QBittorrent:
         deadline = kwargs.pop("_deadline", None)
         base_timeout = kwargs.get("timeout")
         req_kwargs = dict(kwargs)
+        if self._bad_key:
+            raise QbitAuthenticationError(QBIT_API_KEY_MALFORMED)
+        if self._bearer_auth is not None:
+            req_kwargs["auth"] = self._bearer_auth
         if deadline is not None:
             req_kwargs["timeout"] = self._deadline_timeout(deadline, base_timeout)
         response = self._session.post(self._url(path), **req_kwargs)
-        if response.status_code not in (401, 403) or not self._config.username:
+        if response.status_code not in (401, 403) or not self._uses_login:
             return response
         self._authed = False
         logged_in = self.login() if deadline is None else self.login(_deadline=deadline)
@@ -1120,15 +1172,39 @@ class QBittorrent:
         an unreachable client is a thing to display, not an outage here.
         """
         if not self._config.base_url:
+            self.detail = "no URL set"
             return False
         try:
             if not self._authed and not self.login():
+                self.detail = (QBIT_API_KEY_MALFORMED if self._bad_key
+                               else QBIT_LOGIN_REJECTED)
                 return False
             r = self._get("app/version", timeout=self._config.timeout)
-            return r.ok
         except requests.RequestException as err:
-            log.warning("qbittorrent unreachable: %s", err)
+            # The class only: exception text can carry request details.
+            log.warning("qbittorrent unreachable: %s", err.__class__.__name__)
+            self.detail = f"could not reach qBittorrent ({err.__class__.__name__})"
             return False
+        if r.ok:
+            auth = "API key" if self._has_key else (
+                "signed in" if self._uses_login else "no login")
+            version = (r.text or "").strip()
+            valid_version = len(version) <= 32 and re.fullmatch(
+                r"v?[0-9]+(?:\.[0-9]+){1,3}(?:[A-Za-z0-9.-]{1,16})?", version)
+            self.detail = f"qBittorrent {version}, {auth}" if valid_version else auth
+            return True
+        if r.status_code in (401, 403):
+            if self._has_key:
+                log.warning("qbittorrent rejected the API key (status %s)", r.status_code)
+                self.detail = QBIT_API_KEY_REJECTED.format(status=r.status_code)
+            elif self._uses_login:
+                self.detail = QBIT_LOGIN_REJECTED
+            else:
+                self.detail = ("qBittorrent requires a login: set a username and "
+                               "password, or an API key (qBittorrent 5.2+)")
+        else:
+            self.detail = f"qBittorrent answered HTTP {r.status_code}"
+        return False
 
     def completed(self, *, repair=True, timeout: float | None = None) -> list[dict]:
         """Torrents in our category that have finished.

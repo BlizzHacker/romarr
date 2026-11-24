@@ -34,6 +34,7 @@ def environment(monkeypatch):
         "ROMARR_PASSWORD": "romarr-password-secret",
         "PROWLARR_API_KEY": "prowlarr-secret",
         "QBITTORRENT_PASS": "qbit-secret",
+        "QBITTORRENT_API_KEY": "qbt_qbitapikeysecret0000000000000",
         "SABNZBD_API_KEY": "sab-secret",
         "NZBGET_PASS": "nzbget-secret",
         "LIBRARY_API_KEY": "library-key-secret",
