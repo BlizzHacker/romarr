@@ -9,6 +9,7 @@ move and the History event.
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -58,6 +59,7 @@ class _Service:
     def __init__(self, *, tools=("nsz",), submit=None, status=None,
                  finish=None, cancel_status=200):
         self.cancel_status = cancel_status
+        self.jobs = []
         self.tools = list(tools)
         self.submit = submit or _Response(200, {"id": "job-1", "status": "queued"})
         self.status = status or {"id": "job-1", "status": "completed"}
@@ -74,6 +76,8 @@ class _Service:
             return _Response(200, {"status": "ok"})
         if path == "/api/tools":
             return _Response(200, {"available": self.tools, "unavailable": []})
+        if path == "/api/jobs":
+            return _Response(200, self.jobs)
         if path == "/api/jobs/job-1":
             if self.finish is not None:
                 self.finish()
@@ -159,6 +163,15 @@ def test_valid_compression_is_canonicalised(raw, canonical):
 def test_invalid_compression_is_refused(raw):
     with pytest.raises(ValueError):
         parse_compression(raw)
+
+
+@pytest.mark.parametrize("key", ["compress_switch_imports", "compress_switch_xci"])
+def test_compression_switch_requires_a_boolean(tmp_path, key):
+    """A string that looks like false cannot arm source-deleting jobs."""
+    store = Store(tmp_path / "s.json")
+    with pytest.raises(ValueError, match=key):
+        store.update_settings({key: "false"})
+    assert store.settings[key] is False
 
 
 def test_an_xci_is_always_sent_as_block():
@@ -375,6 +388,7 @@ def test_only_switch_nsp_and_xci_imports_are_compressed(tmp_path, monkeypatch):
 
 def test_a_compressed_import_moves_the_library_entry(tmp_path, monkeypatch):
     def done(path):
+        _compressed(path)()
         return CompressOutcome(str(path), COMPRESSED,
                                str(path.with_suffix(".nsz")), "job-1")
 
@@ -382,7 +396,7 @@ def test_a_compressed_import_moves_the_library_entry(tmp_path, monkeypatch):
     s.store.update_settings({"nsz_compression": "solid:12"})
     source = _nsp(s.library)
     s.hashes.add("a" * 40, "Game", "switch", True,
-                 path=source.relative_to(s.library).as_posix())
+                 path=source.relative_to(s.library).as_posix(), physical_sha1="b" * 40)
     queue_item = s.store.enqueue(QueueItem(
         "Game", "switch", "Game", 0, "imported", imported_paths=[str(source)]))
 
@@ -393,7 +407,10 @@ def test_a_compressed_import_moves_the_library_entry(tmp_path, monkeypatch):
     assert callable(kwargs.pop("track_job"))
     assert kwargs == {"url": "http://comp:8080", "api_key": "",
                       "compression": "solid:12"}
-    assert s.hashes.by_sha1("a" * 40).path == "switch/Game [0100000000010000][v0].nsz"
+    entry = s.hashes.by_sha1("a" * 40)
+    assert entry.path == "switch/Game [0100000000010000][v0].nsz"
+    assert s.hashes.by_sha1("b" * 40) is None
+    assert s.hashes.by_sha1(hashlib.sha1(b"nsz", usedforsecurity=False).hexdigest()) is entry
     assert queue_item.imported_paths == [str(source.with_suffix(".nsz"))]
     event, = s.store.history(kind="compress")
     assert event["platform"] == "switch" and event["game"] == "Game"
@@ -471,9 +488,12 @@ def test_a_failed_cancellation_is_reconciled_after_a_restart(tmp_path, monkeypat
                         lambda path, **kw: compress_import(
                             path, **kw, client=_client(remote), job_timeout=0, poll_interval=0))
 
-    s._compress_after_import(source, "switch", "Game")
+    library = {"id": "original", "name": "Shelf", "path": str(s.library)}
+    s._compress_after_import(source, "switch", "Game", library)
     pending, = Store(s.store.path).pending_switch_compression()
     assert pending.job_id == "job-1"
+    assert pending.library_id == "original"
+    assert pending.library_root == str(s.library)
     assert source.is_file()
     assert "still being tracked" in s.store.history(kind="compress")[0]["detail"]
 
@@ -482,15 +502,20 @@ def test_a_failed_cancellation_is_reconciled_after_a_restart(tmp_path, monkeypat
     monkeypatch.setattr(compressatorium, "CompressatoriumClient", lambda config: _client(remote))
     remote.status = {"id": "job-1", "status": "completed", "output_path": str(output)}
     remote.finish = _compressed(source)
-    monkeypatch.setattr(restarted, "library_for", lambda platform: ({"name": "Shelf"}, object()))
-    monkeypatch.setattr(restarted, "library_root", lambda cfg: s.library)
+    original, replacement = object(), object()
+    new_cfg = {"id": "replacement", "path": str(tmp_path / "new-library")}
+    restarted.game_libraries = [(new_cfg, replacement), (library, original)]
+    monkeypatch.setattr(restarted, "library_for", lambda platform: (new_cfg, replacement))
+    rescanned = []
 
-    def unavailable(*args, **kwargs):
+    def unavailable(backend, cfg, platform):
         """A down library must leave the conversion recorded."""
+        rescanned.append((backend, cfg, platform))
         raise OSError("offline")
 
     monkeypatch.setattr(restarted, "_rescan_library", unavailable)
     assert restarted._reconcile_switch_compression() == "Settled 1 Switch compression job(s)"
+    assert rescanned == [(original, library, "switch")]
     persisted = Store(s.store.path)
     assert persisted.pending_switch_compression() == ()
     assert persisted.queue[0].imported_paths == [str(output)]
@@ -498,6 +523,27 @@ def test_a_failed_cancellation_is_reconciled_after_a_restart(tmp_path, monkeypat
     assert request.status == "available" and request.assets == [str(output)]
     assert persisted.history(kind="compress")[0]["detail"].startswith("compressed ")
     assert restarted._reconcile_switch_compression() == "Settled 0 Switch compression job(s)"
+
+
+def test_tracking_recovers_the_id_after_a_lost_submission_reply(tmp_path):
+    """Use the pre-submit snapshot to distinguish the new job from history."""
+    source = _nsp(tmp_path)
+    old = {"id": "older", "file_path": str(source), "mode": "nsz_compress",
+           "delete_on_verify": True, "status": "failed"}
+    remote = _Service(submit=_Response(503), status={"id": "job-1", "status": "failed"})
+    remote.jobs = [old]
+    client = _client(remote)
+    snapshots = []
+    outcome = compress_import(source, url="http://comp:8080", client=client,
+                              track_job=lambda job_id, previous: snapshots.append((job_id, previous)))
+    assert outcome.status == PENDING
+    assert snapshots == [("", ("older",))]
+    assert switch_compress.resolve_job_id(str(source), ("older",), client) == ""
+    remote.jobs.append({**old, "id": "job-1"})
+    job_id = switch_compress.resolve_job_id(str(source), ("older",), client)
+    assert job_id == "job-1"
+    settled = switch_compress.reconcile_import(str(source), job_id, client)
+    assert settled.status == FAILED_STATUS and source.is_file()
 
 
 def test_queue_import_publishes_paths_before_fast_compression(tmp_path, monkeypatch):

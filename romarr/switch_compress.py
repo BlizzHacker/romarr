@@ -145,6 +145,13 @@ def _finished(source: Path, job_id: str, status: JobResult | None) -> CompressOu
                            error=status.error or f"job {status.status}")
 
 
+def resolve_job_id(path: str, previous_ids: tuple[str, ...], client: CompressatoriumClient) -> str:
+    """Find a single matching job created after our submission snapshot."""
+    jobs = client.switch_compression_jobs(path)
+    new_ids = set(jobs or ()) - set(previous_ids)
+    return next(iter(new_ids)) if len(new_ids) == 1 else ""
+
+
 def reconcile_import(path: str, job_id: str,
                      client: CompressatoriumClient | None) -> CompressOutcome | None:
     """Check a tracked job once, using its sibling output if the reply was lost."""
@@ -158,7 +165,7 @@ def compress_import(path: str | Path, *, url: str, api_key: str = "",
                     job_timeout: int = DEFAULT_JOB_TIMEOUT,
                     poll_interval: int = DEFAULT_POLL_INTERVAL,
                     client: CompressatoriumClient | None = None,
-                    track_job: Callable[[str], None] | None = None) -> CompressOutcome:
+                    track_job: Callable[[str, tuple[str, ...]], None] | None = None) -> CompressOutcome:
     """Start compression and wait up to the deadline for a confirmed result.
 
     Record the source before submitting and the ID once returned. The caller
@@ -192,8 +199,15 @@ def compress_import(path: str | Path, *, url: str, api_key: str = "",
     output = expected_output(source)
     if output.exists() or output.is_symlink():
         return CompressOutcome(str(source), SKIPPED, error=f"{output.name} already exists")
+    previous_ids = ()
     if track_job is not None:
-        track_job("")
+        existing = client.switch_compression_jobs(str(source))
+        if existing is None:
+            return CompressOutcome(str(source), FAILED_STATUS, error="could not read the service job list")
+        if any(not JobResult(job_id, status).terminal for job_id, status in existing.items()):
+            return CompressOutcome(str(source), SKIPPED, error="a compression job already exists for this file")
+        previous_ids = tuple(existing)
+        track_job("", previous_ids)
     submitted = client.submit_job(file_path=str(source), mode=mode,
                                   duplicate_action="skip",
                                   delete_on_verify=True, compression=sent)
@@ -203,7 +217,7 @@ def compress_import(path: str | Path, *, url: str, api_key: str = "",
                                error=submitted.error or "submission could not be confirmed")
     job_id = submitted.job_id
     if track_job is not None:
-        track_job(job_id)
+        track_job(job_id, previous_ids)
     log.info("compress: submitted %s as job %s (%s)", source.name, job_id, sent)
 
     final = client.wait_for_jobs([job_id], timeout=job_timeout,

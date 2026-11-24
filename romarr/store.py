@@ -458,7 +458,10 @@ class SwitchCompressionJob:
     platform: str
     game: str
     endpoint: str
-    job_id: str
+    job_id: str = ""
+    previous_ids: tuple[str, ...] = ()
+    library_root: str = ""
+    library_id: str = ""
 
 
 class Store:
@@ -574,7 +577,9 @@ class Store:
             previous = self._switch_compression.get(job.source)
             self._switch_compression[job.source] = job
             try:
-                self.save(raise_on_error=True)
+                # Before submitting, a durable snapshot is required. After
+                # acknowledgement, keep the ID in memory even if saving fails.
+                self.save(raise_on_error=not job.job_id)
             except OSError:
                 if previous is None:
                     self._switch_compression.pop(job.source, None)
@@ -956,6 +961,9 @@ class Store:
                 if parts.scheme.lower() not in ("http", "https") or not parts.hostname:
                     raise ValueError("FlareSolverr URL must start with http:// or https://")
             patch = dict(patch, flaresolverr_url=raw_solver)
+        for key in ("compress_switch_imports", "compress_switch_xci"):
+            if key in patch and not isinstance(patch[key], bool):
+                raise ValueError(f"{key} must be true or false")
         if "nsz_compression" in patch:
             from .switch_compress import parse_compression
             patch = dict(patch, nsz_compression=parse_compression(patch["nsz_compression"]))

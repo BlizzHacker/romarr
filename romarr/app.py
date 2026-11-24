@@ -1232,6 +1232,7 @@ class ROMarr:
 
         self._active_switch_compression: set[str] = set()
         self._switch_reconcile_offset = 0
+        self._switch_reconcile_thread: threading.Thread | None = None
         self.scheduler = Scheduler()
         self.scheduler.add("SoundtrackTorrents", "Add finished soundtrack torrents to RomM",
                            lambda: 30 if self._soundtracks_watching() else 0,
@@ -1243,7 +1244,7 @@ class ROMarr:
         self.scheduler.add(
             "SwitchCompression", "Reconcile unfinished Switch compression",
             lambda: 60 if self.store.pending_switch_compression() else 0,
-            self._reconcile_switch_compression)
+            self._schedule_switch_reconciliation)
         self.scheduler.add(
             "MissingGameSearch", "Search the Wanted list",
             _hours("search_missing_interval_hours"),
@@ -5071,7 +5072,7 @@ class ROMarr:
                 release=source.name, library=label,
                 detail=(f"manual import ({'FORCED over ' + str(status) if forced else status or 'unknown'})"
                         f": {outcome.destination} ({outcome.import_method or 'copy'}) {outcome.fallback_reason}")))
-            self._compress_after_import(outcome.destination, platform.slug, source.stem)
+            self._compress_after_import(outcome.destination, platform.slug, source.stem, target_cfg)
             imported.append({
                 "file": str(outcome.destination),
                 "verdict": status,
@@ -7100,14 +7101,15 @@ class ROMarr:
         except RuntimeError:                       # interpreter shutting down
             pass
 
-    def _compress_after_import(self, destination, platform: str, game: str) -> None:
+    def _compress_after_import(self, destination, platform: str, game: str,
+                               library_cfg: dict | None = None) -> None:
         """Queue an eligible Switch import after its library references are saved."""
-        if platform != "switch" or not destination or not self.store.settings.get("compress_switch_imports"):
+        if platform != "switch" or not destination or self.store.settings.get("compress_switch_imports") is not True:
             return
         path = Path(destination)
         if not switch_compress.wants_compression(path):
             return
-        if path.suffix.lower() == ".xci" and not self.store.settings.get("compress_switch_xci"):
+        if path.suffix.lower() == ".xci" and self.store.settings.get("compress_switch_xci") is not True:
             return
         compression = str(self.store.settings.get("nsz_compression")
                           or switch_compress.DEFAULT_COMPRESSION)
@@ -7115,10 +7117,13 @@ class ROMarr:
         url, api_key, _source = compressatorium_plugin.connection(self._env)
         source = str(path)
         endpoint = hashlib.sha256(url.rstrip("/").encode()).hexdigest()
+        cfg = library_cfg or {}
+        record = SwitchCompressionJob(
+            source, platform, game, endpoint,
+            library_root=str(self.library_root(cfg).resolve()), library_id=str(cfg.get("id") or ""))
 
-        def track_job(job_id: str) -> None:
-            self.store.track_switch_compression(
-                SwitchCompressionJob(source, platform, game, endpoint, job_id))
+        def track_job(job_id: str, previous_ids: tuple[str, ...]) -> None:
+            self.store.track_switch_compression(replace(record, job_id=job_id, previous_ids=previous_ids))
 
         def job():
             try:
@@ -7131,7 +7136,7 @@ class ROMarr:
                     status = switch_compress.PENDING if tracked else switch_compress.FAILED_STATUS
                     outcome = switch_compress.CompressOutcome(
                         source, status, error=f"unexpected error: {type(exc).__name__}")
-                self._record_compress(outcome, platform, game)
+                self._record_compress(outcome, record)
             except Exception:  # noqa: BLE001 - a tracked job is reconciled separately
                 log.warning("compress: could not record %s", path.name, exc_info=True)
             finally:
@@ -7153,6 +7158,16 @@ class ROMarr:
             with self._lock:
                 self._active_switch_compression.discard(source)
 
+    def _schedule_switch_reconciliation(self) -> str:
+        """Keep polling and hashing large ROMs off the shared scheduler thread."""
+        with self._lock:
+            if self._switch_reconcile_thread is not None and self._switch_reconcile_thread.is_alive():
+                return "Switch compression reconciliation is already running"
+            self._switch_reconcile_thread = threading.Thread(
+                target=self._reconcile_switch_compression, name="romarr-compress-reconcile", daemon=True)
+            self._switch_reconcile_thread.start()
+        return "Switch compression reconciliation started"
+
     def _reconcile_switch_compression(self) -> str:
         """Poll tracked jobs once, including submissions from a previous run."""
         from . import compressatorium, compressatorium_plugin
@@ -7172,10 +7187,15 @@ class ROMarr:
                     continue
                 self._active_switch_compression.add(row.source)
             try:
-                outcome = switch_compress.reconcile_import(
-                    row.source, row.job_id, client if row.endpoint == endpoint else None)
+                service = client if row.endpoint == endpoint else None
+                if service is not None and not row.job_id:
+                    job_id = switch_compress.resolve_job_id(row.source, row.previous_ids, service)
+                    if job_id:
+                        row = replace(row, job_id=job_id)
+                        self.store.track_switch_compression(row)
+                outcome = switch_compress.reconcile_import(row.source, row.job_id, service)
                 if outcome is not None:
-                    self._record_compress(outcome, row.platform, row.game)
+                    self._record_compress(outcome, row)
                     settled += 1
             except Exception:  # noqa: BLE001 - leave this job for the next poll
                 log.warning("compress: could not reconcile %s", Path(row.source).name, exc_info=True)
@@ -7184,18 +7204,27 @@ class ROMarr:
                     self._active_switch_compression.discard(row.source)
         return f"Settled {settled} Switch compression job(s)"
 
-    def _record_compress(self, outcome, platform: str, game: str) -> None:
-        """Persist the compression result before asking the library to rescan."""
+    def _record_compress(self, outcome, job: SwitchCompressionJob) -> None:
+        """Persist the compression result before asking the owning library to rescan."""
         target, label, output = None, "", ""
         if outcome.status == switch_compress.COMPRESSED:
-            target = self.library_for(platform)
-            root = self.library_root(target[0]) if target else self.library
-            self.hashes.move_paths({outcome.source: outcome.output}, root=root)
+            root = Path(job.library_root) if job.library_root else self.library
             output = outcome.output
+            physical = ""
+            try:
+                with Path(output).open("rb") as file:
+                    physical = hashlib.file_digest(file, lambda: hashlib.sha1(usedforsecurity=False)).hexdigest()
+            except OSError:
+                log.warning("compress: could not hash %s", Path(output).name, exc_info=True)
+            self.hashes.move_paths({outcome.source: output}, root=root,
+                                   physical_hashes={outcome.source: physical})
+            target = next(((cfg, backend) for cfg, backend in self.game_libraries
+                           if job.library_id and cfg.get("id") == job.library_id
+                           and self.library_root(cfg).resolve() == root), None)
             if target is not None:
                 label = target[0].get("name") or getattr(target[1], "name", "library")
         detail = outcome.describe()
-        event = Event(kind="compress", game=game, platform=platform,
+        event = Event(kind="compress", game=job.game, platform=job.platform,
                       release=Path(outcome.source).name, library=label, detail=detail)
         if outcome.status == switch_compress.PENDING:
             self.store.record(event)
@@ -7204,7 +7233,7 @@ class ROMarr:
         log.info("compress: %s", detail)
         if target is not None and self.store.settings.get("rescan_after_import", True):
             try:
-                self._rescan_library(target[1], target[0], platform)
+                self._rescan_library(target[1], target[0], job.platform)
             except Exception:  # noqa: BLE001 - the outcome is already committed
                 log.warning("compress: library rescan failed for %s", event.release, exc_info=True)
 
@@ -9706,7 +9735,7 @@ class ROMarr:
                         self._identify_after_import(outcome.verification, platform.slug, game_title)
                     if (platform.slug == "switch" and self.store.settings.get("compress_switch_imports")
                             and (queue_item is None or all_ok)):
-                        compression_candidates.append((outcome.destination, platform.slug, game_title))
+                        compression_candidates.append((outcome.destination, platform.slug, game_title, target_cfg))
                     self.store.record(Event(kind="imported", game=game_title,
                                             platform=platform.slug, release=name,
                                             library=label,

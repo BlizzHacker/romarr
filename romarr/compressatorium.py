@@ -402,6 +402,23 @@ class CompressatoriumClient:
             return JobResult(job_id="", error=str(err))
         return self._parse_job(response)
 
+    def switch_compression_jobs(self, file_path: str) -> dict[str, str] | None:
+        """Return job IDs and states for this exact Switch input."""
+        try:
+            response = self._session.get(self._url("/api/jobs"),
+                                         headers=self._headers(), timeout=self._config.timeout)
+            if not response.ok:
+                return None
+            rows = response.json()
+        except (requests.RequestException, ValueError):
+            return None
+        if not isinstance(rows, list):
+            return None
+        return {row["id"]: str(row.get("status") or QUEUED) for row in rows
+                if isinstance(row, dict) and row.get("file_path") == file_path
+                and row.get("mode") == "nsz_compress" and row.get("delete_on_verify") is True
+                and isinstance(row.get("id"), str) and row["id"]}
+
     def job_status(self, job_id: str) -> JobResult:
         """How one job is doing. An unknown job reads status="unknown"."""
         if not job_id:
