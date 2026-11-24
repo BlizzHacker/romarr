@@ -11,7 +11,7 @@ ROMarr runs on every major NAS. Find yours in the table, then read its section.
 | [UGREEN](#ugreen-ugos-pro) | Docker project | [`packaging/ugreen`](../packaging/ugreen/) |
 | [ZimaOS / CasaOS](#zimaos-and-casaos) | App Store, or a custom install | [`packaging/casaos`](../packaging/casaos/) |
 | [TrueNAS SCALE](#truenas-scale) | Community app, or Install via YAML | [`packaging/truenas`](../packaging/truenas/) |
-| [Unraid](#unraid) | Community Applications | [BlizzHacker/cartridge-unraid](https://github.com/BlizzHacker/cartridge-unraid) |
+| [Unraid](#unraid) | Community Applications | [Unraid Community Applications](https://ca.unraid.net/apps/romarr-04jslct0riva81?q=romarr) |
 | [openmediavault](#openmediavault) | Compose plugin | [`packaging/openmediavault`](../packaging/openmediavault/) |
 | [Umbrel](#umbrel) | Umbrel App Store | [`packaging/umbrel`](../packaging/umbrel/) |
 
@@ -222,7 +222,7 @@ ROMarr is in the Community train ([truenas/apps#6524](https://github.com/truenas
 
 ## Unraid
 
-Search **ROMarr** in **Apps** (Community Applications). The template is [BlizzHacker/cartridge-unraid](https://github.com/BlizzHacker/cartridge-unraid/blob/main/templates/romarr.xml).
+Open the [official ROMarr store listing](https://ca.unraid.net/apps/romarr-04jslct0riva81?q=romarr) or search **ROMarr** in **Apps**. The template source is [BlizzHacker/cartridge-unraid](https://github.com/BlizzHacker/cartridge-unraid/blob/main/templates/romarr.xml).
 
 - **PUID/PGID.** `99:100` (`nobody:users`), Unraid's convention.
 - **Folders.**

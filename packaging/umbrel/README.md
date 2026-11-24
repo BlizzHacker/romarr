@@ -12,7 +12,7 @@ Umbrel's `app_proxy`).
   in the Files app and over SMB; completed downloads read from Umbrel's shared
   Downloads storage.
 
-## Validation (2026-11-15)
+## Validation
 
 From a checkout of `umbrel-apps` with this folder copied to `romarr/`:
 
@@ -27,10 +27,7 @@ clean result is real.
 
 ## Submit
 
-This replaces the files in the **existing** PR
-[getumbrel/umbrel-apps#5947](https://github.com/getumbrel/umbrel-apps/pull/5947)
-(branch `BlizzHacker/umbrel-apps:add-romarr`, still at ROMarr 0.7.0 and untouched
-since 2026-08-02):
+The [official store submission](https://github.com/getumbrel/umbrel-apps/pull/5947) uses `BlizzHacker/umbrel-apps:add-romarr`. Keep `releaseNotes` and `gallery` empty until the first submission is accepted.
 
 1. Overwrite `romarr/umbrel-app.yml` and `romarr/docker-compose.yml` on that
    branch with these and add `romarr/data/config/.gitkeep`.
