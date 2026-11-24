@@ -638,6 +638,11 @@ each one its own Save Path if you run more than one.
 
 **Usenet** — SABnzbd, NZBGet, NZBVortex.
 
+You can enable Torrent and Usenet clients at the same time. ROMarr searches
+enabled indexers together and sends each selected release to a download client
+that accepts its protocol. Set up the corresponding indexers and clients for
+each protocol under **Settings**.
+
 **Blackholes** — Torrent Blackhole and Usenet Blackhole. No API and nothing to
 connect to: ROMarr writes the `.torrent` or `.nzb` into a folder your client
 watches, and reads what it finished out of another. That is how you use a

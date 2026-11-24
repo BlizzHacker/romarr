@@ -6357,7 +6357,9 @@ RENDER.general=async()=>{
            `<input type="text" aria-label="qBittorrent address ${i+1}"
               value="${esc(url)}" disabled>`).join('')
        : '<input type="text" value="" placeholder="No enabled qBittorrent client" disabled>'}
-     <div class="help">Manage connections in <a href="#clients">Download Clients</a>.</div></div>
+     <div class="help">ROMarr searches all enabled <a href="#indexers">Indexers</a> together.
+       Set up Torrent and Usenet in <a href="#clients">Download Clients</a> to use both at the same time.
+       Each grab goes to a client that accepts its protocol.</div></div>
    <div class="field"><label>RomM</label>
      <input type="text" value="${esc(SETTINGS._romm_url||'')}" disabled></div>
    <div class="field"><label>Your public URL (for Friends)</label>
@@ -6393,12 +6395,7 @@ RENDER.general=async()=>{
        Settings &rarr; Developer settings with no repository access: public data needs
        no permissions. Sent only to api.github.com, and never shown again.</div></div>`
   +chk('auto_import','Import completed downloads automatically',SETTINGS.auto_import)
-  +`<div class="field"><label>Protocol</label>
-     <select data-k="protocol">
-       <option value="torrent"${SETTINGS.protocol==='torrent'?' selected':''}>Torrent</option>
-       <option value="usenet"${SETTINGS.protocol==='usenet'?' selected':''}>Usenet</option>
-     </select></div>
-   <h3 style="margin-top:18px">The clock</h3>
+  +`<h3 style="margin-top:18px">The clock</h3>
    <p class="help">How often the scheduled jobs run. Zero turns a job off;
      changes apply at the next tick, no restart.</p>`
   +fld('auto_import_interval_minutes','Import check (minutes)',
