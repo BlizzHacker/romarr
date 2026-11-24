@@ -802,6 +802,7 @@ class ROMarr:
             base_url=e.get("QBITTORRENT_URL", ""),
             username=e.get("QBITTORRENT_USER", ""),
             password=e.get("QBITTORRENT_PASS", ""),
+            api_key=e.get("QBITTORRENT_API_KEY", ""),
             category=category_for(e, "QBITTORRENT"),
         ))
         # Usenet is not an afterthought: Prowlarr indexes both protocols, and
@@ -1679,7 +1680,8 @@ class ROMarr:
             })
 
         add("qbittorrent", e.get("QBITTORRENT_URL", ""),
-            username=e.get("QBITTORRENT_USER", ""), password=e.get("QBITTORRENT_PASS", ""))
+            username=e.get("QBITTORRENT_USER", ""), password=e.get("QBITTORRENT_PASS", ""),
+            api_key=e.get("QBITTORRENT_API_KEY", ""))
         add("sabnzbd", e.get("SABNZBD_URL", ""), api_key=e.get("SABNZBD_API_KEY", ""))
         add("nzbget", e.get("NZBGET_URL", ""),
             username=e.get("NZBGET_USER", ""), password=e.get("NZBGET_PASS", ""))
