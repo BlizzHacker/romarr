@@ -133,7 +133,7 @@ from .selection import (Release, best_release, clean_group_name, infer_platform,
                         package_class)
 from .game_packages import (BASE, DEFAULT_PARTS, GAME_FOLDER_LIBRARIES, PACKAGE_PLATFORMS, PARTS,
                             describe_parts, imported_role, normalise_parts)
-from . import portal_socket
+from . import portal_player, portal_socket
 from .store import Event, QueueItem, SeerrRequest, Store, SwitchCompressionJob
 from .ui import favicon_svg as ui_favicon_svg
 from .ui import web_manifest, service_worker, app_icon
@@ -8911,7 +8911,8 @@ class ROMarr:
             "var relay=new URL(PROXY+encodeURIComponent(u.pathname+u.search),location.origin);"
             "relay.protocol=location.protocol==='https:'?'wss:':'ws:';a[0]=relay.href;}"
             "}catch(e){}return Reflect.construct(c,a,n);}});}"
-            "})();</script>"
+            + portal_player.PLAYER_SHIM
+            + "})();</script>"
         )
         lower = text.lower()
         idx = lower.find("<head>")
@@ -10941,8 +10942,11 @@ def make_handler(service: ROMarr):
             if route.path == "/api/v1/library":
                 return self._json(200, {"items": service.libraries_status()})
             if route.path == "/api/v1/library/config":
-                return self._json(200, {"items": [
-                    redact_library(lib) for lib in service.store.list_items("libraries")]})
+                return self._json(200, {
+                    "items": [redact_library(lib) for lib in service.store.list_items("libraries")],
+                    "ggrequestz_url": service.ggrequestz_url,
+                    "library_path": str(service.library),
+                })
             if route.path == "/api/v1/library/schema":
                 return self._json(200, {"types": LIBRARY_TYPES})
             if route.path == "/api/v1/switch/updates":
