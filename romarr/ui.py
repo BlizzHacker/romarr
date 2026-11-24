@@ -5394,6 +5394,14 @@ async function addItem(kind, afterSave){
 }
 
 async function editItem(kind, item, afterSave){
+  if(kind==='downloadclient'&&item.type==='hub'&&!item.id){
+    const config=await j('/api/v1/config').catch(()=>null);
+    if(!config||config.error){toast('Could not load ROM Hub settings');return;}
+    const clients=(config.download_clients||[]).filter(client=>String(client.type).toLowerCase()==='hub');
+    const saved=clients.find(client=>client.enable!==false&&client.save_path)
+      ||clients.find(client=>client.enable!==false)||clients[0];
+    if(saved)item={...saved,type:'hub'};
+  }
   const types = await loadSchema(kind);
   const spec = types[item.type];
   if(!spec){ toast('Unknown type: ' + item.type); return; }
@@ -6070,12 +6078,12 @@ RENDER.clients=async()=>{
       A site that can only be downloaded from by answering a CAPTCHA or a
       bot-detection challenge is reported as unavailable rather than worked
       around.</p>`:''}
-    ${d.items.length?`<table><thead><tr><th>Client</th><th>Protocol</th><th>Address</th>
+    ${d.items.length?`<table><thead><tr><th>Client</th><th>Protocol</th><th>Address / Save Path</th>
       <th>Category</th><th>Status</th><th></th></tr></thead><tbody>
       ${d.items.map((c,i)=>`<tr><td>${esc(c.name)}
         ${c.detail?`<div class="help" style="margin:2px 0 0">${esc(c.detail)}</div>`:''}</td>
         <td><span class="pill">${esc(c.protocol)}</span></td>
-        <td style="color:var(--dim)">${esc(c.url||'—')}</td>
+        <td style="color:var(--dim)">${esc(c.url||c.save_path||'—')}</td>
         <td>${esc(c.category||'—')}</td>
         <td>${state(c)}</td>
         <td><div class="rowact"><button data-edit="${i}">Edit</button></div></td>
