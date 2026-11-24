@@ -2385,6 +2385,11 @@ class ROMarr:
         have handled differently.
         """
         kind = str(cfg.get("type") or "").lower()
+        if kind == "hydra":
+            # A source has no key to reject. What matters is whether it reads,
+            # and whether each kind of link in it has a client to go to.
+            from .hydra import check_config
+            return check_config(cfg, self.clients)
         url, key = cfg.get("url", ""), cfg.get("api_key", "")
         if not url:
             return {"ok": False, "message": "a URL is required"}
@@ -2587,17 +2592,10 @@ class ROMarr:
         # timeout took the whole request down -- and an unrecognised platform
         # name silently routes here, which is how `?platform=psx` returned no
         # status code at all rather than a result or an error.
-        if platform is not None:
-            releases = self._search_releases(game, platform)
-        else:
-            try:
-                releases = self.prowlarr.search(game)
-            except Exception as err:
-                log.warning("prowlarr search failed for %r: %s", game, err)
-                releases = []
-            # The hub lane joins here too, or this endpoint answers a
-            # different question than the request path it claims to mirror.
-            releases = releases + self._hub_releases(game, None)
+        # Without a platform the same merged search runs with the bare title
+        # only, so every directly added indexer (a Hydra source, a Torznab
+        # feed) is asked too -- not Prowlarr and the Hub alone.
+        releases = self._search_releases(game, platform)
         asked = self._request_parts(game, platform)
         favoured = self._preferred_group(game, platform)
         pick = best_release(releases, game, platform,
@@ -2759,6 +2757,9 @@ class ROMarr:
     def _search_releases(self, game: str, platform) -> list:
         """Find releases for a game, favouring recall over a tidy query.
 
+        ``platform`` may be None (a search with no platform chosen): then only
+        the bare title is asked, of every source.
+
         Searching "<game> <platform.name>" alone was far too narrow: indexers
         match the whole string, and almost no release is named "Super Metroid
         Super Nintendo". A real search returned 21 releases; the qualified one
@@ -2805,14 +2806,14 @@ class ROMarr:
         with ThreadPoolExecutor(max_workers=3) as pool:
             hub_search = pool.submit(self._hub_releases, game, platform)
             privacy = {}
-            if isinstance(prowlarr, Prowlarr):
+            if isinstance(prowlarr, Prowlarr) and prowlarr._config.base_url:
                 try:
                     privacy = prowlarr._private_ids()
                 except Exception as err:
                     log.warning("prowlarr privacy lookup failed: %r", err)
-            searches = [pool.submit(search_term, game),
-                        pool.submit(search_term, f"{game} {platform.name}"),
-                        hub_search]
+            searches = [pool.submit(search_term, game), hub_search]
+            if platform is not None:
+                searches.insert(1, pool.submit(search_term, f"{game} {platform.name}"))
         seen: set[tuple[str, str]] = set()
         merged = []
         for search in searches:
@@ -3270,9 +3271,10 @@ class ROMarr:
                     "items": []}
 
         try:
-            releases = (self._search_releases(game, platform) if platform
-                        else self.prowlarr.search(game)
-                        + self._hub_releases(game, None))
+            if platform is None and not self.indexers:
+                releases = self.prowlarr.search(game) + self._hub_releases(game, None)
+            else:
+                releases = self._search_releases(game, platform)
         except Exception as err:
             log.warning("interactive search failed for %r: %s", game, err)
             return {"error": f"search failed: {type(err).__name__}",

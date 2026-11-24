@@ -357,6 +357,8 @@ class Prowlarr:
         what it finds is only kept by the scorer when the title proves it is
         a ROM (selection.other_has_rom_evidence).
         """
+        if not self._config.base_url:
+            return []
         # One after the other, deliberately. Run concurrently (tried in #259)
         # the two fan-outs queue behind each other inside Prowlarr, which
         # limits requests per indexer: the Other query then hit the 60s
@@ -1190,20 +1192,23 @@ INDEXER_TYPES = {
         "label": "Hydra Launcher source",
         "protocol": "any",
         "driver": "hydra",
-        "help": "A Hydra Launcher download source (a .json URL). Magnets go to "
-                "your torrent client, file links to Mister Download Manager or "
-                "Direct HTTP, and file-host links to a debrid service. Browse "
-                "library.hydra.wiki from the Indexers page to pick one.",
+        "help": "A public list of games and download links made for Hydra "
+                "Launcher; no account or API key. Paste its .json address and "
+                "press Test: it says what the list holds and which download "
+                "client each kind of link goes to (magnets to a torrent "
+                "client, file links to Direct HTTP or Mister Download Manager, "
+                "file-host links to Real-Debrid or AllDebrid).",
         "fields": [
-            _TIMEOUT_FIELD,
             INDEXER_FIELD("name", "Name", default="Hydra source"),
             INDEXER_FIELD("enable", "Enable", "bool", True),
             INDEXER_FIELD("url", "Source URL",
-                          help="The source's .json URL, e.g. one listed on library.hydra.wiki"),
-            INDEXER_FIELD("categories", "Categories", default="",
+                          help="The address of the source's .json file, for example "
+                               "one listed on library.hydra.wiki"),
+            {**_TIMEOUT_FIELD, "advanced": True},
+            INDEXER_FIELD("categories", "Categories", default="", advanced=True,
                           help="Leave empty: rows with a platform are filed as console "
                                "(1000), rows without as PC (4050)"),
-            INDEXER_FIELD("priority", "Priority", "int", 25),
+            INDEXER_FIELD("priority", "Priority", "int", 25, advanced=True),
         ],
     },
     "torrentpotato": {

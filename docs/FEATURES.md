@@ -16,7 +16,7 @@ ScreenScraper can be added under **Settings → Metadata**. It identifies a veri
 
 ### Hydra Launcher sources
 
-A **Hydra Launcher source** is an indexer type: one `.json` list of releases and their links, as Hydra Launcher reads it. **Settings → Indexers → Browse the library** lists the sources catalogued on [library.hydra.wiki](https://library.hydra.wiki) and adds one with a click. ROMarr reads a source at most once an hour and searches it locally.
+A **Hydra Launcher source** is a JSON list of releases and download links. Use **Settings → Indexers → Hydra Launcher sources** to check a URL or browse the community catalogue. The preview identifies the download clients needed for that source before you save it. See the [Hydra setup guide](HYDRA.md) for the full walkthrough. ROMarr caches the source contents for up to an hour.
 
 Console sources such as Redump, No-Intro and Rutracker consoles name each row's platform. That platform counts as evidence for it, and a row filed under a different platform is refused, so a PS2 request never takes the PS3 game of the same name. Magnets go to your torrent client, links to a file go to Mister Download Manager or Direct HTTP, and links to a file host's page (1fichier, Gofile, pixeldrain and others) take the first route that can fetch them: the host's own public download API where it has one, otherwise Real-Debrid or AllDebrid. A row's other links are kept as mirrors and tried in turn. ROMarr never solves a captcha or waits out a free-download timer; a link nothing can fetch fails the grab with the host's name and what to add. The reader is ported from RetroArr (MIT).
 

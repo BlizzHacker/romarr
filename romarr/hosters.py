@@ -212,6 +212,16 @@ class HosterRoute:
         self._taken_by = None
         self.last_error = ""
 
+    @property
+    def debrid(self) -> tuple:
+        """The debrid clients this route offers links to, in order."""
+        return tuple(self._debrid)
+
+    @property
+    def direct(self):
+        """The direct client for hosts with a public download API, or None."""
+        return self._direct
+
     @classmethod
     def for_clients(cls, clients) -> "HosterRoute | None":
         from .premium_hosts import multiup_mirrors

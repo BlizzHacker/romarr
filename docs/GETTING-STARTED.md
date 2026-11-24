@@ -61,6 +61,8 @@ Usenet also needs a search source: a **Newznab indexer** finds NZB listings, you
 
 Open **Settings → Indexers**. Connect Prowlarr with its URL and API key, or add a supported indexer directly. A Prowlarr installation with no working game sources will not produce results.
 
+You can also [check and add a Hydra Launcher source](HYDRA.md) under **Settings → Indexers**. Public source lists need no API key. ROMarr shows which download clients the list needs before you save it.
+
 For a plugin source, follow [ROM Hub setup](PLUGINS.md) instead. Enabled plugins declaring `search` join searches when ROMarr's ROM Hub acquisition client is configured.
 
 ### 4. Search one game
