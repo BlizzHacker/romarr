@@ -336,6 +336,16 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "rename_on_import": True,
     "prefer_hardlinks": False,
     "switch_attach_extras": True,   # file Switch updates/DLC in <game>/update|dlc
+    # Compress each imported Switch .nsp to .nsz through the
+    # configured Compressatorium (see switch_compress). Off by default: it
+    # needs the service and the operator's prod.keys mounted into it.
+    "compress_switch_imports": False,
+    # Also compress .xci to .xcz. Separate and off by default: Compressatorium
+    # rarely rebuilds an XCI byte for byte, so most XCI jobs fail their
+    # round-trip and keep the original.
+    "compress_switch_xci": False,
+    # "<solid|block>:<level>", level 1-22. An .xci is always sent as block.
+    "nsz_compression": "block:18",
     "game_package_folders": True,   # RomM libraries: base/update/DLC in <Title>/, update/, dlc/
     "retain_downloads_after_import": True,
     "overwrite_existing": False,
@@ -440,6 +450,20 @@ DEFAULT_SETTINGS: dict[str, Any] = {
 }
 
 
+@dataclass(frozen=True)
+class SwitchCompressionJob:
+    """A Switch compression submission that can outlive ROMarr."""
+
+    source: str
+    platform: str
+    game: str
+    endpoint: str
+    job_id: str = ""
+    previous_ids: tuple[str, ...] = ()
+    library_root: str = ""
+    library_id: str = ""
+
+
 class Store:
     """Everything ROMarr remembers."""
 
@@ -463,6 +487,7 @@ class Store:
         self.events: list[Event] = []
         self.wanted: list[WantedItem] = []
         self.queue: list[QueueItem] = []
+        self._switch_compression: dict[str, SwitchCompressionJob] = {}
         self.load()
 
     # -- persistence -------------------------------------------------------
@@ -509,6 +534,8 @@ class Store:
             # simply an empty queue -- the same thing those installs had after
             # every restart anyway.
             self.queue = _rows(raw.get("queue"), QueueItem)
+            self._switch_compression = {
+                job.source: job for job in _rows(raw.get("switch_compression"), SwitchCompressionJob)}
 
     def save(self, *, raise_on_error: bool = False) -> None:
         """Write state atomically while holding the Store lock through replacement.
@@ -521,6 +548,7 @@ class Store:
                 "events": [asdict(e) for e in self.events[-self.MAX_EVENTS:]],
                 "wanted": [asdict(w) for w in self.wanted],
                 "queue": [asdict(q) for q in self.queue[-self.MAX_QUEUE:]],
+                "switch_compression": [asdict(j) for j in self._switch_compression.values()],
             }
             tmp = None
             try:
@@ -542,6 +570,51 @@ class Store:
                         os.unlink(tmp)
                     except OSError:
                         pass
+
+    def track_switch_compression(self, job: SwitchCompressionJob) -> None:
+        """Persist the conversion before the service may remove the source."""
+        with self._lock:
+            previous = self._switch_compression.get(job.source)
+            self._switch_compression[job.source] = job
+            try:
+                # Before submitting, a durable snapshot is required. After
+                # acknowledgement, keep the ID in memory even if saving fails.
+                self.save(raise_on_error=not job.job_id)
+            except OSError:
+                if previous is None:
+                    self._switch_compression.pop(job.source, None)
+                else:
+                    self._switch_compression[job.source] = previous
+                raise
+
+    def switch_compression_job(self, source: str) -> SwitchCompressionJob | None:
+        """Read the currently tracked job for an imported path."""
+        with self._lock:
+            return self._switch_compression.get(source)
+
+    def pending_switch_compression(self) -> tuple[SwitchCompressionJob, ...]:
+        """Return tracked conversion jobs without exposing the mutable store."""
+        with self._lock:
+            return tuple(self._switch_compression.values())
+
+    def finish_switch_compression(self, event: Event, source: str, output: str, *, job_id: str) -> bool:
+        """Replace existing references and retire only the matching job."""
+        with self._lock:
+            tracked = self._switch_compression.get(source)
+            if tracked is not None and tracked.job_id != job_id:
+                return False
+            if output:
+                for row in self.queue:
+                    if source in row.imported_paths:
+                        row.imported_paths = [output if p == source else p for p in row.imported_paths]
+                for request in self.settings.get("integration_requests", []):
+                    assets = request.get("assets") or []
+                    if source in assets:
+                        request["assets"] = [output if p == source else p for p in assets]
+                        request["updated_at"] = now_iso()
+            self._switch_compression.pop(source, None)
+            self.record(event)
+            return True
 
     # -- history -----------------------------------------------------------
 
@@ -897,6 +970,12 @@ class Store:
                 if parts.scheme.lower() not in ("http", "https") or not parts.hostname:
                     raise ValueError("FlareSolverr URL must start with http:// or https://")
             patch = dict(patch, flaresolverr_url=raw_solver)
+        for key in ("compress_switch_imports", "compress_switch_xci"):
+            if key in patch and not isinstance(patch[key], bool):
+                raise ValueError(f"{key} must be true or false")
+        if "nsz_compression" in patch:
+            from .switch_compress import parse_compression
+            patch = dict(patch, nsz_compression=parse_compression(patch["nsz_compression"]))
         if "plugin_hosts" in patch:
             from .catalogue import parse_hosts
             patch = dict(patch, plugin_hosts=", ".join(parse_hosts(patch["plugin_hosts"])))

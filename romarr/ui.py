@@ -5269,7 +5269,8 @@ RENDER.history=async()=>{
     ${d.items.map(e=>`<tr><td style="color:var(--dim)" title="${esc(e.at)}">${esc(fmtDateTime(e.at))}</td>
       <td><span class="pill ${esc(e.kind)}">${esc(e.kind)}</span></td>
       <td>${esc(e.game)}</td><td>${esc(e.platform)}</td>
-      <td style="color:var(--dim)">${esc(e.release||'—')}</td>
+      <td style="color:var(--dim)">${esc(e.release||'—')}
+        ${e.kind==='compress'&&e.detail?`<div class="help">${esc(e.detail)}</div>`:''}</td>
       <td style="color:var(--dim)">${esc(e.indexer||'—')}</td></tr>`).join('')}</tbody></table>`
     :'<div class="empty">No history yet.</div>';
 };
@@ -5484,6 +5485,8 @@ function readDatCatalogLines(value){
   }
   return out;
 }
+const XCI_WARNING='Compressatorium rarely rebuilds an XCI byte for byte, so most XCI jobs '
+  +'fail their round-trip check and keep the original. Each failure is recorded in History.';
 RENDER.media=()=>settingsPage('Media Management',
   'Where imported ROMs are filed. This must be the same path your library server scans.',
   fld('library_path','ROM library root',SETTINGS.library_path)
@@ -5519,6 +5522,11 @@ RENDER.media=()=>settingsPage('Media Management',
   +chk('rename_on_import','Use DAT names for verified single-file imports (disc-set filenames stay intact)',SETTINGS.rename_on_import)
   +chk('prefer_hardlinks','Prefer hardlinks; copy when unavailable (unchanged files only)',SETTINGS.prefer_hardlinks)
   +chk('switch_attach_extras','File Switch updates and DLC inside their game\'s folder (update/, dlc/) when the game already has one',SETTINGS.switch_attach_extras!==false)
+  +chk('compress_switch_imports','Compress Switch imports (NSP to NSZ) through Compressatorium; the original is removed only after the compressed file verifies',SETTINGS.compress_switch_imports)
+  +chk('compress_switch_xci','Also compress XCI imports to XCZ',SETTINGS.compress_switch_xci)
+  +`<div id="s-xci-warn" class="help" style="color:var(--warn);${SETTINGS.compress_switch_xci?'':'display:none'}">
+     ${esc(XCI_WARNING)}</div>`
+  +fld('nsz_compression','NSZ compression (solid or block, level 1-22; XCZ always uses block)',SETTINGS.nsz_compression||'block:18','text','placeholder="block:18" pattern="(solid|block):([1-9]|1[0-9]|2[0-2])"')
   +chk('game_package_folders','In RomM libraries, file games with updates and DLC (PlayStation, 3DS, Wii U, Switch) as one game folder: base game in &lt;Title&gt;/, update in update/, DLC in dlc/',SETTINGS.game_package_folders!==false)
   +`<p class="dim">Hardlinks share file contents with the download. Editing either file changes both. Archive members are extracted normally. Shared library read permissions are required; ROMarr never changes source permissions.</p>`
   +chk('retain_downloads_after_import','Keep completed downloads for seeding after import',SETTINGS.retain_downloads_after_import)
@@ -5572,7 +5580,16 @@ RENDER.media=()=>settingsPage('Media Management',
      '"Prefer" is the historical fallback: a game with only Japan dumps stays '
      +'in the set rather than being lost. "Strict" treats the region list as '
      +'an allowlist — the plan counts every title omitted for having no dump '
-     +'in your regions.'));
+     +'in your regions.'),
+  ()=>{
+    // XCI compression usually fails its round-trip; say so when it is ticked.
+    const box=document.querySelector('[data-k="compress_switch_xci"]');
+    if(!box) return;
+    box.onchange=()=>{
+      $('#s-xci-warn').style.display=box.checked?'':'none';
+      if(box.checked) toast(XCI_WARNING);
+    };
+  });
 
 RENDER.switch=async()=>{
   const version=pageVersion;

@@ -34,6 +34,12 @@ DAT checksums distinguish **verified**, **bad dump** and **unknown**. Every memb
 
 RAR archives, split RAR sets (`.part01.rar`, `.rar` + `.r00`, `.001`) and any other `.7z`/`.zip` (a zipped cue/bin, a multi-disc set) have no Compressatorium mode, so ROMarr extracts them itself with the same readers the importer uses. These run without the sidecar. One file lands beside its archive; several land in a folder named after it. Nothing is overwritten, and partly extracted output is never left under a final name. Every output is checked against the loaded DATs. An original (for a RAR set, every volume) is deleted only when deletion was asked for and every output verified. A dry run lists which engine would handle each file.
 
+### Switch compression on import
+
+**Settings → Media Management → Compress Switch imports** sends each imported Switch `.nsp` to the same Compressatorium sidecar as an `nsz_compress` job. It is off by default. **Also compress XCI imports to XCZ** adds `.xci` files, is off by default as well, and shows a warning when ticked. An `.nsz` or `.xcz` is already compressed and is left alone. **NSZ compression** takes `solid:<level>` or `block:<level>` with a level from 1 to 22, and defaults to `block:18`. Block mode keeps random access in an NSZ, and an `.xci` is always sent as block because an XCZ cannot be solid.
+
+Compressatorium removes the original only after the compressed file passes its round-trip check. ROMarr then points the hash index, queue row, and published request assets at the `.nsz` or `.xcz` before asking the library server to rescan. After three hours ROMarr requests cancellation and checks an unresolved job in the background, including after a restart. Failed and cancelled jobs keep the original. The outcome is recorded in **History** as a `compress` event. Compressatorium rarely rebuilds an XCI byte for byte, so most `.xci` jobs end failed with the original kept, which is why XCI has its own setting. ROMarr handles no keys: the sidecar needs the operator's own `prod.keys` (its `SWITCH_KEYS`), and without them its nsz tool is reported unavailable and no job is submitted.
+
 ## Collections and existing set torrents
 
 ![Collections 1G1R comparison and set torrent planner](img/collections.png)

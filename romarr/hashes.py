@@ -122,21 +122,30 @@ class HashIndex:
         return entry
 
     def move_paths(self, moves: dict[str, str], *,
-                   root: str | Path | None = None) -> int:
-        """Update saved paths after a verified filesystem rename.
+                   root: str | Path | None = None,
+                   physical_hashes: dict[str, str] | None = None) -> int:
+        """Update saved paths and optional physical aliases after a file changes.
 
         Older entries may contain absolute import paths while audit paths and
-        rename journals are library-relative. Normalize both sides at this
-        boundary and persist the portable relative form after the move.
+        rename journals are library-relative. Store the portable relative form.
         """
         normalized = {_library_path_key(source, root): target
                       for source, target in moves.items()}
+        aliases = {_library_path_key(source, root): sha1
+                   for source, sha1 in (physical_hashes or {}).items()}
         changed = 0
         with self._lock:
             for entry in self._by_sha1.values():
-                target = normalized.get(_library_path_key(entry.path, root))
+                key = _library_path_key(entry.path, root)
+                target = normalized.get(key)
                 if target:
                     entry.path = _relative_library_path(target, root)
+                    if key in aliases:
+                        if self._by_physical.get(entry.physical_sha1) is entry:
+                            self._by_physical.pop(entry.physical_sha1, None)
+                        entry.physical_sha1 = aliases[key]
+                        if entry.physical_sha1:
+                            self._by_physical[entry.physical_sha1] = entry
                     changed += 1
         if changed:
             self.save()

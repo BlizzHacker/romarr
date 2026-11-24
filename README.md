@@ -249,7 +249,7 @@ Source plugins live in [ROM Hub](https://github.com/BlizzHacker/rom-hub); see it
 
 Thanks to the library, emulator and preservation projects ROMarr works with, and to [Radarr](https://github.com/Radarr/Radarr), [Sonarr](https://github.com/Sonarr/Sonarr), [Questarr](https://github.com/Doezer/Questarr) and [gamarr](https://github.com/JeremiahM37/gamarr) for ideas and familiar workflows.
 
-Batch decompression hands disc images to [Compressatorium](https://github.com/pacnpal/compressatorium) by pacnpal over its HTTP API, through the preinstalled [Compressatorium plugin](https://github.com/BlizzHacker/rom-hub-compressatorium); no Compressatorium code is included.
+Batch decompression and opt-in Switch NSZ/XCZ compression hand files to [Compressatorium](https://github.com/pacnpal/compressatorium) by pacnpal over its HTTP API, through the preinstalled [Compressatorium plugin](https://github.com/BlizzHacker/rom-hub-compressatorium); no Compressatorium code is included.
 
 ScreenScraper and SteamGridDB metadata are ported from MIT-licensed [RetroArr](https://github.com/RiDDiX/RetroArr), Copyright (c) 2026 RetroArr.
 
