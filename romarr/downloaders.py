@@ -4647,8 +4647,9 @@ CLIENT_TYPES = {
             FIELD("username", "Username"),
             FIELD("password", "Password", "secret"),
             FIELD("api_key", "API Key", "secret", clearable=True,
-                  help="qBittorrent 5.2+ (WebUI options). Used instead of "
-                       "username and password when set. Cleared when empty."),
+                  help="qBittorrent 5.2+ (Tools > Options > WebUI). Used "
+                       "instead of the username and password when set; "
+                       "empty the field to remove a saved key."),
             FIELD("category", "Category", default="romarr"),
         ],
     },
