@@ -7,12 +7,15 @@ import binascii
 import hashlib
 import http.client
 import io
+import os
 import re
 import select
 import socket
 import ssl
 import threading
 from urllib.parse import urlsplit
+
+import requests
 
 SOCKET_PATHS = frozenset(
     route + suffix
@@ -55,7 +58,8 @@ def protocols(value: str) -> tuple[str, ...]:
     return names
 
 
-def origin_allowed(origin: str, host: str, forwarded_proto: str, public_url: str) -> bool:
+def origin_allowed(origin: str, host: str, forwarded_proto: str, public_url: str,
+                   request_scheme: str = "http") -> bool:
     """Only an explicitly configured or same-host browser origin can connect."""
     try:
         incoming = urlsplit(origin)
@@ -67,10 +71,12 @@ def origin_allowed(origin: str, host: str, forwarded_proto: str, public_url: str
         return False
     actual = (incoming.scheme, incoming.netloc.lower())
     registered = (public.scheme, public.netloc.lower())
-    expected_scheme = forwarded_proto.strip().lower()
-    if expected_scheme not in ("http", "https"):
-        expected_scheme = incoming.scheme
-    return actual in (registered, (expected_scheme, host.strip().lower()))
+    host = host.strip().lower()
+    if registered[0] in ("http", "https") and (actual == registered or host == registered[1]):
+        return actual == registered
+    forwarded = forwarded_proto.strip().lower()
+    expected_scheme = forwarded if forwarded in ("http", "https") else request_scheme
+    return actual == (expected_scheme, host)
 
 
 def valid_path(path: str) -> bool:
@@ -115,12 +121,23 @@ def accept_key(key: str) -> str:
     return base64.b64encode(digest).decode("ascii")
 
 
+def _tls_context() -> ssl.SSLContext:
+    """Use the same CA bundle selection as the library HTTP relay."""
+    bundle = os.environ.get("REQUESTS_CA_BUNDLE") or os.environ.get("CURL_CA_BUNDLE") or requests.certs.where()
+    if os.path.isdir(bundle):
+        return ssl.create_default_context(capath=bundle)
+    return ssl.create_default_context(cafile=bundle)
+
+
 def open_upstream(origin: str, path: str, key: str, offered: tuple[str, ...],
                   credential_headers: dict[str, str]) -> tuple[http.client.HTTPConnection, str, bytes]:
     """Open one connection to the selected library and validate its response."""
     target = urlsplit(origin)
-    connection_class = http.client.HTTPSConnection if target.scheme == "https" else http.client.HTTPConnection
-    upstream = connection_class(target.hostname, target.port, timeout=IO_TIMEOUT)
+    if target.scheme == "https":
+        upstream = http.client.HTTPSConnection(
+            target.hostname, target.port, timeout=IO_TIMEOUT, context=_tls_context())
+    else:
+        upstream = http.client.HTTPConnection(target.hostname, target.port, timeout=IO_TIMEOUT)
     headers = {
         "Connection": "Upgrade",
         "Upgrade": "websocket",

@@ -114,3 +114,22 @@ def test_engine_io_polling_still_uses_the_http_relay(portal_stack):
         assert response.status == 200 and response.read() == b"polling"
     finally:
         client.close()
+
+
+def test_public_origin_pins_its_scheme_even_behind_a_proxy():
+    host = "romarr.example:8080"
+    public = f"https://{host}"
+    assert portal_socket.origin_allowed(public, "internal:7878", "", public)
+    assert not portal_socket.origin_allowed(f"http://{host}", host, "http", public)
+    assert not portal_socket.origin_allowed(f"https://{host}", host, "", "")
+    assert portal_socket.origin_allowed(f"https://{host}", host, "", "", "https")
+
+
+def test_tls_context_uses_requests_ca_bundle(monkeypatch, tmp_path):
+    bundle = tmp_path / "ca"
+    bundle.mkdir()
+    monkeypatch.setenv("REQUESTS_CA_BUNDLE", str(bundle))
+    monkeypatch.setenv("CURL_CA_BUNDLE", str(tmp_path / "unused"))
+    context = portal_socket._tls_context()
+    assert context.check_hostname
+    assert context.verify_mode == portal_socket.ssl.CERT_REQUIRED

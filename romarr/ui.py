@@ -1531,7 +1531,10 @@ RENDER.hub=async()=>{
   // Installing a plugin means running its author's code. Whether that code is
   // confined is the thing to know first, so it goes at the top of the page
   // rather than in a log the operator will never read.
+  const version=typeof pageVersion==='number'?pageVersion:null;
+  const current=()=>version===null||(version===pageVersion&&activePage==='hub');
   let hs=await j('/api/v1/hub/status').catch(()=>({}));
+  if(!current())return;
   const p=$('#page');
   p.innerHTML='<div class="empty">Reading the plugin catalogue…</div>';
 
@@ -1663,6 +1666,7 @@ RENDER.hub=async()=>{
   };
 
   const render=d=>{
+  if(!current())return;
   const confined=hs.sandboxed===true;
   const sandboxNote=hs.available===false ? '' :
     (confined

@@ -42,6 +42,7 @@ from copy import copy, deepcopy
 import logging
 from typing import NamedTuple
 import os
+import ssl
 import pathlib
 import re
 import threading
@@ -11314,7 +11315,8 @@ def make_handler(service: ROMarr):
             if not portal_socket.origin_allowed(
                     self.headers.get("Origin", ""), self.headers.get("Host", ""),
                     self.headers.get("X-Forwarded-Proto", ""),
-                    str(service.store.settings.get("public_url") or "")):
+                    str(service.store.settings.get("public_url") or ""),
+                    "https" if isinstance(self.connection, ssl.SSLSocket) else "http"):
                 return self._json(403, {"error": "library WebSocket origin refused"})
             try:
                 offered = portal_socket.protocols(self.headers.get("Sec-WebSocket-Protocol", ""))
