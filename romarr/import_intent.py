@@ -1,4 +1,4 @@
-"""A reviewable import plan. Filename hints never claim package identity."""
+"""A reviewable import plan. Filename words never claim package identity; a title ID can."""
 from __future__ import annotations
 
 import hashlib
@@ -89,7 +89,8 @@ def _preview_import_from_source(source, download, platform, library_root, *,
             ("unknown", "Package title, type and version have not been inspected; choose its role manually.", "unknown")
             if unknown else
             ("base", "Platform-compatible ROM set; companions are kept together. Game identity is unverified.", "format-only"))
-        header_role = _nup_role(download, group.primary) or _package_role(source, platform, group.primary)
+        header_role = (_nup_role(download, group.primary) or _package_role(source, platform, group.primary)
+                       or (_title_id_role(platform, group.primary) if unknown else None))
         if header_role is not None:
             role, evidence, confidence = header_role
             unknown = role == "unknown"
@@ -101,8 +102,9 @@ def _preview_import_from_source(source, download, platform, library_root, *,
                       "destination": str(_preview_destination(download, platform, target, group, switch_extras,
                                                               folder_routes)),
                       "selected": (len(sets) == 1 or folder_routes is not None) and not unknown})
+    _review_mixed_title_ids(items, platform)
     # Several packages need a person to say how they relate, unless every one
-    # is identified by its header and they file into one game folder.
+    # is identified by its header or title ID and they file into one game folder.
     return {"token": token, "items": items,
             "extras": [n for n in names if n not in used],
             "requires_review": ((len(sets) > 1 and folder_routes is None)
@@ -125,6 +127,44 @@ def _package_role(source, platform, primary):
     return (header.role,
             f"PS4 package header: {game_packages.describe_parts({header.role})} ({header.content_id})",
             "header")
+
+
+#: Platforms whose package file names carry a title ID that says base, update or DLC.
+TITLE_ID_PLATFORMS = ("switch", "switch-2", "3ds")
+_MIXED_TITLE_IDS = "Packages in this download name different title IDs; choose their roles manually."
+
+
+def _title_id_role(platform, primary):
+    """(role, evidence, confidence) from the title ID in a package's name, or None.
+
+    Only Switch, Switch 2 and 3DS title IDs are read: the ID itself says base,
+    update or DLC (`game_packages.identify`). A name without exactly one such
+    ID returns None, which leaves the package for review.
+    """
+    if platform.slug not in TITLE_ID_PLATFORMS:
+        return None
+    family, role = game_packages.identify(Path(primary.replace("\\", "/")).name, platform.slug)
+    if not family or role not in game_packages.PARTS:
+        return None
+    return (role,
+            f"Title ID: {game_packages.describe_parts({role})} of title {family.upper()}.",
+            "title-id")
+
+
+def _review_mixed_title_ids(items, platform):
+    """Send title-ID roles back to review when the IDs name different games.
+
+    An update or DLC for another game must not join this one, so a download
+    whose packages belong to more than one title ID family is never trusted
+    by title ID alone.
+    """
+    tid_items = [i for i in items if i["confidence"] == "title-id"]
+    families = {game_packages.identify(Path(i["primary"].replace("\\", "/")).name, platform.slug)[0]
+                for i in tid_items}
+    if len(families) <= 1:
+        return
+    for item in tid_items:
+        item.update(role="unknown", evidence=_MIXED_TITLE_IDS, confidence="unknown", selected=False)
 
 
 _NUP_UNREADABLE = "Could not read this NUP header; choose its role manually."
