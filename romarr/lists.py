@@ -602,7 +602,7 @@ def _xbox_entries(cfg: dict, *, session=None) -> list[ListEntry]:
     http = session or requests
     key = str(cfg.get("openxbl_key") or "").strip()
     if not key:
-        raise ValueError("Connect Xbox with your OpenXBL API key to read played titles.")
+        return []
     response = http.get(f"{XBOX_API}/achievements",
                         headers={"X-Authorization": key, "Accept": "application/json"},
                         timeout=30, allow_redirects=False)
