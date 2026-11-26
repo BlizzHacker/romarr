@@ -260,6 +260,54 @@ def test_a_failing_hub_does_not_sink_the_search(tmp_path, monkeypatch):
     assert svc._hub_releases("Super Metroid", _FakePlatform()) == []
 
 
+def test_repacks_plugin_searches_and_feeds_rss_sync_with_a_torrent_client(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from romarr.app import ROMarr
+    from romarr.platforms import resolve
+
+    svc = ROMarr(env={"ROMARR_DATA": str(tmp_path / "s.json")})
+    added = []
+    torrent_client = SimpleNamespace(
+        name="qBittorrent",
+        protocol="torrent",
+        configured=True,
+        add=lambda url: added.append(url) or True,
+    )
+    svc.clients = [torrent_client]
+    monkeypatch.setattr(hub, "searchable_plugins", lambda: ["repacks"])
+    repack_row = {
+        "source_id": "repack:fitgirl:c1389977986a805eac49bc5ad4608cbeab5cf177",
+        "title": "Cyberpunk 2077 (v2.12 + All DLCs, MULTi19) [FitGirl Repack]",
+        "platform": "win",
+        "size_bytes": 60 * 1024**3,
+        "url": "https://fitgirl-repacks.site/cyberpunk-2077/",
+        "plugin": "repacks",
+        "magnet": "magnet:?xt=urn:btih:c1389977986a805eac49bc5ad4608cbeab5cf177",
+        "extra": {"repacker": "FitGirl", "downloadable": "torrent"},
+    }
+    seen_calls = []
+
+    def fake_search(q, platform=None, **kw):
+        seen_calls.append((q, platform, kw.get("only")))
+        return [dict(repack_row)], ""
+
+    monkeypatch.setattr(hub, "search", fake_search)
+    monkeypatch.setattr(hub, "resolve_torrents", lambda rows: rows)
+
+    # Works without a ROM Hub download client when a torrent client is configured.
+    releases = svc._hub_releases("Cyberpunk 2077", resolve("win"))
+    assert len(releases) == 1
+    assert releases[0].indexer == "hub:repacks"
+    assert releases[0].protocol == "torrent"
+    assert seen_calls[-1] == ("Cyberpunk 2077", "win", "repacks")
+
+    # rss_sync automatically polls the subscribed FitGirl & DODI RSS feeds for monitored PC titles.
+    svc.store.want("Cyberpunk 2077", "win")
+    summary = svc.rss_sync()
+    assert "1 feed item(s) from 1 source(s), grabbed 1" in summary
+    assert added == ["magnet:?xt=urn:btih:c1389977986a805eac49bc5ad4608cbeab5cf177"]
+
+
 def test_authentication_status_without_shared_rom_hub(monkeypatch):
     import sys
     monkeypatch.setitem(sys.modules, "romarr.ia_auth", None)

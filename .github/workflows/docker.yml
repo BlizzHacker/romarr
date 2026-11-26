@@ -36,7 +36,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt pytest "mcp==1.30.0"
-          pip install "rom-hub @ https://github.com/BlizzHacker/rom-hub/archive/3f5180aa336b0c192b86877ea6f3dc59a8075631.tar.gz"
+          pip install "rom-hub @ https://github.com/BlizzHacker/rom-hub/archive/2936ffa8861b7768d7888670587ba6e15c8c3929.tar.gz"
 
       - uses: actions/checkout@v5
         with:
