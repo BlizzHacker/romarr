@@ -147,7 +147,7 @@ def extract_value(field: str, pasted: str) -> str:
 
     # A URL that carries it -- Epic's code arrives this way in the address
     # bar when the redirect lands.
-    if text.startswith("http"):
+    if text.startswith(("http://", "https://")) or (field == "ea_token" and text.startswith("nucleus:")):
         url = urllib.parse.urlsplit(text)
         for part in (url.query, url.fragment):
             query = urllib.parse.parse_qs(part)

@@ -257,6 +257,7 @@ def test_ea_redirect_fragment_is_accepted():
     from romarr.connect import extract_value
 
     assert extract_value("ea_token", "https://accounts.ea.com/#access_token=fresh") == "fresh"
+    assert extract_value("ea_token", "nucleus:rest#access_token=fresh") == "fresh"
 
 
 def test_calendar_tracks_confirmed_giveaways_and_ignores_upcoming_sales(tmp_path, monkeypatch):

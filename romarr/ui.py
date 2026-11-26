@@ -3017,10 +3017,15 @@ RENDER.lists=async()=>{
         <button class="btn" id="tok-save">${item?'Verify and reconnect':'Connect'}</button>
       </div></div>`;
     document.body.append(m);
-    m.onclick=e=>{if(e.target===m||e.target.dataset.close!==undefined)closeModal();};
+    const onNavigate=()=>{if(!current())m.remove();};
+    window.addEventListener('hashchange',onNavigate,{once:true});
+    const dismiss=()=>{window.removeEventListener('hashchange',onNavigate);m.remove();};
+    m.onclick=e=>{if(e.target===m||e.target.dataset.close!==undefined)dismiss();};
     const input=m.querySelector('#tok-v'), button=m.querySelector('#tok-save');
     input.focus();
+    let savedId=item?.id;
     button.onclick=async()=>{
+      if(!current()||!m.isConnected){dismiss();return;}
       const value=input.value.trim();
       if(!value){toast('Paste the credential first');return;}
       const line=(ok,msg)=>{
@@ -3035,17 +3040,18 @@ RENDER.lists=async()=>{
           const result=await post('/api/v1/importlist/reconnect',{id:item.id,credential:value});
           if(!current()||!m.isConnected)return;
           if(!result.ok){line(false,result.error||'Could not reconnect');return;}
-          closeModal();toast(`${spec.label} reconnected · ${num(result.fetched)} titles fetched`);go('lists');
+          dismiss();toast(`${spec.label} reconnected · ${num(result.fetched)} titles fetched`);go('lists');
         }else{
-          const saved=await post('/api/v1/importlist',{name:spec.label+' library',type,
+          const saved=await post('/api/v1/importlist',{id:savedId,name:spec.label+' library',type,
             platform:'',enable:true,[spec.field]:value});
           if(!current()||!m.isConnected)return;
           if(saved.error){line(false,saved.error);return;}
+          savedId=saved.id;
           const result=await post('/api/v1/command',{name:'ListSync'});
           if(!current()||!m.isConnected)return;
           const failed=(result.failures||[]).find(row=>row.id===saved.id);
           if(failed||result.busy||result.error){line(false,failed?.reason||result.error||result.message);return;}
-          closeModal();toast('Connected '+spec.label);go('lists');
+          dismiss();toast('Connected '+spec.label);go('lists');
         }
       }catch{
         if(current()&&m.isConnected)line(false,'Could not verify the connection. Try again.');
