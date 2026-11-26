@@ -274,13 +274,17 @@ def test_a_single_package_is_classified_by_its_title_id(tmp_path, platform, name
     assert item["selected"] and not p["requires_review"]
 
 
-@pytest.mark.parametrize("name", [
-    "Game.nsp",                                         # no title ID
-    "Game [0100ABCD12340000][0100EEEE12340000].nsp",     # two title IDs
-    "Game [0004000000123400].nsp",                      # a 3DS ID is not a Switch ID
+@pytest.mark.parametrize(("platform", "name"), [
+    ("switch", "Game.nsp"),                                           # no title ID
+    ("switch", "Game [0100ABCD12340000][0100EEEE12340000].nsp"),      # two Switch title IDs
+    ("switch", "Game [0004000000123400].nsp"),                        # a 3DS ID is not a Switch ID
+    ("3ds", "Game.cia"),                                              # no title ID
+    ("3ds", "Bundle [0004000000123400][0004000E00567800].cia"),       # two 3DS title IDs (base first)
+    ("3ds", "Bundle [0004000E00567800][0004000000123400].cia"),       # two 3DS title IDs (update first)
+    ("3ds", "Bundle [0004000000123400][0004000E00123400].cia"),       # two 3DS title IDs (same family, two roles)
 ])
-def test_a_package_without_one_switch_title_id_still_requires_review(tmp_path, name):
-    p = preview_import(_package(tmp_path, name), resolve("switch"), tmp_path / "lib")
+def test_a_package_without_one_title_id_still_requires_review(tmp_path, platform, name):
+    p = preview_import(_package(tmp_path, name), resolve(platform), tmp_path / "lib")
     assert p["items"][0]["role"] == "unknown" and p["requires_review"]
 
 

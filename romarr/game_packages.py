@@ -385,10 +385,11 @@ def identify(text: str, platform_slug: str) -> tuple[str, str]:
         return base_tid_of(tid), kind if kind in PARTS else ""
     roles = _HIGH_WORD_ROLES.get(platform_slug)
     if roles:
-        for high, low in _HIGH_WORD_TID_RE.findall(text):
-            role = roles.get(high.lower())
-            if role:
-                return f"{high[:4]}0000{low}".lower(), role
+        found = {(f"{high[:4]}0000{low}".lower(), roles[high.lower()])
+                 for high, low in _HIGH_WORD_TID_RE.findall(text)
+                 if high.lower() in roles}
+        if len(found) == 1:
+            return found.pop()
     return "", ""
 
 
