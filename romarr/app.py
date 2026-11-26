@@ -6633,6 +6633,13 @@ class ROMarr:
         if generation != getattr(self, "_library_generation", 0):
             log.info("library refresh finished for a configuration that has since changed; not published")
             return
+        cached, at, _ = self._library_cache
+        if partial and cached is not None and not getattr(self, "_library_partial", True):
+            # Keep the completed catalogue readable while another pass is
+            # traversing its sources, or when the new pass ends incomplete.
+            if error:
+                self._library_cache = (cached, at, error)
+            return
         self._publish_library(shelf, error, partial=partial)
 
     def _publish_library(self, shelf: list, error: str, *,

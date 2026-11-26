@@ -228,3 +228,25 @@ def test_unreadable_platform_does_not_hide_readable_siblings(tmp_path, monkeypat
     assert {g.platform for g in readable} == {"b-readable", "c-readable"}
     assert failure.value.folder_failures == ("PermissionError",)
     assert "private mount" not in str(failure.value)
+
+
+def test_complete_shelf_remains_visible_until_the_next_complete_scan(tmp_path):
+    service = ROMarr({"ROMARR_DATA": str(tmp_path / "state.json")})
+    generation = getattr(service, "_library_generation", 0)
+    old = [Game(id="1", name="First", platform="snes"),
+           Game(id="2", name="Second", platform="snes")]
+    service._publish_if_current(generation, old, "", partial=False)
+    service._publish_if_current(generation, old[:1], "", partial=True)
+    assert service._library_cache[0] == old
+    assert not service._library_partial
+
+    service._publish_if_current(generation, old[:1], "Read interrupted", partial=True)
+    assert service._library_cache[0] == old
+    assert service._library_cache[2] == "Read interrupted"
+
+    service._publish_if_current(generation + 1, [], "", partial=False)
+    assert service._library_cache[0] == old
+
+    service._publish_if_current(generation, old[:1], "", partial=False)
+    assert service._library_cache[0] == old[:1]
+    assert service._library_cache[2] == ""
