@@ -678,10 +678,13 @@ class FolderScanError(OSError):
         super().__init__(f"Library read incomplete: {len(self.folder_failures)} filesystem errors")
 
 
-def rom_file_extensions() -> set[str]:
+ROM_ARCHIVES = (".zip", ".7z", ".rar")
+
+
+def rom_file_extensions(archives: tuple[str, ...] = ROM_ARCHIVES) -> set[str]:
     """File suffixes supported by folder libraries and launcher exports."""
     from .platforms import PLATFORMS
-    return {ext for platform in PLATFORMS for ext in platform.extensions} | {".zip", ".7z", ".rar"}
+    return {ext for platform in PLATFORMS for ext in platform.extensions} | set(archives)
 
 
 class FolderLibrary:
@@ -702,6 +705,7 @@ class FolderLibrary:
 
     name = "Folder"
     BACKGROUND_TIMEOUT = DEFAULT_BACKGROUND_TIMEOUT
+    ARCHIVES = ROM_ARCHIVES
 
     # Walking a library of tens of thousands of files on every refresh is not
     # worth it for a number on a badge, so the walk stops here and the count is
@@ -721,7 +725,7 @@ class FolderLibrary:
         return Path(self._config.root)
 
     def _extensions(self) -> set[str]:
-        return rom_file_extensions()
+        return rom_file_extensions(self.ARCHIVES)
 
     @staticmethod
     def _fs_call(operation):

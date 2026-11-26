@@ -147,7 +147,7 @@ from .ui import login_page as ui_login_page
 from .version import compare_key, derive_version, is_unknown
 from .sidecars import read_nfo
 from .build_info import get_build_info
-LIST_ACCOUNT_FIELDS = ("type", "provider", "source", "content", "profile",
+LIST_ACCOUNT_FIELDS = ("type", "provider", "source", "content", "profile", "url",
                        "steam_id", "gog_username", *LIST_SECRETS)
 LIST_SYNC_FIELDS = ("owned_snapshot", "unmatched", "last_sync", "_epic_saved")
 
@@ -2181,6 +2181,10 @@ class ROMarr:
     @staticmethod
     def _restore_list_sync_fields(item: dict, stored: dict) -> None:
         """Carry sync data across edits to the same storefront account."""
+        if (item.get("type") == "epic" and item.get("epic_code")
+                and item["epic_code"] != stored.get("epic_code")
+                and item.get("epic_refresh") == stored.get("epic_refresh")):
+            item.pop("epic_refresh", None)
         same_account = all((item.get(key) or "") == (stored.get(key) or "")
                            for key in LIST_ACCOUNT_FIELDS)
         for key in LIST_SYNC_FIELDS:
@@ -6381,13 +6385,14 @@ class ROMarr:
                     or game.file_name in (".", "..")):
                 continue
             key = (game.source, slug)
+            cfg = sources.get(game.source, default)
             if key not in directories:
-                cfg = sources.get(game.source, default)
                 directories[key] = platform_dir(
                     self.library_root(cfg), slug, layout=self.library_layout(cfg),
                     platform_folders=self.platform_folders(cfg)) if slug else self.library_root(cfg)
             path = game.local_path or str(directories[key] / game.file_name)
             rows.append({"id": game.id, "title": game.name, "platform": slug,
+                         "library_key": str(cfg.get("id") or game.source or "local"),
                          "filename": game.file_name, "path": path,
                          "region": ", ".join(game.regions)})
         return rows
@@ -9237,7 +9242,7 @@ class ROMarr:
         found = self.scan_launchers()
         if found.get("error"):
             return found
-        if not found["items"]:
+        if not found["items"] and not report:
             return {"ok": False, "added": 0,
                     "message": "no launcher libraries found on this machine"}
         if report:
@@ -12140,7 +12145,7 @@ def make_handler(service: ROMarr):
                     if old:
                         cfg["added"] = old.get("added") or []
                         for secret in LIST_SECRETS:
-                            if cfg.get(secret) in ("********", ""):
+                            if cfg.get(secret) in ("********", "", None):
                                 cfg[secret] = old.get(secret, "")
                         service._restore_list_sync_fields(cfg, old)
                 saved = service.store.put_item("import_lists", cfg)

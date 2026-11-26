@@ -135,3 +135,10 @@ def test_a_failing_list_records_why_on_the_list_itself(tmp_path, monkeypatch,
     assert stored["last_sync"]["error"] == expected
     assert result["failed_lists"] == 1
     assert result["failures"][0]["reason"] == expected
+
+
+def test_free_game_collector_toggles_a_separate_results_panel():
+    html = page()
+    assert '<button class="btn ghost" id="l-free-collector"' in html
+    assert 'aria-controls="l-free-offers"' in html
+    assert 'id="l-free-offers" style="margin-top:10px" aria-live="polite" hidden' in html

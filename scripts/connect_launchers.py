@@ -43,7 +43,8 @@ def main() -> int:
         print("No launcher libraries found on this machine.")
         print("Checked Steam, Epic, GOG Galaxy, Battle.net, EA and Amazon in their "
               "default locations.")
-        return 1
+        if args.platform or args.dry_run:
+            return 1
 
     by_launcher = Counter(g.launcher for g in games)
     print(f"Found {len(games)} launcher game(s):")

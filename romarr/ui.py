@@ -2768,10 +2768,12 @@ RENDER.lists=async()=>{
       <summary>Store sync status</summary><div id="l-owned-source-status"></div>
     </details>
   </section>
-  <details id="l-free-collector" class="card" style="margin-top:12px">
-    <summary><b>Free Game Collector</b></summary>
-    <div id="l-free-offers" style="margin-top:10px"></div>
-  </details>
+  <section class="card" style="margin-top:12px">
+    <div class="row"><h3 style="margin:0">Free Game Collector</h3>
+      <button class="btn ghost" id="l-free-collector" aria-controls="l-free-offers"
+        aria-expanded="false">Show offers</button></div>
+    <div id="l-free-offers" style="margin-top:10px" aria-live="polite" hidden></div>
+  </section>
   <h3 style="margin:16px 0 12px">Import lists</h3>
   <div class="row" style="margin-bottom:14px">
       <button class="btn" id="l-add">Add List</button>

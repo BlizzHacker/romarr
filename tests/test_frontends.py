@@ -197,3 +197,12 @@ def test_windows_mapping_skips_a_posix_directory_with_literal_backslash():
 
     rows = [{"path": "/roms/Set\\/Game.sfc"}, {"path": "/roms/Set/Game.sfc"}]
     assert mapped_rows(rows, "/roms", "R:\\ROMs") == [{"path": "R:\\ROMs\\Set\\Game.sfc"}]
+
+
+def test_playnite_export_keeps_ids_distinct_between_libraries():
+    from romarr.frontends import to_playnite
+
+    rows = [{"id": "42", "library_key": key, "title": title, "path": path}
+            for key, title, path in (("a", "First", "/first.rom"), ("b", "Second", "/second.rom"))]
+    games = json.loads(to_playnite(rows))["games"]
+    assert [(game["libraryKey"], game["id"]) for game in games] == [("a", "42"), ("b", "42")]

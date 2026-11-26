@@ -257,6 +257,7 @@ def to_playnite(rows: list[dict]) -> str:
                 "romPath": str(row.get("path") or ""),
                 "id": str(row.get("id") or ""),
                 "verified": str(row.get("verified") or ""),
+                **({"libraryKey": str(row["library_key"])} if row.get("library_key") else {}),
             }
             for row in rows if row.get("path")
         ],

@@ -100,19 +100,42 @@ function Invoke-ROMarrSync {
         }
     }
 
+    $idCounts = @{}
+    foreach ($entry in $response.games) {
+        $idCounts[[string]$entry.id]++
+    }
     $added = 0
     $updated = 0
     $skipped = 0
     foreach ($entry in $response.games) {
         if ([string]::IsNullOrWhiteSpace($entry.romPath)) { $skipped++; continue }
-        $gameId = "romarr:$($entry.id)"
-        if ($existing.ContainsKey($gameId)) {
-            $old = $existing[$gameId]
+        $legacyId = "romarr:$($entry.id)"
+        $gameId = $legacyId
+        if ($entry.libraryKey) {
+            $encodedLibrary = [uri]::EscapeDataString([string]$entry.libraryKey)
+            $gameId = "romarr:library:$encodedLibrary/$($entry.id)"
+        }
+        $old = $existing[$gameId]
+        $migrated = $false
+        if (-not $old -and $gameId -ne $legacyId -and $existing.ContainsKey($legacyId)) {
+            $legacy = $existing[$legacyId]
+            $firstAction = $legacy.GameActions | Select-Object -First 1
+            if (($firstAction -and $firstAction.Path -ceq $entry.romPath) -or
+                ($idCounts[[string]$entry.id] -eq 1 -and $legacy.Name -ceq $entry.name)) {
+                $existing.Remove($legacyId)
+                $legacy.GameId = $gameId
+                $existing[$gameId] = $legacy
+                $old = $legacy
+                $migrated = $true
+            }
+        }
+        if ($old) {
             $action = if ($old.GameActions.Count -eq 1) { $old.GameActions[0] }
-            if ($action -and $action.IsPlayAction -and
+            $pathChanged = $action -and $action.IsPlayAction -and
                 $action.Type -eq [Playnite.SDK.Models.GameActionType]::File -and
-                -not $action.Arguments -and $action.Path -cne $entry.romPath) {
-                $action.Path = $entry.romPath
+                -not $action.Arguments -and $action.Path -cne $entry.romPath
+            if ($pathChanged) { $action.Path = $entry.romPath }
+            if ($migrated -or $pathChanged) {
                 $PlayniteApi.Database.Games.Update($old)
                 $updated++
             } else {
@@ -143,7 +166,7 @@ function Invoke-ROMarrSync {
     }
 
     $PlayniteApi.Dialogs.ShowMessage(
-        "ROMarr: added $added, updated paths for $updated, skipped $skipped.", "ROMarr")
+        "ROMarr: added $added, updated $updated, skipped $skipped.", "ROMarr")
 }
 
 
