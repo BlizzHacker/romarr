@@ -237,3 +237,30 @@ def test_scan_all_never_reads_the_registry_behind_a_tests_back(tmp_path):
     games = scan_all({"steam": [], "epic": [], "gog": [],
                       "battlenet": [], "ea": [], "amazon": []})
     assert games == []
+
+
+def test_steam_install_status_needs_manifest_and_files(tmp_path):
+    (tmp_path / "appmanifest_123.acf").write_text(
+        '"AppState"\n{\n"name" "Example"\n"installdir" "Example"\n"StateFlags" "4"\n}',
+        encoding="utf-8",
+    )
+    assert not steam_games(tmp_path)[0].installed
+    (tmp_path / "common" / "Example").mkdir(parents=True)
+    game = steam_games(tmp_path)[0]
+    assert game.store_id == "123"
+    assert game.installed
+
+
+def test_steam_prefers_confirmed_manifest_across_libraries(tmp_path):
+    stale = tmp_path / "old"
+    stale.mkdir()
+    _acf(stale, "123", "Same title")
+    current = tmp_path / "new"
+    (current / "common" / "Example").mkdir(parents=True)
+    (current / "appmanifest_123.acf").write_text(
+        '"AppState"\n{\n"name" "Same title"\n"installdir" "Example"\n"StateFlags" "4"\n}',
+        encoding="utf-8",
+    )
+    _acf(current, "987", "Same title")
+    games = scan_all({"steam": [stale, current]})
+    assert [(game.store_id, game.installed) for game in games] == [("123", True), ("987", False)]

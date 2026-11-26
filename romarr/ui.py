@@ -2733,8 +2733,49 @@ RENDER.missing=async()=>{
 };
 
 RENDER.lists=async()=>{
+  const version=pageVersion;
+  const current=()=>activePage==='lists'&&pageVersion===version;
   const d=await j('/api/v1/importlist').catch(()=>({items:[]}));
-  $('#page').innerHTML=`<div class="row" style="margin-bottom:14px">
+  if(!current())return;
+  $('#page').innerHTML=`<section class="card" aria-labelledby="l-owned-title">
+    <h3 id="l-owned-title">My games</h3>
+    <div class="row" role="group" aria-label="Library source" style="flex-wrap:wrap">
+      <button class="btn" data-collection-view="owned" aria-pressed="true">Store libraries</button>
+      <button class="btn ghost" data-collection-view="roms" aria-pressed="false">ROM library</button>
+    </div>
+    <div class="row" style="margin:12px 0;flex-wrap:wrap">
+      <input id="l-owned-query" type="search" placeholder="Search your games" aria-label="Search your games"
+        style="flex:1;min-width:min(230px,100%)">
+      <select id="l-owned-provider" aria-label="Storefront"><option value="">All storefronts</option></select>
+      <a class="btn ghost" href="#library" id="l-owned-browse" hidden>Open full library</a>
+    </div>
+    <div id="l-owned-results" aria-live="polite">Loading your games…</div>
+    <details id="l-frontend" style="margin-top:12px" hidden>
+      <summary>Export ROMs to LaunchBox or Playnite</summary>
+      <p class="help">If your launcher sees the library at a different path, enter both folder paths.</p>
+      <div class="row" style="flex-wrap:wrap;margin:8px 0">
+        <input id="l-export-from" aria-label="Folder on ROMarr" placeholder="Folder on ROMarr">
+        <input id="l-export-to" aria-label="Folder on this device" placeholder="Folder on this device">
+      </div>
+      <div class="row">
+        <a class="btn ghost" data-frontend="launchbox" href="/api/v1/frontend/export?format=launchbox"
+          target="_blank" rel="noopener">LaunchBox XML</a>
+        <a class="btn ghost" data-frontend="playnite" href="/api/v1/frontend/export?format=playnite"
+          target="_blank" rel="noopener">Playnite JSON</a>
+      </div>
+    </details>
+    <details id="l-owned-sources" style="margin-top:10px" hidden>
+      <summary>Store sync status</summary><div id="l-owned-source-status"></div>
+    </details>
+  </section>
+  <section class="card" style="margin-top:12px">
+    <div class="row"><h3 style="margin:0">Free Game Collector</h3>
+      <button class="btn ghost" id="l-free-collector" aria-controls="l-free-offers"
+        aria-expanded="false">Show offers</button></div>
+    <div id="l-free-offers" style="margin-top:10px" aria-live="polite" hidden></div>
+  </section>
+  <h3 style="margin:16px 0 12px">Import lists</h3>
+  <div class="row" style="margin-bottom:14px">
       <button class="btn" id="l-add">Add List</button>
       <button class="btn ghost" id="l-sync">Sync Now</button>
       <span style="color:var(--dim);font-size:12.5px">Feed Wanted from a
@@ -2757,8 +2798,7 @@ RENDER.lists=async()=>{
       </tbody></table>`
       :'<div class="empty">No lists yet. Paste one, or connect an account, and let the clock do the asking.</div>'}
     <div class="card" style="margin-top:14px"><h3>Connect an account</h3>
-      <p class="help">One click each. You are already signed in to these in
-        your browser &mdash; that is what makes it one click.</p>
+      <p class="help">Connect a storefront to show its library in My games.</p>
       <div class="row" style="flex-wrap:wrap;gap:10px;margin:10px 0">
         <a class="btn" href="/api/v1/connect/steam"
            style="text-decoration:none">Sign in through Steam</a>
@@ -2773,28 +2813,158 @@ RENDER.lists=async()=>{
         <button class="btn ghost" data-paste="amazon">Amazon / Prime</button>
         <button class="btn ghost" data-paste="ubisoft">Ubisoft</button>
       </div>
-      <p class="help"><b>Steam</b> is a true one-click: Steam's own
-        "Sign in through Steam", no key, no app registration &mdash; it comes
-        straight back with your library connected. <b>Epic, EA and
-        Battle.net</b> pull your <i>owned</i> library through the same web
-        APIs Playnite uses &mdash; none of them issues an application key,
-        so each opens the page your signed-in browser already has and takes
-        one paste. <b>GOG</b> needs only your public profile name.</p>
+      <p class="help"><b>Steam</b> links your SteamID. Add a Steam Web API key in
+        the list editor to sync owned games. <b>GOG</b> uses a public profile.
+        <b>Amazon and Ubisoft</b> support a pasted library.</p>
       <div id="l-token"></div>
       <h3 style="margin-top:18px">Games installed on your gaming PC</h3>
       <p class="help">A second route, useful alongside the above: every
-        launcher writes what it installed to disk, so this needs no
-        credential of any kind &mdash; and it catches anything a store's
-        API misses. Run it <b>on the PC you play on</b>:</p>
+        launcher writes a local library. Report it from the PC you play on
+        using your ROMarr API key. Store passwords stay on that PC.</p>
       <pre style="font:12px/1.6 ui-monospace,Menlo,monospace;color:var(--dim);
         background:var(--bg);border:1px solid var(--line);border-radius:6px;
-        padding:10px;white-space:pre-wrap">python scripts/connect_launchers.py --url ${location.origin} --key &lt;your API key&gt;</pre>
+        padding:10px;white-space:pre-wrap">python scripts/connect_launchers.py --url ${location.origin}</pre>
       <div class="row" style="margin:8px 0">
         <button class="btn ghost" id="l-scan">Scan the ROMarr server</button>
         <span class="help" style="margin:0">Only useful if ROMarr runs on
-          the machine you play on &mdash; it scans wherever ROMarr itself
-          lives, which is usually a server with no launchers.</span></div>
+          the machine you play on. Remote devices can report their own library with the command above.</span></div>
       <div id="l-noapi" style="color:var(--dim);font-size:12.5px"></div></div>`;
+
+  const search=$('#l-owned-query'), provider=$('#l-owned-provider');
+  const results=$('#l-owned-results');
+  let mode='owned', offset=0, request=0, pending;
+  const limit=50;
+  const tabs=Array.from(document.querySelectorAll('[data-collection-view]'));
+
+  async function showGames(){
+    if(!current())return;
+    const ticket=++request;
+    const params=new URLSearchParams({q:search.value,offset:String(offset),limit:String(limit)});
+    if(mode==='owned')params.set('provider',provider.value);
+    else params.set('sort','name');
+    const endpoint=mode==='owned'?'/api/v1/lists/owned':'/api/v1/game';
+    const page=await j(endpoint+'?'+params).catch(()=>({error:'Could not load games'}));
+    if(!current()||ticket!==request)return;
+
+    if(mode==='owned'&&page.providers){
+      const selected=provider.value;
+      provider.innerHTML='<option value="">All storefronts</option>'+
+        page.providers.map(x=>`<option value="${esc(x.id)}">${esc(x.name)} (${num(x.count)})</option>`).join('');
+      provider.value=selected;
+      $('#l-owned-sources').hidden=!page.sources.length&&!page.devices.length;
+      $('#l-owned-source-status').innerHTML=page.sources.map(source=>{
+        const detail=source.failed?'Sync failed · showing the last saved titles'
+          :source.cached_legacy?'Saved titles · sync to refresh'
+          :'Last synced '+fmtDateTime(source.at);
+        return `<p class="help"><b>${esc(source.label)}</b> · ${num(source.count)} titles · ${esc(detail)}</p>`;
+      }).join('')+page.devices.map(device=>
+        `<p class="help"><b>${esc(device.name)}</b> · ${num(device.count)} titles reported · ${esc(fmtDateTime(device.at))}</p>`).join('');
+    }
+    if(page.loading){
+      results.textContent=page.message||'Reading the ROM library…';
+      pending=setTimeout(showGames,3000);
+      return;
+    }
+    if(page.error&&!Array.isArray(page.items)){
+      results.textContent=page.error;
+      return;
+    }
+    const games=page.items||[];
+    if(!games.length&&offset>0){
+      offset=Math.max(0,Math.floor((page.total-1)/limit)*limit);
+      showGames();
+      return;
+    }
+    if(!games.length){
+      results.textContent=search.value||(mode==='owned'&&provider.value)?'No matching games.'
+        :mode==='owned'?'Connect a storefront below or sync an existing account to see its games.'
+        :'No ROMs found in the linked libraries.';
+      return;
+    }
+    const rows=games.map(game=>{
+      if(mode==='roms')return `<tr><td><a href="${esc(gameHref(game.platform_slug||game.platform,game.id,game.name,game.source))}">${esc(game.name)}</a></td>
+        <td>${esc(game.platform||'—')}</td><td>${esc(game.source||'ROM library')}</td></tr>`;
+      const steamId=game.provider==='steam'&&/^[1-9][0-9]{0,9}$/.test(game.store_id||'')?game.store_id:'';
+      const installed=game.installed_on?.length?`<small class="help" style="display:block">Installed on ${esc(game.installed_on.join(', '))}</small>`:'';
+      const basis={activity:'Played',reported:'Reported by device'}[game.basis];
+      return `<tr><td>${esc(game.name)}${installed|| (basis?` <small class="help">${basis}</small>`:'')}</td>
+        <td>${esc(game.provider_label)}</td><td>${steamId?`
+          <div class="rowact"><a class="btn ghost" href="steam://install/${steamId}">Install here</a>
+          <a class="btn ghost" href="steam://rungameid/${steamId}">Play in Steam</a></div>`:esc(game.sources.join(', '))}</td></tr>`;
+    }).join('');
+    results.innerHTML=`<p class="help">${num(offset+1)}–${num(offset+games.length)} of ${num(page.total)}
+      ${mode==='roms'&&page.partial?' · '+esc(page.scan_message||'Library read is incomplete'):''}</p>
+      ${mode==='owned'&&games.some(game=>game.provider==='steam'&&game.store_id)?'<p class="help">Steam opens on this device and lets you choose the install drive.</p>':''}
+      <div style="overflow-x:auto"><table><thead><tr><th>Game</th><th>${mode==='owned'?'Storefront':'Platform'}</th>
+      <th>${mode==='owned'?'Account or action':'Library'}</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn ghost" id="l-owned-prev" ${offset?'':'disabled'}>Previous</button>
+        <button class="btn ghost" id="l-owned-next" ${offset+games.length<page.total?'':'disabled'}>Next</button>
+      </div>`;
+    const prev=$('#l-owned-prev'), next=$('#l-owned-next');
+    const navigate=delta=>{
+      prev.disabled=true;
+      next.disabled=true;
+      offset=Math.max(0,offset+delta);
+      showGames();
+    };
+    prev.onclick=()=>navigate(-limit);
+    next.onclick=()=>navigate(limit);
+  }
+  function restartSearch(delay=0){
+    clearTimeout(pending);
+    request++;
+    offset=0;
+    pending=setTimeout(showGames,delay);
+  }
+  document.querySelectorAll('[data-frontend]').forEach(link=>link.onclick=event=>{
+    const params=new URLSearchParams({format:link.dataset.frontend,
+      path_from:$('#l-export-from').value.trim(),path_to:$('#l-export-to').value.trim()});
+    if(Boolean(params.get('path_from'))!==Boolean(params.get('path_to'))){
+      event.preventDefault();toast('Enter both library paths');return;
+    }
+    link.href='/api/v1/frontend/export?'+params;
+  });
+  search.oninput=()=>restartSearch(200);
+  provider.onchange=()=>restartSearch();
+  tabs.forEach(tab=>tab.onclick=()=>{
+    mode=tab.dataset.collectionView;
+    tabs.forEach(button=>{
+      const selected=button===tab;
+      button.classList.toggle('ghost',!selected);
+      button.setAttribute('aria-pressed',String(selected));
+    });
+    provider.hidden=mode!=='owned';
+    $('#l-owned-sources').hidden=true;
+    $('#l-owned-browse').hidden=mode==='owned';
+    $('#l-frontend').hidden=mode==='owned';
+    results.textContent='Loading your games…';
+    restartSearch();
+  });
+  showGames();
+
+  const collector=$('#l-free-collector'), offers=$('#l-free-offers');
+  let offerRequest=0;
+  collector.onclick=async()=>{
+    const ticket=++offerRequest;
+    const open=offers.hidden;
+    collector.setAttribute('aria-expanded',String(open));
+    collector.textContent=open?'Hide offers':'Show offers';
+    offers.hidden=!open;
+    if(!open)return;
+    offers.textContent='Checking giveaways…';
+    const data=await j('/api/v1/lists/offers').catch(()=>({error:'Could not load giveaways'}));
+    if(!current()||offers.hidden||ticket!==offerRequest)return;
+    const offerLinks=(data.items||[]).map(game=>`<li>
+      <a href="${esc(game.url)}" target="_blank" rel="noopener">${esc(game.name)}</a>
+      · ${esc(game.provider)} · Ends ${esc(fmtDateTime(game.ends_at))}</li>`).join('');
+    offers.innerHTML=`<p class="help">Open an offer to claim it in your store account.
+      ${data.region?'Epic offers for '+esc(data.region)+'.':''}</p>
+      ${data.error?'<p class="help">'+esc(data.error)+'</p>':''}
+      ${offerLinks?'<ul>'+offerLinks+'</ul>':data.region?'<p class="help">No active Epic giveaways found.</p>':''}
+      <div class="row" style="flex-wrap:wrap">${(data.claim_pages||[]).map(store=>
+        `<a class="btn ghost" href="${esc(store.url)}" target="_blank" rel="noopener">${esc(store.provider)}</a>`).join('')}</div>`;
+  };
 
   document.querySelectorAll('[data-paste]').forEach(b=>b.onclick=async()=>{
     const s=await j('/api/v1/connect/sources').catch(()=>({paste_sources:{}}));
@@ -2802,7 +2972,7 @@ RENDER.lists=async()=>{
     if(!spec){toast('Unknown store');return;}
     window.open(spec.open,'_blank','noopener');
     toast(spec.how);
-    editList({type:'paste',name:spec.label+' library'});
+    editList({type:'paste',provider:b.dataset.paste,name:spec.label+' library'});
   });
   document.querySelectorAll('[data-token]').forEach(b=>b.onclick=async()=>{
     const s=await j('/api/v1/connect/sources').catch(()=>({token_sources:{}}));
@@ -2868,9 +3038,9 @@ RENDER.lists=async()=>{
     scanBtn.disabled=true; scanBtn.textContent='Scanning…';
     const r=await j('/api/v1/launchers/connect',{method:'POST',
       headers:{'content-type':'application/json'},
-      body:JSON.stringify({name:'Local launchers'})}).catch(()=>({error:'scan failed'}));
+      body:JSON.stringify({report:true})}).catch(()=>({error:'Could not scan the ROMarr server'}));
     toast(r.error||r.message||'Done');
-    if(r.ok) go('lists'); else { scanBtn.disabled=false; scanBtn.textContent='Scan this machine'; }
+    if(r.ok) go('lists'); else { scanBtn.disabled=false; scanBtn.textContent='Scan the ROMarr server'; }
   };
   $('#l-add').onclick=()=>editList({type:'paste'});
   $('#l-sync').onclick=async e=>{
@@ -2885,7 +3055,12 @@ RENDER.lists=async()=>{
 };
 
 function editList(item){
+  if(document.querySelector('.modal'))return;
   const isNew=!item.id;
+  const kind=item.type||'paste';
+  const types={paste:'Pasted list',url:'List at a URL',steam:'Steam library / wishlist',
+    gog:'GOG profile',xbox:'Xbox (OpenXBL)',psn:'PlayStation (NPSSO)',itchio:'itch.io purchases',
+    epic:'Epic Games',ea:'EA',battlenet:'Battle.net',humble:'Humble Bundle'};
   const m=document.createElement('div');
   m.className='modal';
   m.innerHTML=`<div class="box">
@@ -2896,13 +3071,7 @@ function editList(item){
       <input type="text" data-f="name" value="${esc(item.name||'')}"></div>
     <div class="field"><label>Type</label>
       <select data-f="type">
-        <option value="paste"${!['url','steam','gog'].includes(item.type)?' selected':''}>Pasted list</option>
-        <option value="url"${item.type==='url'?' selected':''}>List at a URL</option>
-        <option value="steam"${item.type==='steam'?' selected':''}>Steam library / wishlist</option>
-        <option value="gog"${item.type==='gog'?' selected':''}>GOG profile</option>
-        <option value="xbox"${item.type==='xbox'?' selected':''}>Xbox (OpenXBL)</option>
-        <option value="psn"${item.type==='psn'?' selected':''}>PlayStation (NPSSO)</option>
-        <option value="itchio"${item.type==='itchio'?' selected':''}>itch.io purchases</option>
+        ${Object.entries(types).map(([id,label])=>`<option value="${id}"${kind===id?' selected':''}>${esc(label)}</option>`).join('')}
       </select></div>
     <div class="field"><label>Default platform</label>
       <select data-f="platform"><option value="">Named per line</option>
@@ -2926,9 +3095,8 @@ function editList(item){
           <option value="owned"${item.source!=='wishlist'?' selected':''}>Owned games</option>
           <option value="wishlist"${item.source==='wishlist'?' selected':''}>Wishlist</option>
         </select></div>
-      <p class="help">The profile's game details must be public. Titles land
-        against the default platform above &mdash; the scorer decides what each
-        title means there.</p></div>
+      <p class="help">For owned games, set Game Details to Public and add your Web API key.
+        Leave Default platform blank to keep the store library separate from Wanted.</p></div>
     <div class="field" data-lt="gog" style="${item.type==='gog'?'':'display:none'}">
       <label>GOG username</label>
       <input type="text" data-f="gog_username" value="${esc(item.gog_username||'')}"
@@ -2953,10 +3121,21 @@ function editList(item){
       <input type="password" data-f="itchio_key" autocomplete="new-password"
         value="${esc(item.itchio_key||'')}"
         placeholder="itch.io/user/settings/api-keys"></div>
-    <div class="field" data-lt="paste" style="${['url','steam','gog'].includes(item.type)?'display:none':''}">
-      <label>Titles</label>
-      <textarea data-f="content" rows="10"
-        style="width:100%;resize:vertical">${esc(item.content||'')}</textarea></div>
+    ${[['epic','epic_code','Authorization code'],['ea','ea_token','Access token'],
+       ['battlenet','battlenet_json','Games and subscriptions JSON'],['humble','humble_cookie','Session value']]
+      .map(([type,field,label])=>`<div class="field" data-lt="${type}"${kind===type?'':' hidden'}>
+        <label>${label}</label>
+        <textarea data-f="${field}" rows="2" autocomplete="off" spellcheck="false"
+          placeholder="${item[field]?'Saved. Leave blank to keep it.':'Paste from the store connection page'}"></textarea></div>`).join('')}
+    <div data-lt="paste"${kind==='paste'?'':' hidden'}>
+      <div class="field"><label>Storefront</label><select data-f="provider">
+        <option value="">None · import list</option>
+        ${[['amazon','Amazon Games'],['ubisoft','Ubisoft Connect']].map(([id,label])=>
+          `<option value="${id}"${item.provider===id?' selected':''}>${label}</option>`).join('')}
+      </select></div>
+      <div class="field"><label>Titles</label>
+        <textarea data-f="content" rows="10" style="width:100%;resize:vertical">${esc(item.content||'')}</textarea></div>
+    </div>
     <label class="check"><input type="checkbox" data-f="enable"
       ${item.enable!==false?'checked':''}><span>Enabled</span></label>
     ${(item.unmatched||[]).length?`<details style="margin-top:10px">
@@ -2978,10 +3157,10 @@ function editList(item){
   enhancePlatformSelect(m.querySelector('[data-f="platform"]'));
   m.onclick=e=>{ if(e.target===m||e.target.dataset.close!==undefined) closeModal(); };
   m.querySelector('[data-f=type]').onchange=e=>{
-    const kind=['url','steam','gog','xbox','psn','itchio'].includes(e.target.value)
-      ?e.target.value:'paste';
-    m.querySelectorAll('[data-lt]').forEach(el=>
-      el.style.display=el.dataset.lt===kind?'':'none');
+    m.querySelectorAll('[data-lt]').forEach(el=>{
+      el.hidden=el.dataset.lt!==e.target.value;
+      el.style.display=el.hidden?'none':'';
+    });
   };
   const payload=()=>({...readForm(), id:item.id});
   const line=(ok,msg)=>{
@@ -3002,8 +3181,10 @@ function editList(item){
     e.target.disabled=false;
   };
   m.querySelector('#l-save').onclick=async()=>{
-    await j('/api/v1/importlist',{method:'POST',
-      headers:{'content-type':'application/json'},body:JSON.stringify(payload())});
+    const saved=await j('/api/v1/importlist',{method:'POST',
+      headers:{'content-type':'application/json'},body:JSON.stringify(payload())})
+      .catch(()=>({error:'Could not save the list'}));
+    if(saved.error){line(false,saved.error);return;}
     closeModal(); toast('Saved'); go('lists');
   };
   const del=m.querySelector('#l-del');

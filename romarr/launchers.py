@@ -33,6 +33,7 @@ import logging
 import os
 import re
 import sqlite3
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -46,6 +47,15 @@ class LocalGame:
     name: str
     launcher: str
     path: str = ""
+    store_id: str = ""
+    install_confirmed: bool | None = None
+
+    @property
+    def installed(self) -> bool:
+        """Only mark an installation when its local files are corroborated."""
+        if self.install_confirmed is not None:
+            return self.install_confirmed
+        return bool(self.path) and Path(self.path).is_dir()
 
 
 # --- Steam ------------------------------------------------------------------
@@ -56,6 +66,9 @@ _STEAM_NOISE = ("Steamworks Common Redistributables", "Steam Linux Runtime",
 
 _ACF_NAME = re.compile(r'^\s*"name"\s*"(.+)"\s*$', re.MULTILINE)
 
+
+_ACF_INSTALLDIR = re.compile(r'^\s*"installdir"\s*"([^"\\/]+)"\s*$', re.MULTILINE)
+_ACF_STATE = re.compile(r'^\s*"StateFlags"\s*"([0-9]+)"\s*$', re.MULTILINE)
 
 _VDF_PATH = re.compile(r'^\s*"path"\s*"(.+)"\s*$', re.MULTILINE)
 
@@ -96,8 +109,14 @@ def steam_games(steamapps: Path) -> list[LocalGame]:
         name = match.group(1).strip()
         if not name or any(noise in name for noise in _STEAM_NOISE):
             continue
-        out.append(LocalGame(name=name, launcher="steam",
-                             path=str(manifest.parent)))
+        directory = _ACF_INSTALLDIR.search(text)
+        state = _ACF_STATE.search(text)
+        installed = bool(directory and state and int(state.group(1)) & 4
+                         and directory.group(1) not in (".", "..")
+                         and (manifest.parent / "common" / directory.group(1)).is_dir())
+        out.append(LocalGame(name=name, launcher="steam", path=str(manifest.parent),
+                             store_id=manifest.stem.removeprefix("appmanifest_"),
+                             install_confirmed=installed))
     return out
 
 
@@ -360,7 +379,16 @@ def ubisoft_games(install_dirs=None) -> list[LocalGame]:
 # --- everything at once -----------------------------------------------------
 
 def default_locations() -> dict[str, list[Path]]:
-    """Where each launcher keeps its library on a stock Windows install."""
+    """Find supported launchers in their usual paths on this device."""
+    if sys.platform.startswith("linux"):
+        home = Path.home()
+        data_home = Path(os.environ.get("XDG_DATA_HOME") or home / ".local" / "share")
+        return {"steam": [data_home / "Steam" / "steamapps",
+                          home / ".steam" / "steam" / "steamapps",
+                          home / ".var" / "app" / "com.valvesoftware.Steam" / "data" / "Steam" / "steamapps",
+                          home / "snap" / "steam" / "common" / ".local" / "share" / "Steam" / "steamapps"]}
+    if sys.platform == "darwin":
+        return {"steam": [Path.home() / "Library" / "Application Support" / "Steam" / "steamapps"]}
     program_data = Path(os.environ.get("ProgramData", r"C:\ProgramData"))
     local = Path(os.environ.get("LOCALAPPDATA", ""))
     drives = [Path(f"{letter}:\\") for letter in "CDEFG"
@@ -430,13 +458,11 @@ def scan_all(locations: dict[str, list[Path]] | None = None) -> list[LocalGame]:
         except Exception as exc:            # noqa: BLE001
             log.warning("ubisoft scan failed: %s", exc)
 
-    # One title per (name, launcher): Steam libraries on two drives list the
-    # same game twice, and so does a game reinstalled elsewhere.
-    seen, unique = set(), []
+    # Steam can retain a stale manifest after moving games between disks.
+    unique = {}
     for game in games:
-        key = (game.name.lower(), game.launcher)
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(game)
-    return unique
+        key = (game.launcher, game.store_id or game.name.casefold())
+        current = unique.get(key)
+        if current is None or (game.installed and not current.installed):
+            unique[key] = game
+    return list(unique.values())

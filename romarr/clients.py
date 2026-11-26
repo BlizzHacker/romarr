@@ -1893,6 +1893,7 @@ class Romm:
                 provenance=provenance,
                 extension=extension,
                 platform_slug=str(it.get("platform_slug") or ""),
+                file_name=str(it.get("fs_name") or ""),
             ))
         return out
 

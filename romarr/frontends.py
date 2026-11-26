@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import logging
+from pathlib import PurePosixPath, PureWindowsPath
 import xml.etree.ElementTree as ET
 from xml.dom import minidom
 
@@ -148,6 +149,34 @@ def _pretty(root: ET.Element) -> str:
         .decode("utf-8")
 
 
+def mapped_rows(rows: list[dict], source: str, destination: str) -> list[dict]:
+    """Translate only files under a requested mount, even across OS styles."""
+    if not source and not destination:
+        return rows
+
+    def parse(value):
+        if PureWindowsPath(value).drive:
+            return PureWindowsPath(value)
+        return PurePosixPath(value)
+
+    old, new = parse(source), parse(destination)
+    if not old.is_absolute() or not new.is_absolute() or ".." in (*old.parts, *new.parts):
+        raise ValueError("Give an absolute server folder and an absolute device folder")
+    out = []
+    for row in rows:
+        path = parse(row["path"])
+        if type(path) is not type(old) or ".." in path.parts or not path.is_relative_to(old):
+            continue
+        relative = path.relative_to(old)
+        candidate = new.joinpath(*relative.parts)
+        if (candidate.anchor != new.anchor or not candidate.is_relative_to(new)
+                or candidate.parts[len(new.parts):] != relative.parts
+                or (isinstance(new, PureWindowsPath) and any(":" in part for part in relative.parts))):
+            continue
+        out.append({**row, "path": str(candidate)})
+    return out
+
+
 def to_launchbox(rows: list[dict]) -> str:
     """A LaunchBox platform XML.
 
@@ -228,6 +257,7 @@ def to_playnite(rows: list[dict]) -> str:
                 "romPath": str(row.get("path") or ""),
                 "id": str(row.get("id") or ""),
                 "verified": str(row.get("verified") or ""),
+                **({"libraryKey": str(row["library_key"])} if row.get("library_key") else {}),
             }
             for row in rows if row.get("path")
         ],

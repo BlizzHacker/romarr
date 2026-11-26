@@ -1,22 +1,20 @@
 """Connect the launchers on this PC to ROMarr, in one command.
 
-ROMarr usually runs on a server; the launchers are on the machine you play
-on. This is the bridge: it scans every launcher installed here -- Steam,
-Epic, GOG Galaxy, Battle.net, EA -- and pushes the titles to ROMarr as an
-import list, which then feeds Wanted on ROMarr's normal schedule.
+Installations are reported for the device running this script. ROMarr shows
+the snapshot in Wanted > Lists. Use --platform for the older Wanted workflow.
 
-    python scripts/connect_launchers.py --url http://romarr:6868 --key <api key>
+    python scripts/connect_launchers.py --url https://romarr.example
 
-    --dry-run       show what would be sent, send nothing
-    --platform      file every title against one platform (default: per line)
-
-No store credentials are involved anywhere in this. The launchers already
-wrote your library to disk when they installed it; this reads those files.
+Store credentials and filesystem paths stay on this computer. The ROMarr API
+key is prompted for without echo when omitted.
 """
 
 import argparse
 import getpass
 import json
+import platform
+import re
+import socket
 import sys
 import urllib.error
 import urllib.request
@@ -34,20 +32,22 @@ def main() -> int:
     ap.add_argument("--key", default="", help="ROMarr API key. Omitted, it is "
                                               "prompted for without echo.")
     ap.add_argument("--platform", default="",
-                    help="Platform slug for every title; default is per-line")
-    ap.add_argument("--name", default="Local launchers")
+                    help="Send titles to Wanted using this platform slug")
+    ap.add_argument("--name", default=socket.gethostname(), help="Name shown in Lists")
+    ap.add_argument("--device-id", default="", help="Stable identifier for this device")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
     games = scan_all()
     if not games:
         print("No launcher libraries found on this machine.")
-        print("Checked Steam, Epic, GOG Galaxy, Battle.net and EA in their "
+        print("Checked Steam, Epic, GOG Galaxy, Battle.net, EA and Amazon in their "
               "default locations.")
-        return 1
+        if args.platform or args.dry_run:
+            return 1
 
     by_launcher = Counter(g.launcher for g in games)
-    print(f"Found {len(games)} installed game(s):")
+    print(f"Found {len(games)} launcher game(s):")
     for launcher, count in sorted(by_launcher.items()):
         print(f"  {launcher:<10} {count}")
         for game in [g for g in games if g.launcher == launcher][:5]:
@@ -55,26 +55,28 @@ def main() -> int:
         if count > 5:
             print(f"      … and {count - 5} more")
 
-    # One title per line, tab-separated from its store, which is exactly the
-    # shape ROMarr's list parser already understands.
-    content = "\n".join(f"{g.name}" for g in games)
-
     if args.dry_run:
         print("\n--dry-run: nothing sent.")
         return 0
 
     key = args.key or getpass.getpass("ROMarr API key: ")
-    payload = json.dumps({
-        "name": args.name,
-        "type": "paste",
-        "platform": args.platform,
-        "content": content,
-        "enable": True,
-    }).encode()
+    if args.platform:
+        endpoint = "/api/v1/importlist"
+        data = {"name": args.name, "type": "paste", "platform": args.platform,
+                "content": "\n".join(game.name for game in games), "enable": True}
+    else:
+        endpoint = "/api/v1/lists/device"
+        device_id = args.device_id or re.sub(r"[^a-z0-9_.-]", "-", socket.gethostname().lower())
+        os_name = {"Windows": "windows", "Linux": "linux", "Darwin": "macos"}.get(platform.system(), "other")
+        data = {"name": args.name, "device_id": device_id, "os": os_name, "games": [
+            {"name": game.name, "provider": game.launcher, "store_id": game.store_id,
+             "installed": game.installed} for game in games
+        ]}
     request = urllib.request.Request(
-        args.url.rstrip("/") + "/api/v1/importlist", data=payload,
-        headers={"Content-Type": "application/json", "X-Api-Key": key},
+        args.url.rstrip("/") + endpoint, data=json.dumps(data).encode(),
+        headers={"Content-Type": "application/json"},
         method="POST")
+    request.add_unredirected_header("X-Api-Key", key)
     try:
         with urllib.request.urlopen(request, timeout=60) as response:
             saved = json.loads(response.read() or b"{}")
@@ -86,12 +88,11 @@ def main() -> int:
               f"{exc.__class__.__name__}", file=sys.stderr)
         return 1
 
-    print(f"\nSent {len(games)} title(s) to ROMarr as list "
-          f"{saved.get('id', '?')!r}.")
-    # ASCII only: the default Windows console is cp1252 and a stray arrow
-    # here raised UnicodeEncodeError *after* the list had already been sent,
-    # which reads as a failed run of a command that actually worked.
-    print("Wanted -> Lists shows it; Sync Now runs it immediately.")
+    if args.platform:
+        print(f"\nSent {len(games)} title(s) to import list {saved.get('id', '?')!r}.")
+    else:
+        print(f"\nReported {saved['count']} game(s) for {args.name}.")
+    print("See Wanted > Lists in ROMarr.")
     return 0
 
 

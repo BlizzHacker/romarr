@@ -119,6 +119,8 @@ class Game:
     #: The slug is unambiguous, so anything asking "what plays this" uses it
     #: and falls back to the display name only when a backend has no slug.
     platform_slug: str = ""
+    file_name: str = ""
+    local_path: str = ""
 
 
 # Budget for the background shelf fetch. Nothing waits on it, so it is
@@ -676,6 +678,15 @@ class FolderScanError(OSError):
         super().__init__(f"Library read incomplete: {len(self.folder_failures)} filesystem errors")
 
 
+ROM_ARCHIVES = (".zip", ".7z", ".rar")
+
+
+def rom_file_extensions(archives: tuple[str, ...] = ROM_ARCHIVES) -> set[str]:
+    """File suffixes supported by folder libraries and launcher exports."""
+    from .platforms import PLATFORMS
+    return {ext for platform in PLATFORMS for ext in platform.extensions} | set(archives)
+
+
 class FolderLibrary:
     """A directory, which is what most of the emulation world actually uses.
 
@@ -694,10 +705,7 @@ class FolderLibrary:
 
     name = "Folder"
     BACKGROUND_TIMEOUT = DEFAULT_BACKGROUND_TIMEOUT
-
-    # Archives count: a zipped ROM is the normal shipping form, and every
-    # frontend listed above reads them.
-    ARCHIVES = (".zip", ".7z", ".rar")
+    ARCHIVES = ROM_ARCHIVES
 
     # Walking a library of tens of thousands of files on every refresh is not
     # worth it for a number on a badge, so the walk stops here and the count is
@@ -717,9 +725,7 @@ class FolderLibrary:
         return Path(self._config.root)
 
     def _extensions(self) -> set[str]:
-        from .platforms import PLATFORMS
-        known = {ext for p in PLATFORMS for ext in p.extensions}
-        return known | set(self.ARCHIVES)
+        return rom_file_extensions(self.ARCHIVES)
 
     @staticmethod
     def _fs_call(operation):
@@ -782,7 +788,8 @@ class FolderLibrary:
         for path in self._walk(self.MAX_SCAN if limit is None else limit):
             yield Game(id=str(path), name=path.stem,
                        platform=path.parent.name if path.parent != self._root else "",
-                       extension=path.suffix.lower())
+                       extension=path.suffix.lower(),
+                       file_name=path.name, local_path=str(path))
 
     def reachable(self) -> bool:
         """Whether the directory is there. Cheap, because a page waits on it."""

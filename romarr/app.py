@@ -42,6 +42,8 @@ from copy import copy, deepcopy
 import logging
 from typing import NamedTuple
 import os
+import platform as host_platform
+import socket
 import ssl
 import pathlib
 import re
@@ -62,7 +64,7 @@ import requests
 
 from .libraries import (
     FolderScanError, LIBRARY_TYPES, RETROBAT_FOLDERS, build_library, build_library_from_config, library_counts,
-    load_backend_plugins, merge_library_secrets, redact_library, route_library,
+    load_backend_plugins, merge_library_secrets, redact_library, rom_file_extensions, route_library,
 )
 from .clients import QBittorrent, QbitConfig, QbitAuthenticationError, Romm, RommConfig
 from . import soundtracks as soundtracks_mod
@@ -97,6 +99,7 @@ from .capture import status as capture_status
 from .catalogue import (Submission, check_source, facets as hub_facets,
                         search as hub_search, submission_link)
 from .frontends import FORMATS as FRONTEND_FORMATS
+from .free_game_collector import FreeGameCollector
 from .metadata import PROVIDERS as METADATA_PROVIDERS, SECRET_FIELDS as METADATA_SECRET_FIELDS
 from .notify import (NOTIFIERS, Message, Notifier, failed, grabbed, imported,
                      FIELD_HELP, FIELD_LABELS, send_test,
@@ -118,14 +121,15 @@ from .playability import (
     DOWNLOAD, MOONLIGHT_KINDS, NCI_DEFAULT_PORT, PAIRING_IS_MANUAL, PLAYERS,
     WOLF, MoonlightHost, PlayerPolicy, RetroArchNCI, StreamServer,
     StreamSources, routes_for, routes_for_file)
-from .lists import LIST_TYPES
+from .lists import (DEVICE_REPORT_MAX_BYTES, LIST_TYPES, OWNED_PROVIDERS,
+                    device_report, owned_games, owned_provider)
 from . import release_controls
 
 #: List-source fields that are credentials: masked on the way out, kept on
 #: edit when the form returns the placeholder.
 LIST_SECRETS = ("api_key", "openxbl_key", "npsso", "itchio_key",
                 "epic_code", "epic_refresh", "ea_token",
-                "battlenet_cookie", "humble_cookie")
+                "battlenet_cookie", "battlenet_json", "humble_cookie")
 from .scheduler import Scheduler, next_search_due
 from .selection import (Release, best_release, clean_group_name, infer_platform,
                         judge, score,
@@ -134,7 +138,7 @@ from .selection import (Release, best_release, clean_group_name, infer_platform,
 from .game_packages import (BASE, DEFAULT_PARTS, GAME_FOLDER_LIBRARIES, PACKAGE_PLATFORMS, PARTS,
                             describe_parts, imported_role, normalise_parts)
 from . import portal_player, portal_socket
-from .store import Event, QueueItem, SeerrRequest, Store, SwitchCompressionJob
+from .store import Event, QueueItem, SeerrRequest, Store, SwitchCompressionJob, now_iso
 from .ui import favicon_svg as ui_favicon_svg
 from .ui import web_manifest, service_worker, app_icon
 from .ui import page as ui_page
@@ -143,6 +147,9 @@ from .ui import login_page as ui_login_page
 from .version import compare_key, derive_version, is_unknown
 from .sidecars import read_nfo
 from .build_info import get_build_info
+LIST_ACCOUNT_FIELDS = ("type", "provider", "source", "content", "profile", "url",
+                       "steam_id", "gog_username", *LIST_SECRETS)
+LIST_SYNC_FIELDS = ("owned_snapshot", "unmatched", "last_sync", "_epic_saved")
 
 log = logging.getLogger(__name__)
 
@@ -193,7 +200,7 @@ MASKED_ITEM_FIELDS = {
     "connections": ("url", "urls", "token", "password", "key", "secret"),
     "import_lists": LIST_SECRETS,
 }
-SERVER_OWNED_SETTINGS = ("chat_agent", "cloud_storage")
+SERVER_OWNED_SETTINGS = ("chat_agent", "cloud_storage", "owned_devices")
 _SECRET_KEY_WORDS = ("secret", "password", "token", "passkey", "api_key", "apikey")
 
 
@@ -898,6 +905,8 @@ class ROMarr:
         self._metadata_lock = threading.RLock()
         self._collection_source_lock = threading.RLock()
         self._mdm_lock = threading.Lock()
+        self._list_sync_lock = threading.Lock()
+        self.free_game_collector = FreeGameCollector(region=e.get("ROMARR_GIVEAWAY_COUNTRY", "US"))
         # Lets a configuration change wake the background refresh instead of
         # waiting out its interval. Created before reload_libraries, which sets
         # it.
@@ -2154,6 +2163,10 @@ class ROMarr:
         for key, fields in MASKED_ITEM_FIELDS.items():
             if isinstance(out.get(key), list):
                 out[key] = [mask_item(item, fields) for item in out[key]]
+        out.pop("owned_devices", None)
+        for item in out.get("import_lists", []):
+            if isinstance(item, dict):
+                item.pop("owned_snapshot", None)
         for key, value in list(out.items()):
             if (isinstance(value, str) and value
                     and any(t in key.lower() for t in _SECRET_KEY_WORDS)):
@@ -2164,6 +2177,20 @@ class ROMarr:
             chat["api_key"] = SECRET_MASK if chat.get("api_key") else ""
             out["chat_agent"] = chat
         return out
+
+    @staticmethod
+    def _restore_list_sync_fields(item: dict, stored: dict) -> None:
+        """Carry sync data across edits to the same storefront account."""
+        if (item.get("type") == "epic" and item.get("epic_code")
+                and item["epic_code"] != stored.get("epic_code")
+                and item.get("epic_refresh") == stored.get("epic_refresh")):
+            item.pop("epic_refresh", None)
+        same_account = all((item.get(key) or "") == (stored.get(key) or "")
+                           for key in LIST_ACCOUNT_FIELDS)
+        for key in LIST_SYNC_FIELDS:
+            item.pop(key, None)
+            if same_account and key in stored:
+                item[key] = stored[key]
 
     def restore_masked_items(self, patch: dict) -> dict:
         """Undo masking in a settings patch so a masked echo never overwrites a secret."""
@@ -2182,6 +2209,8 @@ class ROMarr:
                         if item.get(f) in (SECRET_MASK, None) or (f in item and item[f] == ""
                                                                   and old.get(f)):
                             item[f] = old.get(f, "")
+                    if key == "import_lists":
+                        self._restore_list_sync_fields(item, old)
                 fixed.append(item)
             patch[key] = fixed
         for key in list(patch):
@@ -6334,38 +6363,38 @@ class ROMarr:
         }
 
     def frontend_rows(self, platform: str = "") -> list[dict]:
-        """The library flattened into the shape every frontend export wants.
-
-        One shape for all three, because the differences between LaunchBox,
-        Playnite and EmulationStation are in how the fields are *written*, not
-        in which fields exist -- and three near-identical row builders would
-        drift apart the first time one of them gained a column.
-        """
-        items = (self.library_view() or {}).get("items", [])
-        wanted = str(platform or "").strip().lower()
+        """Export the full cached library with filenames supplied by its backend."""
+        games = self._library_cache[0] or ()
+        wanted = platform.strip().lower()
+        sources = {cfg.get("name") or getattr(backend, "name", "library"): cfg
+                   for cfg, backend in self.game_libraries}
+        default = next(iter(sources.values()), {}) if len(sources) == 1 else {}
+        directories = {}
+        extensions = rom_file_extensions()
         rows = []
-        for item in items:
-            slug = str(item.get("platform_slug") or item.get("platform") or "")
-            if wanted and slug.lower() != wanted:
+        for game in games:
+            slug = (game.platform_slug or game.platform).lower()
+            if wanted and wanted != slug:
                 continue
-            name = str(item.get("file_name") or item.get("filename")
-                       or item.get("name") or "")
-            rows.append({
-                "id": item.get("id") or item.get("rom_id") or "",
-                "title": item.get("name") or item.get("title") or name,
-                "platform": slug,
-                "filename": name,
-                # The default library root, not library_root(None): that
-                # helper reads its argument, and handing it None was a 500
-                # on every export whose backend rows carry no path -- which
-                # is what RomM's cached rows look like. Caught live by
-                # scripts/playnite_proof.ps1.
-                "path": item.get("path") or item.get("full_path")
-                        or (str(self.library / slug / name)
-                            if name and slug else ""),
-                "region": item.get("region") or "",
-                "verified": item.get("verified") or "",
-            })
+            if game.origin == "cloud" or not game.file_name:
+                continue
+            if os.path.splitext(game.file_name)[1].lower() not in extensions:
+                continue
+            if not game.local_path and (not re.fullmatch(r"[a-z0-9][a-z0-9-]*", slug)
+                    or any(char in game.file_name for char in ("/", chr(92), ":", chr(0)))
+                    or game.file_name in (".", "..")):
+                continue
+            key = (game.source, slug)
+            cfg = sources.get(game.source, default)
+            if key not in directories:
+                directories[key] = platform_dir(
+                    self.library_root(cfg), slug, layout=self.library_layout(cfg),
+                    platform_folders=self.platform_folders(cfg)) if slug else self.library_root(cfg)
+            path = game.local_path or str(directories[key] / game.file_name)
+            rows.append({"id": game.id, "title": game.name, "platform": slug,
+                         "library_key": str(cfg.get("id") or game.source or "local"),
+                         "filename": game.file_name, "path": path,
+                         "region": ", ".join(game.regions)})
         return rows
 
     def metrics(self) -> str:
@@ -9190,21 +9219,42 @@ class ROMarr:
         for game in games:
             counts[game.launcher] = counts.get(game.launcher, 0) + 1
         return {
-            "items": [{"name": g.name, "launcher": g.launcher, "path": g.path}
+            "items": [{"name": g.name, "launcher": g.launcher, "path": g.path,
+                       "store_id": g.store_id, "installed": g.installed}
                       for g in games],
             "counts": counts,
             "total": len(games),
         }
 
+    def save_device_library(self, body: dict) -> dict:
+        """Replace one device's catalogue with its most recent report."""
+        report = device_report(body, now_iso())
+        with self._lock:
+            stored = self.store.list_items("owned_devices")
+            if len(stored) >= 24 and not any(row["id"] == report["id"] for row in stored):
+                raise OverflowError("This server already has 24 device reports")
+            self.store.put_item("owned_devices", report, require_persist=True)
+        return {"ok": True, "count": len(report["games"])}
+
     def connect_launchers(self, name: str = "Local launchers",
-                          platform: str = "") -> dict:
-        """Scan this machine's launchers and save the result as an import list."""
+                          platform: str = "", *, report: bool = False) -> dict:
+        """Scan this machine and report it or save an acquisition list."""
         found = self.scan_launchers()
         if found.get("error"):
             return found
-        if not found["items"]:
+        if not found["items"] and not report:
             return {"ok": False, "added": 0,
                     "message": "no launcher libraries found on this machine"}
+        if report:
+            host = socket.gethostname()
+            slug = re.sub(r"[^a-z0-9_.-]", "-", host.lower()).lstrip("._-")[:73]
+            os_name = {"Windows": "windows", "Linux": "linux", "Darwin": "macos"}.get(
+                host_platform.system(), "other")
+            saved = self.save_device_library({
+                "device_id": slug or "local-romarr", "name": host[:100], "os": os_name,
+                "games": [{**game, "provider": game["launcher"]} for game in found["items"]],
+            })
+            return {**saved, "message": f"Reported {saved['count']} game(s) from {host}"}
         content = "\n".join(g["name"] for g in found["items"])
         saved = self.store.put_item("import_lists", {
             "name": name, "type": "paste", "platform": platform,
@@ -9224,6 +9274,15 @@ class ROMarr:
         that were acquired, imported and fulfilled -- a slow loop
         re-downloading its own history.
         """
+        if not self._list_sync_lock.acquire(blocking=False):
+            return {"added": 0, "busy": True, "message": "List sync is already running"}
+        try:
+            return self._sync_import_lists()
+        finally:
+            self._list_sync_lock.release()
+
+    def _sync_import_lists(self) -> dict:
+        """Read each list once and retain storefront entries beside its ledger."""
         from .lists import fetch_entries
         lists = self.store.list_items("import_lists")
         if not lists:
@@ -9233,12 +9292,11 @@ class ROMarr:
         for cfg in lists:
             if not cfg.get("enable", True):
                 continue
-            from .store import now_iso
+            original = dict(cfg)
             try:
                 entries = fetch_entries(cfg)
-                cfg["last_sync"] = {"at": now_iso(),
-                                    "fetched": len(entries)}
-                self.store.put_item("import_lists", cfg)
+                synced_at = now_iso()
+                cfg["last_sync"] = {"at": synced_at, "fetched": len(entries)}
             except Exception as err:
                 # Which list failed matters, and so does WHY: "2 list(s)
                 # unreadable" sends somebody hunting through logs for a
@@ -9251,17 +9309,21 @@ class ROMarr:
                 failures.append({"id": cfg.get("id"),
                                  "name": cfg.get("name"), "reason": reason})
                 cfg["last_sync"] = {"at": now_iso(), "error": reason}
-                self.store.put_item("import_lists", cfg)
+                self.store.replace_list_sync(original, cfg)
                 failed_lists += 1
                 continue
+            if owned_provider(cfg):
+                cfg["owned_snapshot"] = {"at": synced_at, "games": [
+                    {"name": entry.game, "store_id": entry.store_id} for entry in entries
+                ]}
             # Epic swaps its single-use code for a refresh token during the
             # fetch; persisting that is what makes the next sync silent.
             if cfg.get("epic_refresh") and not cfg.get("_epic_saved"):
                 cfg["epic_code"] = ""
                 cfg["_epic_saved"] = True
-                self.store.put_item("import_lists", cfg)
             ledger = set(cfg.get("added") or [])
-            changed = False
+            pending = []
+            seen_unmatched = set()
             # Titles with no ROM platform -- a Battle.net or PSN library is
             # mostly modern games -- are kept on the list, visibly, rather
             # than discarded. "133 skipped" with no way to see which 133 is
@@ -9271,7 +9333,8 @@ class ROMarr:
                 platform = resolve(entry.platform or cfg.get("platform") or "")
                 if platform is None:
                     unknown += 1
-                    if entry.game not in unmatched:
+                    if entry.game not in seen_unmatched:
+                        seen_unmatched.add(entry.game)
                         unmatched.append(entry.game)
                     continue
                 key = f"{platform.slug}/{entry.game.strip().lower()}"
@@ -9279,13 +9342,11 @@ class ROMarr:
                     known += 1
                     continue
                 ledger.add(key)
-                changed = True
-                self.store.want(entry.game, platform.slug)
-                added += 1
-            if changed or unmatched != (cfg.get("unmatched") or []):
-                cfg["added"] = sorted(ledger)
-                cfg["unmatched"] = unmatched[:500]
-                self.store.put_item("import_lists", cfg)
+                pending.append((entry.game, platform.slug))
+            cfg["added"] = sorted(ledger)
+            cfg["unmatched"] = unmatched[:500]
+            if self.store.replace_list_sync(original, cfg, pending):
+                added += len(pending)
         message = f"added {added} to Wanted"
         if known:
             message += f", {known} already added before"
@@ -10983,7 +11044,13 @@ def make_handler(service: ROMarr):
                     return self._json(400, {
                         "error": "unknown format",
                         "known": sorted(FRONTEND_FORMATS)})
+                from .frontends import mapped_rows
                 rows = service.frontend_rows(query.get("platform", [""])[0])
+                try:
+                    rows = mapped_rows(rows, query.get("path_from", [""])[0],
+                                       query.get("path_to", [""])[0])
+                except ValueError as err:
+                    return self._json(400, {"error": str(err)})
                 return self._send(200, spec["render"](rows).encode("utf-8"),
                                   spec["content_type"])
             if route.path == "/api/v1/indexer/schema":
@@ -11121,12 +11188,28 @@ def make_handler(service: ROMarr):
                 if platform and game:
                     return self._json(200, service.store.game_meta(platform, game))
                 return self._json(200, {"items": service.store.all_game_meta()})
+            if route.path == "/api/v1/lists/offers":
+                return self._json(200, service.free_game_collector.view())
+            if route.path == "/api/v1/lists/owned":
+                try:
+                    offset = max(0, int(query.get("offset", ["0"])[0]))
+                    limit = max(1, min(250, int(query.get("limit", ["100"])[0])))
+                except ValueError:
+                    return self._json(400, {"error": "offset and limit must be integers"})
+                return self._json(200, owned_games(
+                    service.store.list_items("import_lists"),
+                    devices=service.store.list_items("owned_devices"),
+                    q=query.get("q", [""])[0], provider=query.get("provider", [""])[0],
+                    offset=offset, limit=limit))
             if route.path == "/api/v1/importlist":
                 items = []
                 for cfg in service.store.list_items("import_lists"):
                     # The ledger is bookkeeping, not configuration; its size
                     # is the interesting part.
                     ledger = cfg.pop("added", None) or []
+                    snapshot = cfg.pop("owned_snapshot", None)
+                    if snapshot is not None:
+                        cfg["owned_count"] = len(snapshot["games"])
                     for secret in LIST_SECRETS:
                         if cfg.get(secret):
                             cfg[secret] = "********"
@@ -11488,6 +11571,9 @@ def make_handler(service: ROMarr):
             # which is not a refusal. Only this route is bounded here: a
             # restore legitimately posts a large backup, and a blanket cap
             # would break it.
+            if route.path == "/api/v1/lists/device" and length > DEVICE_REPORT_MAX_BYTES:
+                self._discard(length)
+                return self._json(413, {"error": "Device report is too large"})
             if (route.path == "/api/v1/capture"
                     and length > CAPTURE_MAX_BODY):
                 # Drained in chunks and thrown away rather than read whole.
@@ -12029,13 +12115,16 @@ def make_handler(service: ROMarr):
                        ("id", "name", "type", "platform", "content", "url",
                         "steam_id", "profile", "api_key", "source",
                         "gog_username", "openxbl_key", "npsso", "itchio_key",
-                        "epic_code", "ea_token", "battlenet_json")}
+                        "epic_code", "ea_token", "battlenet_json",
+                        "humble_cookie", "battlenet_cookie", "provider")}
                 cfg["enable"] = bool(body.get("enable", True))
                 cfg["type"] = str(cfg["type"] or "paste").lower()
                 if cfg["type"] not in LIST_TYPES:
                     return self._json(400, {
                         "error": f"unknown list type {cfg['type']!r}",
                         "known": sorted(LIST_TYPES)})
+                provider = str(cfg.get("provider") or "")
+                cfg["provider"] = provider if cfg["type"] == "paste" and provider in OWNED_PROVIDERS else ""
                 # Take the whole document a person pasted, not just the
                 # bare value: every token page is JSON and select-all-copy
                 # is what actually happens.
@@ -12056,18 +12145,29 @@ def make_handler(service: ROMarr):
                     if old:
                         cfg["added"] = old.get("added") or []
                         for secret in LIST_SECRETS:
-                            if cfg.get(secret) in ("********", ""):
+                            if cfg.get(secret) in ("********", "", None):
                                 cfg[secret] = old.get(secret, "")
+                        service._restore_list_sync_fields(cfg, old)
                 saved = service.store.put_item("import_lists", cfg)
                 saved.pop("added", None)
+                saved.pop("owned_snapshot", None)
                 for secret in LIST_SECRETS:
                     if saved.get(secret):
                         saved[secret] = "********"
                 return self._json(200, saved)
-            if route.path == "/api/v1/launchers/connect":
-                return self._json(200, service.connect_launchers(
-                    str(body.get("name") or "Local launchers"),
-                    str(body.get("platform") or "")))
+            if route.path in ("/api/v1/lists/device", "/api/v1/launchers/connect"):
+                try:
+                    if route.path == "/api/v1/lists/device":
+                        return self._json(200, service.save_device_library(body))
+                    return self._json(200, service.connect_launchers(
+                        str(body.get("name") or "Local launchers"),
+                        str(body.get("platform") or ""), report=body.get("report") is True))
+                except ValueError as err:
+                    return self._json(400, {"error": str(err)})
+                except OverflowError as err:
+                    return self._json(409, {"error": str(err)})
+                except OSError:
+                    return self._json(500, {"error": "Could not save the device report"})
             if route.path == "/api/v1/importlist/preview":
                 from .lists import fetch_entries as _fetch_entries
                 preview_cfg = {k: body.get(k) or ""

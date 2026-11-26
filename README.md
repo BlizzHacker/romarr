@@ -197,6 +197,7 @@ The image includes archive tools. **ROM Hub is included on amd64/arm64; it is un
 - Exact duplicate audit, quarantine and restore; a preview comes before any move.
 - Preview-first renaming for DAT-verified single files already in a library, with a saved restore journal.
 - Multiple library destinations, notifications, import lists and frontend exports.
+- Browse connected storefronts and ROMs, report devices, and find giveaways. [Owned games and launcher guide](docs/OWNED-GAMES.md).
 - Game pages, a wishlist that saves games without searching, and monitoring you can switch on or off later. [Monitoring guide](docs/MONITORING.md).
 - Game soundtracks found by title or picked from your music folder, uploaded into RomM's Jukebox with exact undo. [Soundtracks guide](docs/SOUNDTRACKS.md).
 - A Switch Updates & DLC report; new updates and DLC are filed inside their game's folder where RomM finds them; plus NTSC/PAL and preferred-format release preferences. [Switch guide](docs/SWITCH-INVENTORY.md).
