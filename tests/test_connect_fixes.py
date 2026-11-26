@@ -162,7 +162,7 @@ def test_collector_only_displays_active_paid_base_games_and_official_links():
                 "totalPrice": {"discountPrice": 0, "originalPrice": 0}}}]
     payload = {"data": {"Catalog": {"searchStore": {"elements": rows}}}}
     offers = epic_offers(payload, now=datetime(2026, 11, 27, tzinfo=timezone.utc))
-    assert [offer["url"] for offer in offers] == ["https://store.epicgames.com/en-US/p/example"]
+    assert [offer["url"] for offer in offers] == ["https://store.epicgames.com/p/example?lang=en-US"]
     assert epic_offers(payload, now=datetime(2026, 12, 4, tzinfo=timezone.utc)) == []
 
 
@@ -258,6 +258,62 @@ def test_ea_redirect_fragment_is_accepted():
 
     assert extract_value("ea_token", "https://accounts.ea.com/#access_token=fresh") == "fresh"
 
+
+def test_calendar_tracks_confirmed_giveaways_and_ignores_upcoming_sales(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+    from romarr import free_game_collector as collector
+    from romarr.store import Store
+
+    class Clock(datetime):
+        instant = datetime(2026, 11, 27, tzinfo=timezone.utc)
+
+        @classmethod
+        def now(cls, tz=None):
+            return cls.instant
+
+    def promotion(start, end, discount):
+        return [{"promotionalOffers": [{"startDate": start, "endDate": end, "discountSetting": {
+            "discountType": "PERCENTAGE", "discountPercentage": discount}}]}]
+
+    active = {"id": "active", "title": "Free today", "offerType": "BASE_GAME", "productSlug": "free-now",
+              "price": {"totalPrice": {"discountPrice": 0, "originalPrice": 999}},
+              "promotions": {"promotionalOffers": promotion("2026-11-26T16:00:00Z", "2026-12-03T16:00:00Z", 0)}}
+    future = {**active, "id": "coming", "title": "Free next week",
+              "price": {"totalPrice": {"discountPrice": 999, "originalPrice": 999}},
+              "promotions": {"upcomingPromotionalOffers": promotion(
+                  "2026-12-03T16:00:00Z", "2026-12-10T16:00:00Z", 0)}}
+    sale = {**future, "id": "sale", "promotions": {"upcomingPromotionalOffers": promotion(
+        "2026-12-03T16:00:00Z", "2026-12-10T16:00:00Z", 40)}}
+    rows = [active, future, sale]
+
+    class Feed:
+        status_code = 200
+
+        def get(self, *args, **kwargs):
+            return self
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def iter_content(self, chunk_size):
+            yield json.dumps({"data": {"Catalog": {"searchStore": {"elements": rows}}}}).encode()
+
+    monkeypatch.setattr(collector, "datetime", Clock)
+    store = Store(tmp_path / "state.json")
+    current = collector.FreeGameCollector(session=Feed(), store=store).view()
+    assert [row["id"] for row in current["items"]] == ["active"]
+    assert [row["id"] for row in current["upcoming"]] == ["coming"]
+    assert current["ended"] == []
+    assert store.get_item("giveaway_history", "US")["offers"][0]["id"] == "active"
+
+    Clock.instant = datetime(2026, 12, 4, tzinfo=timezone.utc)
+    rows.clear()
+    after = collector.FreeGameCollector(session=Feed(), store=Store(store.path)).view()
+    assert after["items"] == after["upcoming"] == []
+    assert [row["id"] for row in after["ended"]] == ["active"]
 
 def test_reconnect_api_dispatches_the_authenticated_post(tmp_path):
     from http.server import ThreadingHTTPServer

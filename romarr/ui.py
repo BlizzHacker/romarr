@@ -2732,6 +2732,22 @@ RENDER.missing=async()=>{
   });
 };
 
+function giveawayRows(items,stage){
+  if(!items.length)return '<p class="help">'+{
+    active:'No active Epic giveaways found.',
+    upcoming:'No upcoming Epic giveaways announced.',
+    ended:'No ended giveaways recorded yet.'
+  }[stage]+'</p>';
+  return '<ul>'+items.map(game=>{
+    const action=stage==='active'?'<a class="btn ghost" href="'+esc(game.url)
+      +'" target="_blank" rel="noopener noreferrer">'+(game.product_page?'Claim on '+esc(game.provider):'Open Epic giveaways')+' ↗</a>':'';
+    const dates=stage==='upcoming'?'Starts '+fmtDateTime(game.starts_at)+' · Ends '+fmtDateTime(game.ends_at)
+      : (stage==='ended'?'Ended ':'Ends ')+fmtDateTime(game.ends_at);
+    return '<li style="margin:.6em 0"><b>'+esc(game.name)+'</b> · '+esc(game.provider)
+      +' · '+esc(dates)+' '+action+'</li>';
+  }).join('')+'</ul>';
+}
+
 RENDER.lists=async()=>{
   const version=pageVersion;
   const current=()=>activePage==='lists'&&pageVersion===version;
@@ -2961,15 +2977,15 @@ RENDER.lists=async()=>{
     offers.textContent='Checking giveaways…';
     const data=await j('/api/v1/lists/offers').catch(()=>({error:'Could not load giveaways'}));
     if(!current()||offers.hidden||ticket!==offerRequest)return;
-    const offerLinks=(data.items||[]).map(game=>`<li>
-      <a href="${esc(game.url)}" target="_blank" rel="noopener">${esc(game.name)}</a>
-      · ${esc(game.provider)} · Ends ${esc(fmtDateTime(game.ends_at))}</li>`).join('');
-    offers.innerHTML=`<p class="help">Open an offer to claim it in your store account.
-      ${data.region?'Epic offers for '+esc(data.region)+'.':''}</p>
+    offers.innerHTML=`<p class="help">Sign in to Epic and choose <b>Get</b> on the game page.
+      ${data.region?'Showing offers for '+esc(data.region)+'.':''}</p>
       ${data.error?'<p class="help">'+esc(data.error)+'</p>':''}
-      ${offerLinks?'<ul>'+offerLinks+'</ul>':data.region?'<p class="help">No active Epic giveaways found.</p>':''}
-      <div class="row" style="flex-wrap:wrap">${(data.claim_pages||[]).map(store=>
-        `<a class="btn ghost" href="${esc(store.url)}" target="_blank" rel="noopener">${esc(store.provider)}</a>`).join('')}</div>`;
+      ${giveawayRows(data.items||[],'active')}
+      <div class="row" style="flex-wrap:wrap">
+        <a class="btn ghost" href="#calendar/giveaways">Giveaway calendar</a>
+        ${(data.claim_pages||[]).map(store=>
+          `<a class="btn ghost" href="${esc(store.url)}" target="_blank" rel="noopener noreferrer">Browse ${esc(store.provider)} offers ↗</a>`).join('')}
+      </div>`;
   };
 
   document.querySelectorAll('[data-paste]').forEach(b=>b.onclick=async()=>{
@@ -7493,13 +7509,37 @@ const metaResult=d=>{
 let CAL={view:'releases',month:'',day:''};
 
 RENDER.calendar=async()=>{
-  const q=new URLSearchParams({view:CAL.view,limit:'120'});
-  if(CAL.month) q.set('month',CAL.month);
-  if(CAL.day) q.set('day',CAL.day);
+  const version=pageVersion;
+  const current=()=>activePage==='calendar'&&pageVersion===version;
+  const view=ROUTE_ARGS[0]==='giveaways'?'giveaways':CAL.view;
+  const views=[['releases','Anniversaries'],['added','Added'],['updated','Updated'],
+               ['upcoming','Upcoming releases'],['giveaways','Giveaways']];
+  const tabs='<div class="row" style="margin-bottom:10px;gap:6px;flex-wrap:wrap">'
+    +views.map(([id,label])=>'<button class="btn '+(id===view?'':'ghost')
+      +'" data-calview="'+id+'" aria-pressed="'+(id===view)+'">'+label+'</button>').join('')+'</div>';
+  const bindViews=()=>document.querySelectorAll('[data-calview]').forEach(button=>button.onclick=()=>{
+    CAL.view=button.dataset.calview; CAL.month=''; CAL.day='';
+    go(CAL.view==='giveaways'?'calendar/giveaways':'calendar');
+  });
+  if(view==='giveaways'){
+    $('#page').innerHTML='<div class="card">'+tabs+'<div id="cal-giveaways" aria-live="polite">Loading giveaways…</div></div>';
+    bindViews();
+    const data=await j('/api/v1/lists/offers').catch(()=>({error:'Could not load giveaways'}));
+    if(!current())return;
+    $('#cal-giveaways').innerHTML=(data.region?'<p class="help">Epic Games · '+esc(data.region)+'</p>':'')
+      +(data.error?'<p class="help">'+esc(data.error)+'</p>':'')
+      +'<h3>Available now</h3>'+giveawayRows(data.items||[],'active')
+      +'<h3>Upcoming giveaways</h3>'+giveawayRows(data.upcoming||[],'upcoming')
+      +'<h3>Past giveaways</h3>'+giveawayRows(data.ended||[],'ended')
+      +'<p class="help">The calendar records giveaways observed by this server.</p>';
+    return;
+  }
+  const q=new URLSearchParams({view,limit:'120'});
+  if(CAL.month)q.set('month',CAL.month);
+  if(CAL.day)q.set('day',CAL.day);
   const d=await j('/api/v1/calendar/library?'+q)
-    .catch(()=>({items:[],days:[],error:'the library could not be read'}));
-  const views=[['releases','Anniversaries'],['added','Added'],
-               ['updated','Updated'],['upcoming','Upcoming']];
+    .catch(()=>({items:[],days:[],error:'The library could not be read'}));
+  if(!current())return;
   const items=d.items||[], days=d.days||[];
   const cov=d.coverage||{};
   // The share of the shelf this view can place at all. A calendar drawn over
@@ -7519,12 +7559,7 @@ RENDER.calendar=async()=>{
   };
   const busiest=days.reduce((a,x)=>Math.max(a,x.count),0);
 
-  $('#page').innerHTML='<div class="card">'
-    +'<div class="row" style="margin-bottom:10px;gap:6px;flex-wrap:wrap">'
-    +views.map(([k,l])=>'<button class="btn '+(k===d.view?'':'ghost')+'"'
-      +' data-calview="'+k+'" style="padding:4px 10px;font-size:12px">'
-      +l+'</button>').join('')
-    +'</div>'
+  $('#page').innerHTML='<div class="card">'+tabs
     +(d.error?'<div class="panel-note panel-warn">'+esc(d.error)+'</div>':'')
     +(d.note?'<p class="help">'+esc(d.note)+'</p>':'')
     +(d.view!=='upcoming'&&d.month
@@ -7573,8 +7608,7 @@ RENDER.calendar=async()=>{
     +'<div id="cal-web"><div class="empty">Checking…</div></div>'
     +'</div>';
 
-  document.querySelectorAll('[data-calview]').forEach(b=>b.onclick=()=>{
-    CAL.view=b.dataset.calview; CAL.month=''; CAL.day=''; go('calendar');});
+  bindViews();
   document.querySelectorAll('[data-calmonth]').forEach(b=>b.onclick=()=>{
     CAL.month=b.dataset.calmonth; CAL.day=''; go('calendar');});
   document.querySelectorAll('[data-calday]').forEach(b=>b.onclick=()=>{
@@ -7594,6 +7628,7 @@ RENDER.calendar=async()=>{
   // already out, filling a shelf headed "still to come".
   const w=await j('/api/v1/calendar'+(d.view==='upcoming'?'?back=-1':''))
     .catch(()=>({items:[],error:'unavailable'}));
+  if(!current())return;
   const web=w.items||[];
   const wsrc=w.provider_label||'a metadata provider';
   if(web.length) $('#cal-web-note').textContent=fmt(web.length)+' title(s) from '
