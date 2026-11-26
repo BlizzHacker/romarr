@@ -2732,11 +2732,28 @@ RENDER.missing=async()=>{
   });
 };
 
+function giveawayRows(items,stage){
+  if(!items.length)return '<p class="help">'+{
+    active:'No active Epic giveaways found.',
+    upcoming:'No upcoming Epic giveaways announced.',
+    ended:'No ended giveaways recorded yet.'
+  }[stage]+'</p>';
+  return '<ul>'+items.map(game=>{
+    const action=stage==='active'?'<a class="btn ghost" href="'+esc(game.url)
+      +'" target="_blank" rel="noopener noreferrer">'+(game.product_page?'Claim on '+esc(game.provider):'Open Epic giveaways')+' ↗</a>':'';
+    const dates=stage==='upcoming'?'Starts '+fmtDateTime(game.starts_at)+' · Ends '+fmtDateTime(game.ends_at)
+      : (stage==='ended'?'Ended ':'Ends ')+fmtDateTime(game.ends_at);
+    return '<li style="margin:.6em 0"><b>'+esc(game.name)+'</b> · '+esc(game.provider)
+      +' · '+esc(dates)+' '+action+'</li>';
+  }).join('')+'</ul>';
+}
+
 RENDER.lists=async()=>{
   const version=pageVersion;
   const current=()=>activePage==='lists'&&pageVersion===version;
   const d=await j('/api/v1/importlist').catch(()=>({items:[]}));
   if(!current())return;
+  const reconnectable=new Set(['steam','ea','psn','xbox']);
   $('#page').innerHTML=`<section class="card" aria-labelledby="l-owned-title">
     <h3 id="l-owned-title">My games</h3>
     <div class="row" role="group" aria-label="Library source" style="flex-wrap:wrap">
@@ -2783,17 +2800,20 @@ RENDER.lists=async()=>{
         spreadsheet. Each title is added once, ever; full sets and 1G1R live
         under Collections.</span></div>
     ${d.items.length?`<table><thead><tr><th>Name</th><th>Type</th>
-      <th>Platform</th><th>Added so far</th><th>Enabled</th><th></th></tr></thead><tbody>
+      <th>Platform</th><th>Added to Wanted</th><th>Library sync</th><th>Enabled</th><th></th></tr></thead><tbody>
       ${d.items.map((l,i)=>`<tr><td><b>${esc(l.name||'—')}</b>${
           l.type==='url'?`<div style="color:var(--dim);font-size:11.5px">${esc(l.url||'')}</div>`:''}</td>
         <td>${esc(l.type)}</td><td>${esc(l.platform||'per line')}</td>
-        <td>${l.added_count||0}${l.unmatched_count
-          ?` <span class="pill" title="Titles with no ROM platform — modern store games. Open Edit to see them.">${l.unmatched_count} kept aside</span>`:''}
-          ${l.last_sync?`<div style="font-size:11px;color:${l.last_sync.error?'var(--warn)':'var(--dim)'}">
-            ${l.last_sync.error?esc(l.last_sync.error.slice(0,90))
-              :`fetched ${l.last_sync.fetched} at ${esc(fmtDateTime(l.last_sync.at||''))}`}</div>`:''}</td>
+        <td>${num(l.added_count||0)}</td>
+        <td>${l.owned_count!==undefined?`<div>${num(l.owned_count)}
+          ${l.type==='psn'||l.type==='xbox'?'played titles':'library entries'}</div>`:''}
+          ${l.last_sync?`<div class="help" style="margin:.2em 0;max-width:38ch;color:${l.last_sync.error?'var(--warn)':'var(--dim)'}">
+            ${l.last_sync.error?esc(l.last_sync.error)
+              :`Fetched ${num(l.last_sync.fetched||0)} · ${esc(fmtDateTime(l.last_sync.at||''))}`}</div>`:
+              '<small class="help">Never synced</small>'}</td>
         <td><span class="dot ${l.enable!==false?'up':'down'}"></span></td>
         <td style="text-align:right"><div class="rowact">
+          ${reconnectable.has(l.type)?`<button data-lreconnect="${i}">${l.type==='steam'&&!l.api_key?'Add API key':'Reconnect'}</button>`:''}
           <button data-ledit="${i}">Edit</button></div></td></tr>`).join('')}
       </tbody></table>`
       :'<div class="empty">No lists yet. Paste one, or connect an account, and let the clock do the asking.</div>'}
@@ -2957,15 +2977,15 @@ RENDER.lists=async()=>{
     offers.textContent='Checking giveaways…';
     const data=await j('/api/v1/lists/offers').catch(()=>({error:'Could not load giveaways'}));
     if(!current()||offers.hidden||ticket!==offerRequest)return;
-    const offerLinks=(data.items||[]).map(game=>`<li>
-      <a href="${esc(game.url)}" target="_blank" rel="noopener">${esc(game.name)}</a>
-      · ${esc(game.provider)} · Ends ${esc(fmtDateTime(game.ends_at))}</li>`).join('');
-    offers.innerHTML=`<p class="help">Open an offer to claim it in your store account.
-      ${data.region?'Epic offers for '+esc(data.region)+'.':''}</p>
+    offers.innerHTML=`<p class="help">Sign in to Epic and choose <b>Get</b> on the game page.
+      ${data.region?'Showing offers for '+esc(data.region)+'.':''}</p>
       ${data.error?'<p class="help">'+esc(data.error)+'</p>':''}
-      ${offerLinks?'<ul>'+offerLinks+'</ul>':data.region?'<p class="help">No active Epic giveaways found.</p>':''}
-      <div class="row" style="flex-wrap:wrap">${(data.claim_pages||[]).map(store=>
-        `<a class="btn ghost" href="${esc(store.url)}" target="_blank" rel="noopener">${esc(store.provider)}</a>`).join('')}</div>`;
+      ${giveawayRows(data.items||[],'active')}
+      <div class="row" style="flex-wrap:wrap">
+        <a class="btn ghost" href="#calendar/giveaways">Giveaway calendar</a>
+        ${(data.claim_pages||[]).map(store=>
+          `<a class="btn ghost" href="${esc(store.url)}" target="_blank" rel="noopener noreferrer">Browse ${esc(store.provider)} offers ↗</a>`).join('')}
+      </div>`;
   };
 
   document.querySelectorAll('[data-paste]').forEach(b=>b.onclick=async()=>{
@@ -2976,58 +2996,78 @@ RENDER.lists=async()=>{
     toast(spec.how);
     editList({type:'paste',provider:b.dataset.paste,name:spec.label+' library'});
   });
-  document.querySelectorAll('[data-token]').forEach(b=>b.onclick=async()=>{
+  async function connectStore(type,item){
     const s=await j('/api/v1/connect/sources').catch(()=>({token_sources:{}}));
-    const spec=(s.token_sources||{})[b.dataset.token];
-    if(!spec){toast('Unknown store');return;}
-    window.open(spec.open,'_blank','noopener');
-    // A modal, not an inline panel: window.open moves the person to another
-    // tab, and when they come back a box further down the page is a box
-    // they never see. This one is in front of them and focused.
+    if(!current()||document.querySelector('.modal'))return;
+    const spec=(s.token_sources||{})[type];
+    if(!spec){toast('Could not load the connection instructions');return;}
     const m=document.createElement('div');
     m.className='modal';
     m.innerHTML=`<div class="box">
-      <h3>Connect ${esc(spec.label)}</h3>
-      <div class="sub">A tab just opened. ${esc(spec.how)}</div>
-      <div class="field"><label>Paste it here</label>
-        <textarea id="tok-v" rows="4" autocomplete="off" spellcheck="false"
-          placeholder='paste the whole thing — {"npsso":"..."} is fine'
-          style="width:100%;resize:vertical;font:12px/1.5 ui-monospace,
-          Menlo,monospace"></textarea>
-        <div style="color:var(--dim);font-size:11.5px;margin-top:4px">
-          Paste the entire page if you like — ROMarr pulls the value out.</div>
+      <h3>${item?'Reconnect':'Connect'} ${esc(spec.label)}</h3>
+      <div class="sub">${esc(spec.how)}</div>
+      <p><a class="btn ghost" href="${esc(spec.open)}" target="_blank" rel="noopener noreferrer">Open ${esc(spec.label)} sign-in or key page ↗</a></p>
+      <div class="field"><label for="tok-v">Paste the credential</label>
+        <textarea id="tok-v" rows="3" autocomplete="off" spellcheck="false"
+          style="width:100%;resize:vertical"></textarea>
       </div>
-      <div id="testline"></div>
+      <div id="testline" role="status"></div>
       <div class="foot">
         <button class="btn ghost sp" data-close>Cancel</button>
-        <button class="btn" id="tok-save">Connect</button>
+        <button class="btn" id="tok-save">${item?'Verify and reconnect':'Connect'}</button>
       </div></div>`;
     document.body.append(m);
-    m.onclick=e=>{ if(e.target===m||e.target.dataset.close!==undefined) closeModal(); };
-    setTimeout(()=>m.querySelector('#tok-v')?.focus(),50);
-    $('#tok-save').onclick=async()=>{
-      const value=$('#tok-v').value.trim();
-      if(!value){toast('Paste the value first');return;}
-      const body={name:spec.label+' library',type:b.dataset.token,
-                  platform:'',enable:true};
-      body[spec.field]=value;
+    const onNavigate=()=>{if(!current())m.remove();};
+    window.addEventListener('hashchange',onNavigate,{once:true});
+    const dismiss=()=>{window.removeEventListener('hashchange',onNavigate);m.remove();};
+    m.onclick=e=>{if(e.target===m||e.target.dataset.close!==undefined)dismiss();};
+    const input=m.querySelector('#tok-v'), button=m.querySelector('#tok-save');
+    input.focus();
+    let savedId=item?.id;
+    button.onclick=async()=>{
+      if(!current()||!m.isConnected){dismiss();return;}
+      const value=input.value.trim();
+      if(!value){toast('Paste the credential first');return;}
       const line=(ok,msg)=>{
         const el=m.querySelector('#testline');
-        el.className='testline '+(ok?'ok':'bad'); el.textContent=msg;
+        el.className='testline '+(ok?'ok':'bad');el.textContent=msg;
       };
-      line(true,'Connecting…');
-      const saved=await j('/api/v1/importlist',{method:'POST',
-        headers:{'content-type':'application/json'},body:JSON.stringify(body)});
-      if(saved.error){line(false,saved.error);return;}
-      const r=await j('/api/v1/command',{method:'POST',
-        headers:{'content-type':'application/json'},
-        body:JSON.stringify({name:'ListSync'})});
-      // The failure reason belongs here, in front of the person who just
-      // pasted, not in a toast that vanishes.
-      const failed=(r.failures||[]).find(f=>f.id===saved.id);
-      if(failed){ line(false,failed.reason); return; }
-      closeModal(); toast(r.message||'Connected'); go('lists');
+      const post=(url,data)=>j(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(data)});
+      button.disabled=true;
+      line(true,'Checking the library…');
+      try{
+        if(item){
+          const result=await post('/api/v1/importlist/reconnect',{id:item.id,credential:value});
+          if(!current()||!m.isConnected)return;
+          if(!result.ok){line(false,result.error||'Could not reconnect');return;}
+          dismiss();toast(`${spec.label} reconnected · ${num(result.fetched)} titles fetched`);go('lists');
+        }else{
+          const saved=await post('/api/v1/importlist',{id:savedId,name:spec.label+' library',type,
+            platform:'',enable:true,[spec.field]:value});
+          if(!current()||!m.isConnected)return;
+          if(saved.error){line(false,saved.error);return;}
+          savedId=saved.id;
+          const result=await post('/api/v1/command',{name:'ListSync'});
+          if(!current()||!m.isConnected)return;
+          const failed=(result.failures||[]).find(row=>row.id===saved.id);
+          if(failed||result.busy||result.error){line(false,failed?.reason||result.error||result.message);return;}
+          dismiss();toast('Connected '+spec.label);go('lists');
+        }
+      }catch{
+        if(current()&&m.isConnected)line(false,'Could not verify the connection. Try again.');
+      }finally{
+        button.disabled=false;
+      }
     };
+  }
+  document.querySelectorAll('[data-token]').forEach(b=>b.onclick=()=>{
+    const type=b.dataset.token;
+    const item=reconnectable.has(type)?d.items.find(row=>row.type===type):undefined;
+    connectStore(type,item);
+  });
+  document.querySelectorAll('[data-lreconnect]').forEach(b=>b.onclick=()=>{
+    const item=d.items[Number(b.dataset.lreconnect)];
+    connectStore(item.type,item);
   });
   j('/api/v1/importlist/schema').then(s=>{
     const el=$('#l-noapi'); if(!el) return;   // page may have changed
@@ -7475,13 +7515,37 @@ const metaResult=d=>{
 let CAL={view:'releases',month:'',day:''};
 
 RENDER.calendar=async()=>{
-  const q=new URLSearchParams({view:CAL.view,limit:'120'});
-  if(CAL.month) q.set('month',CAL.month);
-  if(CAL.day) q.set('day',CAL.day);
+  const version=pageVersion;
+  const current=()=>activePage==='calendar'&&pageVersion===version;
+  const view=ROUTE_ARGS[0]==='giveaways'?'giveaways':CAL.view;
+  const views=[['releases','Anniversaries'],['added','Added'],['updated','Updated'],
+               ['upcoming','Upcoming releases'],['giveaways','Giveaways']];
+  const tabs='<div class="row" style="margin-bottom:10px;gap:6px;flex-wrap:wrap">'
+    +views.map(([id,label])=>'<button class="btn '+(id===view?'':'ghost')
+      +'" data-calview="'+id+'" aria-pressed="'+(id===view)+'">'+label+'</button>').join('')+'</div>';
+  const bindViews=()=>document.querySelectorAll('[data-calview]').forEach(button=>button.onclick=()=>{
+    CAL.view=button.dataset.calview; CAL.month=''; CAL.day='';
+    go(CAL.view==='giveaways'?'calendar/giveaways':'calendar');
+  });
+  if(view==='giveaways'){
+    $('#page').innerHTML='<div class="card">'+tabs+'<div id="cal-giveaways" aria-live="polite">Loading giveaways…</div></div>';
+    bindViews();
+    const data=await j('/api/v1/lists/offers').catch(()=>({error:'Could not load giveaways'}));
+    if(!current())return;
+    $('#cal-giveaways').innerHTML=(data.region?'<p class="help">Epic Games · '+esc(data.region)+'</p>':'')
+      +(data.error?'<p class="help">'+esc(data.error)+'</p>':'')
+      +'<h3>Available now</h3>'+giveawayRows(data.items||[],'active')
+      +'<h3>Upcoming giveaways</h3>'+giveawayRows(data.upcoming||[],'upcoming')
+      +'<h3>Past giveaways</h3>'+giveawayRows(data.ended||[],'ended')
+      +'<p class="help">The calendar records giveaways observed by this server.</p>';
+    return;
+  }
+  const q=new URLSearchParams({view,limit:'120'});
+  if(CAL.month)q.set('month',CAL.month);
+  if(CAL.day)q.set('day',CAL.day);
   const d=await j('/api/v1/calendar/library?'+q)
-    .catch(()=>({items:[],days:[],error:'the library could not be read'}));
-  const views=[['releases','Anniversaries'],['added','Added'],
-               ['updated','Updated'],['upcoming','Upcoming']];
+    .catch(()=>({items:[],days:[],error:'The library could not be read'}));
+  if(!current())return;
   const items=d.items||[], days=d.days||[];
   const cov=d.coverage||{};
   // The share of the shelf this view can place at all. A calendar drawn over
@@ -7501,12 +7565,7 @@ RENDER.calendar=async()=>{
   };
   const busiest=days.reduce((a,x)=>Math.max(a,x.count),0);
 
-  $('#page').innerHTML='<div class="card">'
-    +'<div class="row" style="margin-bottom:10px;gap:6px;flex-wrap:wrap">'
-    +views.map(([k,l])=>'<button class="btn '+(k===d.view?'':'ghost')+'"'
-      +' data-calview="'+k+'" style="padding:4px 10px;font-size:12px">'
-      +l+'</button>').join('')
-    +'</div>'
+  $('#page').innerHTML='<div class="card">'+tabs
     +(d.error?'<div class="panel-note panel-warn">'+esc(d.error)+'</div>':'')
     +(d.note?'<p class="help">'+esc(d.note)+'</p>':'')
     +(d.view!=='upcoming'&&d.month
@@ -7555,8 +7614,7 @@ RENDER.calendar=async()=>{
     +'<div id="cal-web"><div class="empty">Checking…</div></div>'
     +'</div>';
 
-  document.querySelectorAll('[data-calview]').forEach(b=>b.onclick=()=>{
-    CAL.view=b.dataset.calview; CAL.month=''; CAL.day=''; go('calendar');});
+  bindViews();
   document.querySelectorAll('[data-calmonth]').forEach(b=>b.onclick=()=>{
     CAL.month=b.dataset.calmonth; CAL.day=''; go('calendar');});
   document.querySelectorAll('[data-calday]').forEach(b=>b.onclick=()=>{
@@ -7576,6 +7634,7 @@ RENDER.calendar=async()=>{
   // already out, filling a shelf headed "still to come".
   const w=await j('/api/v1/calendar'+(d.view==='upcoming'?'?back=-1':''))
     .catch(()=>({items:[],error:'unavailable'}));
+  if(!current())return;
   const web=w.items||[];
   const wsrc=w.provider_label||'a metadata provider';
   if(web.length) $('#cal-web-note').textContent=fmt(web.length)+' title(s) from '

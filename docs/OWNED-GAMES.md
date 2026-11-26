@@ -50,8 +50,15 @@ Cartridge continues to use its RomM-compatible library for ROM play.
 
 ## Free Game Collector
 
-Choose **Show offers** under **Free Game Collector** to see active Epic base-game
-giveaways. `ROMARR_GIVEAWAY_COUNTRY` selects the two-letter Epic country
-code and defaults to `US`. Follow an offer to claim it in the official store.
-Amazon Luna, Steam and GOG open their storefront pages. After claiming a
-game, sync the store or report it from Playnite to update My games.
+Choose **Show offers** under **Free Game Collector** to see active Epic
+giveaways. Select **Claim on Epic Games**, sign in, and choose **Get** on
+the product page. Amazon Luna has its own offers page.
+
+Open **Wanted → Calendar → Giveaways** for active offers, announced
+giveaways, and offers the server recorded before they ended. ROMarr checks
+the feed every 30 minutes and keeps up to a year of observed offers.
+The calendar records offer dates independently of your store purchases.
+
+`ROMARR_GIVEAWAY_COUNTRY` selects a two-letter Epic country code and
+defaults to `US`. After claiming a title, sync its storefront account or
+report it from Playnite to update My games.

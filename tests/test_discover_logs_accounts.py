@@ -101,10 +101,13 @@ class FakeResponse:
 
 def test_xbox_titles_become_entries():
     class FakeXbl:
-        def get(self, url, headers=None, timeout=None):
+        def get(self, url, headers=None, timeout=None, allow_redirects=True):
+            assert not allow_redirects
             assert headers["X-Authorization"] == "XKEY"
-            return FakeResponse({"titles": [
+            response = FakeResponse({"titles": [
                 {"name": "Banjo-Kazooie"}, {"name": "Perfect Dark"}, {}]})
+            response.status_code = 200
+            return response
 
     entries = fetch_entries({"type": "xbox", "openxbl_key": "XKEY"},
                             session=FakeXbl())

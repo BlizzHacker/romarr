@@ -107,6 +107,7 @@ def steam_verify(query: dict, *, session=None) -> str:
 #: characters between two quotes is a worse instruction than just accepting
 #: the paste. Maps the field ROMarr stores to the key the store calls it.
 _JSON_KEYS = {
+    "api_key": ("key", "api_key"),
     "npsso": ("npsso",),
     "ea_token": ("access_token",),
     "epic_code": ("authorizationCode", "code"),
@@ -146,11 +147,13 @@ def extract_value(field: str, pasted: str) -> str:
 
     # A URL that carries it -- Epic's code arrives this way in the address
     # bar when the redirect lands.
-    if text.startswith("http"):
-        query = urllib.parse.parse_qs(urllib.parse.urlsplit(text).query)
-        for key in keys:
-            if query.get(key):
-                return str(query[key][0]).strip()
+    if text.startswith(("http://", "https://")) or (field == "ea_token" and text.startswith("nucleus:")):
+        url = urllib.parse.urlsplit(text)
+        for part in (url.query, url.fragment):
+            query = urllib.parse.parse_qs(part)
+            for key in keys:
+                if query.get(key):
+                    return str(query[key][0]).strip()
 
     # A bare value, but tolerate a stray quote or trailing comma from a
     # partial selection.
@@ -216,7 +219,16 @@ class StateStore:
 # ROMarr can do is take you to the exact page and accept the paste -- which
 # is one click and one copy, and is honest about being that.
 
+RECONNECT_FIELDS = {"steam": "api_key", "ea": "ea_token", "psn": "npsso", "xbox": "openxbl_key"}
+
 TOKEN_SOURCES = {
+    "steam": {
+        "label": "Steam",
+        "open": "https://steamcommunity.com/dev/apikey",
+        "field": RECONNECT_FIELDS["steam"],
+        "how": "Sign in with the Steam account linked to this list. Copy its Web API key. "
+               "ROMarr already has your SteamID.",
+    },
     "psn": {
         "label": "PlayStation",
         "open": "https://ca.account.sony.com/api/v1/ssocookie",

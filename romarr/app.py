@@ -200,7 +200,7 @@ MASKED_ITEM_FIELDS = {
     "connections": ("url", "urls", "token", "password", "key", "secret"),
     "import_lists": LIST_SECRETS,
 }
-SERVER_OWNED_SETTINGS = ("chat_agent", "cloud_storage", "owned_devices")
+SERVER_OWNED_SETTINGS = ("chat_agent", "cloud_storage", "owned_devices", "giveaway_history")
 _SECRET_KEY_WORDS = ("secret", "password", "token", "passkey", "api_key", "apikey")
 
 
@@ -906,7 +906,6 @@ class ROMarr:
         self._collection_source_lock = threading.RLock()
         self._mdm_lock = threading.Lock()
         self._list_sync_lock = threading.Lock()
-        self.free_game_collector = FreeGameCollector(region=e.get("ROMARR_GIVEAWAY_COUNTRY", "US"))
         # Lets a configuration change wake the background refresh instead of
         # waiting out its interval. Created before reload_libraries, which sets
         # it.
@@ -917,6 +916,8 @@ class ROMarr:
         # lost everything you had asked for, which is the difference between a
         # tool and a demo.
         self.store = Store(e.get("ROMARR_DATA", "/opt/romarr/romarr.json"))
+        self.free_game_collector = FreeGameCollector(
+            region=e.get("ROMARR_GIVEAWAY_COUNTRY", "US"), store=self.store)
         self._remember_collection_owners()
         # A library path saved through the UI has to win over the environment,
         # or the setting is one you can change but not apply. A *default* must
@@ -1291,6 +1292,9 @@ class ROMarr:
             _hours("list_sync_interval_hours"),
             lambda: self.list_sync()["message"])
         self.scheduler.add(
+            "FreeGameCollector", "Record current game giveaways",
+            lambda: 1800, self._collect_free_games)
+        self.scheduler.add(
             "UpdateCheck", "Check github.com for a newer ROMarr",
             lambda: 86400 if self.store.settings.get("update_check", True) else 0,
             lambda: self.check_update()["message"])
@@ -1323,6 +1327,11 @@ class ROMarr:
                 self.start_hash_seed(quiet=True)
         except Exception:                          # noqa: BLE001 - never fatal
             log.debug("startup hash seed did not start", exc_info=True)
+
+    def _collect_free_games(self) -> str:
+        """Run the giveaway collector even when nobody has opened Lists."""
+        offers = self.free_game_collector.view()
+        return offers["error"] or f"{len(offers['items'])} active and {len(offers['upcoming'])} upcoming"
 
     def _refresh_counts(self) -> None:
         """Keep the count and the library fresh without ever blocking a request.
@@ -2164,6 +2173,7 @@ class ROMarr:
             if isinstance(out.get(key), list):
                 out[key] = [mask_item(item, fields) for item in out[key]]
         out.pop("owned_devices", None)
+        out.pop("giveaway_history", None)
         for item in out.get("import_lists", []):
             if isinstance(item, dict):
                 item.pop("owned_snapshot", None)
@@ -9311,6 +9321,47 @@ class ROMarr:
         finally:
             self._list_sync_lock.release()
 
+    def reconnect_import_list(self, item_id: str, pasted: str) -> dict:
+        """Test a replacement credential before updating one account snapshot."""
+        from .connect import RECONNECT_FIELDS, extract_value
+        from .lists import fetch_entries
+
+        original = self.store.get_item("import_lists", item_id)
+        if original is None:
+            return {"error": "This import list no longer exists"}
+        field = RECONNECT_FIELDS.get(original.get("type"))
+        if not field:
+            return {"error": "This source cannot be reconnected here"}
+        if original["type"] == "steam" and not original.get("steam_id"):
+            return {"error": "Link your Steam account before adding its Web API key"}
+        if not isinstance(pasted, str) or not 0 < len(pasted) <= 8192:
+            return {"error": "Paste a credential from the provider page"}
+        try:
+            value = extract_value(field, pasted)
+        except ValueError:
+            return {"error": "Paste the credential from the provider page"}
+        if not value or any(char.isspace() for char in value):
+            return {"error": "Paste the credential from the provider page"}
+        candidate = {**original, field: value}
+        try:
+            entries = fetch_entries(candidate)
+        except requests.RequestException:
+            return {"error": "The provider could not read this library. Check its connection and try again."}
+        except ValueError as err:
+            return {"error": str(err)}
+        at = now_iso()
+        candidate["last_sync"] = {"at": at, "fetched": len(entries)}
+        if owned_provider(candidate):
+            candidate["owned_snapshot"] = {"at": at, "games": [
+                {"name": entry.game, "store_id": entry.store_id} for entry in entries
+            ]}
+        candidate["unmatched"] = list(dict.fromkeys(
+            entry.game for entry in entries
+            if resolve(entry.platform or candidate.get("platform") or "") is None))[:500]
+        if not self.store.replace_list_sync(original, candidate):
+            return {"error": "The list changed during the check. Reopen it and try again."}
+        return {"ok": True, "fetched": len(entries)}
+
     def _sync_import_lists(self) -> dict:
         """Read each list once and retain storefront entries beside its ledger."""
         from .lists import fetch_entries
@@ -9406,6 +9457,8 @@ class ROMarr:
             return self.retire_dead_downloads()
         if name == "ListSync":
             return self.list_sync()
+        if name == "FreeGameCollector":
+            return {"message": self._collect_free_games()}
         if name == "UpdateCheck":
             return self.check_update(manual=True)
         if name == "ApplyUpdate":
@@ -12140,6 +12193,9 @@ def make_handler(service: ROMarr):
                 except ValueError as exc:
                     return self._json(400, {"error": str(exc)})
                 return self._json(200, meta)
+            if route.path == "/api/v1/importlist/reconnect":
+                result = service.reconnect_import_list(str(body.get("id") or ""), body.get("credential"))
+                return self._json(200 if result.get("ok") else 400, result)
             if route.path == "/api/v1/importlist":
                 cfg = {k: body.get(k, "") for k in
                        ("id", "name", "type", "platform", "content", "url",
