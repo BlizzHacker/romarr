@@ -24,3 +24,23 @@ def test_the_set_names_guides_videos_and_mods():
         assert slug in hub.NON_GAME_PLUGINS
     for slug in ("archive-org", "homebrew", "libretro-content", "theromdepot", "minerva-archive"):
         assert slug not in hub.NON_GAME_PLUGINS
+
+
+def test_hub_search_skips_non_game_and_incompatible_platform_plugins():
+    from types import SimpleNamespace
+
+    def make(slug, platforms=()):
+        return SimpleNamespace(
+            slug=slug,
+            enabled=True,
+            manifest=SimpleNamespace(capabilities=("search",), platforms=platforms),
+        )
+
+    assert not hub._plugin_supports_platform(make("libretro-cores"), "snes")
+    assert not hub._plugin_supports_platform(make("youtube-tutorials"), None)
+    assert not hub._plugin_supports_platform(make("demozoo"), "snes")
+    assert not hub._plugin_supports_platform(make("aminet"), "switch")
+    assert not hub._plugin_supports_platform(make("custom-amiga", ("amiga",)), "snes")
+    assert hub._plugin_supports_platform(make("demozoo"), "amiga")
+    assert hub._plugin_supports_platform(make("demozoo"), None)
+    assert hub._plugin_supports_platform(make("archive-org"), "snes")

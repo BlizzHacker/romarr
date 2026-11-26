@@ -42,3 +42,14 @@ def test_a_corrupt_file_is_silently_nothing(tmp_path):
     path = tmp_path / "options.json"
     path.write_text("{not json")
     assert load_ha_options(str(path)) == {}
+
+
+def test_resolve_port_honours_romarr_port_and_webui_port_or_port():
+    from romarr.__main__ import resolve_port
+
+    assert resolve_port({}) == 6868
+    assert resolve_port({"ROMARR_PORT": "7878"}) == 7878
+    assert resolve_port({"ROMARR_PORT": "6868", "WEBUI_PORT": "8686"}) == 8686
+    assert resolve_port({"ROMARR_PORT": "6868", "PORT": "9090"}) == 9090
+    assert resolve_port({"ROMARR_PORT": "7878", "PORT": "9090"}) == 7878
+    assert resolve_port({"ROMARR_PORT": "invalid"}) == 6868

@@ -577,20 +577,33 @@ class CloudJobs:
         found = self._mount(mount_id)
         ok, reason = fuse_available()
         if not ok:
+            log.warning("cloud mount %s refused: %s", found.get("mount_point"), reason)
             raise CloudError(reason)
         point = self._mount_point(found["mount_point"])
         if self._is_mounted(point):
             return {"ok": True, "mounted": True}
-        os.makedirs(point, exist_ok=True)
-        if os.listdir(point):
-            raise CloudError("The mount folder must be empty")
+        try:
+            os.makedirs(point, exist_ok=True)
+            entries = os.listdir(point)
+        except OSError as err:
+            msg = (f"Cannot create or read mount folder {point} ({err.strerror or err}). "
+                   "Choose a folder writable by ROMarr (such as under your library or "
+                   "download folder) or check container permissions.")
+            log.warning("cloud mount %s failed: %s", point, msg)
+            raise CloudError(msg) from None
+        if entries:
+            msg = f"The mount folder {point} must be empty"
+            log.warning("cloud mount %s refused: %s", point, msg)
+            raise CloudError(msg)
         try:
             self.cloud.rclone.mount(fs_string(found["remote"], found["remote_path"]), point,
                                     cache_mode=found["cache_mode"],
                                     allow_other=found.get("allow_other", False),
                                     cache_max_gb=float(found.get("cache_max_gb") or 10))
         except RcloneError as err:
+            log.warning("cloud mount %s failed: %s", point, err)
             raise CloudError(str(err)) from None
+        log.info("cloud mount active: %s -> %s:%s", point, found["remote"], found.get("remote_path", ""))
         return {"ok": True, "mounted": True}
 
     def unmount(self, mount_id: str) -> dict:
@@ -598,6 +611,7 @@ class CloudJobs:
         try:
             self.cloud.rclone.unmount(found["mount_point"])
         except RcloneError as err:
+            log.warning("cloud unmount %s failed: %s", found.get("mount_point"), err)
             raise CloudError(str(err)) from None
         return {"ok": True, "mounted": False}
 

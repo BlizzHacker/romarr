@@ -642,6 +642,15 @@ def test_mount_refused_without_fuse(jobs, svc, monkeypatch):
         jobs.mount(m["id"])
 
 
+def test_mount_permission_error_becomes_readable_cloud_error(jobs, svc, monkeypatch):
+    m = jobs.save_mount({"remote": "dav", "mount_point": str(svc.lib / "cloud")})["mount"]
+    monkeypatch.setattr(cloud_jobs, "fuse_available", lambda: (True, ""))
+    monkeypatch.setattr(cloud_jobs.os, "makedirs",
+                        lambda *a, **kw: (_ for _ in ()).throw(PermissionError(13, "Permission denied")))
+    with pytest.raises(CloudError, match="Cannot create or read mount folder"):
+        jobs.mount(m["id"])
+
+
 # -- routes --------------------------------------------------------------------------
 
 

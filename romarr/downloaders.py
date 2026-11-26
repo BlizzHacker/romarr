@@ -1117,6 +1117,7 @@ class DelugeConfig:
     base_url: str
     password: str = ""
     category: str = "romarr"
+    save_path: str = ""
     timeout: int = 30
 
 
@@ -1137,41 +1138,48 @@ class Deluge:
     protocol = "torrent"
     name = "Deluge"
     RPC_PATH = "/json"
+    supports_torrent_file = True
 
     def __init__(self, config, session=None):
         self._config = config
         self._session = session or requests.Session()
         self._id = 0
+        self.last_job_id = ""
+        self.last_error = ""
 
     @property
     def configured(self) -> bool:
         return bool(self._config.base_url)
 
-    def _call(self, method: str, params: list) -> dict:
+    def _call(self, method: str, params: list, *, _timeout: float | None = None) -> dict:
         self._id += 1
         url = self._config.base_url.rstrip("/") + self.RPC_PATH
+        req_timeout = (self._config.timeout if _timeout is None
+                       else max(0.01, min(float(self._config.timeout or 30), float(_timeout))))
         response = self._session.post(
             url,
             data=json.dumps({"method": method, "params": params, "id": self._id}),
             headers={"Content-Type": "application/json"},
-            timeout=self._config.timeout)
+            timeout=req_timeout)
         try:
             return response.json() or {}
         except Exception:
             return {}
 
-    def _ready(self) -> bool:
-        if not self._call("auth.login", [self._config.password]).get("result"):
+    def _ready(self, *, _timeout: float | None = None) -> bool:
+        if not self._call("auth.login", [self._config.password], _timeout=_timeout).get("result"):
+            self.last_error = "Deluge rejected the WebUI password"
             log.warning("Deluge rejected the WebUI password")
             return False
-        if self._call("web.connected", []).get("result"):
+        if self._call("web.connected", [], _timeout=_timeout).get("result"):
             return True
-        hosts = self._call("web.get_hosts", []).get("result") or []
+        hosts = self._call("web.get_hosts", [], _timeout=_timeout).get("result") or []
         if not hosts:
+            self.last_error = "Deluge WebUI is not attached to a daemon"
             log.warning("Deluge WebUI is not attached to a daemon and knows "
                         "no hosts to attach to")
             return False
-        return bool(self._call("web.connect", [hosts[0][0]]).get("result", True))
+        return bool(self._call("web.connect", [hosts[0][0]], _timeout=_timeout).get("result", True))
 
     def reachable(self) -> bool:
         try:
@@ -1180,25 +1188,144 @@ class Deluge:
             log.warning("Deluge unreachable: %s", exc)
             return False
 
+    def _apply_label(self, torrent_hash: str) -> None:
+        if not self._config.category or not torrent_hash:
+            return
+        # Best effort: the Label plugin may not be enabled, and a missing
+        # label is no reason to call a successful add a failure. When the
+        # plugin is enabled but the label has not been created yet, Deluge
+        # returns an Unknown Label error; creating it once and retrying makes
+        # a fresh Deluge install work out of the box.
+        reply = self._call("label.set_torrent", [torrent_hash, self._config.category])
+        err = str((reply.get("error") or {}).get("message") or "")
+        if "unknown label" in err.lower():
+            self._call("label.add", [self._config.category])
+            self._call("label.set_torrent", [torrent_hash, self._config.category])
+
     def add(self, magnet_or_url: str, *, save_path: str | None = None) -> bool:
+        self.last_job_id = ""
+        self.last_error = ""
         try:
             if not self._ready():
                 return False
-            options = {"download_location": save_path} if save_path else {}
-            body = self._call("core.add_torrent_magnet", [magnet_or_url, options])
+            dest = save_path or getattr(self._config, "save_path", "")
+            options = {"download_location": dest} if dest else {}
+            target = str(magnet_or_url or "").strip()
+            method = ("core.add_torrent_url"
+                      if target.lower().startswith(("http://", "https://"))
+                      else "core.add_torrent_magnet")
+            body = self._call(method, [target, options])
             if body.get("error") or not body.get("result"):
+                err_msg = str((body.get("error") or {}).get("message") or body.get("error") or "refused")
+                self.last_error = f"Deluge refused the torrent: {err_msg}"
                 log.warning("Deluge refused the torrent: %s", body.get("error"))
                 return False
-            if self._config.category:
-                # Best effort: the Label plugin may not be enabled, and a
-                # missing label is no reason to call a successful add a
-                # failure.
-                self._call("label.set_torrent",
-                           [body.get("result"), self._config.category])
+            self.last_job_id = str(body.get("result") or "").lower()
+            self._apply_label(str(body.get("result") or ""))
             return True
         except Exception as exc:
+            self.last_error = f"Deluge add failed: {exc}"
             log.warning("Deluge add failed: %s", exc)
             return False
+
+    def add_torrent_file(self, torrent: bytes, *, save_path: str | None = None) -> bool:
+        """Upload locally fetched .torrent bytes via core.add_torrent_file."""
+        self.last_job_id = ""
+        self.last_error = ""
+        if not torrent:
+            return False
+        try:
+            if not self._ready():
+                return False
+            dest = save_path or getattr(self._config, "save_path", "")
+            options = {"download_location": dest} if dest else {}
+            encoded = base64.b64encode(torrent).decode("ascii")
+            body = self._call("core.add_torrent_file", ["romarr.torrent", encoded, options])
+            if body.get("error") or not body.get("result"):
+                err_msg = str((body.get("error") or {}).get("message") or body.get("error") or "refused")
+                self.last_error = f"Deluge refused the torrent file: {err_msg}"
+                log.warning("Deluge refused the torrent file: %s", body.get("error"))
+                return False
+            self.last_job_id = str(body.get("result") or "").lower()
+            self._apply_label(str(body.get("result") or ""))
+            return True
+        except Exception as exc:
+            self.last_error = f"Deluge add_torrent_file failed: {exc}"
+            log.warning("Deluge add_torrent_file failed: %s", exc)
+            return False
+
+    @staticmethod
+    def _content_path(row: dict) -> str:
+        save_dir = str(row.get("save_path") or "").strip()
+        if not save_dir or chr(0) in save_dir:
+            return ""
+        sep = "\\" if ("\\" in save_dir and "/" not in save_dir) else "/"
+        base = save_dir.rstrip("/\\")
+        files = row.get("files") or []
+        if isinstance(files, list) and files:
+            parts_list = [str(f.get("path") or "").replace("\\", "/").strip("/").split("/")
+                          for f in files if isinstance(f, dict) and f.get("path")]
+            if parts_list and not any(p in ("", ".", "..") or ":" in p or chr(0) in p
+                                      for parts in parts_list for p in parts):
+                if len(parts_list) == 1:
+                    rel = "/".join(parts_list[0])
+                else:
+                    root = parts_list[0][0]
+                    rel = root if all(len(p) > 1 and p[0] == root for p in parts_list) else ""
+                if rel:
+                    return base + sep + rel.replace("/", sep)
+        name = str(row.get("name") or "").strip().replace("\\", "/")
+        if not name or "/" in name or name in (".", "..") or ":" in name or chr(0) in name:
+            return ""
+        return base + sep + name
+
+    def completed(self, timeout: float | None = None) -> list[dict]:
+        """Finished torrents from Deluge, filtered by label when the Label plugin is active."""
+        if not self.configured:
+            return []
+        try:
+            if not self._ready(_timeout=timeout):
+                return []
+            body = self._call(
+                "core.get_torrents_status",
+                [{}, ["name", "save_path", "state", "progress", "is_finished", "label", "files"]],
+                _timeout=timeout,
+            )
+        except Exception as exc:
+            log.warning("Deluge completed query failed: %s", exc)
+            return []
+        torrents = body.get("result")
+        if not isinstance(torrents, dict):
+            return []
+        category = (self._config.category or "").strip()
+        out = []
+        for raw_hash, row in torrents.items():
+            if not isinstance(row, dict):
+                continue
+            info_hash = str(raw_hash or "").strip().lower()
+            label = str(row.get("label") or "").strip()
+            if label == "romarr-soundtracks":
+                continue
+            if label and category and label != category:
+                continue
+            done = (bool(row.get("is_finished"))
+                    or float(row.get("progress") or 0) >= 100.0
+                    or str(row.get("state") or "").lower() == "seeding")
+            if not done:
+                continue
+            content_path = self._content_path(row)
+            if not content_path:
+                continue
+            out.append({
+                "id": info_hash,
+                "hash": info_hash,
+                "name": str(row.get("name") or ""),
+                "save_path": str(row.get("save_path") or ""),
+                "content_path": content_path,
+                "category": label or category,
+                "state": "done",
+            })
+        return out
 
 
 @dataclass
@@ -4673,6 +4800,7 @@ CLIENT_TYPES = {
                   help="The WebUI password, not the daemon's. Default: deluge"),
             FIELD("category", "Label", default="romarr",
                   help="Needs the Label plugin; ignored when it is not enabled"),
+            FIELD("save_path", "Download directory"),
         ],
     },
     "rtorrent": {
@@ -5109,7 +5237,8 @@ def build_client(cfg: dict, *, data_dir: str = ""):
             save_path=cfg.get("save_path", "")))
     elif kind == "deluge":
         client = Deluge(DelugeConfig(
-            base_url=url, password=cfg.get("password", ""), category=category))
+            base_url=url, password=cfg.get("password", ""), category=category,
+            save_path=cfg.get("save_path", "")))
     elif kind == "rtorrent":
         # Credentials ride in the URL because that is where XML-RPC over
         # basic auth expects them.

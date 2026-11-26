@@ -185,6 +185,14 @@ If you run the container with `--user`, rootless Docker, Podman userns, or
 Kubernetes `runAsUser`, PUID/PGID are ignored and logged as ignored — there is
 nothing to drop to and no authority to chown with.
 
+### Running behind Gluetun (`network_mode: "service:gluetun"`)
+
+When routing ROMarr through a Gluetun VPN container, keep three rules in mind to avoid **"The connection was reset"** (`ERR_CONNECTION_RESET`) in your browser:
+
+1. **Publish the port on the `gluetun` service, not on `romarr`.** Inside a shared network namespace, Gluetun owns the ports. To expose ROMarr on a custom port (for example `7878` or `8686`), either map `- "8686:6868"` on `gluetun` (keeping ROMarr on `6868` internally) or set `ROMARR_PORT: 8686` (or `WEBUI_PORT: 8686` / `PORT: 8686`) on `romarr` and map `- "8686:8686"` on `gluetun`.
+2. **Allow your LAN subnet through Gluetun's firewall.** Set `FIREWALL_OUTBOUND_SUBNETS=192.168.0.0/16,10.0.0.0/8,172.16.0.0/12` (matching your home LAN) on the `gluetun` container so Gluetun does not drop or reset return packets to your browser or localRomM/Prowlarr instances.
+3. **Keep `ROMARR_HOST=0.0.0.0` (the default).** Binding `127.0.0.1` inside a container prevents Docker and Gluetun from forwarding browser connections to ROMarr.
+
 ### Which tag to use
 
 | Tag | What it is |

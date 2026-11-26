@@ -2798,6 +2798,14 @@ class ROMarr:
         sources: list[tuple[str, object]] = [("prowlarr", prowlarr)]
         sources += [(getattr(i, "name", "indexer"), i)
                     for i in getattr(self, "indexers", [])]
+        timing_lock = threading.Lock()
+        by_source: dict[str, dict] = {}
+
+        def record_timing(label: str, elapsed_ms: int, count: int) -> None:
+            with timing_lock:
+                entry = by_source.setdefault(label, {"source": label, "ms": 0, "found": 0})
+                entry["ms"] = max(entry["ms"], elapsed_ms)
+                entry["found"] += count
 
         def search_term(term):
             """Query all captured indexer sources for one search string."""
@@ -2805,6 +2813,7 @@ class ROMarr:
             with ExitStack() as sessions:
                 for label, source in sources:
                     client = source
+                    t0 = time.monotonic()
                     try:
                         if isinstance(source, Prowlarr) or getattr(source, "_owns_session", False):
                             client = copy(source)
@@ -2812,17 +2821,30 @@ class ROMarr:
                             client._session = sessions.enter_context(requests.Session())
                         if isinstance(client, Prowlarr) and source is prowlarr:
                             client._privacy = privacy
-                        releases.extend(client.search(term))
+                        found = list(client.search(term) or [])
+                        releases.extend(found)
+                        record_timing(label, int((time.monotonic() - t0) * 1000), len(found))
                     except Exception as err:
+                        record_timing(label, int((time.monotonic() - t0) * 1000), 0)
                         log.warning("%s search failed for %r: %s", label, term, err)
             return releases
+
+        def timed_hub():
+            t0 = time.monotonic()
+            try:
+                found = list(self._hub_releases(game, platform) or [])
+            except Exception:
+                record_timing("rom-hub", int((time.monotonic() - t0) * 1000), 0)
+                raise
+            record_timing("rom-hub", int((time.monotonic() - t0) * 1000), len(found))
+            return found
 
         # Enabled ROM Hub plugins are searched alongside the indexers: the
         # same titles, scored by the same rules, grabbable from the same
         # Interactive Search page. One query, not per-term: the Hub's own
         # fan-out already merges every plugin's answer for it.
         with ThreadPoolExecutor(max_workers=3) as pool:
-            hub_search = pool.submit(self._hub_releases, game, platform)
+            hub_search = pool.submit(timed_hub)
             privacy = {}
             if isinstance(prowlarr, Prowlarr) and prowlarr._config.base_url:
                 try:
@@ -2845,6 +2867,7 @@ class ROMarr:
                 if key not in seen:
                     seen.add(key)
                     merged.append(release)
+        self._last_search_timings = sorted(by_source.values(), key=lambda x: -x["ms"])
         return merged
 
     def _preferred_group(self, game: str, platform) -> str:
@@ -3206,7 +3229,8 @@ class ROMarr:
             except Exception:
                 reasons = ()
             self.notify(grabbed(pick.title, platform_slug,
-                                getattr(pick, "indexer", ""), reasons))
+                                getattr(pick, "indexer", ""), reasons,
+                                external_request_id=external_request_id))
         else:
             self.store.want(game, platform_slug)
             self.store.note_failure(game, platform_slug, item.detail)
@@ -3292,16 +3316,30 @@ class ROMarr:
                     "game": game, "platform": None, "unknown_platform": platform_name,
                     "items": []}
 
+        t_start = time.monotonic()
+        timings: list[dict] = []
+        self._last_search_timings = []
         try:
             if platform is None and not self.indexers:
-                releases = self.prowlarr.search(game) + self._hub_releases(game, None)
+                t0 = time.monotonic()
+                p_rel = list(self.prowlarr.search(game) or [])
+                timings.append({"source": "prowlarr", "ms": int((time.monotonic() - t0) * 1000),
+                                "found": len(p_rel)})
+                t1 = time.monotonic()
+                h_rel = list(self._hub_releases(game, None) or [])
+                timings.append({"source": "rom-hub", "ms": int((time.monotonic() - t1) * 1000),
+                                "found": len(h_rel)})
+                timings.sort(key=lambda x: -x["ms"])
+                releases = p_rel + h_rel
             else:
                 releases = self._search_releases(game, platform)
+                timings = list(getattr(self, "_last_search_timings", []) or [])
         except Exception as err:
             log.warning("interactive search failed for %r: %s", game, err)
             return {"error": f"search failed: {type(err).__name__}",
                     "game": game, "platform": platform.slug if platform else None,
                     "items": []}
+        elapsed_ms = int((time.monotonic() - t_start) * 1000)
 
         judged = []
         parts_for = {}   # one Wanted lookup per platform, not per release
@@ -3363,6 +3401,8 @@ class ROMarr:
             "platform": platform.slug if platform else None,
             "found": len(items),
             "accepted": sum(1 for i in items if i["accepted"]),
+            "elapsed_ms": elapsed_ms,
+            "timings": timings,
             "items": items,
         }
 
@@ -9388,7 +9428,9 @@ class ROMarr:
             f"{f.signature} in {Path(f.path).name}" for f in found)
         self.store.record(Event(kind="failed", game=name, platform=platform.slug,
                                 detail=detail))
-        self.notify(failed(name, detail))
+        req_id = getattr(queue_item, "external_request_id", "") if queue_item is not None else ""
+        self.notify(failed(name, detail, platform=platform.slug,
+                           external_request_id=req_id))
         if queue_item is not None:
             queue_item.state = "import-failed"
             queue_item.release_fault = True
@@ -9768,6 +9810,8 @@ class ROMarr:
             outcomes = confirm_in_library(outcomes, self.library_root(target_cfg))
             all_ok = all(o.ok for o in outcomes)
             fulfils_base = not (queue_item and queue_item.import_intent.get("existing_game"))
+            req_id = getattr(queue_item, "external_request_id", "") if queue_item is not None else ""
+            imported_assets = tuple(str(o.destination) for o in outcomes if o.ok and getattr(o, "destination", None))
             for outcome in outcomes:
                 if outcome.ok:
                     if outcome.sha1:
@@ -9783,12 +9827,16 @@ class ROMarr:
                                             detail=f"{outcome.destination} ({outcome.import_method or 'copy'}) {outcome.fallback_reason}"))
                     if all_ok and fulfils_base:
                         self.notify(imported(game_title, platform.slug,
-                                             outcome.verification))
+                                             outcome.verification,
+                                             external_request_id=req_id,
+                                             assets=imported_assets))
                 else:
                     self.store.record(Event(kind="failed", game=game_title,
                                             platform=platform.slug,
                                             detail=outcome.reason))
-                    self.notify(failed(game_title, str(outcome.reason)))
+                    self.notify(failed(game_title, str(outcome.reason),
+                                       platform=platform.slug,
+                                       external_request_id=req_id))
             if queue_item is not None:
                 # Marked so the scheduled sweep never re-attempts it; the
                 # Tasks page button clears failure marks to retry.
@@ -12746,7 +12794,15 @@ def serve(port: int = 6868, env: dict[str, str] | None = None):
         log.exception("plugin preinstall skipped (non-fatal)")
 
     bind_env = env if env is not None else os.environ
-    host = str(bind_env.get("ROMARR_HOST") or "0.0.0.0")
+    host = str(bind_env.get("ROMARR_HOST") or "0.0.0.0").strip()
+    if host in ("127.0.0.1", "localhost", "::1") and (
+            Path("/.dockerenv").exists() or bind_env.get("container")):
+        log.warning(
+            "ROMARR_HOST=%s inside a container only accepts loopback traffic; "
+            "Docker port publishing and Gluetun (network_mode: service:gluetun) "
+            "will reset external connections. Set ROMARR_HOST=0.0.0.0 to expose the UI.",
+            host,
+        )
     ThreadingHTTPServer.request_queue_size = 256
     httpd = ThreadingHTTPServer((host, port), make_handler(service))
 
