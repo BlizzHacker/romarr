@@ -161,3 +161,32 @@ def test_every_format_survives_an_empty_library(name):
         ET.fromstring(out)
     else:
         json.loads(out)
+
+
+def test_export_reads_past_the_first_page_and_uses_actual_filenames(tmp_path):
+    from romarr.app import ROMarr
+    from romarr.libraries import Game
+
+    service = ROMarr({"ROMARR_DATA": str(tmp_path / "state.json"),
+                      "LIBRARY_PATH": str(tmp_path / "roms")})
+    games = [Game(str(i), f"Display title {i}", platform_slug="snes",
+                  file_name=f"Game {i} (USA).sfc") for i in range(145)]
+    games.append(Game("cloud", "Missing", platform_slug="snes",
+                      file_name="missing.sfc", origin="cloud"))
+    games.append(Game("unsafe", "Unsafe", platform_slug="snes",
+                      file_name="../unsafe.sfc"))
+    service._library_cache = (games, 0, "")
+    rows = service.frontend_rows("snes")
+    assert len(rows) == 145
+    assert rows[-1]["filename"] == "Game 144 (USA).sfc"
+    assert rows[-1]["path"].endswith(str(tmp_path / "roms" / "snes" / "Game 144 (USA).sfc"))
+
+
+def test_export_can_map_a_server_mount_to_a_large_windows_library():
+    from romarr.frontends import mapped_rows
+
+    assert mapped_rows(ROWS, "/roms/snes", r"\\storage\games")[0]["path"] == (
+        r"\\storage\games\Super Metroid (USA).sfc")
+    assert len(mapped_rows(ROWS, "/roms/snes", r"D:\Games")) == 1
+    with pytest.raises(ValueError):
+        mapped_rows(ROWS, "/roms", "Games")

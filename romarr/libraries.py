@@ -119,6 +119,8 @@ class Game:
     #: The slug is unambiguous, so anything asking "what plays this" uses it
     #: and falls back to the display name only when a backend has no slug.
     platform_slug: str = ""
+    file_name: str = ""
+    local_path: str = ""
 
 
 # Budget for the background shelf fetch. Nothing waits on it, so it is
@@ -782,7 +784,8 @@ class FolderLibrary:
         for path in self._walk(self.MAX_SCAN if limit is None else limit):
             yield Game(id=str(path), name=path.stem,
                        platform=path.parent.name if path.parent != self._root else "",
-                       extension=path.suffix.lower())
+                       extension=path.suffix.lower(),
+                       file_name=path.name, local_path=str(path))
 
     def reachable(self) -> bool:
         """Whether the directory is there. Cheap, because a page waits on it."""

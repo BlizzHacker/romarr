@@ -46,6 +46,15 @@ class LocalGame:
     name: str
     launcher: str
     path: str = ""
+    store_id: str = ""
+    install_confirmed: bool | None = None
+
+    @property
+    def installed(self) -> bool:
+        """Only mark an installation when its local files are corroborated."""
+        if self.install_confirmed is not None:
+            return self.install_confirmed
+        return bool(self.path) and Path(self.path).is_dir()
 
 
 # --- Steam ------------------------------------------------------------------
@@ -56,6 +65,9 @@ _STEAM_NOISE = ("Steamworks Common Redistributables", "Steam Linux Runtime",
 
 _ACF_NAME = re.compile(r'^\s*"name"\s*"(.+)"\s*$', re.MULTILINE)
 
+
+_ACF_INSTALLDIR = re.compile(r'^\s*"installdir"\s*"([^"\\/]+)"\s*$', re.MULTILINE)
+_ACF_STATE = re.compile(r'^\s*"StateFlags"\s*"([0-9]+)"\s*$', re.MULTILINE)
 
 _VDF_PATH = re.compile(r'^\s*"path"\s*"(.+)"\s*$', re.MULTILINE)
 
@@ -96,8 +108,14 @@ def steam_games(steamapps: Path) -> list[LocalGame]:
         name = match.group(1).strip()
         if not name or any(noise in name for noise in _STEAM_NOISE):
             continue
-        out.append(LocalGame(name=name, launcher="steam",
-                             path=str(manifest.parent)))
+        directory = _ACF_INSTALLDIR.search(text)
+        state = _ACF_STATE.search(text)
+        installed = bool(directory and state and int(state.group(1)) & 4
+                         and directory.group(1) not in (".", "..")
+                         and (manifest.parent / "common" / directory.group(1)).is_dir())
+        out.append(LocalGame(name=name, launcher="steam", path=str(manifest.parent),
+                             store_id=manifest.stem.removeprefix("appmanifest_"),
+                             install_confirmed=installed))
     return out
 
 

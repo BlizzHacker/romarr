@@ -61,19 +61,20 @@ def test_the_stats_page_reports_update_state_honestly():
     assert "Auto-update is ON — it applies" not in html
 
 
-def test_frontend_rows_survive_pathless_backend_rows(tmp_path):
-    """RomM's cached rows carry no filesystem path. Building the fallback
-    from library_root(None) was a 500 on every export -- caught by the live
-    Playnite proof, of all things."""
+def test_frontend_rows_survive_a_backend_with_no_local_path(tmp_path):
+    """Use the actual backend filename and skip rows with no usable file."""
     from romarr.app import ROMarr
     from romarr.libraries import Game
     svc = ROMarr(env={"ROMARR_DATA": str(tmp_path / "s.json"),
                       "LIBRARY_PATH": str(tmp_path)})
-    svc._library_cache = ([Game(id="1", name="Super Metroid (USA)",
-                                platform="snes")], 9e18, "")
+    svc._library_cache = ([
+        Game(id="1", name="Super Metroid", platform="snes", file_name="Super Metroid (USA).sfc"),
+        Game(id="2", name="A metadata-only row", platform="snes"),
+    ], 9e18, "")
     rows = svc.frontend_rows()
+    assert len(rows) == 1
     assert "snes" in rows[0]["path"]
-    assert rows[0]["path"].endswith("Super Metroid (USA)")
+    assert rows[0]["path"].endswith("Super Metroid (USA).sfc")
 
 
 def test_the_library_serves_organised_pages_not_the_first_100(tmp_path):

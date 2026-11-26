@@ -19,6 +19,8 @@ service will not start again.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 import copy
 import json
 import logging
@@ -390,6 +392,7 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # entry keeps a ledger of what it already added, so a list re-syncing
     # never resurrects a title that was acquired and fulfilled.
     "import_lists": [],
+    "owned_devices": [],
     "list_sync_interval_hours": 6,
     # Download clients and indexers, each a list of stored configurations.
     #
@@ -934,6 +937,25 @@ class Store:
         if not require_persist:
             self.save()
         return out
+
+    def replace_list_sync(self, previous: dict, item: dict,
+                          pending: Iterable[tuple[str, str]] = ()) -> bool:
+        """Publish a list snapshot and its Wanted additions in one state write."""
+        with self._lock:
+            if self.get_item("import_lists", previous.get("id")) != previous:
+                return False
+            known = {(row.game.lower(), row.platform) for row in self.wanted}
+            before = len(self.wanted)
+            for game, platform in pending:
+                if (game.lower(), platform) not in known:
+                    self.wanted.append(WantedItem(game=game, platform=platform))
+                    known.add((game.lower(), platform))
+            try:
+                self.put_item("import_lists", item, require_persist=True)
+            except Exception:
+                del self.wanted[before:]
+                raise
+            return True
 
     def delete_item(self, key: str, item_id: str, *, require_persist: bool = False) -> bool:
         with self._lock:

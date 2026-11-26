@@ -303,6 +303,11 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
                                  "one game (?platform=&game=) or all."),
     "/api/v1/game/roulette": ("GET", "Backlog roulette: one shelf game at "
                                      "random (?status=shelved[,playing]&platform=)."),
+    "/api/v1/lists/offers": ("GET", "Current free-to-keep offers and official claim pages."),
+    "/api/v1/lists/owned": ("GET", "Search and page cached storefront libraries. "
+                                   "Returns titles, storefronts and sync status without credentials."),
+    "/api/v1/lists/device": ("POST", "Replace one authenticated device library report. "
+                                    "Accepts game names and install state without credentials or paths."),
     "/api/v1/importlist": ("GET", "Import lists and how many titles each has "
                                   "fed into Wanted."),
     "/api/v1/importlist/schema": ("GET", "The list types and their fields."),

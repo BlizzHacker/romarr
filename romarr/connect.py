@@ -317,11 +317,9 @@ TOKEN_SOURCES = {
 PASTE_SOURCES = {
     "amazon": {
         "label": "Amazon / Prime Gaming",
-        "open": "https://gaming.amazon.com/library",
-        "how": "Amazon's only API needs full device registration -- there "
-               "is no page that issues a token. Select-all-copy your "
-               "library page and paste it as a list; the parser pulls the "
-               "titles out of the mess.",
+        "open": "https://luna.amazon.com/claims/home",
+        "how": "Paste the games you own, one title per line, from Amazon Games "
+               "or the provider where you redeemed the offer.",
     },
     "ubisoft": {
         "label": "Ubisoft Connect",

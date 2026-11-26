@@ -49,7 +49,7 @@ Write-Output ("SDK: {0}" -f [Playnite.SDK.Models.Game].Assembly.GetName().Versio
 
 $menu = GetMainMenuItems $null
 Check "GetMainMenuItems returns the two real ScriptMainMenuItem entries" `
-    ($menu.Count -eq 2 -and $menu[0].GetType().FullName -eq "Playnite.SDK.Plugins.ScriptMainMenuItem")
+    ($menu.Count -eq 3 -and $menu[0].GetType().FullName -eq "Playnite.SDK.Plugins.ScriptMainMenuItem")
 
 Invoke-ROMarrSync $null
 $added = $database.Games.Count

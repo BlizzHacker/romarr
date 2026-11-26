@@ -28,7 +28,16 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
+
+
+OWNED_PROVIDERS = {
+    "steam": "Steam", "gog": "GOG", "epic": "Epic Games",
+    "battlenet": "Battle.net", "ea": "EA", "itchio": "itch.io",
+    "humble": "Humble", "xbox": "Xbox", "psn": "PlayStation",
+    "amazon": "Amazon Games", "ubisoft": "Ubisoft Connect",
+}
 
 log = logging.getLogger(__name__)
 
@@ -50,6 +59,7 @@ def clean_title(name: str) -> str:
 class ListEntry:
     game: str
     platform: str = ""   # empty means "use the list's default"
+    store_id: str = ""
 
     @property
     def key(self) -> str:
@@ -114,6 +124,10 @@ def fetch_entries(cfg: dict, *, session=None) -> list[ListEntry]:
     """
     kind = str(cfg.get("type") or "paste").lower()
     if kind == "paste":
+        if cfg.get("provider") in OWNED_PROVIDERS:
+            # Store titles can contain dashes, ranking-like prefixes and hashes.
+            return [ListEntry(game=line.strip())
+                    for line in (cfg.get("content") or "").splitlines() if line.strip()]
         return parse_list(cfg.get("content") or "")
     if kind == "url":
         import requests
@@ -417,6 +431,12 @@ STEAM_WISHLIST_CAP = 150
 STEAM_COMMUNITY = "https://steamcommunity.com"
 
 
+def steam_app_id(value) -> str:
+    """Return an app ID that can be interpolated into a Steam client link."""
+    app_id = str(value or "")
+    return app_id if re.fullmatch(r"[1-9][0-9]{0,9}", app_id) else ""
+
+
 def _steam_public_entries(cfg: dict, http) -> list[ListEntry]:
     """Owned games from a PUBLIC Steam profile, with no API key at all.
 
@@ -472,10 +492,10 @@ def _steam_public_entries(cfg: dict, http) -> list[ListEntry]:
             "the profile's Game Details to Public, or add a free API key "
             "from steamcommunity.com/dev/apikey")
     out = []
-    for game in root.findall(".//game/name"):
-        name = (game.text or "").strip()
+    for game in root.findall(".//game"):
+        name = (game.findtext("name") or "").strip()
         if name:
-            out.append(ListEntry(game=name))
+            out.append(ListEntry(game=name, store_id=steam_app_id(game.findtext("appID"))))
     if not out and root.tag == "response":
         raise ValueError("Steam did not recognise that profile")
     return out
@@ -501,8 +521,11 @@ def _steam_entries(cfg: dict, *, session=None) -> list[ListEntry]:
                     "include_appinfo": 1, "include_played_free_games": 1},
             timeout=30)
         response.raise_for_status()
-        games = ((response.json().get("response") or {}).get("games")) or []
-        return [ListEntry(game=clean_title(g["name"]))
+        owned = response.json().get("response") or {}
+        if "games" not in owned and "game_count" not in owned:
+            raise ValueError("Steam did not return your owned library. Check the SteamID, key and Game Details privacy.")
+        games = owned.get("games") or []
+        return [ListEntry(game=clean_title(g["name"]), store_id=steam_app_id(g.get("appid")))
                 for g in games if g.get("name")]
 
     # Wishlist appids come without names; each name is a store lookup.
@@ -714,10 +737,8 @@ LIST_TYPES = {
     },
     "steam": {
         "label": "Steam library / wishlist",
-        "help": "Owned games need NO credential: paste your profile URL or "
-                "vanity name with Game Details set to Public. A Web API key "
-                "(steamcommunity.com/dev/apikey) is only required for the "
-                "wishlist.",
+        "help": "Add a Steam Web API key and SteamID to sync your owned games "
+                "or wishlist. Sign in through Steam to save your SteamID.",
         "fields": ["name", "enable", "platform", "profile", "steam_id",
                    "api_key", "source"],
     },
@@ -845,3 +866,128 @@ NO_API_STORES = {
                 "acquisition matters most anyway.",
 }
 
+
+def owned_provider(cfg: dict) -> str:
+    """Identify a storefront collection, including an explicit manual import."""
+    kind = str(cfg.get("type") or "").lower()
+    if kind == "steam" and str(cfg.get("source") or "").lower() == "wishlist":
+        return ""
+    provider = cfg.get("provider") if kind == "paste" else kind
+    return provider if isinstance(provider, str) and provider in OWNED_PROVIDERS else ""
+
+
+def owned_games(lists: list[dict], *, devices: Sequence[dict] = (), q: str = "",
+                provider: str = "", offset: int = 0, limit: int = 100) -> dict:
+    """Return a searchable page from account snapshots without credentials."""
+    needle = q.strip().casefold()
+    entries = {}
+    steam_ids_by_title = {}
+    pending = []
+    sources = []
+    labels = {**OWNED_PROVIDERS, "playnite": "Playnite"}
+
+    def add_game(kind, row, label, basis, installed_on="", *, defer=True):
+        name = row["name"]
+        store_id = steam_app_id(row.get("store_id")) if kind == "steam" else ""
+        title_key = (kind, "name", clean_title(name).casefold())
+        key = title_key
+        if store_id:
+            key = (kind, "id", store_id)
+            steam_ids_by_title.setdefault(title_key, set()).add(key)
+        elif kind == "steam":
+            if defer:
+                pending.append((kind, row, label, basis, installed_on))
+                return
+            known_ids = steam_ids_by_title.get(title_key, ())
+            if len(known_ids) == 1:
+                key = next(iter(known_ids))
+        game = entries.setdefault(key, {
+            "name": name, "provider": kind, "provider_label": labels[kind],
+            "store_id": store_id, "sources": [], "basis": basis, "installed_on": [],
+        })
+        if game["basis"] == "reported":
+            game["basis"] = basis
+        if label not in game["sources"]:
+            game["sources"].append(label)
+        if installed_on and installed_on not in game["installed_on"]:
+            game["installed_on"].append(installed_on)
+
+    for cfg in lists:
+        kind = owned_provider(cfg)
+        if not kind or not cfg.get("enable", True):
+            continue
+        snapshot = cfg.get("owned_snapshot")
+        if snapshot is None:
+            legacy = ([item.game for item in fetch_entries(cfg)]
+                      if cfg.get("type") == "paste" else cfg.get("unmatched") or [])
+            rows = [{"name": name} for name in legacy if isinstance(name, str)]
+            at = ""
+        else:
+            rows = snapshot["games"]
+            at = snapshot["at"]
+        label = str(cfg.get("name") or labels[kind])
+        basis = "activity" if kind in ("psn", "xbox") else "library"
+        sources.append({"provider": kind, "label": label, "at": at,
+                        "count": len(rows), "cached_legacy": snapshot is None,
+                        "failed": bool((cfg.get("last_sync") or {}).get("error")),
+                        "basis": basis})
+        for row in rows:
+            add_game(kind, row, label, basis)
+
+    for device in devices:
+        label = device["name"]
+        for row in device["games"]:
+            installed_on = label if row["installed"] else ""
+            add_game(row["provider"], row, label, "reported", installed_on)
+
+    for args in pending:
+        add_game(*args, defer=False)
+
+    counts: dict[str, int] = {}
+    matches = []
+    for item in entries.values():
+        kind = item["provider"]
+        counts[kind] = counts.get(kind, 0) + 1
+        if (not provider or kind == provider) and needle in item["name"].casefold():
+            matches.append(item)
+    matches.sort(key=lambda game: (game["name"].casefold(), game["provider"]))
+    return {"items": matches[offset:offset + limit], "offset": offset,
+            "total": len(matches), "providers": [
+                {"id": kind, "name": label, "count": counts.get(kind, 0)}
+                for kind, label in labels.items() if counts.get(kind)
+                or any(source["provider"] == kind for source in sources)],
+            "sources": sources, "devices": [
+                {"name": device["name"], "os": device["os"], "at": device["at"],
+                 "count": len(device["games"])} for device in devices],
+            }
+
+
+DEVICE_REPORT_MAX_BYTES = 4 * 1024 * 1024
+DEVICE_REPORT_MAX_GAMES = 25_000
+
+
+def device_report(body, at: str) -> dict:
+    """Accept a bounded catalogue snapshot containing no paths or credentials."""
+    if not isinstance(body, dict):
+        raise ValueError("Expected a device report")
+    key = str(body.get("device_id") or "").strip().lower()
+    name = str(body.get("name") or "").strip()
+    os_name = str(body.get("os") or "").lower()
+    games = body.get("games")
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_.-]{0,79}", key) or not 1 <= len(name) <= 100:
+        raise ValueError("A valid device ID and name are required")
+    if os_name not in {"windows", "linux", "macos", "other"}:
+        raise ValueError("Unknown device operating system")
+    if not isinstance(games, list) or len(games) > DEVICE_REPORT_MAX_GAMES:
+        raise ValueError(f"Report no more than {DEVICE_REPORT_MAX_GAMES:,} games")
+    rows = []
+    for row in games:
+        if not isinstance(row, dict):
+            raise ValueError("Each device game must be an object")
+        title = str(row.get("name") or "").strip()
+        provider = str(row.get("provider") or "").lower()
+        if not title or len(title) > 400 or provider not in (*OWNED_PROVIDERS, "playnite"):
+            raise ValueError("Each device game needs a title and a known storefront")
+        rows.append({"name": title, "provider": provider, "installed": row.get("installed") is True,
+                     "store_id": steam_app_id(row.get("store_id")) if provider == "steam" else ""})
+    return {"id": key, "name": name, "os": os_name, "at": at, "games": rows}

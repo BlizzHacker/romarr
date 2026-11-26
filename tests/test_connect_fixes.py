@@ -95,3 +95,72 @@ def test_unmatched_titles_are_kept_visible_not_discarded(tmp_path):
     assert out["unknown"] == 2
     stored = svc.store.list_items("import_lists")[0]
     assert sorted(stored["unmatched"]) == ["Diablo IV", "Overwatch"]
+
+
+def test_owned_store_sync_keeps_all_games_past_the_legacy_limit(tmp_path, monkeypatch):
+    from romarr import lists
+    from romarr.app import ROMarr
+
+    service = ROMarr({"ROMARR_DATA": str(tmp_path / "state.json")})
+    service.store.put_item("import_lists", {"name": "My Steam", "type": "steam",
+                                             "api_key": "private-key"})
+    entries = [lists.ListEntry(f"Game {i:03}", store_id=str(1000 + i))
+               for i in range(620)]
+    monkeypatch.setattr(lists, "fetch_entries", lambda cfg: entries)
+    assert service.list_sync()["added"] == 0
+    stored = service.store.list_items("import_lists")
+    assert len(stored[0]["unmatched"]) == 500
+    page = lists.owned_games(stored, offset=600)
+    assert page["total"] == 620 and len(page["items"]) == 20
+    assert page["items"][0]["store_id"] == "1600"
+    assert "private-key" not in json.dumps(page)
+    assert "owned_snapshot" not in service.safe_settings()["import_lists"][0]
+
+
+def test_owned_view_excludes_wishlist_and_accepts_manual_store_titles():
+    from romarr.lists import owned_games
+
+    page = owned_games([
+        {"type": "steam", "source": "wishlist", "unmatched": ["Wishlist Only"]},
+        {"type": "paste", "name": "My Amazon", "provider": "amazon",
+         "content": "Game - Definitive Edition\nAnother Game"},
+        {"type": "battlenet", "enable": False, "unmatched": ["Disabled"]},
+    ], q="definitive")
+    assert [row["name"] for row in page["items"]] == ["Game - Definitive Edition"]
+    assert page["providers"] == [{"id": "amazon", "name": "Amazon Games", "count": 2}]
+
+
+def test_device_report_links_to_owned_steam_id_without_exposing_paths():
+    from romarr.lists import device_report, owned_games
+
+    report = device_report({"device_id": "Gaming-PC", "name": "Gaming PC", "os": "windows",
+                            "games": [{"provider": "steam", "name": "Example™",
+                                       "installed": True, "path": "C:/private"}]}, "now")
+    assert report["id"] == "gaming-pc"
+    assert "path" not in report["games"][0]
+    source = {"type": "steam", "owned_snapshot": {"at": "now",
+              "games": [{"name": "Example", "store_id": "123"}]}}
+    found = owned_games([source], devices=[report])
+    assert found["total"] == 1
+    assert found["items"][0]["store_id"] == "123"
+    assert found["items"][0]["installed_on"] == ["Gaming PC"]
+
+
+def test_collector_only_displays_active_paid_base_games_and_official_links():
+    from datetime import datetime, timezone
+    from romarr.free_game_collector import epic_offers
+
+    giveaway = {"id": "1", "title": "Base game", "offerType": "BASE_GAME",
+                "productSlug": "example/home",
+                "price": {"totalPrice": {"discountPrice": 0, "originalPrice": 999}},
+                "promotions": {"promotionalOffers": [{"promotionalOffers": [
+                    {"startDate": "2026-11-26T16:00:00Z", "endDate": "2026-12-03T16:00:00Z"}
+                ]}]}}
+    rows = [giveaway, {**giveaway, "id": "2", "offerType": "ADD_ON"},
+            {**giveaway, "id": "3", "promotions": None},
+            {**giveaway, "id": "4", "price": {
+                "totalPrice": {"discountPrice": 0, "originalPrice": 0}}}]
+    payload = {"data": {"Catalog": {"searchStore": {"elements": rows}}}}
+    offers = epic_offers(payload, now=datetime(2026, 11, 27, tzinfo=timezone.utc))
+    assert [offer["url"] for offer in offers] == ["https://store.epicgames.com/en-US/p/example"]
+    assert epic_offers(payload, now=datetime(2026, 12, 4, tzinfo=timezone.utc)) == []
