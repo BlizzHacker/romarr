@@ -2703,7 +2703,13 @@ class ROMarr:
         return ("minerva-archive" in searchable
                 and self._selective_torrent_client() is not None)
 
-    def _hub_releases(self, game: str, platform=None) -> list:
+    def _repacks_search_ready(self, searchable: list[str]) -> bool:
+        """FitGirl & DODI Repacks can search and grab with any configured torrent client."""
+        return ("repacks" in searchable
+                and pick_client("torrent", self.clients) is not None)
+
+    def _hub_releases(self, game: str, platform=None, *,
+                      only: str | tuple[str, ...] | None = None) -> list:
         """Turn ROM Hub search rows into releases for the shared grab flow.
 
         Magnet rows from ordinary torrent plugins use the configured torrent
@@ -2716,11 +2722,16 @@ class ROMarr:
         Non-torrent plugin rows keep their hub download URL and are fetched
         through ROM Hub's bounded FetchPlan lane.
         """
-        only = None
-        if not self._hub_enabled():
-            if not self._minerva_search_ready(hub.searchable_plugins()):
+        if only is None and not self._hub_enabled():
+            searchable = hub.searchable_plugins()
+            ready: list[str] = []
+            if self._minerva_search_ready(searchable):
+                ready.append("minerva-archive")
+            if self._repacks_search_ready(searchable):
+                ready.append("repacks")
+            if not ready:
                 return []
-            only = "minerva-archive"
+            only = ready[0] if len(ready) == 1 else tuple(ready)
         from .selection import Release
         try:
             search_options = {"only": only} if only else {}
@@ -2745,7 +2756,7 @@ class ROMarr:
             if not row.get("title"):
                 continue
             plugin_slug = str(row.get("plugin") or "")
-            if only is not None and plugin_slug != only:
+            if only is not None and (plugin_slug != only if isinstance(only, str) else plugin_slug not in only):
                 continue
             if plugin_slug in hub.NON_GAME_PLUGINS:
                 # Guides, videos, mods and tools are not the game.
@@ -8377,6 +8388,18 @@ class ROMarr:
             except Exception as err:
                 log.warning("%s feed read failed: %s", label,
                             err.__class__.__name__)
+        # Automatic FitGirl & DODI Repacks RSS subscription: when the `repacks`
+        # plugin is installed/enabled and a PC (`win`) title is monitored, poll
+        # its subscribed RSS feeds (`fitgirl-repacks.site/feed/` and
+        # `dodi-repacks.site/feed/`) alongside Torznab/Newznab feeds.
+        if any((resolve(w.platform) and resolve(w.platform).slug == "win") for w in wanted):
+            searchable = hub.searchable_plugins()
+            if "repacks" in searchable and (self._hub_enabled() or self._repacks_search_ready(searchable)):
+                try:
+                    releases += self._hub_releases("latest", resolve("win"), only="repacks")
+                    sources += 1
+                except Exception as err:
+                    log.warning("repacks rss feed read failed: %s", err.__class__.__name__)
         if not sources:
             return "no indexer could be read"
         grabbed_count = skipped_in_flight = 0

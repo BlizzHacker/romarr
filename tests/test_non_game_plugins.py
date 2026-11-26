@@ -40,6 +40,8 @@ def test_hub_search_skips_non_game_and_incompatible_platform_plugins():
     assert not hub._plugin_supports_platform(make("youtube-tutorials"), None)
     assert not hub._plugin_supports_platform(make("demozoo"), "snes")
     assert not hub._plugin_supports_platform(make("aminet"), "switch")
+    assert not hub._plugin_supports_platform(make("repacks"), "snes")
+    assert hub._plugin_supports_platform(make("repacks"), "win")
     assert not hub._plugin_supports_platform(make("custom-amiga", ("amiga",)), "snes")
     assert hub._plugin_supports_platform(make("demozoo"), "amiga")
     assert hub._plugin_supports_platform(make("demozoo"), None)

@@ -637,6 +637,7 @@ PLATFORM_SCOPED_PLUGINS: dict[str, frozenset[str]] = {
     "snes-central": frozenset({"snes"}),
     "smwcentral": frozenset({"snes", "n64"}),
     "exodos": frozenset({"dos", "win"}),
+    "repacks": frozenset({"win", "pc", "windows", "dos", "linux"}),
     "scummvm-freeware": frozenset({"dos", "win", "amiga", "atari-st", "mac"}),
 }
 
