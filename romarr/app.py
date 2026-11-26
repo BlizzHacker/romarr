@@ -11249,9 +11249,6 @@ def make_handler(service: ROMarr):
                     devices=service.store.list_items("owned_devices"),
                     q=query.get("q", [""])[0], provider=query.get("provider", [""])[0],
                     offset=offset, limit=limit))
-            if route.path == "/api/v1/importlist/reconnect":
-                result = service.reconnect_import_list(str(body.get("id") or ""), body.get("credential"))
-                return self._json(200 if result.get("ok") else 400, result)
             if route.path == "/api/v1/importlist":
                 items = []
                 for cfg in service.store.list_items("import_lists"):
@@ -12161,6 +12158,9 @@ def make_handler(service: ROMarr):
                 except ValueError as exc:
                     return self._json(400, {"error": str(exc)})
                 return self._json(200, meta)
+            if route.path == "/api/v1/importlist/reconnect":
+                result = service.reconnect_import_list(str(body.get("id") or ""), body.get("credential"))
+                return self._json(200 if result.get("ok") else 400, result)
             if route.path == "/api/v1/importlist":
                 cfg = {k: body.get(k, "") for k in
                        ("id", "name", "type", "platform", "content", "url",

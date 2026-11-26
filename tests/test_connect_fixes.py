@@ -257,3 +257,27 @@ def test_ea_redirect_fragment_is_accepted():
     from romarr.connect import extract_value
 
     assert extract_value("ea_token", "https://accounts.ea.com/#access_token=fresh") == "fresh"
+
+
+def test_reconnect_api_dispatches_the_authenticated_post(tmp_path):
+    from http.server import ThreadingHTTPServer
+    from threading import Thread
+    import requests
+    from romarr.app import ROMarr, make_handler
+
+    app = ROMarr({"ROMARR_DATA": str(tmp_path / "state.json"), "ROMARR_API_KEY": "test-admin"})
+    app.reconnect_import_list = lambda item_id, value: {"ok": True, "fetched": 7}
+    with ThreadingHTTPServer(("127.0.0.1", 0), make_handler(app)) as server:
+        worker = Thread(target=server.serve_forever, daemon=True)
+        worker.start()
+        try:
+            url = f"http://127.0.0.1:{server.server_port}/api/v1/importlist/reconnect"
+            body = {"id": "xbox", "credential": "test-only"}
+            assert requests.post(url, json=body, timeout=5).status_code == 401
+            headers = {"X-Api-Key": "test-admin"}
+            assert requests.get(url, headers=headers, timeout=5).status_code == 404
+            response = requests.post(url, headers=headers, json=body, timeout=5)
+            assert response.status_code == 200 and response.json()["fetched"] == 7
+        finally:
+            server.shutdown()
+            worker.join()
