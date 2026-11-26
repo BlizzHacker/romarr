@@ -2893,7 +2893,9 @@ RENDER.lists=async()=>{
           <a class="btn ghost" href="steam://rungameid/${steamId}">Play in Steam</a></div>`:esc(game.sources.join(', '))}</td></tr>`;
     }).join('');
     results.innerHTML=`<p class="help">${num(offset+1)}–${num(offset+games.length)} of ${num(page.total)}
-      ${mode==='roms'&&page.partial?' · '+esc(page.scan_message||'Library read is incomplete'):''}</p>
+      ${mode==='roms'&&page.partial?' · '+esc(page.scan_message||'Library read is incomplete'):
+        mode==='roms'&&page.scan?.running?' · Updating the library. Showing the last complete scan.':
+        mode==='roms'&&page.error?' · Showing the last complete scan. '+esc(page.scan_message||page.error):''}</p>
       ${mode==='owned'&&games.some(game=>game.provider==='steam'&&game.store_id)?'<p class="help">Steam opens on this device and lets you choose the install drive.</p>':''}
       <div style="overflow-x:auto"><table><thead><tr><th>Game</th><th>${mode==='owned'?'Storefront':'Platform'}</th>
       <th>${mode==='owned'?'Account or action':'Library'}</th></tr></thead><tbody>${rows}</tbody></table></div>
