@@ -2561,8 +2561,13 @@ RENDER.search=async()=>{
       $('#s-out').innerHTML=`<p class="help" style="color:var(--warn)">${esc(d.error)}</p>`;
       return;
     }
+    const timingNote=(d.timings&&d.timings.length)
+      ? ` in <b>${((d.elapsed_ms||0)/1000).toFixed(1)}s</b> (`
+        + d.timings.map(t=>`${esc(t.source)}: ${(t.ms/1000).toFixed(1)}s${t.ms>=4000?' ⚠ slow':''}`).join(', ')
+        + `)`
+      : '';
     if(!d.items.length){
-      $('#s-out').innerHTML='<div class="panel-note"><b>No releases returned.</b>'
+      $('#s-out').innerHTML='<div class="panel-note"><b>No releases returned'+(timingNote?' ('+timingNote.trim()+')':'')+'.</b>'
         +'<p>No download was started. Check the search source first:</p>'
         +'<ol><li>Open <a href="#indexers">Indexers</a>, enable your source and use its <b>Test</b> button. '
         +'For Prowlarr, check the indexer there too.</li>'
@@ -2576,7 +2581,7 @@ RENDER.search=async()=>{
     }
     $('#s-out').innerHTML=`
       <p class="help"><b>${d.found}</b> releases, <b>${d.accepted}</b> of them
-        acceptable. Rejected rows are shown too, because why a release was
+        acceptable${timingNote}. Rejected rows are shown too, because why a release was
         refused is usually the answer you came for.</p>
       <table><thead><tr><th>Score</th><th>Release</th><th>Size</th>
         <th>Seeders</th><th>Indexer</th><th>Why</th><th></th></tr></thead><tbody>
@@ -4234,11 +4239,14 @@ RENDER.cloud=async()=>{
     <div id="cl-runs">${(st.runs||[]).length?`<table class="pd-table"><tr><th>Run</th><th>State</th><th>Progress</th><th>Started</th><th>Result</th></tr>${st.runs.map(runRow).join('')}</table>`:''}</div>
   </div>
   <div class="card"><b>Mounts</b> <span class="help">An rclone mount makes a cloud folder a local folder, usable as a library root (Settings → Libraries).</span>
+    ${!st.fuse.available?`<p class="help" style="color:var(--warn)"><b>FUSE is unavailable on this server:</b> ${esc(st.fuse.reason||'Grant /dev/fuse and SYS_ADMIN to mount cloud folders.')}</p>`:''}
+    ${remotes.length&&!remotes.some(r=>r.engine==='rclone')?`<p class="help" style="color:var(--warn)">Your current cloud connection uses the built-in engine (for browsing, backups and imports). To mount a cloud folder as a local filesystem path, add a connection using an <b>rclone</b> provider above.</p>`:''}
     ${(st.mounts||[]).length?`<table class="pd-table"><tr><th>Folder</th><th>Cloud</th><th>Cache</th><th>State</th><th></th></tr>${st.mounts.map(m=>`<tr><td>${esc(m.mount_point)}</td><td>${esc(m.remote)}:${esc(m.remote_path||'/')}</td><td>${esc(m.cache_mode)}</td><td>${(st.mount_states||{})[m.id]?'<span class="pill">mounted</span>':'not mounted'}</td><td><button class="btn ghost" data-mon="${esc(m.id)}">${(st.mount_states||{})[m.id]?'Unmount':'Mount'}</button> <button class="btn danger" data-mdel="${esc(m.id)}">Delete</button></td></tr>`).join('')}</table>`:''}
+    <div id="cm-msg" class="testline"></div>
     <details><summary><b>Add a mount</b></summary>
       <div class="row" style="gap:10px;flex-wrap:wrap"><div class="field"><label for="cm-remote">Connection</label><select id="cm-remote">${ropt('',r=>r.engine==='rclone')}</select></div>${cloudField('cm-rpath','Cloud folder','','ROMs')}${cloudField('cm-point','Mount folder (empty)','','/mnt/cloud-roms')}<div class="field"><label for="cm-cache">Cache</label><select id="cm-cache"><option>full</option><option>writes</option><option>minimal</option><option>off</option></select></div>${cloudField('cm-max','Cache limit (GB)','10','10','number')}</div>
       <label class="check"><input type="checkbox" id="cm-auto" checked> Mount when ROMarr starts</label> <label class="check"><input type="checkbox" id="cm-other"> Let other users (RomM, Plex) read it (needs user_allow_other in /etc/fuse.conf)</label>
-      <button class="btn" id="cm-save">Save mount</button><div id="cm-msg" class="testline"></div>
+      <button class="btn" id="cm-save">Save mount</button>
     </details>
   </div>
   <div class="card"><b>Your own OAuth apps</b> <span class="help">Optional for rclone; required for the built-in Google Drive and OneDrive. Register the paste-back address (Google: <code>${esc(st.paste_redirects.gdrive)}</code>, Microsoft: <code>${esc(st.paste_redirects.onedrive)}</code>) and, for the direct return, <code>${esc(location.origin)}/api/v1/cloud/oauth/callback</code></span>
@@ -4343,8 +4351,10 @@ RENDER.cloud=async()=>{
   // mounts
   $('#cm-save').onclick=()=>act(()=>cloudPost('mounts',{remote:$('#cm-remote').value,remote_path:$('#cm-rpath').value.trim(),mount_point:$('#cm-point').value.trim(),
     cache_mode:$('#cm-cache').value,cache_max_gb:Number($('#cm-max').value||10),auto:$('#cm-auto').checked,allow_other:$('#cm-other').checked}),'cm-msg','Saved.',true);
-  document.querySelectorAll('[data-mon]').forEach(b=>b.onclick=()=>{const on=(st.mount_states||{})[b.dataset.mon];
-    act(()=>cloudPost(on?'mounts/unmount':'mounts/mount',{id:b.dataset.mon}),'cm-msg',on?'Unmounted.':'Mounted.',true);});
+  document.querySelectorAll('[data-mon]').forEach(b=>b.onclick=async()=>{const on=(st.mount_states||{})[b.dataset.mon];
+    b.disabled=true; cloudSay('cm-msg',on?'Unmounting…':'Mounting…');
+    const r=await act(()=>cloudPost(on?'mounts/unmount':'mounts/mount',{id:b.dataset.mon}),'cm-msg',on?'Unmounted.':'Mounted.',true);
+    if(!r&&cloudCur(version)) b.disabled=false;});
   document.querySelectorAll('[data-mdel]').forEach(b=>b.onclick=()=>{ if(confirm('Delete this mount? It is unmounted first; cloud files are not touched.')) act(()=>cloudPost('mounts/delete',{id:b.dataset.mdel}),'cm-msg','Deleted.',true);});
   // apps and hosts
   document.querySelectorAll('[data-app]').forEach(b=>b.onclick=()=>{const p=b.dataset.app;

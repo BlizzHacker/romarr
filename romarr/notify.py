@@ -70,6 +70,10 @@ class Message:
     #: The ROMarr page this is about, as a path such as "/#queue". The
     #: Notifier turns it into `url` when the install knows its public address.
     path: str = ""
+    #: Structured context for generic webhook integrations.
+    platform: str = ""
+    external_request_id: str = ""
+    assets: tuple[str, ...] = ()
 
     def text(self) -> str:
         lines = [self.title]
@@ -205,12 +209,16 @@ def _webhook(cfg: dict, message: Message) -> bool:
     """
     delivery = uuid.uuid4().hex
     created = int(time.time())
-    body = json.dumps({
+    payload = {
         "id": delivery, "createdAt": created,
         "event": message.event, "title": message.title,
         "body": message.body, "reasons": list(message.reasons),
         "url": message.url,
-    }).encode()
+        "platform": message.platform,
+        "external_request_id": message.external_request_id,
+        "assets": list(message.assets),
+    }
+    body = json.dumps(payload).encode()
     url = cfg.get("url", "")
     secret = str(cfg.get("secret") or "")
 
@@ -393,7 +401,8 @@ class Notifier:
         return event in events
 
 
-def grabbed(title: str, platform: str, indexer: str, reasons) -> Message:
+def grabbed(title: str, platform: str, indexer: str, reasons, *,
+            external_request_id: str = "", assets: tuple[str, ...] | list[str] = ()) -> Message:
     """The message other tools cannot send.
 
     Radarr tells you it grabbed something. This tells you what it weighed,
@@ -405,10 +414,14 @@ def grabbed(title: str, platform: str, indexer: str, reasons) -> Message:
         body=f"{platform} — from {indexer}" if platform else f"from {indexer}",
         reasons=tuple(reasons or ()),
         path="/#queue",
+        platform=str(platform or ""),
+        external_request_id=str(external_request_id or ""),
+        assets=tuple(str(a) for a in (assets or ())),
     )
 
 
-def imported(title: str, platform: str, verification) -> Message:
+def imported(title: str, platform: str, verification, *,
+             external_request_id: str = "", assets: tuple[str, ...] | list[str] = ()) -> Message:
     status = getattr(verification, "status", "") or ""
     detail = getattr(verification, "detail", "") or ""
     game = getattr(verification, "game", "") or ""
@@ -423,12 +436,19 @@ def imported(title: str, platform: str, verification) -> Message:
         event = ON_IMPORT
     return Message(event=event, title=f"Imported {title}",
                    body=f"{platform} — {note}" if platform else note,
-                   path="/#history")
+                   path="/#history",
+                   platform=str(platform or ""),
+                   external_request_id=str(external_request_id or ""),
+                   assets=tuple(str(a) for a in (assets or ())))
 
 
-def failed(title: str, reason: str) -> Message:
+def failed(title: str, reason: str, *, platform: str = "",
+           external_request_id: str = "", assets: tuple[str, ...] | list[str] = ()) -> Message:
     return Message(event=ON_FAILURE, title=f"Failed {title}", body=reason,
-                   path="/#history")
+                   path="/#history",
+                   platform=str(platform or ""),
+                   external_request_id=str(external_request_id or ""),
+                   assets=tuple(str(a) for a in (assets or ())))
 
 
 def update_available(current: str, latest: str, url: str = "") -> Message:

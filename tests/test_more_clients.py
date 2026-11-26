@@ -317,3 +317,64 @@ def test_transmission_only_returns_completed_torrent_content_paths():
     completed, = client.completed()
     assert completed["content_path"] == "/downloads/Folder"
     assert completed["name"] == "Display name"
+
+
+def test_deluge_uploads_torrent_files_creates_missing_label_and_reports_completed(tmp_path):
+    from romarr.app import QueueItem, ROMarr
+    from romarr.downloaders import Deluge, DelugeConfig
+
+    roms = tmp_path / "roms"
+    downloads = tmp_path / "downloads"
+    roms.mkdir()
+    downloads.mkdir()
+    rom = downloads / "Super Metroid (USA).sfc"
+    rom.write_bytes(b"test ROM bytes")
+    info_hash = "b" * 40
+    session = FakeSession([
+        FakeResponse(200, {"result": True, "error": None}),          # auth.login
+        FakeResponse(200, {"result": True, "error": None}),          # web.connected
+        FakeResponse(200, {"result": info_hash.upper(), "error": None}),  # core.add_torrent_file
+        FakeResponse(200, {"result": None, "error": {"message": "Unknown Label"}}),  # label.set_torrent
+        FakeResponse(200, {"result": None, "error": None}),          # label.add
+        FakeResponse(200, {"result": None, "error": None}),          # label.set_torrent retry
+        FakeResponse(200, {"result": True, "error": None}),          # completed: auth.login
+        FakeResponse(200, {"result": True, "error": None}),          # completed: web.connected
+        FakeResponse(200, {"result": {
+            info_hash: {
+                "name": rom.name,
+                "save_path": str(downloads),
+                "state": "Seeding",
+                "progress": 100.0,
+                "is_finished": True,
+                "label": "romarr",
+                "files": [{"path": rom.name}],
+            },
+            "c" * 40: {
+                "name": "Other.sfc",
+                "save_path": str(downloads),
+                "state": "Downloading",
+                "progress": 42.0,
+                "is_finished": False,
+                "label": "romarr",
+                "files": [{"path": "Other.sfc"}],
+            },
+        }, "error": None}),
+    ])
+    client = Deluge(DelugeConfig("http://d:8112", password="p", category="romarr"),
+                    session=session)
+    assert client.supports_torrent_file is True
+    assert client.add_torrent_file(b"d8:announce4:test4:infod4:name4:gameee")
+    assert client.last_job_id == info_hash
+    methods = [json.loads(c["data"])["method"] for c in session.calls]
+    assert "core.add_torrent_file" in methods
+    assert "label.add" in methods
+
+    service = ROMarr({"ROMARR_DATA": str(tmp_path / "state.json"),
+                      "LIBRARY_KIND": "folder", "LIBRARY_PATH": str(roms)})
+    service.clients = [client]
+    item = QueueItem("Super Metroid", "snes", rom.name, 1, "grabbed",
+                     download_id=client.last_job_id)
+    service.queue.append(item)
+    result = service.import_finished()
+    assert item.state == "imported", result
+    assert (roms / "snes" / rom.name).read_bytes() == rom.read_bytes()

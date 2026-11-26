@@ -616,6 +616,53 @@ NON_GAME_PLUGINS = frozenset({
     "compressatorium", "mdm",
 })
 
+#: Plugins whose catalogue only covers specific platforms. When an operator
+#: searches for a specific system outside a plugin's scope (e.g. searching for
+#: a Switch or SNES game while `demozoo`, `aminet` or `worldofspectrum` is
+#: enabled), skipping incompatible plugins avoids waiting on slow remote APIs
+#: whose results could never match the requested platform.
+PLATFORM_SCOPED_PLUGINS: dict[str, frozenset[str]] = {
+    "demozoo": frozenset({
+        "dos", "amiga", "c64", "zxs", "zx81", "sinclair-zx81", "atari-st",
+        "cpc", "msx", "msx2", "vic-20", "plus4", "atari800", "atari2600",
+        "apple2", "appleii", "win", "linux",
+    }),
+    "aminet": frozenset({"amiga", "cd32"}),
+    "whdload": frozenset({"amiga", "cd32"}),
+    "lemon64": frozenset({"c64"}),
+    "csdb": frozenset({"c64", "vic-20", "plus4"}),
+    "worldofspectrum": frozenset({"zxs", "zx81", "sinclair-zx81"}),
+    "zxart": frozenset({"zxs", "zx81", "sinclair-zx81"}),
+    "famicom-world": frozenset({"nes", "fds"}),
+    "snes-central": frozenset({"snes"}),
+    "smwcentral": frozenset({"snes", "n64"}),
+    "exodos": frozenset({"dos", "win"}),
+    "scummvm-freeware": frozenset({"dos", "win", "amiga", "atari-st", "mac"}),
+}
+
+
+def _plugin_supports_platform(plugin, platform: str | None) -> bool:
+    """Whether `plugin` can return game releases for `platform` when `only` is None."""
+    slug = str(getattr(plugin, "slug", "") or "")
+    if slug in NON_GAME_PLUGINS:
+        return False
+    if not platform:
+        return True
+    resolved = resolve(platform)
+    candidates = {str(platform).lower(), str(_search_platform(platform) or "").lower()}
+    if resolved is not None:
+        candidates.add(resolved.slug.lower())
+    candidates.discard("")
+    scoped = PLATFORM_SCOPED_PLUGINS.get(slug)
+    if scoped is not None and not (candidates & scoped):
+        return False
+    manifest_plats = getattr(getattr(plugin, "manifest", None), "platforms", None) or ()
+    if manifest_plats:
+        declared = {str(p).strip().lower() for p in manifest_plats if str(p).strip()}
+        if declared and not (declared & {"*", "all", "any"}) and not (candidates & declared):
+            return False
+    return True
+
 
 def searchable_plugins() -> list[str]:
     """Slugs of installed, enabled plugins that declare `search`."""
@@ -671,6 +718,7 @@ def search(query: str, platform: str | None = None, limit: int = 25,
         plugins = [p for p in _registry.Registry(HOME).installed()
                    if getattr(p, "enabled", True)
                    and (only is None or (p.slug == only if isinstance(only, str) else p.slug in only))
+                   and (only is not None or _plugin_supports_platform(p, platform))
                    and "search" in (getattr(p.manifest, "capabilities", ())
                                     or ())]
     except Exception as exc:
