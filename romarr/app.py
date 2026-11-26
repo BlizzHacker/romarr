@@ -9288,6 +9288,47 @@ class ROMarr:
         finally:
             self._list_sync_lock.release()
 
+    def reconnect_import_list(self, item_id: str, pasted: str) -> dict:
+        """Test a replacement credential before updating one account snapshot."""
+        from .connect import RECONNECT_FIELDS, extract_value
+        from .lists import fetch_entries
+
+        original = self.store.get_item("import_lists", item_id)
+        if original is None:
+            return {"error": "This import list no longer exists"}
+        field = RECONNECT_FIELDS.get(original.get("type"))
+        if not field:
+            return {"error": "This source cannot be reconnected here"}
+        if original["type"] == "steam" and not original.get("steam_id"):
+            return {"error": "Link your Steam account before adding its Web API key"}
+        if not isinstance(pasted, str) or not 0 < len(pasted) <= 8192:
+            return {"error": "Paste a credential from the provider page"}
+        try:
+            value = extract_value(field, pasted)
+        except ValueError:
+            return {"error": "Paste the credential from the provider page"}
+        if not value or any(char.isspace() for char in value):
+            return {"error": "Paste the credential from the provider page"}
+        candidate = {**original, field: value}
+        try:
+            entries = fetch_entries(candidate)
+        except requests.RequestException:
+            return {"error": "The provider could not read this library. Check its connection and try again."}
+        except ValueError as err:
+            return {"error": str(err)}
+        at = now_iso()
+        candidate["last_sync"] = {"at": at, "fetched": len(entries)}
+        if owned_provider(candidate):
+            candidate["owned_snapshot"] = {"at": at, "games": [
+                {"name": entry.game, "store_id": entry.store_id} for entry in entries
+            ]}
+        candidate["unmatched"] = list(dict.fromkeys(
+            entry.game for entry in entries
+            if resolve(entry.platform or candidate.get("platform") or "") is None))[:500]
+        if not self.store.replace_list_sync(original, candidate):
+            return {"error": "The list changed during the check. Reopen it and try again."}
+        return {"ok": True, "fetched": len(entries)}
+
     def _sync_import_lists(self) -> dict:
         """Read each list once and retain storefront entries beside its ledger."""
         from .lists import fetch_entries
@@ -11208,6 +11249,9 @@ def make_handler(service: ROMarr):
                     devices=service.store.list_items("owned_devices"),
                     q=query.get("q", [""])[0], provider=query.get("provider", [""])[0],
                     offset=offset, limit=limit))
+            if route.path == "/api/v1/importlist/reconnect":
+                result = service.reconnect_import_list(str(body.get("id") or ""), body.get("credential"))
+                return self._json(200 if result.get("ok") else 400, result)
             if route.path == "/api/v1/importlist":
                 items = []
                 for cfg in service.store.list_items("import_lists"):

@@ -2737,6 +2737,7 @@ RENDER.lists=async()=>{
   const current=()=>activePage==='lists'&&pageVersion===version;
   const d=await j('/api/v1/importlist').catch(()=>({items:[]}));
   if(!current())return;
+  const reconnectable=new Set(['steam','ea','psn','xbox']);
   $('#page').innerHTML=`<section class="card" aria-labelledby="l-owned-title">
     <h3 id="l-owned-title">My games</h3>
     <div class="row" role="group" aria-label="Library source" style="flex-wrap:wrap">
@@ -2783,17 +2784,20 @@ RENDER.lists=async()=>{
         spreadsheet. Each title is added once, ever; full sets and 1G1R live
         under Collections.</span></div>
     ${d.items.length?`<table><thead><tr><th>Name</th><th>Type</th>
-      <th>Platform</th><th>Added so far</th><th>Enabled</th><th></th></tr></thead><tbody>
+      <th>Platform</th><th>Added to Wanted</th><th>Library sync</th><th>Enabled</th><th></th></tr></thead><tbody>
       ${d.items.map((l,i)=>`<tr><td><b>${esc(l.name||'—')}</b>${
           l.type==='url'?`<div style="color:var(--dim);font-size:11.5px">${esc(l.url||'')}</div>`:''}</td>
         <td>${esc(l.type)}</td><td>${esc(l.platform||'per line')}</td>
-        <td>${l.added_count||0}${l.unmatched_count
-          ?` <span class="pill" title="Titles with no ROM platform — modern store games. Open Edit to see them.">${l.unmatched_count} kept aside</span>`:''}
-          ${l.last_sync?`<div style="font-size:11px;color:${l.last_sync.error?'var(--warn)':'var(--dim)'}">
-            ${l.last_sync.error?esc(l.last_sync.error.slice(0,90))
-              :`fetched ${l.last_sync.fetched} at ${esc(fmtDateTime(l.last_sync.at||''))}`}</div>`:''}</td>
+        <td>${num(l.added_count||0)}</td>
+        <td>${l.owned_count!==undefined?`<div>${num(l.owned_count)}
+          ${l.type==='psn'||l.type==='xbox'?'played titles':'library entries'}</div>`:''}
+          ${l.last_sync?`<div class="help" style="margin:.2em 0;max-width:38ch;color:${l.last_sync.error?'var(--warn)':'var(--dim)'}">
+            ${l.last_sync.error?esc(l.last_sync.error)
+              :`Fetched ${num(l.last_sync.fetched||0)} · ${esc(fmtDateTime(l.last_sync.at||''))}`}</div>`:
+              '<small class="help">Never synced</small>'}</td>
         <td><span class="dot ${l.enable!==false?'up':'down'}"></span></td>
         <td style="text-align:right"><div class="rowact">
+          ${reconnectable.has(l.type)?`<button data-lreconnect="${i}">${l.type==='steam'&&!l.api_key?'Add API key':'Reconnect'}</button>`:''}
           <button data-ledit="${i}">Edit</button></div></td></tr>`).join('')}
       </tbody></table>`
       :'<div class="empty">No lists yet. Paste one, or connect an account, and let the clock do the asking.</div>'}
@@ -2976,58 +2980,72 @@ RENDER.lists=async()=>{
     toast(spec.how);
     editList({type:'paste',provider:b.dataset.paste,name:spec.label+' library'});
   });
-  document.querySelectorAll('[data-token]').forEach(b=>b.onclick=async()=>{
+  async function connectStore(type,item){
     const s=await j('/api/v1/connect/sources').catch(()=>({token_sources:{}}));
-    const spec=(s.token_sources||{})[b.dataset.token];
-    if(!spec){toast('Unknown store');return;}
-    window.open(spec.open,'_blank','noopener');
-    // A modal, not an inline panel: window.open moves the person to another
-    // tab, and when they come back a box further down the page is a box
-    // they never see. This one is in front of them and focused.
+    if(!current()||document.querySelector('.modal'))return;
+    const spec=(s.token_sources||{})[type];
+    if(!spec){toast('Could not load the connection instructions');return;}
     const m=document.createElement('div');
     m.className='modal';
     m.innerHTML=`<div class="box">
-      <h3>Connect ${esc(spec.label)}</h3>
-      <div class="sub">A tab just opened. ${esc(spec.how)}</div>
-      <div class="field"><label>Paste it here</label>
-        <textarea id="tok-v" rows="4" autocomplete="off" spellcheck="false"
-          placeholder='paste the whole thing — {"npsso":"..."} is fine'
-          style="width:100%;resize:vertical;font:12px/1.5 ui-monospace,
-          Menlo,monospace"></textarea>
-        <div style="color:var(--dim);font-size:11.5px;margin-top:4px">
-          Paste the entire page if you like — ROMarr pulls the value out.</div>
+      <h3>${item?'Reconnect':'Connect'} ${esc(spec.label)}</h3>
+      <div class="sub">${esc(spec.how)}</div>
+      <p><a class="btn ghost" href="${esc(spec.open)}" target="_blank" rel="noopener noreferrer">Open ${esc(spec.label)} sign-in or key page ↗</a></p>
+      <div class="field"><label for="tok-v">Paste the credential</label>
+        <textarea id="tok-v" rows="3" autocomplete="off" spellcheck="false"
+          style="width:100%;resize:vertical"></textarea>
       </div>
-      <div id="testline"></div>
+      <div id="testline" role="status"></div>
       <div class="foot">
         <button class="btn ghost sp" data-close>Cancel</button>
-        <button class="btn" id="tok-save">Connect</button>
+        <button class="btn" id="tok-save">${item?'Verify and reconnect':'Connect'}</button>
       </div></div>`;
     document.body.append(m);
-    m.onclick=e=>{ if(e.target===m||e.target.dataset.close!==undefined) closeModal(); };
-    setTimeout(()=>m.querySelector('#tok-v')?.focus(),50);
-    $('#tok-save').onclick=async()=>{
-      const value=$('#tok-v').value.trim();
-      if(!value){toast('Paste the value first');return;}
-      const body={name:spec.label+' library',type:b.dataset.token,
-                  platform:'',enable:true};
-      body[spec.field]=value;
+    m.onclick=e=>{if(e.target===m||e.target.dataset.close!==undefined)closeModal();};
+    const input=m.querySelector('#tok-v'), button=m.querySelector('#tok-save');
+    input.focus();
+    button.onclick=async()=>{
+      const value=input.value.trim();
+      if(!value){toast('Paste the credential first');return;}
       const line=(ok,msg)=>{
         const el=m.querySelector('#testline');
-        el.className='testline '+(ok?'ok':'bad'); el.textContent=msg;
+        el.className='testline '+(ok?'ok':'bad');el.textContent=msg;
       };
-      line(true,'Connecting…');
-      const saved=await j('/api/v1/importlist',{method:'POST',
-        headers:{'content-type':'application/json'},body:JSON.stringify(body)});
-      if(saved.error){line(false,saved.error);return;}
-      const r=await j('/api/v1/command',{method:'POST',
-        headers:{'content-type':'application/json'},
-        body:JSON.stringify({name:'ListSync'})});
-      // The failure reason belongs here, in front of the person who just
-      // pasted, not in a toast that vanishes.
-      const failed=(r.failures||[]).find(f=>f.id===saved.id);
-      if(failed){ line(false,failed.reason); return; }
-      closeModal(); toast(r.message||'Connected'); go('lists');
+      const post=(url,data)=>j(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(data)});
+      button.disabled=true;
+      line(true,'Checking the library…');
+      try{
+        if(item){
+          const result=await post('/api/v1/importlist/reconnect',{id:item.id,credential:value});
+          if(!current()||!m.isConnected)return;
+          if(!result.ok){line(false,result.error||'Could not reconnect');return;}
+          closeModal();toast(`${spec.label} reconnected · ${num(result.fetched)} titles fetched`);go('lists');
+        }else{
+          const saved=await post('/api/v1/importlist',{name:spec.label+' library',type,
+            platform:'',enable:true,[spec.field]:value});
+          if(!current()||!m.isConnected)return;
+          if(saved.error){line(false,saved.error);return;}
+          const result=await post('/api/v1/command',{name:'ListSync'});
+          if(!current()||!m.isConnected)return;
+          const failed=(result.failures||[]).find(row=>row.id===saved.id);
+          if(failed||result.busy||result.error){line(false,failed?.reason||result.error||result.message);return;}
+          closeModal();toast('Connected '+spec.label);go('lists');
+        }
+      }catch{
+        if(current()&&m.isConnected)line(false,'Could not verify the connection. Try again.');
+      }finally{
+        button.disabled=false;
+      }
     };
+  }
+  document.querySelectorAll('[data-token]').forEach(b=>b.onclick=()=>{
+    const type=b.dataset.token;
+    const item=reconnectable.has(type)?d.items.find(row=>row.type===type):undefined;
+    connectStore(type,item);
+  });
+  document.querySelectorAll('[data-lreconnect]').forEach(b=>b.onclick=()=>{
+    const item=d.items[Number(b.dataset.lreconnect)];
+    connectStore(item.type,item);
   });
   j('/api/v1/importlist/schema').then(s=>{
     const el=$('#l-noapi'); if(!el) return;   // page may have changed

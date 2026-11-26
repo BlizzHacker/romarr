@@ -594,7 +594,7 @@ def _gog_entries(cfg: dict, *, session=None) -> list[ListEntry]:
 # played -- is one authenticated GET. That history IS the practical library:
 # Microsoft exposes no purchased-games list even to OpenXBL.
 
-XBOX_API = "https://xbl.io/api/v2"
+XBOX_API = "https://api.xbl.io/v2"
 
 
 def _xbox_entries(cfg: dict, *, session=None) -> list[ListEntry]:
@@ -602,18 +602,26 @@ def _xbox_entries(cfg: dict, *, session=None) -> list[ListEntry]:
     http = session or requests
     key = str(cfg.get("openxbl_key") or "").strip()
     if not key:
-        return []
+        raise ValueError("Connect Xbox with your OpenXBL API key to read played titles.")
     response = http.get(f"{XBOX_API}/achievements",
-                        headers={"X-Authorization": key,
-                                 "Accept": "application/json"}, timeout=30)
+                        headers={"X-Authorization": key, "Accept": "application/json"},
+                        timeout=30, allow_redirects=False)
+    if response.status_code in (401, 403):
+        raise ValueError("OpenXBL rejected the API key. Reconnect Xbox with a current key.")
     response.raise_for_status()
-    titles = (response.json() or {}).get("titles") or []
-    out = []
-    for title in titles:
-        name = clean_title(str(title.get("name") or ""))
-        if name:
-            out.append(ListEntry(game=name))
-    return out
+    body = response.json()
+    if isinstance(body, dict) and "code" in body:
+        code = str(body["code"])
+        if code in ("401", "403"):
+            raise ValueError("OpenXBL rejected the API key. Reconnect Xbox with a current key.")
+        if code != "200":
+            raise ValueError("OpenXBL could not read your Xbox activity. Try syncing again.")
+        body = body.get("content")
+    titles = body.get("titles") if isinstance(body, dict) else None
+    if not isinstance(titles, list):
+        raise ValueError("OpenXBL returned no Xbox title history. Try syncing again.")
+    return [ListEntry(game=name) for title in titles if isinstance(title, dict)
+            if (name := clean_title(str(title.get("name") or "")))]
 
 
 # --- PlayStation ------------------------------------------------------------
@@ -650,10 +658,12 @@ def _psn_entries(cfg: dict, *, session=None) -> list[ListEntry]:
                 "redirect_uri": "com.scee.psxandroid.scecompcall://redirect"},
         headers={"Cookie": f"npsso={npsso}"},
         allow_redirects=False, timeout=30)
+    from urllib.parse import parse_qs, urlsplit
+
     location = response.headers.get("Location") or ""
-    if "code=" not in location:
+    code = parse_qs(urlsplit(location).query).get("code", [""])[0]
+    if not code:
         raise stale
-    code = location.split("code=")[1].split("&")[0]
     # Step 2: the token.
     response = http.post(
         f"{PSN_AUTH}/token",

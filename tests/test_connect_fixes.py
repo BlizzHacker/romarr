@@ -183,3 +183,77 @@ def test_settings_echo_keeps_owned_snapshot_and_account_change_clears_it(tmp_pat
 
     changed = service.restore_masked_items({"import_lists": [{**restored, "profile": "new"}]})
     assert "owned_snapshot" not in changed["import_lists"][0]
+
+
+def test_xbox_import_reads_openxbl_envelope_and_reports_bad_payload():
+    import pytest
+    from types import SimpleNamespace
+
+    class Client:
+        def get(self, url, **kwargs):
+            assert url == "https://api.xbl.io/v2/achievements"
+            assert kwargs["allow_redirects"] is False
+            return SimpleNamespace(status_code=200, raise_for_status=lambda: None,
+                                   json=lambda: payload)
+
+    cfg = {"type": "xbox", "openxbl_key": "test-key"}
+    titles = [{"name": "Halo®"}, {"name": "Fable"}]
+    for payload in ({"code": 200, "content": {"titles": titles}}, {"titles": titles}):
+        assert [row.game for row in fetch_entries(cfg, session=Client())] == ["Halo", "Fable"]
+    payload = {"code": 200, "content": {"titles": []}}
+    assert fetch_entries(cfg, session=Client()) == []
+    payload = {"code": 401, "content": {"message": "provider text"}}
+    with pytest.raises(ValueError, match="rejected the API key"):
+        fetch_entries(cfg, session=Client())
+    payload = {"code": 200, "content": {}}
+    with pytest.raises(ValueError, match="no Xbox title history"):
+        fetch_entries(cfg, session=Client())
+
+
+def test_psn_does_not_exchange_an_error_code_as_an_authorization_code():
+    import pytest
+    from types import SimpleNamespace
+
+    class Client:
+        def get(self, *args, **kwargs):
+            return SimpleNamespace(headers={
+                "Location": "https://playstation.example/?error=login_required&error_code=4165"
+            })
+
+    with pytest.raises(ValueError, match="PlayStation refused"):
+        fetch_entries({"type": "psn", "npsso": "stale"}, session=Client())
+
+
+def test_reconnect_checks_the_replacement_before_saving(tmp_path, monkeypatch):
+    from romarr import lists
+    from romarr.app import ROMarr
+
+    service = ROMarr({"ROMARR_DATA": str(tmp_path / "state.json")})
+    original = service.store.put_item("import_lists", {
+        "name": "EA library", "type": "ea", "ea_token": "old-token", "platform": "",
+        "enable": True, "added": ["snes/example"], "owned_snapshot": {
+            "at": "yesterday", "games": [{"name": "Old listing", "store_id": ""}]},
+    })
+
+    def read(config):
+        if config["ea_token"] != "valid-token":
+            raise ValueError("EA refused the credential")
+        return [lists.ListEntry("New listing")]
+
+    monkeypatch.setattr(lists, "fetch_entries", read)
+    rejected = service.reconnect_import_list(original["id"], "bad-token")
+    assert rejected == {"error": "EA refused the credential"}
+    assert service.store.get_item("import_lists", original["id"]) == original
+
+    result = service.reconnect_import_list(original["id"], '{"access_token":"valid-token"}')
+    assert result == {"ok": True, "fetched": 1}
+    saved = service.store.get_item("import_lists", original["id"])
+    assert saved["added"] == ["snes/example"]
+    assert saved["owned_snapshot"]["games"] == [{"name": "New listing", "store_id": ""}]
+    assert saved["last_sync"]["fetched"] == 1
+
+
+def test_ea_redirect_fragment_is_accepted():
+    from romarr.connect import extract_value
+
+    assert extract_value("ea_token", "https://accounts.ea.com/#access_token=fresh") == "fresh"

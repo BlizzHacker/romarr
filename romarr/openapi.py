@@ -311,6 +311,7 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "/api/v1/importlist": ("GET", "Import lists and how many titles each has "
                                   "fed into Wanted."),
     "/api/v1/importlist/schema": ("GET", "The list types and their fields."),
+    "/api/v1/importlist/reconnect": ("POST", "Validate and save a replacement storefront credential and its library snapshot."),
     "/api/v1/importlist/preview": ("POST", "Parse a list without saving it: "
                                            "titles and platform resolution."),
     "/api/v1/connection": ("GET", "Configured notification connections, "
