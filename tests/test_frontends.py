@@ -190,3 +190,10 @@ def test_export_can_map_a_server_mount_to_a_large_windows_library():
     assert len(mapped_rows(ROWS, "/roms/snes", r"D:\Games")) == 1
     with pytest.raises(ValueError):
         mapped_rows(ROWS, "/roms", "Games")
+
+
+def test_windows_mapping_skips_a_posix_directory_with_literal_backslash():
+    from romarr.frontends import mapped_rows
+
+    rows = [{"path": "/roms/Set\\/Game.sfc"}, {"path": "/roms/Set/Game.sfc"}]
+    assert mapped_rows(rows, "/roms", "R:\\ROMs") == [{"path": "R:\\ROMs\\Set\\Game.sfc"}]

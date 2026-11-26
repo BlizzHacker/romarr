@@ -2868,6 +2868,11 @@ RENDER.lists=async()=>{
       return;
     }
     const games=page.items||[];
+    if(!games.length&&offset>0){
+      offset=Math.max(0,Math.floor((page.total-1)/limit)*limit);
+      showGames();
+      return;
+    }
     if(!games.length){
       results.textContent=search.value||(mode==='owned'&&provider.value)?'No matching games.'
         :mode==='owned'?'Connect a storefront below or sync an existing account to see its games.'
@@ -2886,7 +2891,7 @@ RENDER.lists=async()=>{
           <a class="btn ghost" href="steam://rungameid/${steamId}">Play in Steam</a></div>`:esc(game.sources.join(', '))}</td></tr>`;
     }).join('');
     results.innerHTML=`<p class="help">${num(offset+1)}–${num(offset+games.length)} of ${num(page.total)}
-      ${mode==='roms'&&page.partial?' · Library scan still in progress':''}</p>
+      ${mode==='roms'&&page.partial?' · '+esc(page.scan_message||'Library read is incomplete'):''}</p>
       ${mode==='owned'&&games.some(game=>game.provider==='steam'&&game.store_id)?'<p class="help">Steam opens on this device and lets you choose the install drive.</p>':''}
       <div style="overflow-x:auto"><table><thead><tr><th>Game</th><th>${mode==='owned'?'Storefront':'Platform'}</th>
       <th>${mode==='owned'?'Account or action':'Library'}</th></tr></thead><tbody>${rows}</tbody></table></div>
@@ -2894,8 +2899,15 @@ RENDER.lists=async()=>{
         <button class="btn ghost" id="l-owned-prev" ${offset?'':'disabled'}>Previous</button>
         <button class="btn ghost" id="l-owned-next" ${offset+games.length<page.total?'':'disabled'}>Next</button>
       </div>`;
-    $('#l-owned-prev').onclick=()=>{offset=Math.max(0,offset-limit);showGames();};
-    $('#l-owned-next').onclick=()=>{offset+=limit;showGames();};
+    const prev=$('#l-owned-prev'), next=$('#l-owned-next');
+    const navigate=delta=>{
+      prev.disabled=true;
+      next.disabled=true;
+      offset=Math.max(0,offset+delta);
+      showGames();
+    };
+    prev.onclick=()=>navigate(-limit);
+    next.onclick=()=>navigate(limit);
   }
   function restartSearch(delay=0){
     clearTimeout(pending);
@@ -2930,11 +2942,17 @@ RENDER.lists=async()=>{
   showGames();
 
   const collector=$('#l-free-collector'), offers=$('#l-free-offers');
-  collector.ontoggle=async()=>{
-    if(!collector.open)return;
+  let offerRequest=0;
+  collector.onclick=async()=>{
+    const ticket=++offerRequest;
+    const open=offers.hidden;
+    collector.setAttribute('aria-expanded',String(open));
+    collector.textContent=open?'Hide offers':'Show offers';
+    offers.hidden=!open;
+    if(!open)return;
     offers.textContent='Checking giveaways…';
     const data=await j('/api/v1/lists/offers').catch(()=>({error:'Could not load giveaways'}));
-    if(!current()||!collector.open)return;
+    if(!current()||offers.hidden||ticket!==offerRequest)return;
     const offerLinks=(data.items||[]).map(game=>`<li>
       <a href="${esc(game.url)}" target="_blank" rel="noopener">${esc(game.name)}</a>
       · ${esc(game.provider)} · Ends ${esc(fmtDateTime(game.ends_at))}</li>`).join('');

@@ -48,7 +48,7 @@ Write-Output ("Playnite extension proof -- {0}" -f (Get-Date -Format s))
 Write-Output ("SDK: {0}" -f [Playnite.SDK.Models.Game].Assembly.GetName().Version)
 
 $menu = GetMainMenuItems $null
-Check "GetMainMenuItems returns the two real ScriptMainMenuItem entries" `
+Check "GetMainMenuItems returns three real ScriptMainMenuItem entries" `
     ($menu.Count -eq 3 -and $menu[0].GetType().FullName -eq "Playnite.SDK.Plugins.ScriptMainMenuItem")
 
 Invoke-ROMarrSync $null

@@ -101,11 +101,25 @@ function Invoke-ROMarrSync {
     }
 
     $added = 0
+    $updated = 0
     $skipped = 0
     foreach ($entry in $response.games) {
         if ([string]::IsNullOrWhiteSpace($entry.romPath)) { $skipped++; continue }
         $gameId = "romarr:$($entry.id)"
-        if ($existing.ContainsKey($gameId)) { $skipped++; continue }
+        if ($existing.ContainsKey($gameId)) {
+            $old = $existing[$gameId]
+            $action = if ($old.GameActions.Count -eq 1) { $old.GameActions[0] }
+            if ($action -and $action.IsPlayAction -and
+                $action.Type -eq [Playnite.SDK.Models.GameActionType]::File -and
+                -not $action.Arguments -and $action.Path -cne $entry.romPath) {
+                $action.Path = $entry.romPath
+                $PlayniteApi.Database.Games.Update($old)
+                $updated++
+            } else {
+                $skipped++
+            }
+            continue
+        }
 
         $game = New-Object "Playnite.SDK.Models.Game"
         $game.Name = $entry.name
@@ -124,11 +138,12 @@ function Invoke-ROMarrSync {
         }
 
         $PlayniteApi.Database.Games.Add($game)
+        $existing[$gameId] = $game
         $added++
     }
 
     $PlayniteApi.Dialogs.ShowMessage(
-        "ROMarr: added $added, already present or unplayable $skipped.", "ROMarr")
+        "ROMarr: added $added, updated paths for $updated, skipped $skipped.", "ROMarr")
 }
 
 

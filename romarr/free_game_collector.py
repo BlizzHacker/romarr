@@ -79,7 +79,6 @@ class FreeGameCollector:
 
     def view(self) -> dict:
         """Refresh on demand and keep unexpired entries through provider outages."""
-        now = datetime.now(timezone.utc)
         with self._lock:
             if monotonic() >= self._until:
                 try:
@@ -94,12 +93,13 @@ class FreeGameCollector:
                             body.extend(block)
                             if len(body) > MAX_FEED_BYTES:
                                 raise ValueError("Offer feed too large")
-                    self._offers = epic_offers(json.loads(body), now=now)
+                    self._offers = epic_offers(json.loads(body), now=datetime.now(timezone.utc))
                     self._error = ""
                     self._until = monotonic() + 900
                 except (requests.RequestException, ValueError, KeyError, TypeError, AttributeError):
                     self._error = "Epic offers could not be refreshed. Open the store to check."
                     self._until = monotonic() + 60
+            now = datetime.now(timezone.utc)
             return {"items": [row for row in self._offers if _instant(row["ends_at"]) > now],
                     "region": self.region, "claim_pages": CLAIM_PAGES,
                     "error": self._error}

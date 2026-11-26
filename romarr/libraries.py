@@ -678,6 +678,12 @@ class FolderScanError(OSError):
         super().__init__(f"Library read incomplete: {len(self.folder_failures)} filesystem errors")
 
 
+def rom_file_extensions() -> set[str]:
+    """File suffixes supported by folder libraries and launcher exports."""
+    from .platforms import PLATFORMS
+    return {ext for platform in PLATFORMS for ext in platform.extensions} | {".zip", ".7z", ".rar"}
+
+
 class FolderLibrary:
     """A directory, which is what most of the emulation world actually uses.
 
@@ -697,10 +703,6 @@ class FolderLibrary:
     name = "Folder"
     BACKGROUND_TIMEOUT = DEFAULT_BACKGROUND_TIMEOUT
 
-    # Archives count: a zipped ROM is the normal shipping form, and every
-    # frontend listed above reads them.
-    ARCHIVES = (".zip", ".7z", ".rar")
-
     # Walking a library of tens of thousands of files on every refresh is not
     # worth it for a number on a badge, so the walk stops here and the count is
     # reported as at-least. An honest ceiling beats a slow exact answer.
@@ -719,9 +721,7 @@ class FolderLibrary:
         return Path(self._config.root)
 
     def _extensions(self) -> set[str]:
-        from .platforms import PLATFORMS
-        known = {ext for p in PLATFORMS for ext in p.extensions}
-        return known | set(self.ARCHIVES)
+        return rom_file_extensions()
 
     @staticmethod
     def _fs_call(operation):

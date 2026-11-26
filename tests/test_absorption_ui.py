@@ -70,6 +70,7 @@ def test_frontend_rows_survive_a_backend_with_no_local_path(tmp_path):
     svc._library_cache = ([
         Game(id="1", name="Super Metroid", platform="snes", file_name="Super Metroid (USA).sfc"),
         Game(id="2", name="A metadata-only row", platform="snes"),
+        Game(id="3", name="A cover image", platform="snes", file_name="Cover.jpg"),
     ], 9e18, "")
     rows = svc.frontend_rows()
     assert len(rows) == 1

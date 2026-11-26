@@ -170,7 +170,7 @@ def mapped_rows(rows: list[dict], source: str, destination: str) -> list[dict]:
         relative = path.relative_to(old)
         candidate = new.joinpath(*relative.parts)
         if (candidate.anchor != new.anchor or not candidate.is_relative_to(new)
-                or ".." in candidate.parts or len(candidate.parts) != len(new.parts) + len(relative.parts)
+                or candidate.parts[len(new.parts):] != relative.parts
                 or (isinstance(new, PureWindowsPath) and any(":" in part for part in relative.parts))):
             continue
         out.append({**row, "path": str(candidate)})

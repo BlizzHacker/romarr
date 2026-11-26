@@ -164,3 +164,22 @@ def test_collector_only_displays_active_paid_base_games_and_official_links():
     offers = epic_offers(payload, now=datetime(2026, 11, 27, tzinfo=timezone.utc))
     assert [offer["url"] for offer in offers] == ["https://store.epicgames.com/en-US/p/example"]
     assert epic_offers(payload, now=datetime(2026, 12, 4, tzinfo=timezone.utc)) == []
+
+
+def test_settings_echo_keeps_owned_snapshot_and_account_change_clears_it(tmp_path):
+    from romarr.app import ROMarr
+
+    service = ROMarr(env={"ROMARR_DATA": str(tmp_path / "state.json")})
+    snapshot = {"at": "now", "games": [{"name": "Example", "store_id": "123"}]}
+    service.store.put_item("import_lists", {
+        "id": "steam", "name": "PC", "type": "steam", "profile": "original",
+        "api_key": "private", "owned_snapshot": snapshot,
+    })
+    patch = {"import_lists": service.safe_settings()["import_lists"]}
+    assert "owned_snapshot" not in patch["import_lists"][0]
+    restored = service.restore_masked_items(patch)["import_lists"][0]
+    assert restored["owned_snapshot"] == snapshot
+    assert restored["api_key"] == "private"
+
+    changed = service.restore_masked_items({"import_lists": [{**restored, "profile": "new"}]})
+    assert "owned_snapshot" not in changed["import_lists"][0]

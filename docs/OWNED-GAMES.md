@@ -26,6 +26,7 @@ For Steam titles with an app ID, **Install here** opens Steam on the device
 viewing ROMarr. Choose the target Steam library and drive in Steam. **Play in
 Steam** opens the same game's launch flow. On a remote gaming host, open
 ROMarr in that host's desktop session to hand off to its local Steam client.
+Steam also offers [Remote Downloads](https://help.steampowered.com/en/faqs/view/1025-BD94-12FC-3409) for a PC or Mac with Steam signed in and running.
 A Sunshine or Wolf host can stream apps that the host already exposes to
 Moonlight.
 
@@ -49,7 +50,7 @@ Cartridge continues to use its RomM-compatible library for ROM play.
 
 ## Free Game Collector
 
-Open **Free Game Collector** in Lists to see active Epic base-game
+Choose **Show offers** under **Free Game Collector** to see active Epic base-game
 giveaways. `ROMARR_GIVEAWAY_COUNTRY` selects the two-letter Epic country
 code and defaults to `US`. Follow an offer to claim it in the official store.
 Amazon Luna, Steam and GOG open their storefront pages. After claiming a

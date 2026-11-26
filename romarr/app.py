@@ -64,7 +64,7 @@ import requests
 
 from .libraries import (
     FolderScanError, LIBRARY_TYPES, RETROBAT_FOLDERS, build_library, build_library_from_config, library_counts,
-    load_backend_plugins, merge_library_secrets, redact_library, route_library,
+    load_backend_plugins, merge_library_secrets, redact_library, rom_file_extensions, route_library,
 )
 from .clients import QBittorrent, QbitConfig, QbitAuthenticationError, Romm, RommConfig
 from . import soundtracks as soundtracks_mod
@@ -147,6 +147,9 @@ from .ui import login_page as ui_login_page
 from .version import compare_key, derive_version, is_unknown
 from .sidecars import read_nfo
 from .build_info import get_build_info
+LIST_ACCOUNT_FIELDS = ("type", "provider", "source", "content", "profile",
+                       "steam_id", "gog_username", *LIST_SECRETS)
+LIST_SYNC_FIELDS = ("owned_snapshot", "unmatched", "last_sync", "_epic_saved")
 
 log = logging.getLogger(__name__)
 
@@ -2175,6 +2178,16 @@ class ROMarr:
             out["chat_agent"] = chat
         return out
 
+    @staticmethod
+    def _restore_list_sync_fields(item: dict, stored: dict) -> None:
+        """Carry sync data across edits to the same storefront account."""
+        same_account = all((item.get(key) or "") == (stored.get(key) or "")
+                           for key in LIST_ACCOUNT_FIELDS)
+        for key in LIST_SYNC_FIELDS:
+            item.pop(key, None)
+            if same_account and key in stored:
+                item[key] = stored[key]
+
     def restore_masked_items(self, patch: dict) -> dict:
         """Undo masking in a settings patch so a masked echo never overwrites a secret."""
         for key, fields in MASKED_ITEM_FIELDS.items():
@@ -2192,6 +2205,8 @@ class ROMarr:
                         if item.get(f) in (SECRET_MASK, None) or (f in item and item[f] == ""
                                                                   and old.get(f)):
                             item[f] = old.get(f, "")
+                    if key == "import_lists":
+                        self._restore_list_sync_fields(item, old)
                 fixed.append(item)
             patch[key] = fixed
         for key in list(patch):
@@ -6351,12 +6366,15 @@ class ROMarr:
                    for cfg, backend in self.game_libraries}
         default = next(iter(sources.values()), {}) if len(sources) == 1 else {}
         directories = {}
+        extensions = rom_file_extensions()
         rows = []
         for game in games:
             slug = (game.platform_slug or game.platform).lower()
             if wanted and wanted != slug:
                 continue
             if game.origin == "cloud" or not game.file_name:
+                continue
+            if os.path.splitext(game.file_name)[1].lower() not in extensions:
                 continue
             if not game.local_path and (not re.fullmatch(r"[a-z0-9][a-z0-9-]*", slug)
                     or any(char in game.file_name for char in ("/", chr(92), ":", chr(0)))
@@ -12124,12 +12142,7 @@ def make_handler(service: ROMarr):
                         for secret in LIST_SECRETS:
                             if cfg.get(secret) in ("********", ""):
                                 cfg[secret] = old.get(secret, "")
-                        account_fields = ("type", "provider", "source", "content", "profile",
-                                          "steam_id", "gog_username", *LIST_SECRETS)
-                        if all((cfg.get(k) or "") == (old.get(k) or "") for k in account_fields):
-                            for field in ("owned_snapshot", "unmatched", "last_sync", "_epic_saved"):
-                                if field in old:
-                                    cfg[field] = old[field]
+                        service._restore_list_sync_fields(cfg, old)
                 saved = service.store.put_item("import_lists", cfg)
                 saved.pop("added", None)
                 saved.pop("owned_snapshot", None)
