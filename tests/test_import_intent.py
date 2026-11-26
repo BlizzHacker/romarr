@@ -248,3 +248,70 @@ def test_a_nup_inside_an_archive_is_not_opened(tmp_path):
     path = archive(tmp_path, {"Game.nup": build_nup([Pkg(0x0100ABCD12340000)])})
     item = preview_import(path, resolve("switch"), tmp_path / "lib")["items"][0]
     assert (item["role"], item["confidence"]) == ("base", "format-only")
+
+
+def _package(tmp_path, name, data=b"package"):
+    """A loose package file named `name` under `tmp_path`."""
+    path = tmp_path / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    return path
+
+
+@pytest.mark.parametrize(("platform", "name", "role"), [
+    ("switch", "Super Mario Bros. Wonder [010015100B514000][v0][Base].xci", "base"),
+    ("switch-2", "Game [0100ABCD12340000].nsp", "base"),
+    ("switch", "Game [0100ABCD12340800][v65536].nsp", "update"),
+    ("switch", "Game [0100ABCD12341001].nsp", "dlc"),
+    ("3ds", "Game (USA) [0004000000123400].cia", "base"),
+    ("3ds", "Game (USA) [0004000E00123400].cia", "update"),
+])
+def test_a_single_package_is_classified_by_its_title_id(tmp_path, platform, name, role):
+    """A lone package whose title ID says what it is imports without review."""
+    p = preview_import(_package(tmp_path, name), resolve(platform), tmp_path / "lib")
+    item = p["items"][0]
+    assert (item["role"], item["confidence"]) == (role, "title-id")
+    assert item["selected"] and not p["requires_review"]
+
+
+@pytest.mark.parametrize(("platform", "name"), [
+    ("switch", "Game.nsp"),                                           # no title ID
+    ("switch", "Game [0100ABCD12340000][0100EEEE12340000].nsp"),      # two Switch title IDs
+    ("switch", "Game [0004000000123400].nsp"),                        # a 3DS ID is not a Switch ID
+    ("3ds", "Game.cia"),                                              # no title ID
+    ("3ds", "Bundle [0004000000123400][0004000E00567800].cia"),       # two 3DS title IDs (base first)
+    ("3ds", "Bundle [0004000E00567800][0004000000123400].cia"),       # two 3DS title IDs (update first)
+    ("3ds", "Bundle [0004000000123400][0004000E00123400].cia"),       # two 3DS title IDs (same family, two roles)
+])
+def test_a_package_without_one_title_id_still_requires_review(tmp_path, platform, name):
+    p = preview_import(_package(tmp_path, name), resolve(platform), tmp_path / "lib")
+    assert p["items"][0]["role"] == "unknown" and p["requires_review"]
+
+
+def test_title_ids_are_only_read_on_title_id_platforms(tmp_path):
+    """A PS4 package keeps its header rule; a Switch-looking name proves nothing there."""
+    path = _package(tmp_path, "Game [0100ABCD12340000].pkg")
+    p = preview_import(path, resolve("ps4"), tmp_path / "lib")
+    assert p["items"][0]["role"] == "unknown" and p["requires_review"]
+
+
+def test_one_games_base_and_update_route_without_review(tmp_path):
+    folder = tmp_path / "Game"
+    _package(folder, "Game [0100ABCD12340000].nsp", b"base")
+    _package(folder, "Game [0100ABCD12340800][v65536].nsp", b"update")
+    p = preview_import(folder, resolve("switch"), tmp_path / "lib", package_folders=True, game_title="Game")
+    assert {i["primary"]: (i["role"], i["confidence"]) for i in p["items"]} == {
+        "Game [0100ABCD12340000].nsp": ("base", "title-id"),
+        "Game [0100ABCD12340800][v65536].nsp": ("update", "title-id")}
+    assert not p["requires_review"]
+
+
+def test_packages_naming_different_title_ids_still_require_review(tmp_path):
+    """An update for another game must not be trusted to join this one."""
+    folder = tmp_path / "Game"
+    _package(folder, "Game [0100ABCD12340000].nsp", b"base")
+    _package(folder, "Other [0100EEEE12340800][v65536].nsp", b"update")
+    p = preview_import(folder, resolve("switch"), tmp_path / "lib", package_folders=True, game_title="Game")
+    assert p["requires_review"]
+    assert all(i["role"] == "unknown" and not i["selected"] for i in p["items"])
+    assert all("different title IDs" in i["evidence"] for i in p["items"])

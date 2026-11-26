@@ -70,7 +70,9 @@ comes from the best evidence each platform offers:
 | PS3, PS5, PSP, Vita | The serial or content ID (`BLUS30443`, `PCSE00120`) says which game; folder and file names say what it is. |
 | Xbox 360, PC | Folder and file names. |
 
-Downloads whose packages a PS4 header identifies import without review.
+Downloads whose packages a PS4 header identifies import without review, and
+so do Switch, Switch 2 and 3DS packages whose title IDs all belong to one
+game.
 Everything else follows the existing review rules in Queue. The roles you
 choose there decide the folders, and Queue shows the resulting destination
 tree for you to confirm before anything is written. A file name never decides
