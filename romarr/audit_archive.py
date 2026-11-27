@@ -23,11 +23,18 @@ def _bounded_directory(source):
 
     ZIP64 and split archives stay unknown rather than allocating unbounded metadata.
     """
-    source.seek(0, 2)
-    size = source.tell()
-    source.seek(max(0, size - 65557))
-    tail = source.read(65557)
-    at = tail.rfind(b"PK\x05\x06")
+    size = source.seek(0, 2)
+    if size < 22:
+        return False
+    # Most ZIPs have no comment. Read the minimum footer first, especially
+    # for libraries where every archive read goes across a network mount.
+    source.seek(-22, 2)
+    tail = source.read(22)
+    at = 0
+    if not tail.startswith(b"PK\x05\x06") or tail[-2:] != b"\0\0":
+        source.seek(max(0, size - 65557))
+        tail = source.read(65557)
+        at = tail.rfind(b"PK\x05\x06")
     if at < 0 or len(tail) - at < 22:
         return False
     _, disk, start, local_count, count, central_size, offset, comment = struct.unpack_from("<4s4H2LH", tail, at)

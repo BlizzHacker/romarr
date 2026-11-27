@@ -200,6 +200,8 @@ def test_collection_preview_and_queue_recognize_renamed_zips(tmp_path):
     }.items():
         with zipfile.ZipFile(folder / archive_name, "w", zipfile.ZIP_DEFLATED) as archive:
             archive.writestr("rom.sfc", records[dat_name])
+            if archive_name == "zool.zip":
+                archive.comment = b"ZIPs with archive comments also match."
 
     plan = service.collection_plan("SNES", "snes", regions=["usa", "europe"])
     assert plan["library_scan"] == {
