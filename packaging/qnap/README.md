@@ -21,7 +21,7 @@ The QPKG ships no Python. `shared/romarr.sh` runs `ghcr.io/blizzhacker/romarr:<Q
 In `debian:12`, with QDK's `shared/` installed to `/usr/share/QDK` and `qpkg_encrypt` compiled from its `src/`:
 
 ```bash
-cd packaging/qnap/qpkg/romarr && /usr/share/QDK/bin/qbuild   # build/romarr_1.14.1.qpkg, 29 KB
+cd packaging/qnap/qpkg/romarr && /usr/share/QDK/bin/qbuild   # build/romarr_1.14.2.qpkg, 29 KB
 ```
 
 The package ends with QDK's `QNAPQPKG` checksum trailer.
@@ -29,12 +29,12 @@ The package ends with QDK's `QNAPQPKG` checksum trailer.
 ### Install test
 
 ```bash
-PORT=16869 packaging/qnap/test/qts-qpkg-smoke.sh romarr_1.14.1.qpkg
+PORT=16869 packaging/qnap/test/qts-qpkg-smoke.sh romarr_1.14.2.qpkg
 ```
 
 The script unpacks the QPKG the way QDK's installer does and stubs `/sbin/getcfg` and `/sbin/log_tool`. The 2026-11-27 CI smoke run ended with `QTS QPKG SMOKE PASSED`:
 
-1. **Start.** It started `ghcr.io/blizzhacker/romarr:1.14.1` as uid 1000, and `/api/health` answered.
+1. **Start.** It started `ghcr.io/blizzhacker/romarr:1.14.2` as uid 1000, and `/api/health` answered.
 2. **Restart** reused the same container.
 3. **Missing library.** A missing library folder refused to start.
 4. **Remove** deleted the container and kept `/share/Container/romarr/romarr.json`.

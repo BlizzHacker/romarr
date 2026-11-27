@@ -3,7 +3,7 @@
 # container laid out like a DiskStation (/var/packages, /volume1, a package
 # user, SynoCommunity's Python at /var/packages/python312/target).
 #
-#   packaging/synology/test/dsm-spk-smoke.sh romarr_noarch-dsm7_1.14.1-1.spk
+#   packaging/synology/test/dsm-spk-smoke.sh romarr_noarch-dsm7_1.14.2-1.spk
 #
 # DSM itself only runs on Synology hardware (its licence forbids anything
 # else), so this replays Package Center's sequence: preinst, extract

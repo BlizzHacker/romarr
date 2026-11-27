@@ -21,8 +21,8 @@ There are two packages. The user guide is [docs/NAS.md](../../docs/NAS.md#synolo
 In the spksrc image (`ghcr.io/synocommunity/spksrc`), with `spk/romarr` and `cross/romarr` copied into an spksrc checkout:
 
 ```bash
-make -C cross/romarr digests        # SHA256 5beedfa8... = GitHub's v1.14.1 tarball
-make -C spk/romarr arch-noarch-7.1  # packages/romarr_noarch-dsm7_1.14.1-1.spk, 1.7 MB
+make -C cross/romarr digests        # SHA256 93c7fe63... = GitHub's v1.14.2 tarball
+make -C spk/romarr arch-noarch-7.1  # packages/romarr_noarch-dsm7_1.14.2-1.spk, 1.7 MB
 ```
 
 The generated `INFO` and `conf/` contain:
@@ -35,7 +35,7 @@ The generated `INFO` and `conf/` contain:
 ### Install test
 
 ```bash
-packaging/synology/test/dsm-spk-smoke.sh romarr_noarch-dsm7_1.14.1-1.spk
+packaging/synology/test/dsm-spk-smoke.sh romarr_noarch-dsm7_1.14.2-1.spk
 ```
 
 This runs in a `python:3.12-slim` container laid out like DSM 7.2: `/var/packages`, `/volume1/games`, the `sc-romarr` user, and Python 3.12 at `/var/packages/python312/target`. The 2026-11-27 run went through every step and ended with `DSM SPK SMOKE PASSED`:
@@ -53,7 +53,7 @@ Shellcheck is clean on `service-setup.sh` and the smoke script.
 ### Submit to SynoCommunity
 
 1. Fork `SynoCommunity/spksrc` and copy `spksrc/spk/romarr` and `spksrc/cross/romarr` into it.
-2. Open a PR titled `romarr: add package v1.14.1`, using their template.
+2. Open a PR titled `romarr: add package v1.14.2`, using their template.
 
 ## Container Manager
 

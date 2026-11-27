@@ -2,7 +2,7 @@
 # Install and run the ROMarr App Central package the way ADM does, against
 # real Docker.
 #
-#   packaging/asustor/test/adm-apk-smoke.sh romarr_1.14.1_any.apk
+#   packaging/asustor/test/adm-apk-smoke.sh romarr_1.14.2_any.apk
 #
 # ADM only runs on Asustor hardware, so this unpacks the .apk apkg-tools
 # built (a zip of control.tar.gz and data.tar.gz), puts it where App Central

@@ -87,6 +87,15 @@
   </keywords>
 
   <releases>
+    <release version="1.14.2" date="2026-11-27">
+      <url type="details">https://github.com/BlizzHacker/romarr/releases/tag/v1.14.2</url>
+      <description>
+        <ul>
+          <li>Configurable max queue size (50 to 50,000, default 500) under Settings with live queue counter.</li>
+          <li>Failed queue entries are trimmed before active downloads, and lowering the limit never drops active downloads.</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.14.1" date="2026-11-27">
       <url type="details">https://github.com/BlizzHacker/romarr/releases/tag/v1.14.1</url>
       <description>
