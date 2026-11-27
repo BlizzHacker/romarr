@@ -6795,6 +6795,8 @@ RENDER.general=async()=>{
        SETTINGS.list_sync_interval_hours,'number')
   +fld('max_queue','Max queue size (in-flight limit, 50–50,000)',
        SETTINGS.max_queue??500,'number')
+  +chk('auto_clear_failed_queue','Automatically remove retired failed downloads from Queue (logged to History & returned to Wanted)',
+       SETTINGS.auto_clear_failed_queue!==false)
   +`</details>`
   +`<details class="adv"><summary>Advanced: Peering URL, FlareSolverr, custom plugin forges &amp; GitHub token</summary>
     <div class="field"><label>Your public URL (for Friends)</label>

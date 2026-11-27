@@ -83,12 +83,12 @@ def test_a_job_sabnzbd_failed_is_retired_without_waiting_for_the_timeout(tmp_pat
     service = svc(tmp_path)
     service.prowlarr = FakeProwlarr()
     service.clients = [FakeUsenet([failure()])]
-    service.store.enqueue(grabbed(minutes=1))
+    row = service.store.enqueue(grabbed(minutes=1))
 
     assert service.retire_dead_downloads()["blocklisted"] == 1
-    row = service.queue[0]
     assert row.state == "failed" and row.release_fault
     assert row.detail == f"SABnzbd failed the download: {NOT_COMPLETE}"
+    assert row not in service.queue
     assert "cannot be completed" in service.store.list_items("blocklist")[0]["reason"]
 
 
@@ -130,10 +130,11 @@ def test_a_local_failure_still_stalls_out_as_before(tmp_path):
     service = svc(tmp_path)
     service.prowlarr = FakeProwlarr()
     service.clients = [FakeUsenet([failure(release_fault=False)])]
-    service.store.enqueue(grabbed(minutes=60 * 5))
+    row = service.store.enqueue(grabbed(minutes=60 * 5))
 
     assert service.retire_dead_downloads()["blocklisted"] == 1
-    assert "stalled" in service.queue[0].detail
+    assert "stalled" in row.detail
+    assert row not in service.queue
 
 
 def test_a_failure_is_paired_by_job_id_never_by_title(tmp_path):

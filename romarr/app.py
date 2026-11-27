@@ -4754,6 +4754,9 @@ class ROMarr:
                                     platform=row.platform, release=row.release,
                                     indexer=row.indexer,
                                     detail=f"blocklisted -- {reason}"))
+            if self.store.settings.get("auto_clear_failed_queue", True):
+                with self.store._lock:
+                    self.queue[:] = [q for q in self.queue if q is not row]
             # For a row grabbed by hand (manual=True), do not replace it automatically
             # and do not put the search text on Wanted (#119).
             if getattr(row, "manual", False):
