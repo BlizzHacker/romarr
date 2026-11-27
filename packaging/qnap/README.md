@@ -32,7 +32,7 @@ The package ends with QDK's `QNAPQPKG` checksum trailer.
 PORT=16869 packaging/qnap/test/qts-qpkg-smoke.sh romarr_1.14.1.qpkg
 ```
 
-The script unpacks the QPKG the way QDK's installer does and stubs `/sbin/getcfg` and `/sbin/log_tool`. The 2026-11-23 run against Docker 20.10 ended with `QTS QPKG SMOKE PASSED`:
+The script unpacks the QPKG the way QDK's installer does and stubs `/sbin/getcfg` and `/sbin/log_tool`. The 2026-11-27 CI smoke run ended with `QTS QPKG SMOKE PASSED`:
 
 1. **Start.** It started `ghcr.io/blizzhacker/romarr:1.14.1` as uid 1000, and `/api/health` answered.
 2. **Restart** reused the same container.
