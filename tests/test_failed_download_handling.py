@@ -146,13 +146,28 @@ def test_an_archive_with_no_roms_in_it_is_the_fault_of_the_release(tmp_path):
 
 def test_a_download_that_stalled_is_retired(tmp_path):
     service = svc(tmp_path)
-    service.store.enqueue(QueueItem(
+    row = service.store.enqueue(QueueItem(
         "Contra", "nes", "Contra (USA)", 5, "grabbed",
         at=ago(60 * 5), release_id="btih:" + "c" * 40))
 
     assert service.retire_dead_downloads()["blocklisted"] == 1
-    assert service.queue[0].state == "failed"
-    assert "stalled" in service.queue[0].detail
+    assert row.state == "failed"
+    assert "stalled" in row.detail
+    assert row not in service.queue
+    assert any(e["kind"] == "ignored" and "stalled" in e["detail"]
+               for e in service.store.history(10))
+
+
+def test_auto_clear_failed_queue_can_be_disabled(tmp_path):
+    service = svc(tmp_path)
+    service.store.update_settings({"auto_clear_failed_queue": False})
+    row = service.store.enqueue(QueueItem(
+        "Contra", "nes", "Contra (USA)", 5, "grabbed",
+        at=ago(60 * 5), release_id="btih:" + "c" * 40))
+
+    assert service.retire_dead_downloads()["blocklisted"] == 1
+    assert row in service.queue
+    assert row.blocklisted is True
 
 
 def test_a_download_still_within_the_timeout_is_left_alone(tmp_path):

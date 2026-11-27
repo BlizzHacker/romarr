@@ -422,6 +422,9 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     # is grabbed in its place. Without this the next missing/RSS sweep re-runs
     # the same scorer over the same results and picks the same dead file.
     "blocklist_failed_downloads": True,
+    # When on, retired/blocklisted failed downloads are removed from the
+    # Activity queue automatically once logged to History and returned to Wanted.
+    "auto_clear_failed_queue": True,
     # How long a grabbed download may sit without finishing before it counts
     # as stalled, in minutes. 0 disables stall detection entirely, leaving
     # only outright failures to be retired. Generous by default: a large disc
@@ -1049,7 +1052,7 @@ class Store:
                 if parts.scheme.lower() not in ("http", "https") or not parts.hostname:
                     raise ValueError("FlareSolverr URL must start with http:// or https://")
             patch = dict(patch, flaresolverr_url=raw_solver)
-        for key in ("compress_switch_imports", "compress_switch_xci"):
+        for key in ("compress_switch_imports", "compress_switch_xci", "auto_clear_failed_queue"):
             if key in patch and not isinstance(patch[key], bool):
                 raise ValueError(f"{key} must be true or false")
         if "nsz_compression" in patch:
