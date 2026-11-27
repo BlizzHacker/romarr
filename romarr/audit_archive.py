@@ -18,17 +18,23 @@ MAX_CENTRAL_BYTES = 4 * 1024 * 1024
 MAX_SHEET_BYTES = 1024 * 1024
 
 
-def _bounded_directory(path):
+def _bounded_directory(source):
     """Inspect bounded EOCD metadata before zipfile allocates its member index.
 
     ZIP64 and split archives stay unknown rather than allocating unbounded metadata.
     """
-    with path.open("rb") as source:
-        source.seek(0, 2)
-        size = source.tell()
+    size = source.seek(0, 2)
+    if size < 22:
+        return False
+    # Most ZIPs have no comment. Read the minimum footer first, especially
+    # for libraries where every archive read goes across a network mount.
+    source.seek(-22, 2)
+    tail = source.read(22)
+    at = 0
+    if not tail.startswith(b"PK\x05\x06") or tail[-2:] != b"\0\0":
         source.seek(max(0, size - 65557))
         tail = source.read(65557)
-    at = tail.rfind(b"PK\x05\x06")
+        at = tail.rfind(b"PK\x05\x06")
     if at < 0 or len(tail) - at < 22:
         return False
     _, disk, start, local_count, count, central_size, offset, comment = struct.unpack_from("<4s4H2LH", tail, at)
@@ -45,14 +51,37 @@ def _safe_member(name: str) -> bool:
             and not any(part in ("", ".", "..") for part in path.split("/")))
 
 
+def single_zip_fingerprint(path: Path) -> tuple[int, str] | None:
+    """Read the sole file's size and CRC from bounded ZIP metadata."""
+    try:
+        if path.is_symlink():
+            return None
+        with path.open("rb") as source:
+            if not _bounded_directory(source):
+                return None
+            with zipfile.ZipFile(source) as archive:
+                members = [info for info in archive.infolist() if not info.is_dir()]
+                if len(members) != 1:
+                    return None
+                info = members[0]
+                if (not _safe_member(info.filename) or info.flag_bits & 1
+                        or stat.S_ISLNK(info.external_attr >> 16)
+                        or not 0 < info.file_size <= MAX_MEMBER_BYTES):
+                    return None
+                return info.file_size, f"{info.CRC:08x}"
+    except (OSError, zipfile.BadZipFile, ValueError, NotImplementedError):
+        return None
+
+
 def audit_zip(path: Path, platform, dats):
     """Return the DAT verdict; unsafe or incomplete archives are unknown.
 
     Member reads reach EOF so zipfile checks CRC, and hash_stream keeps RAM bounded.
     """
     try:
-        if not _bounded_directory(path):
-            return Match(UNKNOWN, detail="archive directory limit or unsupported ZIP layout")
+        with path.open("rb") as source:
+            if not _bounded_directory(source):
+                return Match(UNKNOWN, detail="archive directory limit or unsupported ZIP layout")
         with zipfile.ZipFile(path) as archive:
             all_infos = archive.infolist()
             infos = [info for info in all_infos if not info.is_dir()]

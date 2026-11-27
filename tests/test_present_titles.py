@@ -11,8 +11,12 @@ A plan concerns one platform, and a platform is one directory.
 
 from __future__ import annotations
 
+import zipfile
+import zlib
+
 from romarr.app import ROMarr
 from romarr.collections import PRESENT_UNKNOWN, PRESENT_VERIFIED
+from romarr.dat import Dat, Game as DatGame, Rom
 from romarr.libraries import Game
 
 
@@ -56,8 +60,19 @@ def test_a_disc_set_stored_as_a_directory_counts_as_present(tmp_path):
 def test_it_falls_back_to_the_shelf_when_there_is_no_directory(tmp_path):
     """A server-backed library ROMarr cannot list on disk still gets an
     answer, just a partial one."""
-    service, _ = service_with(tmp_path, shelf=["Some Game (USA)"])
-    assert "Some Game (USA)" in service._present_titles("nosuchplatform")
+    service, library = service_with(tmp_path)
+    service._library_cache = ([
+        *(Game(id=str(i), name=f"NES Friend {i} (USA)", platform="nes")
+          for i in range(125)),
+        Game(id="snes", name="Some Game (USA)", platform="Super Nintendo"),
+        Game(id="cloud", name="Another Game (USA)", platform="snes", origin="cloud"),
+    ], 0.0, "")
+    scan = {}
+    assert service._present_titles("snes", scan=scan) == {
+        "Some Game (USA)": PRESENT_UNKNOWN,
+    }
+    assert scan == {"folders": [{"path": str(library / "snes"), "files": None}],
+                    "used_cache": True, "cached_rows": 1}
 
 
 def test_an_import_verdict_upgrades_a_plain_presence(tmp_path):
@@ -157,3 +172,106 @@ def test_a_deep_disc_set_answers_to_its_directory_name(tmp_path):
 
     assert "Final Fantasy VII (USA)" in present
     assert "FF7 (USA) (Disc 1)" in present
+
+
+def test_collection_preview_and_queue_recognize_renamed_zips(tmp_path):
+    """The SNES preview identifies dumps whose archive names omit DAT tags."""
+    service, library = service_with(tmp_path)
+    folder = library / "snes"
+    folder.mkdir()
+    records = {
+        "Zombies Ate My Neighbors (USA)": b"zombies usa",
+        "Zombies Ate My Neighbors (Europe)": b"zombies europe",
+        "Zool (USA)": b"zool usa",
+        "Zool (USA) (Sample)": b"zool sample",
+        "Zoop (USA)": b"zoop usa",
+        "Zoop (Europe)": b"zoop europe",
+    }
+    dat = Dat("SNES", games={
+        name: DatGame(name, (Rom(name + ".sfc", len(data),
+                                 f"{zlib.crc32(data):08x}"),))
+        for name, data in records.items()
+    })
+    service.dats.add(dat)
+    for archive_name, dat_name in {
+        "zombies ate my neighbors.zip": "Zombies Ate My Neighbors (USA)",
+        "zool (sample cart).zip": "Zool (USA) (Sample)",
+        "zool.zip": "Zool (USA)",
+        "zoop.zip": "Zoop (Europe)",
+    }.items():
+        with zipfile.ZipFile(folder / archive_name, "w", zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("rom.sfc", records[dat_name])
+            if archive_name == "zool.zip":
+                archive.comment = b"ZIPs with archive comments also match."
+
+    plan = service.collection_plan("SNES", "snes", regions=["usa", "europe"])
+    assert plan["library_scan"] == {
+        "folders": [{"path": str(folder), "files": 4}],
+        "used_cache": False,
+        "cached_rows": 0,
+    }
+    assert {t["name"]: t["status"] for t in plan["titles"]} == {
+        "Zombies Ate My Neighbors (USA)": PRESENT_UNKNOWN,
+        "Zool (USA)": PRESENT_UNKNOWN,
+        "Zoop (USA)": "missing",
+    }
+    batch = service.collection_start("SNES", "snes", regions=["usa", "europe"])
+    assert batch["queued"] == 1
+    assert service._batches()[batch["id"]].queue == ["Zoop (USA)"]
+
+
+def test_a_dat_filename_matches_case_insensitively_with_variant_tags(tmp_path):
+    """Exact region and revision still matter when matching by name."""
+    service, library = service_with(tmp_path)
+    folder = library / "snes"
+    folder.mkdir()
+    (folder / "chrono trigger (usa) (rev 1).7z").touch()
+    names = ("Chrono Trigger (USA) (Rev 1)", "Chrono Trigger (USA)")
+    dat = Dat("SNES", games={name: DatGame(name) for name in names})
+
+    assert service._present_titles("snes", dat) == {names[0]: PRESENT_UNKNOWN}
+
+
+def test_zip_headers_do_not_guess_from_ambiguous_or_partial_dumps(tmp_path):
+    """A CRC shared by variants, a single track and a multi-ROM ZIP are ambiguous."""
+    service, library = service_with(tmp_path)
+    folder = library / "snes"
+    folder.mkdir()
+    games = {}
+
+    def rom(data):
+        return Rom("rom.sfc", len(data), f"{zlib.crc32(data):08x}")
+
+    for name in ("Shared (USA)", "Shared (Japan)"):
+        games[name] = DatGame(name, (rom(b"same dump"),))
+    games["Tracks (USA)"] = DatGame("Tracks (USA)", (rom(b"track 1"), rom(b"track 2")))
+    games["Cartridge (USA)"] = DatGame("Cartridge (USA)", (rom(b"cartridge"),))
+    for name, data in (("shared", b"same dump"), ("tracks", b"track 1"),
+                       ("two roms", b"cartridge")):
+        with zipfile.ZipFile(folder / (name + ".zip"), "w") as archive:
+            archive.writestr("rom.sfc", data)
+            if name == "two roms":
+                archive.writestr("extra.sfc", b"other rom")
+    (folder / "cartridge.zip").write_bytes(b"not a ZIP")
+
+    assert service._present_titles("snes", Dat("SNES", games=games)) == {}
+
+
+
+def test_a_zip_using_an_unsupported_version_does_not_abort_the_preview(tmp_path):
+    """ZIP metadata that this Python cannot parse is skipped."""
+    service, library = service_with(tmp_path)
+    folder = library / "snes"
+    folder.mkdir()
+    name, data = "Game (USA)", b"cart data"
+    dat = Dat("SNES", games={name: DatGame(
+        name, (Rom("game.sfc", len(data), f"{zlib.crc32(data):08x}"),))})
+    service.dats.add(dat)
+    with zipfile.ZipFile(folder / "bad.zip", "w") as archive:
+        info = zipfile.ZipInfo("game.sfc")
+        info.extract_version = zipfile.MAX_EXTRACT_VERSION + 1
+        archive.writestr(info, data)
+
+    plan = service.collection_plan("SNES", "snes")
+    assert plan["counts"]["have"] == 0
+    assert plan["counts"]["missing"] == 1
