@@ -15,7 +15,7 @@
 
 services:
   romarr:
-    image: ghcr.io/blizzhacker/romarr:1.13.2
+    image: ghcr.io/blizzhacker/romarr:1.14.1
     container_name: romarr
     restart: unless-stopped
     ports:

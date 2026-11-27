@@ -1,9 +1,9 @@
 # Windows Package Manager (winget)
 
-`manifests/m/MoveWeight/ROMarr/1.13.2/` is a multi-file manifest (schema 1.28.0)
+`manifests/m/MoveWeight/ROMarr/1.14.1/` is a multi-file manifest (schema 1.28.0)
 for [microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs), at the
 exact path that repository uses. It installs the release's **portable ZIP**
-(`ROMarr-1.13.2-win-x64.zip`, SHA-256 from the release's `SHA256SUMS.txt`) and
+(`ROMarr-1.14.1-win-x64.zip`, SHA-256 from the release's `SHA256SUMS.txt`) and
 puts a `romarr` command on the PATH that opens the desktop app:
 
 ```powershell
@@ -36,11 +36,11 @@ check that the pipeline's run starts the app.
 Either with Microsoft's tool (it forks, branches and opens the PR for you):
 
 ```powershell
-wingetcreate submit --prtitle "New package: MoveWeight.ROMarr version 1.13.2" packaging\winget\manifests\m\MoveWeight\ROMarr\1.13.2
+wingetcreate submit --prtitle "New package: MoveWeight.ROMarr version 1.14.1" packaging\winget\manifests\m\MoveWeight\ROMarr\1.14.1
 ```
 
-or by hand: fork `microsoft/winget-pkgs`, copy the `1.13.2` folder to
-`manifests/m/MoveWeight/ROMarr/1.13.2/`, and open a PR. A bot validates, installs
+or by hand: fork `microsoft/winget-pkgs`, copy the `1.14.1` folder to
+`manifests/m/MoveWeight/ROMarr/1.14.1/`, and open a PR. A bot validates, installs
 and scans it; a moderator merges.
 
 Updates: `wingetcreate update MoveWeight.ROMarr --version <v> --urls <zip-url> --submit`.

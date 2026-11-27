@@ -1,7 +1,7 @@
 #!/bin/sh
 # Run the ROMarr QPKG's service script the way QTS does, against real Docker.
 #
-#   packaging/qnap/test/qts-qpkg-smoke.sh romarr_1.13.2.qpkg
+#   packaging/qnap/test/qts-qpkg-smoke.sh romarr_1.14.1.qpkg
 #
 # QTS only runs on QNAP hardware, so this unpacks the QPKG QDK built, puts the
 # QTS helpers it calls (/sbin/getcfg, /sbin/log_tool) in front of it, points
@@ -65,7 +65,7 @@ echo "== start ghcr.io/blizzhacker/romarr:$version"
 "$WORK/romarr.sh" start; health; echo
 "$WORK/romarr.sh" status
 test "$(docker inspect -f '{{.Config.Image}}' romarr)" = "ghcr.io/blizzhacker/romarr:$version"
-docker exec romarr sh -c 'ps -o user,args | grep "[p]ython -m romarr"' | grep -q '^1000 '
+test "$(awk '/^Uid:/ {print $2}' "/proc/$(docker inspect -f '{{.State.Pid}}' romarr)/status")" = "1000"
 test -s "$WORK/share/Container/romarr/romarr.json"
 docker inspect -f '{{range .Mounts}}{{.Destination}} {{end}}' romarr | grep -q "$WORK/share/Download"
 

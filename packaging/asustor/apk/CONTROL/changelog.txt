@@ -1,2 +1,2 @@
-1.13.2
-- First App Central package. Runs ghcr.io/blizzhacker/romarr:1.13.2 on Docker Engine.
+1.14.1
+- First App Central package. Runs ghcr.io/blizzhacker/romarr:1.14.1 on Docker Engine.

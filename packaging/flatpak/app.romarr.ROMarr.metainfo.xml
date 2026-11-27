@@ -87,6 +87,18 @@
   </keywords>
 
   <releases>
+    <release version="1.14.1" date="2026-11-27">
+      <url type="details">https://github.com/BlizzHacker/romarr/releases/tag/v1.14.1</url>
+      <description>
+        <ul>
+          <li>Simple/Advanced UX modes, Quick Launch (Cmd+K), wallpapers/textures, and floating AI chat dock.</li>
+          <li>Collection Preview Plan now matches renamed ROM ZIPs by footer size/CRC without unpacking.</li>
+          <li>Owned Game Library and Device Libraries in Lists, plus Giveaway Calendar and store reconnect fixes.</li>
+          <li>FitGirl and DODI Repacks plugin with RSS sync, Switch NSZ/XCZ compression, and Hydra source guide.</li>
+          <li>Docker FUSE mounts fixed for numeric PUID/PGID runs, plus native NAS packages for Synology, QNAP and Asustor.</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.13.2" date="2026-11-23">
       <url type="details">https://github.com/BlizzHacker/romarr/releases/tag/v1.13.2</url>
       <description>
