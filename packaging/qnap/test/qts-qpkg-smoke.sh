@@ -65,7 +65,7 @@ echo "== start ghcr.io/blizzhacker/romarr:$version"
 "$WORK/romarr.sh" start; health; echo
 "$WORK/romarr.sh" status
 test "$(docker inspect -f '{{.Config.Image}}' romarr)" = "ghcr.io/blizzhacker/romarr:$version"
-docker exec romarr sh -c 'ps -o uid,args | grep "[p]ython -m romarr"' | grep -Eq '^[[:space:]]*1000 '
+test "$(awk '/^Uid:/ {print $2}' "/proc/$(docker inspect -f '{{.State.Pid}}' romarr)/status")" = "1000"
 test -s "$WORK/share/Container/romarr/romarr.json"
 docker inspect -f '{{range .Mounts}}{{.Destination}} {{end}}' romarr | grep -q "$WORK/share/Download"
 
