@@ -805,11 +805,58 @@ THEME_BOOT = r"""
   if(!rgb(accent)) accent=FALLBACK;
   apply(mode,accent);
 
+  var UKEY='romarr.uiMode';
+  var uiMode=recall(UKEY)==='advanced'?'advanced':'simple';
+  root.setAttribute('data-ui-mode',uiMode);
+
+  var BKEY='romarr.bg';
+  function readBg(){
+    try{
+      var raw=recall(BKEY);
+      if(raw) return Object.assign({preset:'none',url:'',fit:'cover',opacity:22,blur:0},JSON.parse(raw));
+    }catch(e){}
+    return {preset:'none',url:'',fit:'cover',opacity:22,blur:0};
+  }
+  function applyBg(cfg){
+    cfg=Object.assign({preset:'none',url:'',fit:'cover',opacity:22,blur:0},cfg||{});
+    root.setAttribute('data-bg-preset',cfg.preset||'none');
+    var safeUrl='';
+    if(cfg.url && (/^https?:\/\//i.test(cfg.url) || /^data:image\/(png|jpeg|jpg|webp|gif);base64,/i.test(cfg.url))){
+      safeUrl=cfg.url.replace(/["'()\\\r\n]/g,'');
+    }
+    root.style.setProperty('--bg-img',safeUrl?('url("'+safeUrl+'")'):'none');
+    var fit=cfg.fit||'cover';
+    root.style.setProperty('--bg-size',fit==='repeat'?'auto':(fit==='center'?'auto':fit));
+    root.style.setProperty('--bg-repeat',fit==='repeat'?'repeat':'no-repeat');
+    root.style.setProperty('--bg-pos','center');
+    var op=Math.max(0,Math.min(85,Number(cfg.opacity)));
+    if(isNaN(op)) op=22;
+    root.style.setProperty('--bg-opacity',String(op/100));
+    var bl=Math.max(0,Math.min(24,Number(cfg.blur)||0));
+    root.style.setProperty('--bg-blur',bl+'px');
+    root.setAttribute('data-bg-active',(safeUrl||(cfg.preset&&cfg.preset!=='none'))?'1':'0');
+    try{ root.dispatchEvent(new CustomEvent('bgchange')); }catch(e){}
+  }
+  applyBg(readBg());
+
   window.ROMTHEME={
     modes:MODES,
     mode:function(){ return root.getAttribute('data-theme'); },
     accent:function(){ return root.style.getPropertyValue('--accent').trim()
                               || FALLBACK; },
+    uiMode:function(){ return root.getAttribute('data-ui-mode')||'simple'; },
+    setUiMode:function(next){
+      var m=next==='advanced'?'advanced':'simple';
+      root.setAttribute('data-ui-mode',m);
+      store(UKEY,m);
+      try{ root.dispatchEvent(new CustomEvent('uimodechange')); }catch(e){}
+    },
+    bg:function(){ return readBg(); },
+    setBg:function(patch){
+      var next=Object.assign(readBg(),patch||{});
+      applyBg(next);
+      try{ store(BKEY,JSON.stringify(next)); }catch(e){}
+    },
     set:function(mode,accent){
       var m=MODES.indexOf(mode)>=0?mode:this.mode(),
           a=rgb(accent)?accent:this.accent();
@@ -866,8 +913,31 @@ def _theme_control_html() -> str:
         '<label class="sw pick" title="Any colour you like">'
         f'<input type="color" id="accent-pick" value="{ACCENTS[0][0]}" '
         'aria-label="Custom accent colour"></label>'
+        '</div>'
+        '<div class="thm-lbl" style="margin-top:12px">Background &amp; Texture</div>'
+        '<div class="bg-ctrl">'
+        '<select id="bg-preset" aria-label="Background texture">'
+        '<option value="none">None (Solid)</option>'
+        '<option value="grid">Subtle Grid</option>'
+        '<option value="dots">Retro Dots</option>'
+        '<option value="scanlines">Arcade Scanlines</option>'
+        '<option value="mesh">Ambient Accent Glow</option>'
+        '</select>'
+        '<input id="bg-url" type="url" placeholder="Wallpaper image URL (https://…)" aria-label="Wallpaper URL">'
+        '<div class="row" style="gap:6px;margin-top:6px">'
+        '<select id="bg-fit" aria-label="Wallpaper layout" style="flex:1">'
+        '<option value="cover">Cover</option>'
+        '<option value="contain">Contain</option>'
+        '<option value="repeat">Tile / Repeat</option>'
+        '<option value="center">Center</option>'
+        '</select>'
+        '<button type="button" class="mini" id="bg-clear" title="Clear wallpaper">Reset</button>'
+        '</div>'
+        '<label class="bg-range"><span>Opacity</span><input id="bg-opacity" type="range" min="5" max="80" value="22"></label>'
+        '<label class="bg-range"><span>Blur</span><input id="bg-blur" type="range" min="0" max="20" value="0"></label>'
+        '</div>'
         '<button id="notes-restore" type="button" hidden>Show hidden notices</button>'
-        '</div></div></details>'
+        '</div></details>'
         '<a id="android-beta-link" href="https://play.google.com/apps/internaltest/4700888732790045566" '
         'target="_blank" rel="noopener noreferrer" class="nav" '
         'style="margin:8px 10px 4px;padding:7px 10px;font-size:12px;font-weight:600;'
@@ -1484,7 +1554,7 @@ const pluginDashboard=async(slug,onBack)=>{
     +(tries.length?'<div class="pd-box"><h3>Try it</h3>'+tries.join('')+'<div id="pd-out"></div></div>':'')
     +'</div>'
     +(d.terms?'<div class="panel-note"><b>Terms.</b> '+esc(d.terms)+'</div>':'')
-    +(d.readme?'<details class="pd-box" open><summary><b>Instructions (README)</b></summary><div class="pd-readme">'
+    +(d.readme?'<details class="adv pd-box"><summary><b>Instructions (README)</b></summary><div class="pd-readme">'
       +mdLite(d.readme)+'</div></details>':'');
   $('#pd-back').onclick=onBack;
   $('#pd-toggle').onclick=async()=>{
@@ -1711,14 +1781,38 @@ RENDER.hub=async()=>{
       +esc(name)+'<span class="n">'+n+'</span></span>').join('');
     const quickFilters=[['guides','Guides & FAQs'],['tutorials','Video Tutorials'],['mods','Mods & Addons'],['bots','Bots & Tools'],['github','Open-Source Repos']].map(([kw,label])=>
       '<button type="button" class="chip'+(q===kw?' on':'')+'" data-quick="'+esc(kw)+'" aria-pressed="'+(q===kw?'true':'false')+'">'+esc(label)+'</button>').join('');
+    const starters=[
+      ['repacks','FitGirl & DODI Repacks','PC repacks & RSS auto-updates'],
+      ['archive-org','Internet Archive','Classic ROM & disc sets'],
+      ['nointro-archive','Myrient / No-Intro','Verified cartridge dumps'],
+      ['vimm-net',"Vimm's Lair",'Curated console classics'],
+      ['modrinth','Modrinth','Zero-key mods & modpacks'],
+      ['strategywiki','StrategyWiki','Open community walkthroughs']
+    ];
+    const starterBar='<div class="proof-bar" style="margin-top:12px"><div class="row" style="justify-content:space-between;align-items:center">'
+      +'<b>Recommended Zero-Key Starter Sources</b><span class="help" style="margin:0">One click to install or open — no API key required</span></div>'
+      +'<div class="row" style="flex-wrap:wrap;gap:8px;margin-top:8px">'
+      +starters.map(([slug,label,hint])=>{
+        const found=items.find(x=>x.slug===slug);
+        const isInst=found?found.installed:(hs.searchable_plugins||[]).includes(slug);
+        const isEn=found?found.enabled:(hs.searchable_plugins||[]).includes(slug);
+        return '<div class="proof-pill'+(isInst&&isEn?' ok':'')+'" title="'+esc(hint)+'">'
+          +'<span><b>'+esc(label)+'</b></span>'
+          +(isInst
+            ?'<span class="pill" style="background:var(--ok);color:#08210d">'+(isEn?'Ready':'Installed')+'</span>'
+              +'<button type="button" class="mini" data-open="'+esc(slug)+'">Open</button>'
+            :'<button type="button" class="mini accent" data-act="install" data-slug="'+esc(slug)+'">Install</button>')
+          +'</div>';
+      }).join('')+'</div></div>';
 
     p.innerHTML='<div class="card"><h3>Add game, mod, guide, bot &amp; repo sources with ROM Hub</h3>'
       +'<p>ROM Hub brings ROMs, <b>game mods</b> (CurseForge, ModDB, Nexus Mods, Modrinth, Thunderstore, GameBanana), <b>guides &amp; FAQs</b> (GameFAQs, StrategyWiki, Game Manuals), <b>video tutorials</b> (YouTube), and <b>open-source games &amp; bots</b> (GitHub) into ROMarr. Pick a source below, install it, and enable it.</p>'
       +'<p class="help">To download files through Interactive Search, add a ROM Hub download client and choose a writable download folder. Eight of the eleven new community plugins require zero API keys.</p>'
       +'<div class="row"><button class="btn" id="hub-connect">Set up ROM Hub downloads</button>'
       +'<a class="btn ghost" href="https://github.com/BlizzHacker/rom-hub" target="_blank" rel="noopener">Plugin catalogue and help</a>'
-      +'<button class="btn ghost" id="hub-search">Open Interactive Search</button></div></div>'
-      +acqNote+sandboxNote+solverNote+'<div class="card"><h3>Plugins'
+      +'<button class="btn ghost" id="hub-search">Open Interactive Search</button></div>'
+      +starterBar+'</div>'
+      +acqNote+'<div class="card"><h3>Plugins'
       +'<span class="help" style="margin-left:10px">'+items.length+' of '+(d.total||0)+'</span></h3>'
       +'<div class="cat-bar">'
       +'<input id="pq" placeholder="Search plugins by name, author or description…" value="'+esc(q)+'">'
@@ -1734,6 +1828,8 @@ RENDER.hub=async()=>{
          +'Try a different search, or add your own plugin below.</div>')
       +'</div></div>'
 
+      +'<details class="adv"><summary>Advanced: Power tools, custom repositories &amp; sandbox status (Igir 1G1R, eXo2romm, custom git plugins)</summary>'
+      +sandboxNote+solverNote
       +'<div class="card"><h3>Igir v5.8.0 — 1G1R Front-End & RomM Sorter</h3>'
       +'<p class="help">Run Igir v5.8.0 directly against your staging and DAT folders using ROMarr\'s 1G1R region priority and native <code>{romm}</code> folder tokens.</p>'
       +'<div class="panels" style="margin-top:8px">'
@@ -1794,7 +1890,7 @@ RENDER.hub=async()=>{
       +'<div id="smsg"></div>'
       +'<div class="panel-note">ROMarr does not post this for you. It prepares the '
       +'entry and hands you a link to review and submit yourself.</div></div>'
-      +'</div>';
+      +'</div></details>';
 
     $('#hub-connect').onclick=()=>editItem('downloadclient',{type:'hub'},()=>RENDER.hub());
     $('#hub-search').onclick=()=>go('search');
@@ -2579,13 +2675,10 @@ RENDER.search=async()=>{
         +'After you grab a result, download or import failures appear in <a href="#queue">Queue</a> and <a href="#history">History</a>.</p></div>';
       return;
     }
-    $('#s-out').innerHTML=`
-      <p class="help"><b>${d.found}</b> releases, <b>${d.accepted}</b> of them
-        acceptable${timingNote}. Rejected rows are shown too, because why a release was
-        refused is usually the answer you came for.</p>
-      <table><thead><tr><th>Score</th><th>Release</th><th>Size</th>
-        <th>Seeders</th><th>Indexer</th><th>Why</th><th></th></tr></thead><tbody>
-      ${d.items.map((r,i)=>`<tr style="${r.accepted?'':'opacity:.62'}">
+    const acceptedRows=d.items.filter(r=>r.accepted);
+    const rejectedRows=d.items.filter(r=>!r.accepted);
+    const best=acceptedRows.find(r=>r.grabbable)||acceptedRows[0]||null;
+    const renderRow=(r)=>`<tr style="${r.accepted?'':'opacity:.62'}">
         <td><span class="pill ${r.accepted?'imported':'failed'}">${r.score}</span></td>
         <td>${esc(r.title)}${r.info_url?` <a href="${esc(r.info_url)}" target="_blank"
             rel="noopener noreferrer" title="Open on ${esc(r.indexer||'the indexer')}"
@@ -2602,7 +2695,33 @@ RENDER.search=async()=>{
         <td><div class="rowact">${r.grabbable
           ? `<button data-grab="${esc(r.id)}" data-plat="${esc(r.platform||'')}">Grab</button>`
           : `<span style="color:var(--dim);font-size:12px">${esc(r.grab_refusal||'no link')}</span>`}</div></td>
-        </tr>`).join('')}</tbody></table>`;
+        </tr>`;
+    const bestBanner=best?`<div class="best-match">
+      <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+        <div style="flex:1;min-width:220px">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <span class="pill imported">Recommended Best Match · Score ${best.score}</span>
+            <span class="pill">${esc(best.indexer||'source')}</span>
+            <span class="pill">${mb(best.size)}</span>
+            ${best.platform?`<span class="pill">${esc(best.platform)}</span>`:''}
+          </div>
+          <div style="font-weight:650;margin-top:6px;overflow-wrap:anywhere">${esc(best.title)}</div>
+          <div class="help" style="margin:4px 0 0">${(best.reasons||[]).slice(0,3).map(esc).join(' · ')}</div>
+        </div>
+        ${best.grabbable?`<button class="btn" data-grab="${esc(best.id)}" data-plat="${esc(best.platform||'')}">Grab Best Match</button>`:''}
+      </div>
+    </div>`:'';
+    $('#s-out').innerHTML=`
+      <p class="help"><b>${d.found}</b> releases, <b>${d.accepted}</b> of them
+        acceptable${timingNote}. ${rejectedRows.length?'Rejected rows are folded below so you see clean, ready-to-grab matches first.':''}</p>
+      ${bestBanner}
+      ${acceptedRows.length?`<table><thead><tr><th>Score</th><th>Release</th><th>Size</th>
+        <th>Seeders</th><th>Indexer</th><th>Why</th><th></th></tr></thead><tbody>
+        ${acceptedRows.map(renderRow).join('')}</tbody></table>`:''}
+      ${rejectedRows.length?`<details class="adv"${acceptedRows.length?'':' open data-keep-open="1"'}><summary>Advanced: ${rejectedRows.length} rejected release(s) and why they were refused</summary>
+        <table><thead><tr><th>Score</th><th>Release</th><th>Size</th>
+        <th>Seeders</th><th>Indexer</th><th>Why</th><th></th></tr></thead><tbody>
+        ${rejectedRows.map(renderRow).join('')}</tbody></table></details>`:''}`;
 
     document.querySelectorAll('[data-grab]').forEach(b=>b.onclick=async()=>{
       b.disabled=true; b.textContent='Grabbing…';
@@ -2837,7 +2956,8 @@ RENDER.lists=async()=>{
         the list editor to sync owned games. <b>GOG</b> uses a public profile.
         <b>Amazon and Ubisoft</b> support a pasted library.</p>
       <div id="l-token"></div>
-      <h3 style="margin-top:18px">Games installed on your gaming PC</h3>
+      <details class="adv"><summary>Advanced: Games installed on your gaming PC (CLI script &amp; local server scan)</summary>
+      <h3 style="margin-top:12px">Games installed on your gaming PC</h3>
       <p class="help">A second route, useful alongside the above: every
         launcher writes a local library. Report it from the PC you play on
         using your ROMarr API key. Store passwords stay on that PC.</p>
@@ -2848,7 +2968,7 @@ RENDER.lists=async()=>{
         <button class="btn ghost" id="l-scan">Scan the ROMarr server</button>
         <span class="help" style="margin:0">Only useful if ROMarr runs on
           the machine you play on. Remote devices can report their own library with the command above.</span></div>
-      <div id="l-noapi" style="color:var(--dim);font-size:12.5px"></div></div>`;
+      <div id="l-noapi" style="color:var(--dim);font-size:12.5px"></div></details></div>`;
 
   const search=$('#l-owned-query'), provider=$('#l-owned-provider');
   const results=$('#l-owned-results');
@@ -3991,11 +4111,15 @@ RENDER.portal=async()=>{
           <input id="portal-url" placeholder="http://192.168.1.50:8080" value="${esc(currentUrl)}" style="flex:1;min-width:220px;padding:7px 11px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--r-sm)">
           <button class="btn" id="portal-load">Open</button>
           <button class="btn ghost" id="portal-rescan">Refresh Library</button>
-          <button class="btn ghost" id="portal-1g1r">Preview 1G1R (Igir)</button>
-          <button class="btn ghost" id="portal-hashes">Seed Netplay Hashes</button>
-          <button class="btn ${effectiveProxy?'':'ghost'}" id="portal-shield" title="Toggle Same-Origin Authenticated Proxy">${effectiveProxy?'Proxy: Same-Origin (ON)':'Mode: Direct Iframe'}</button>
           ${currentUrl?`<a class="btn ghost" id="portal-popout" href="${esc(popOutHref)}" target="_blank" rel="noopener noreferrer">Open in New Tab ↗</a>`:''}
         </div>
+        <details class="adv" style="margin-bottom:10px"><summary>Advanced library actions (1G1R preview, Netplay hash seed, Same-Origin proxy toggle)</summary>
+          <div class="row" style="margin-top:8px;flex-wrap:wrap">
+            <button class="btn ghost" id="portal-1g1r">Preview 1G1R (Igir)</button>
+            <button class="btn ghost" id="portal-hashes">Seed Netplay Hashes</button>
+            <button class="btn ${effectiveProxy?'':'ghost'}" id="portal-shield" title="Toggle Same-Origin Authenticated Proxy">${effectiveProxy?'Proxy: Same-Origin (ON)':'Mode: Direct Iframe'}</button>
+          </div>
+        </details>
         <div id="portal-status"></div>
         ${currentUrl&&!canProxy?`<div class="panel-note" style="margin-bottom:12px">
           <b>Direct iframe mode:</b> <code>${esc(currentUrl)}</code> is not in <a href="#libraries">Settings → Libraries</a>, so ROMarr loads it directly in your browser instead of routing through <code>/api/v1/portal/proxy</code> (which only proxies configured library origins).
@@ -4836,6 +4960,17 @@ RENDER.stats=async()=>{
         catalogue is larger.</p></div>`:''}
     <div class="card"><h3>Imports by platform</h3>${bar(s.imported_by_platform)}</div>
     <div class="card"><h3>Grabs by indexer</h3>${bar(s.grabbed_by_indexer)}</div>
+    <div class="card"><h3>Shelf</h3><div class="st">
+      <div><b>${(s.statuses||{}).playing||0}</b><span>Playing</span></div>
+      <div><b>${(s.statuses||{}).completed||0}</b><span>Completed</span></div>
+      <div><b>${(s.statuses||{}).shelved||0}</b><span>Shelved</span></div>
+    </div><p class="help">Set from any game tile in the Library.</p>
+      <div class="row"><select id="rl-st"><option value="shelved">From Shelved</option>
+        <option value="playing">From Playing</option>
+        <option value="shelved,playing">From both</option></select>
+        <button class="btn" id="rl-go">Pick my next game</button></div>
+      <div id="rl-out" style="margin-top:8px"></div></div>
+    <details class="adv"><summary>Advanced maintenance: Library audit &amp; Fix existing filenames</summary>
     <div class="card"><h3>Library audit</h3>
       <p class="help">Verify what is already on the shelf: every file hashed
         against your DATs — <b>bad dump</b> means right size, wrong bytes
@@ -4857,17 +4992,7 @@ RENDER.stats=async()=>{
         <input id="rn-scope" placeholder="Optional subfolder (leave blank for all)" aria-label="Optional folder inside the platform">
         <button class="btn" id="rn-preview">Preview safe renames</button></div>
       <div id="rn-out" style="margin-top:10px"></div>
-      <div id="rn-journals" style="margin-top:10px"></div></div>
-    <div class="card"><h3>Shelf</h3><div class="st">
-      <div><b>${(s.statuses||{}).playing||0}</b><span>Playing</span></div>
-      <div><b>${(s.statuses||{}).completed||0}</b><span>Completed</span></div>
-      <div><b>${(s.statuses||{}).shelved||0}</b><span>Shelved</span></div>
-    </div><p class="help">Set from any game tile in the Library.</p>
-      <div class="row"><select id="rl-st"><option value="shelved">From Shelved</option>
-        <option value="playing">From Playing</option>
-        <option value="shelved,playing">From both</option></select>
-        <button class="btn" id="rl-go">Pick my next game</button></div>
-      <div id="rl-out" style="margin-top:8px"></div></div>`;
+      <div id="rn-journals" style="margin-top:10px"></div></div></details>`;
   enhancePlatformSelect($('#au-plat'), 'Select a platform');
   enhancePlatformSelect($('#rn-plat'), 'Select a platform');
   const rl=document.getElementById('rl-go');
@@ -5777,6 +5902,18 @@ RENDER.media=()=>settingsPage('Media Management',
   'Where imported ROMs are filed. This must be the same path your library server scans.',
   fld('library_path','ROM library root',SETTINGS.library_path)
   +fld('dat_path','DAT directory',SETTINGS.dat_path||'')
+  +sel('library_layout','Folder structure',
+     [['flat','Structure A — platform/rom'],['nested','Structure B — platform/roms/rom']],
+     SETTINGS.library_layout||'flat',
+     'Match your library server. RomM Structure A files as '
+     +'&lt;root&gt;/&lt;platform&gt;/&lt;rom&gt;; Structure B adds a roms/ level. '
+     +'Per-library overrides live on the Libraries page.')
+  +chk('rename_on_import','Use DAT names for verified single-file imports (disc-set filenames stay intact)',SETTINGS.rename_on_import)
+  +chk('prefer_hardlinks','Prefer hardlinks; copy when unavailable (unchanged files only)',SETTINGS.prefer_hardlinks)
+  +`<p class="dim">Hardlinks share file contents with the download. Editing either file changes both. Archive members are extracted normally. Shared library read permissions are required; ROMarr never changes source permissions.</p>`
+  +chk('retain_downloads_after_import','Keep completed downloads for seeding after import',SETTINGS.retain_downloads_after_import)
+  +chk('rescan_after_import','Tell your library server to rescan after an import',SETTINGS.rescan_after_import)
+  +`<details class="adv"><summary>Advanced: Path mappings, per-platform folder overrides &amp; import rules</summary>`
   +`<div class="field"><label>Trusted DAT catalog → platform mapping (optional)</label>
      <textarea data-k="dat_catalog_platforms" data-datcatalogmap="1" rows="4"
        style="width:100%;resize:vertical;font:12px/1.5 ui-monospace,Menlo,monospace"
@@ -5799,14 +5936,10 @@ RENDER.media=()=>settingsPage('Media Management',
      <div style="color:var(--dim);font-size:11.5px;margin-top:4px">
        Optional per-platform directory names under your library root (e.g. <code>win = Windows</code>).
        Defaults to RomM's canonical filesystem slugs when blank.</div></div>`
-  +sel('library_layout','Folder structure',
-     [['flat','Structure A — platform/rom'],['nested','Structure B — platform/roms/rom']],
-     SETTINGS.library_layout||'flat',
-     'Match your library server. RomM Structure A files as '
-     +'&lt;root&gt;/&lt;platform&gt;/&lt;rom&gt;; Structure B adds a roms/ level. '
-     +'Per-library overrides live on the Libraries page.')
-  +chk('rename_on_import','Use DAT names for verified single-file imports (disc-set filenames stay intact)',SETTINGS.rename_on_import)
-  +chk('prefer_hardlinks','Prefer hardlinks; copy when unavailable (unchanged files only)',SETTINGS.prefer_hardlinks)
+  +chk('overwrite_existing','Overwrite an existing file',SETTINGS.overwrite_existing)
+  +chk('reconcile_after_import','Reconcile Wanted aliases against verified library files after an import',SETTINGS.reconcile_after_import!==false)
+  +`</details>`
+  +`<details class="adv"><summary>Advanced: Switch NSZ/XCI compression &amp; multi-part package folders</summary>`
   +chk('switch_attach_extras','File Switch updates and DLC inside their game\'s folder (update/, dlc/) when the game already has one',SETTINGS.switch_attach_extras!==false)
   +chk('compress_switch_imports','Compress Switch imports (NSP to NSZ) through Compressatorium; the original is removed only after the compressed file verifies',SETTINGS.compress_switch_imports)
   +chk('compress_switch_xci','Also compress XCI imports to XCZ',SETTINGS.compress_switch_xci)
@@ -5814,11 +5947,8 @@ RENDER.media=()=>settingsPage('Media Management',
      ${esc(XCI_WARNING)}</div>`
   +fld('nsz_compression','NSZ compression (solid or block, level 1-22; XCZ always uses block)',SETTINGS.nsz_compression||'block:18','text','placeholder="block:18" pattern="(solid|block):([1-9]|1[0-9]|2[0-2])"')
   +chk('game_package_folders','In RomM libraries, file games with updates and DLC (PlayStation, 3DS, Wii U, Switch) as one game folder: base game in &lt;Title&gt;/, update in update/, DLC in dlc/',SETTINGS.game_package_folders!==false)
-  +`<p class="dim">Hardlinks share file contents with the download. Editing either file changes both. Archive members are extracted normally. Shared library read permissions are required; ROMarr never changes source permissions.</p>`
-  +chk('retain_downloads_after_import','Keep completed downloads for seeding after import',SETTINGS.retain_downloads_after_import)
-  +chk('overwrite_existing','Overwrite an existing file',SETTINGS.overwrite_existing)
-  +chk('rescan_after_import','Tell your library server to rescan after an import',SETTINGS.rescan_after_import)
-  +chk('reconcile_after_import','Reconcile Wanted aliases against verified library files after an import',SETTINGS.reconcile_after_import!==false)
+  +`</details>`
+  +`<details class="adv"><summary>Advanced: Antivirus &amp; hash reputation scanners (Defender, MWM, VirusTotal, ClamAV)</summary>`
   +chk('scanner_defender_enabled','Scan imports with Microsoft Defender on this Windows host',SETTINGS.scanner_defender_enabled)
   +chk('scanner_mwm_enabled','Require an antivirus result from MoveWeight Manager',SETTINGS.scanner_mwm_enabled)
   +fld('scanner_mwm_url','MoveWeight Manager URL',SETTINGS.scanner_mwm_url||'','text',
@@ -5834,6 +5964,8 @@ RENDER.media=()=>settingsPage('Media Management',
      An infected download is refused and blocklisted; while ClamAV cannot be
      reached, finished downloads wait instead of going in unscanned. System &rarr;
      Status shows whether it answers.</div>`
+  +`</details>`
+  +`<details class="adv"><summary>Advanced: 1G1R fan-translation &amp; language rules</summary>`
   +sel('translation_policy','Fan translations in 1G1R sets',
      [['exclude','Exclude — published dumps only'],
       ['fill','Fill gaps — use a translation only when no preferred-region dump exists'],
@@ -5866,7 +5998,8 @@ RENDER.media=()=>settingsPage('Media Management',
      '"Prefer" is the historical fallback: a game with only Japan dumps stays '
      +'in the set rather than being lost. "Strict" treats the region list as '
      +'an allowlist — the plan counts every title omitted for having no dump '
-     +'in your regions.'),
+     +'in your regions.')
+  +`</details>`,
   ()=>{
     // XCI compression usually fails its round-trip; say so when it is ticked.
     const box=document.querySelector('[data-k="compress_switch_xci"]');
@@ -6006,6 +6139,28 @@ RENDER.profiles=async()=>{
       </div>
 
       <div class="row" style="display:flex;gap:16px;flex-wrap:wrap">
+        <div style="flex:2;min-width:260px">
+          <div class="field">
+            <label>Preferred Regions</label>
+            <input type="text" id="prof-regions" value="${esc(regions.join(', '))}" placeholder="USA, World, Europe, Japan">
+            <div style="color:var(--dim);font-size:11.5px;margin-top:4px">
+              Comma-separated list of regions in preferred order.
+            </div>
+          </div>
+        </div>
+        <div style="flex:1;min-width:200px">
+          <div class="field">
+            <label>Minimum Seeders</label>
+            <input type="number" id="prof-min-seeders" value="${esc(minSeeders)}" placeholder="1">
+            <div style="color:var(--dim);font-size:11.5px;margin-top:4px">
+              Required seeders on public torrent trackers.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <details class="adv"><summary>Advanced: Size limits, Usenet retention, video standard &amp; custom scoring rules</summary>
+      <div class="row" style="display:flex;gap:16px;flex-wrap:wrap;margin-top:8px">
         <div style="flex:1;min-width:260px">
           <div class="field">
             <label>Minimum Size (MB)</label>
@@ -6025,13 +6180,6 @@ RENDER.profiles=async()=>{
           </div>
         </div>
         <div style="flex:1;min-width:260px">
-          <div class="field">
-            <label>Minimum Seeders</label>
-            <input type="number" id="prof-min-seeders" value="${esc(minSeeders)}" placeholder="1">
-            <div style="color:var(--dim);font-size:11.5px;margin-top:4px">
-              Required seeders on public torrent trackers.
-            </div>
-          </div>
           <div class="field">
             <label>Usenet Minimum Age (minutes)</label>
             <input type="number" min="0" id="prof-usenet-min-age" value="${esc(usenetMinAge)}" placeholder="0">
@@ -6081,13 +6229,6 @@ RENDER.profiles=async()=>{
         <textarea id="prof-formats" rows="3" placeholder="${isGlobal?'psx = chd, cue, bin':'chd, cue, bin'}">${esc(formatValue)}</textarea>
         <small>${isGlobal?'One platform slug = comma-separated extensions per line.':'Comma-separated extensions. Empty disables format preference for this platform.'} Only the final filename extension or selected torrent member counts.</small>
       </div>
-      <div class="field" style="margin-top:12px">
-        <label>Preferred Regions</label>
-        <input type="text" id="prof-regions" value="${esc(regions.join(', '))}" placeholder="USA, World, Europe, Japan">
-        <div style="color:var(--dim);font-size:11.5px;margin-top:4px">
-          Comma-separated list of regions in preferred order.
-        </div>
-      </div>
 
       <div class="field" style="margin-top:12px">
         <label>Custom Region Scores</label>
@@ -6125,6 +6266,7 @@ RENDER.profiles=async()=>{
         <label class="check"><input type="checkbox" id="prof-allow-beta"${allowBeta?' checked':''}><span>Accept betas and prototypes</span></label>
         <label class="check" style="margin-left:16px"><input type="checkbox" id="prof-allow-hacks"${allowHacks?' checked':''}><span>Accept ROM hacks</span></label>
       </div>
+      </details>
 
       <div style="margin-top:16px">
         <button class="btn" id="prof-save-btn">Save Profile</button>
@@ -6294,14 +6436,25 @@ RENDER.clients=async()=>{
   $('#page').innerHTML=`<div class="card">
     <div class="row" style="margin-bottom:12px">
       <h3 style="margin:0">Download Clients</h3>
-      <button class="btn sp" id="c-add" style="margin-left:auto">Add</button>
+      <button class="btn ghost" id="c-quick-builtin" style="margin-left:auto">1-Click Enable Direct HTTP &amp; ROM Hub</button>
+      <button class="btn sp" id="c-add">Add</button>
     </div>
-    <p class="help">A release is routed by its protocol, so an indexer type
-      with no client configured cannot be grabbed at all &mdash; which is why
-      unconfigured clients are listed rather than hidden.</p>
+    <p class="help">Connect a download client or enable the built-in Direct HTTP &amp; ROM Hub engines in one click.</p>
     ${gaps.length?`<p class="help" style="color:var(--warn)">
       No client configured for: <b>${gaps.join(', ')}</b>.
       Those results will be found and then refused.</p>`:''}
+    ${d.items.length?`<table><thead><tr><th>Client</th><th>Protocol</th><th>Address / Save Path</th>
+      <th>Category</th><th>Status</th><th></th></tr></thead><tbody>
+      ${d.items.map((c,i)=>`<tr><td>${esc(c.name)}
+        ${c.detail?`<div class="help" style="margin:2px 0 0">${esc(c.detail)}</div>`:''}</td>
+        <td><span class="pill">${esc(c.protocol)}</span></td>
+        <td style="color:var(--dim)">${esc(c.url||c.save_path||'—')}</td>
+        <td>${esc(c.category||'—')}</td>
+        <td>${state(c)}</td>
+        <td><div class="rowact"><button data-edit="${i}">Edit</button></div></td>
+        </tr>`).join('')}</tbody></table>`
+    :'<div class="empty">No download clients yet. Use 1-Click Enable above or Add one to start grabbing.</div>'}
+    <details class="adv"><summary>Advanced: Standalone engines (MDM / Usenet) &amp; Headless Browser details</summary>
     ${mdmNote}
     ${br?`<p class="help">ROM sites are fetched over plain HTTP by the
       <b>Direct HTTP</b> client. A handful put the file behind a form the
@@ -6314,19 +6467,24 @@ RENDER.clients=async()=>{
       A site that can only be downloaded from by answering a CAPTCHA or a
       bot-detection challenge is reported as unavailable rather than worked
       around.</p>`:''}
-    ${d.items.length?`<table><thead><tr><th>Client</th><th>Protocol</th><th>Address / Save Path</th>
-      <th>Category</th><th>Status</th><th></th></tr></thead><tbody>
-      ${d.items.map((c,i)=>`<tr><td>${esc(c.name)}
-        ${c.detail?`<div class="help" style="margin:2px 0 0">${esc(c.detail)}</div>`:''}</td>
-        <td><span class="pill">${esc(c.protocol)}</span></td>
-        <td style="color:var(--dim)">${esc(c.url||c.save_path||'—')}</td>
-        <td>${esc(c.category||'—')}</td>
-        <td>${state(c)}</td>
-        <td><div class="rowact"><button data-edit="${i}">Edit</button></div></td>
-        </tr>`).join('')}</tbody></table>`
-    :'<div class="empty">No download clients yet. Add one to start grabbing.</div>'}
+    </details>
   </div>`;
   $('#c-add').onclick=()=>addItem('downloadclient');
+  const quickBtn=$('#c-quick-builtin');
+  if(quickBtn) quickBtn.onclick=async()=>{
+    quickBtn.disabled=true; quickBtn.textContent='Enabling…';
+    const base=(SETTINGS&&SETTINGS.library_path)||'/downloads';
+    const saveOne=(type,name)=>j('/api/v1/downloadclient',{method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({type,name,enable:true,save_path:base})}).catch(e=>({error:e.message||'Request failed'}));
+    const r1=await saveOne('direct','Direct HTTP');
+    const r2=await saveOne('hub','ROM Hub');
+    const okNames=[!r1.error?'Direct HTTP':null,!r2.error?'ROM Hub':null].filter(Boolean);
+    const errs=[r1.error?('Direct HTTP: '+r1.error):null,r2.error?('ROM Hub: '+r2.error):null].filter(Boolean);
+    if(okNames.length&&!errs.length) toast('Enabled '+okNames.join(' & '));
+    else if(okNames.length) toast('Enabled '+okNames.join(', ')+'; failed: '+errs.join('; '));
+    else toast('Could not enable built-in clients: '+errs.join('; '));
+    if(isCurrentClients()) RENDER.clients();
+  };
   const installBtn=$('#mdm-install');
   if(installBtn){
     let mdmBusy=false;
@@ -6464,7 +6622,7 @@ RENDER.indexers=async()=>{
         </tr>`).join('')}</tbody></table></div>`
     :(d.error?`<div class="card"><h3>Via Prowlarr</h3>
         <p class="help" style="color:var(--warn)">${esc(d.error)}</p></div>`:'')}`;
-  $('#page').innerHTML+=`<div class="card" id="hydra-card"><h3>Hydra Launcher sources</h3>
+  $('#page').innerHTML+=`<details class="adv"><summary>Advanced: Hydra Launcher community JSON sources (zero-key public game lists)</summary><div class="card" id="hydra-card"><h3>Hydra Launcher sources</h3>
     <p class="help">A Hydra source is a public list of games and their download links, made for Hydra Launcher.
       It needs no account or API key. ROMarr reads the list, searches it like an indexer, and sends each grab
       to the client that can fetch that kind of link. <a href="${HYDRA_GUIDE}" target="_blank" rel="noopener">Step-by-step guide</a></p>
@@ -6481,7 +6639,7 @@ RENDER.indexers=async()=>{
     <p class="help" style="margin-top:8px">Labels come from library.hydra.wiki. <b>Classics</b> lists hold console and retro games,
       which ROMarr can verify against No-Intro and Redump DATs, so they are listed first. <b>Trusted</b>, <b>Safe For Use</b> and
       <b>Use At Your Own Risk</b> are the library reviewers' ratings.</p>
-    <div id="hy-list" style="margin-top:10px"></div></div>`;
+    <div id="hy-list" style="margin-top:10px"></div></div></details>`;
   $('#i-add').onclick=()=>addItem('indexer');
   document.querySelectorAll('[data-iedit]').forEach(b=>b.onclick=()=>
     editItem('indexer', d.items[Number(b.dataset.iedit)]));
@@ -6605,8 +6763,39 @@ RENDER.general=async()=>{
        Set up Torrent and Usenet in <a href="#clients">Download Clients</a> to use both at the same time.
        Each grab goes to a client that accepts its protocol.</div></div>
    <div class="field"><label>RomM</label>
-     <input type="text" value="${esc(SETTINGS._romm_url||'')}" disabled></div>
-   <div class="field"><label>Your public URL (for Friends)</label>
+     <input type="text" value="${esc(SETTINGS._romm_url||'')}" disabled></div>`
+  +chk('auto_import','Import completed downloads automatically',SETTINGS.auto_import)
+  +chk('update_check','Check github.com daily for a newer ROMarr',
+       SETTINGS.update_check)
+  +chk('auto_update','Apply updates automatically (git installs only; waits until nothing is downloading, then restarts ROMarr)',
+       SETTINGS.auto_update)
+  +sel('update_channel','Update channel',
+     [['stable','Stable — published releases'], ['rc','RC — release candidates'],
+      ['beta','Beta — testing builds'], ['alpha','Alpha — early previews'],
+      ['nightly','Nightly — latest commit on main']],
+     SETTINGS.update_channel||'stable',
+     'Stable follows published releases. RC, Beta and Alpha include more stable releases too and require manual application. Nightly follows main by exact revision. PR previews are separate, explicit choices under System → Updates.')
+  +chk('auto_update_plugins','Update ROM Hub plugins daily from their sources',
+       SETTINGS.auto_update_plugins)
+  +`<h3 style="margin-top:18px">Security</h3>
+    <div class="row" style="gap:8px;align-items:center;margin:8px 0">
+      <button class="btn ghost" id="g-key" type="button">Reveal API key</button>
+      <code id="g-keyout" style="font-size:12px;color:var(--dim)"></code></div>`
+  +`<details class="adv"><summary>Advanced: Scheduler intervals (The clock)</summary>
+    <h3 style="margin-top:12px">The clock</h3>
+    <p class="help">How often the scheduled jobs run. Zero turns a job off;
+      changes apply at the next tick, no restart.</p>`
+  +fld('auto_import_interval_minutes','Import check (minutes)',
+       SETTINGS.auto_import_interval_minutes,'number')
+  +fld('search_missing_interval_hours','Wanted search (hours)',
+       SETTINGS.search_missing_interval_hours,'number')
+  +fld('rss_sync_interval_minutes','RSS sync (minutes)',
+       SETTINGS.rss_sync_interval_minutes,'number')
+  +fld('list_sync_interval_hours','List sync (hours)',
+       SETTINGS.list_sync_interval_hours,'number')
+  +`</details>`
+  +`<details class="adv"><summary>Advanced: Peering URL, FlareSolverr, custom plugin forges &amp; GitHub token</summary>
+    <div class="field"><label>Your public URL (for Friends)</label>
      <input type="text" data-k="public_url"
        value="${esc(SETTINGS.public_url||'')}"
        placeholder="https://romarr.example.com">
@@ -6638,34 +6827,8 @@ RENDER.general=async()=>{
        requests an hour without one. Create a fine-grained token at github.com &rarr;
        Settings &rarr; Developer settings with no repository access: public data needs
        no permissions. Sent only to api.github.com, and never shown again.</div></div>`
-  +chk('auto_import','Import completed downloads automatically',SETTINGS.auto_import)
-  +`<h3 style="margin-top:18px">The clock</h3>
-   <p class="help">How often the scheduled jobs run. Zero turns a job off;
-     changes apply at the next tick, no restart.</p>`
-  +fld('auto_import_interval_minutes','Import check (minutes)',
-       SETTINGS.auto_import_interval_minutes,'number')
-  +fld('search_missing_interval_hours','Wanted search (hours)',
-       SETTINGS.search_missing_interval_hours,'number')
-  +fld('rss_sync_interval_minutes','RSS sync (minutes)',
-       SETTINGS.rss_sync_interval_minutes,'number')
-  +fld('list_sync_interval_hours','List sync (hours)',
-       SETTINGS.list_sync_interval_hours,'number')
-  +chk('update_check','Check github.com daily for a newer ROMarr',
-       SETTINGS.update_check)
-  +chk('auto_update','Apply updates automatically (git installs only; waits until nothing is downloading, then restarts ROMarr)',
-       SETTINGS.auto_update)
-  +sel('update_channel','Update channel',
-     [['stable','Stable — published releases'], ['rc','RC — release candidates'],
-      ['beta','Beta — testing builds'], ['alpha','Alpha — early previews'],
-      ['nightly','Nightly — latest commit on main']],
-     SETTINGS.update_channel||'stable',
-     'Stable follows published releases. RC, Beta and Alpha include more stable releases too and require manual application. Nightly follows main by exact revision. PR previews are separate, explicit choices under System → Updates.')
-  +chk('auto_update_plugins','Update ROM Hub plugins daily from their sources',
-       SETTINGS.auto_update_plugins)
-  +`<h3 style="margin-top:18px">Security</h3>
-    <div class="row" style="gap:8px;align-items:center;margin:8px 0">
-      <button class="btn ghost" id="g-key" type="button">Reveal API key</button>
-      <code id="g-keyout" style="font-size:12px;color:var(--dim)"></code></div>
+  +`</details>`
+  +`<details class="adv"><summary>Advanced: Two-Factor Authentication (TOTP) &amp; Single Sign-On (OIDC)</summary>
     <div class="row" style="gap:8px;align-items:center;margin:8px 0">
       <button class="btn ghost" id="g-totp" type="button">Enable two-factor (TOTP)</button>
       <button class="btn ghost" id="g-totpoff" type="button">Disable</button>
@@ -6709,7 +6872,7 @@ RENDER.general=async()=>{
      <div style="color:var(--dim);font-size:11.5px;margin-top:4px">
        Blank = any user your provider authenticates (and in the required group,
        if set). The provider must send a <code>groups</code> claim for a group
-       restriction to work — Authentik needs it in the scope mapping.</div></div>`,
+       restriction to work — Authentik needs it in the scope mapping.</div></div></details>`,
   ()=>{
     $('#g-key').onclick=async()=>{
       const d=await j('/api/v1/system/apikey').catch(()=>({}));
@@ -6812,9 +6975,6 @@ RENDER.status=async()=>{
            <td style="color:var(--dim)">set MOONLIGHT_HOST to a Wolf, Sunshine or
            Steam Headless machine</td></tr>`}
     </tbody></table></div>
-    ${ggrequestzCard(g)}
-    ${playCard(h.play_routes||{})}
-    ${moonlightCard(h.moonlight||{})}
     <div class="card"><h3>About</h3><div class="st">
       <div><b>${esc(h.version||"unknown")}</b><span>Version</span></div>
       <div><b>${h.platforms}</b><span>Platforms</span></div>
@@ -6823,7 +6983,10 @@ RENDER.status=async()=>{
       <div><b>${h.events}</b><span>History events</span></div>
       <div><b>${esc(h.uptime)}</b><span>Uptime</span></div>
     </div>${buildIdentityLine(h.build)}<p class="help"><a href="https://romarr.app/privacy" target="_blank" rel="noopener noreferrer">Privacy policy</a> · <a href="mailto:me@romarr.app">Contact support</a> · <a href="https://discord.gg/ywNFceuAd" target="_blank" rel="noopener noreferrer">Discord</a> · <a href="https://opencollective.com/romarr" target="_blank" rel="noopener noreferrer">Open Collective</a> · <a href="https://github.com/BlizzHacker/romarr" target="_blank" rel="noopener noreferrer">GitHub</a></p></div>
-
+    <details class="adv"><summary>Advanced: Backup, export, GG Requestz webhook &amp; game streaming hosts</summary>
+    ${ggrequestzCard(g)}
+    ${playCard(h.play_routes||{})}
+    ${moonlightCard(h.moonlight||{})}
     <div class="card"><h3>Backup and export</h3>
     <p class="help">A snapshot restores an install: settings, libraries,
     indexers, clients, history and the wanted list. Credentials are stripped
@@ -6850,7 +7013,7 @@ RENDER.status=async()=>{
     </div>
     <p class="help" style="margin-top:16px">Or as a frontend's own format:</p>
     <div class="row" style="flex-wrap:wrap;gap:8px" id="fe-row"></div>
-    </div>`;
+    </div></details>`;
 
   wireGGRequestz();
   wireMoonlight(h.moonlight||{});
@@ -7406,6 +7569,7 @@ RENDER.metadata=async()=>{
       :providerVerified ? '<div class="empty">No provider configured yet — covers, Discover and '
        +'the Calendar stay dark until one is.</div>' : '')
     +'</div>'
+    +'<details class="adv"><summary>Advanced: Provider reference &amp; live filename lookup tester</summary>'
     +'<div class="card"><h3>What each provider needs</h3>'
     +'<p class="help">ROMarr looks a game up by its <b>DAT-verified name</b> when it '
     +'has one, and only falls back to parsing the filename when it does not. '
@@ -7428,7 +7592,7 @@ RENDER.metadata=async()=>{
     +'<div class="field"><label>SHA-1</label><input id="msha1" placeholder="40 hex"></div>'
     +'</div></details>'
     +'<button class="mini accent" id="mgo">Identify</button>'
-    +'<div id="mout" role="status" style="margin-top:12px"></div></div>';
+    +'<div id="mout" role="status" style="margin-top:12px"></div></div></details>';
 
   const input=$('#mfn'), output=$('#mout');
   const lookup=async()=>{
@@ -7799,8 +7963,20 @@ RENDER.setup=async()=>{
   const order=SETUP.mode==='organize'?[0,1,4,5]:[0,1,2,3,4,5];
   const active=SETUP.step;
   const added=rows=>rows.length?'<ul style="padding-left:20px;margin:12px 0">'
-    +rows.map(row=>'<li>'+esc(row.name)+(row.enabled?'':' <span class="help">(disabled)</span>')+'</li>').join('')+'</ul>':'';
+    +rows.map(row=>'<li><b>'+esc(row.name)+'</b>'+(row.enabled?' <span class="pill" style="background:var(--ok);color:#08210d">✓ Proven &amp; Ready</span>':' <span class="help">(disabled)</span>')+'</li>').join('')+'</ul>':'';
   const action=(id,label)=>'<button class="btn ghost" id="'+id+'">'+label+'</button>';
+  const hasLib=(state.libraries||[]).some(r=>r&&r.enabled!==false);
+  const hasClient=(state.download_clients||[]).some(r=>r&&r.enabled!==false);
+  const hasSource=(state.indexers||[]).some(r=>r&&r.enabled!==false);
+  const hasDat=(state.dat_loaded||0)>0;
+  const proofPill=(ok,label)=>'<span class="proof-pill'+(ok?' ok':'')+'">'+(ok?'✓ ':'○ ')+'<b>'+label+'</b></span>';
+  const proofBar='<div class="proof-bar"><div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">'
+    +'<span><b>Live Readiness Proof</b></span>'
+    +'<div class="row" style="flex-wrap:wrap;gap:6px">'
+    +proofPill(hasLib,'Library')
+    +(SETUP.mode==='download'?proofPill(hasClient,'Downloads')+proofPill(hasSource,'Search Sources'):'')
+    +proofPill(hasDat,'DAT Checksums')
+    +'</div></div></div>';
   let content='';
   if(active===0){
     content='<h3>Welcome to ROMarr</h3><p class="help">Let’s get one game into your library. Choose a starting point; you can add more connections later.</p>'
@@ -7816,7 +7992,9 @@ RENDER.setup=async()=>{
       +'<p class="help">You can preview files in <a href="#manualimport">Manual Import</a> before copying them into your library. Review the platform and destination first. DAT-verified single files can use the canonical name; multi-file disc sets keep their referenced filenames.</p>';
   }else if(active===2){
     content='<h3>Choose what downloads your files</h3><p class="help">Download on the ROMarr host, or connect an app you already run. Choose the protocol your source provides.</p>'
-      +added(state.download_clients)+'<div class="row">'
+      +added(state.download_clients)
+      +'<div class="row" style="margin-bottom:8px"><button class="btn" id="setup-oneclick-hub">1-Click Enable Direct HTTP &amp; ROM Hub Downloads</button></div>'
+      +'<div class="row">'
       +action('setup-usenet','Built-in Usenet')+action('setup-torrent','Standalone torrents')
       +action('setup-direct','Direct HTTP')+action('setup-hub-client','ROM Hub')
       +action('setup-client','Connect an existing client')+'</div>'
@@ -7853,6 +8031,7 @@ RENDER.setup=async()=>{
       +'<p class="help">Stuck? You do not need to know the technical terms. Tell us the last step you reached. <a href="https://github.com/BlizzHacker/romarr/issues" target="_blank" rel="noopener">Open a GitHub issue</a> with your ROMarr version, what you expected, and the relevant error. Remove passwords and API keys from logs.</p>';
   }
   $('#page').innerHTML='<div class="card" style="max-width:900px"><div class="row" style="justify-content:space-between"><span class="help">Setup Guide</span><button class="btn ghost" id="setup-dismiss">Set up later</button></div>'
+    +proofBar
     +'<div class="row" style="flex-wrap:wrap;gap:6px;margin:12px 0 24px">'+order.map((step,n)=>
       '<button class="chip '+(step===active?'on':'')+'" data-setup-step="'+step+'">'+(n+1)+'. '+titles[step]+'</button>').join('')+'</div>'
     +content+'<div class="row" style="margin-top:24px;justify-content:space-between">'
@@ -7883,6 +8062,21 @@ RENDER.setup=async()=>{
   bind('setup-torrent',()=>editItem('downloadclient',{type:'mdm_torrent'},saved));
   bind('setup-direct',()=>editItem('downloadclient',{type:'mdm_http'},saved));
   bind('setup-hub-client',()=>editItem('downloadclient',{type:'hub'},saved));
+  bind('setup-oneclick-hub',async()=>{
+    const btn=$('#setup-oneclick-hub'); if(btn)btn.disabled=true;
+    const base=state.library_path||'/downloads';
+    const saveOne=(type,name)=>j('/api/v1/downloadclient',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({type,name,enable:true,save_path:base})}).catch(e=>({error:e.message||'Request failed'}));
+    const r1=await saveOne('direct','Direct HTTP');
+    const r2=await saveOne('hub','ROM Hub');
+    const okNames=[!r1.error?'Direct HTTP':null,!r2.error?'ROM Hub':null].filter(Boolean);
+    const errs=[r1.error?('Direct HTTP: '+r1.error):null,r2.error?('ROM Hub: '+r2.error):null].filter(Boolean);
+    if(okNames.length&&!errs.length) toast('Enabled '+okNames.join(' & '));
+    else if(okNames.length) toast('Enabled '+okNames.join(', ')+'; failed: '+errs.join('; '));
+    else toast('Could not enable built-in clients: '+errs.join('; '));
+    if(btn)btn.disabled=false;
+    saved();
+  });
   bind('setup-newznab',()=>editItem('indexer',{type:'newznab'},saved));
   bind('setup-prowlarr',()=>editItem('indexer',{type:'prowlarr'},saved));
   bind('setup-indexer',()=>addItem('indexer',saved));
@@ -7946,10 +8140,15 @@ RENDER.getstarted=async()=>{
      +'<td class="help" style="margin:0">'+what+'</td></tr>':'';
 
   $('#page').innerHTML=
-    '<div class="card"><h3>What ROMarr is</h3><p><a class="btn" href="#setup">Open the Setup Guide</a></p>'
-    +'<p class="help">ROMarr helps you find, check and organize games. '
-    +'Start with files you already have, or connect a search source and a download client. '
-    +'Optional DAT catalogues compare your files with known checksums.</p>'
+    '<div class="card"><h3>Quick Start</h3>'
+    +'<p class="help">Find, verify, and organize your games in minutes. Press <b>Ctrl+K</b> (or <b>⌘K</b>) anywhere to jump to any game, search, or setting.</p>'
+    +'<div class="row" style="flex-wrap:wrap;gap:10px;margin:12px 0">'
+    +'<a class="btn" href="#setup">Open Setup Guide</a>'
+    +'<a class="btn ghost" href="#search">Interactive Search</a>'
+    +'<a class="btn ghost" href="#hub">Starter Plugins</a>'
+    +'<a class="btn ghost" href="#manualimport">Adopt Existing ROMs</a>'
+    +'</div>'
+    +'<details class="adv"><summary>How ROMarr fits with your emulators &amp; library server</summary>'
     +'<p class="help"><b>Your emulator plays the games.</b> RomM is an optional '
     +'library frontend with playback for supported systems. You can also use a plain folder. '
     +'If you use Sonarr or Radarr, the search-and-import workflow will feel familiar.</p>'
@@ -7961,7 +8160,7 @@ RENDER.getstarted=async()=>{
     +'library root &nbsp; library server &nbsp; a frontend</span><br>'
     +'<span style="color:var(--dim)">└─ ROMarr does the first four ─┘ &nbsp; '
     +'└ you choose this ┘</span>'
-    +'</div></div>'
+    +'</div></details></div>'
 
     +'<div class="card" style="margin-top:16px"><h3>Your setup</h3>'
     +step(1,'An indexer',indexerOk,
@@ -7981,7 +8180,8 @@ RENDER.getstarted=async()=>{
        +'set is missing.')
     +'</div>'
 
-    +'<div class="card" style="margin-top:16px"><h3>Where you actually play</h3>'
+    +'<details class="adv"><summary>Where you actually play &amp; supported frontends</summary>'
+    +'<div class="card" style="margin-top:10px"><h3>Where you actually play</h3>'
     +'<p class="help">ROMarr files the ROM; one of these runs it. You do not '
     +'need all of them — one is enough.</p>'
     +'<table><thead><tr><th>If your library is</th><th>You play in</th></tr></thead><tbody>'
@@ -8006,7 +8206,7 @@ RENDER.getstarted=async()=>{
        +routeRow('download','Download only',
           'ROMarr fetches and verifies it; you play it in a native emulator.')
        +'</tbody></table>':'')
-    +'</div>'
+    +'</div></details>'
 
     +'<div class="card" style="margin-top:16px"><h3>Next</h3>'
     +'<p class="help">'
@@ -8111,11 +8311,12 @@ RENDER.collections=async()=>{
        +'<span class="help" style="margin:0">Reads the DAT and your library. Nothing is downloaded.</span></div>'
       :collectionsNoDat())
     +'<div id="cres" style="margin-top:16px"></div></div>'
-    +'<div class="card" style="margin-top:16px"><h3>Fill a set from a torrent you already have (optional)</h3>'
+    +'<details class="adv" style="margin-top:16px"><summary>Advanced: Fill a set from a whole-set torrent you already have (optional)</summary>'
+    +'<div class="card" style="margin-top:8px"><h3>Fill a set from a torrent you already have (optional)</h3>'
     +(sourceState.errors||[]).map(error=>'<div class="panel-note panel-warn">'+esc(error)+'</div>').join('')
     +(hiddenSources>0
       ?'<p class="help" id="csrc-hidden">'+esc(String(hiddenSources))
-       +(hiddenSources===1?' torrent that does not look like a game is':' torrents that do not look like games are')
+       +(hiddenSources===1?' torrent that does not look like a game is':' torrents that does not look like games are')
        +' hidden (films, TV, music). '
        +'<a href="#collections" id="csrc-show-all">Show them anyway</a></p>'
       :'')
@@ -8143,7 +8344,7 @@ RENDER.collections=async()=>{
          +'To use a set torrent you already have, add it to qBittorrent or '
          +'Transmission (and enable that client under <a href="#clients">Download Clients</a> if it is off), '
          +'then come back here.</p>'))
-    +'<div id="csrc-jobs" style="margin-top:10px"></div></div>'
+    +'<div id="csrc-jobs" style="margin-top:10px"></div></div></details>'
     +'<div class="card" style="margin-top:16px"><h3>Sets in progress</h3>'
     +'<p class="help">Each set requests a few titles per pass, by itself every '+esc(String(passMinutes))
     +' minutes. <b>Run next</b> does a pass now. Requested games show up under Queue and Wanted like any other request.</p>'
@@ -8740,11 +8941,12 @@ RENDER.update=async()=>{
     +'</div>'
     +'<div id="up-msg" style="margin-top:10px"></div>'
     +'</div>'
+    +'<details class="adv"><summary>Advanced: Release channels &amp; pull request previews</summary>'
     +'<div class="card"><h3>Choose a release channel</h3><p class="help">Stable is the regular release. RC is the last testing stage before release; Beta is for wider testing; Alpha is the earliest preview. Each also includes more stable releases. Nightly follows main. Alpha, Beta, RC and PR previews require a deliberate update.</p>'
     +'<div class="row" style="flex-wrap:wrap"><label for="up-channel">Channel</label><select id="up-channel">'+[['stable','Stable'],['rc','Release candidate'],['beta','Beta'],['alpha','Alpha'],['nightly','Nightly']].map(([value,label])=>'<option value="'+value+'"'+(value===(st.update_channel||'stable')?' selected':'')+'>'+label+'</option>').join('')+'</select><button class="btn ghost" id="up-channel-save">Save and check</button><button class="btn ghost" id="up-releases">Browse releases</button></div><div id="up-release-list" class="help"></div></div>'
     +'<div class="card"><h3>Try a pull request</h3><p class="help">This runs a contributor’s code on your own installation. Review the author, diff and checks first. A clean source install can apply a passing PR that fast-forwards its current build; divergent branches need a separate preview build. Docker and bundled apps use separately built packages.</p>'
     +'<div class="row" style="flex-wrap:wrap"><button class="btn ghost" id="up-pr-list">Find open PRs</button><select id="up-pr-choices" aria-label="Open pull requests" style="max-width:100%"><option value="">Choose a PR</option></select><label for="up-pr-number">PR number</label><input id="up-pr-number" type="number" min="1" max="999999" style="max-width:130px"><button class="btn ghost" id="up-pr-inspect">Inspect PR</button></div><div id="up-pr-result" style="overflow-wrap:anywhere"></div>'
-    +(d.preview?'<div class="panel-note"><b>Active preview: PR #'+esc(String(d.preview.number))+'</b> · '+esc(d.preview.head.slice(0,12))+'<p>Automatic updates are disabled. Your private configuration backup is retained separately; restoring code does not erase current settings.</p><button class="btn ghost" id="up-pr-restore">Restore previous code</button></div>':'')+'</div>'
+    +(d.preview?'<div class="panel-note"><b>Active preview: PR #'+esc(String(d.preview.number))+'</b> · '+esc(d.preview.head.slice(0,12))+'<p>Automatic updates are disabled. Your private configuration backup is retained separately; restoring code does not erase current settings.</p><button class="btn ghost" id="up-pr-restore">Restore previous code</button></div>':'')+'</div></details>'
     +((d.docker_guidance||[]).length
       ?'<div class="card"><h3>How to update this container</h3><p class="help">'
        +'ROMarr runs from an image. Verify the original host deployment before changing it:</p><pre style="font:12px/1.6 ui-monospace,Menlo,monospace;color:var(--dim)">'
@@ -9098,6 +9300,105 @@ input[type=search],input[type=url],input[type=email],select,textarea{
 #notes-restore{display:block;margin:10px 0 0;padding:0;border:0;background:none;
   color:var(--accent-text);font-size:12.5px;cursor:pointer;text-align:left}
 #notes-restore[hidden]{display:none}
+/* ---- progressive disclosure & Simple / Advanced UI mode -------------------- */
+details.adv{margin:14px 0;padding:10px 14px;background:var(--surface-2);
+  border:1px solid var(--line-soft);border-radius:var(--r-md)}
+details.adv>summary{cursor:pointer;font-weight:600;font-size:13.5px;
+  color:var(--fg-2);list-style:none;display:flex;align-items:center;gap:8px}
+details.adv>summary::-webkit-details-marker{display:none}
+details.adv>summary::before{content:'▸';color:var(--accent-text);font-size:13px}
+details.adv[open]>summary{margin-bottom:12px;padding-bottom:8px;
+  border-bottom:1px solid var(--line-soft);color:var(--fg)}
+details.adv[open]>summary::before{content:'▾'}
+.proof-bar{margin:12px 0;padding:12px 14px;background:var(--surface-2);
+  border:1px solid var(--line-soft);border-radius:var(--r-md)}
+.proof-pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;
+  border-radius:999px;font-size:12.5px;background:var(--bg);
+  border:1px solid var(--line);color:var(--dim)}
+.proof-pill.ok{border-color:color-mix(in srgb,var(--ok) 55%,var(--line));color:var(--fg)}
+.best-match{margin:12px 0;padding:14px 16px;background:var(--surface-2);
+  border:1px solid color-mix(in srgb,var(--ok) 55%,var(--line));
+  border-left:4px solid var(--ok);border-radius:var(--r-md)}
+#ui-mode-toggle{white-space:nowrap;font-size:12.5px;padding:6px 12px;min-height:34px}
+:root[data-ui-mode="advanced"] #ui-mode-toggle{border-color:var(--accent-line);color:var(--accent-text)}
+#cmd-trigger{white-space:nowrap;font-size:12.5px;padding:6px 12px;min-height:34px;display:inline-flex;align-items:center;gap:6px}
+#cmd-trigger kbd{font:600 10.5px/1 ui-monospace,Menlo,monospace;padding:2px 5px;border-radius:4px;
+  background:var(--surface-2);border:1px solid var(--line);color:var(--dim)}
+.cmd-modal{position:fixed;inset:0;z-index:120;background:rgba(8,10,16,.66);
+  -webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);
+  display:flex;align-items:flex-start;justify-content:center;padding:12vh 16px 24px}
+.cmd-box{width:100%;max-width:560px;background:var(--surface);border:1px solid var(--line);
+  border-radius:var(--r-lg);box-shadow:0 24px 64px rgba(0,0,0,.48);overflow:hidden}
+.cmd-head{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--line-soft)}
+.cmd-head input{flex:1;background:transparent;border:0;outline:none;color:var(--fg);font-size:15px;min-height:32px;padding:0}
+.cmd-list{max-height:52vh;overflow-y:auto;padding:6px}
+.cmd-item{width:100%;display:flex;align-items:center;justify-content:space-between;gap:12px;
+  text-align:left;padding:10px 12px;border:0;border-radius:var(--r-sm);background:transparent;
+  color:var(--fg);cursor:pointer;font-size:13.5px;transition:background var(--t)}
+.cmd-item:hover,.cmd-item.on{background:var(--accent-soft);color:var(--accent-text)}
+.cmd-item small{color:var(--dim);font-size:11.5px}
+.cmd-foot{display:flex;justify-content:space-between;padding:8px 14px;border-top:1px solid var(--line-soft);
+  color:var(--dim);font-size:11.5px;background:var(--surface-2)}
+/* ---- custom background wallpapers & textures ------------------------------- */
+#bg-layer{position:fixed;inset:0;z-index:0;pointer-events:none;
+  opacity:var(--bg-opacity,.22);filter:blur(var(--bg-blur,0px));
+  background-image:var(--bg-img,none);background-size:var(--bg-size,cover);
+  background-repeat:var(--bg-repeat,no-repeat);background-position:var(--bg-pos,center);
+  transition:opacity .2s ease}
+:root[data-bg-preset="grid"] #bg-layer{
+  background-image:var(--bg-img,none),linear-gradient(var(--line) 1px,transparent 1px),linear-gradient(90deg,var(--line) 1px,transparent 1px);
+  background-size:var(--bg-size,cover),28px 28px,28px 28px;
+  background-repeat:var(--bg-repeat,no-repeat),repeat,repeat}
+:root[data-bg-preset="dots"] #bg-layer{
+  background-image:var(--bg-img,none),radial-gradient(var(--dim) 1px,transparent 1px);
+  background-size:var(--bg-size,cover),20px 20px;
+  background-repeat:var(--bg-repeat,no-repeat),repeat}
+:root[data-bg-preset="scanlines"] #bg-layer{
+  background-image:var(--bg-img,none),repeating-linear-gradient(0deg,rgba(0,0,0,.35) 0px,rgba(0,0,0,.35) 1px,transparent 1px,transparent 4px);
+  background-size:var(--bg-size,cover),100% 4px;
+  background-repeat:var(--bg-repeat,no-repeat),repeat}
+:root[data-bg-preset="mesh"] #bg-layer{
+  background-image:var(--bg-img,none),radial-gradient(900px 520px at 18% 0%,var(--accent-soft),transparent 65%),radial-gradient(760px 520px at 90% 95%,var(--accent-softer),transparent 65%);
+  background-size:var(--bg-size,cover),100% 100%,100% 100%;
+  background-repeat:var(--bg-repeat,no-repeat),no-repeat,no-repeat}
+:root[data-bg-active="1"] #main{position:relative;z-index:1}
+:root[data-bg-active="1"] .card{background:color-mix(in srgb,var(--surface) 88%,transparent);
+  -webkit-backdrop-filter:blur(12px);backdrop-filter:blur(12px)}
+.bg-ctrl{display:flex;flex-direction:column;gap:6px;margin-top:4px}
+.bg-ctrl select,.bg-ctrl input[type=url]{width:100%;font-size:12px;padding:6px 8px;min-height:30px;
+  background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:var(--r-sm)}
+.bg-range{display:flex;align-items:center;gap:8px;font-size:11.5px;color:var(--dim)}
+.bg-range span{width:48px}
+.bg-range input{flex:1;min-height:20px;padding:0;accent-color:var(--accent)}
+/* ---- global floating AI chat dock ------------------------------------------ */
+#chat-dock-fab{position:fixed;right:22px;bottom:22px;z-index:95;
+  display:inline-flex;align-items:center;gap:8px;padding:11px 16px;border-radius:999px;
+  background:var(--accent);color:var(--accent-ink);border:0;font-weight:650;font-size:13.5px;
+  box-shadow:0 10px 30px rgba(0,0,0,.38);cursor:pointer;transition:transform var(--t),filter var(--t)}
+#chat-dock-fab:hover{transform:translateY(-2px);filter:brightness(1.07)}
+#chat-dock{position:fixed;right:22px;bottom:22px;z-index:96;width:min(410px,calc(100vw - 24px));
+  height:min(580px,calc(100dvh - 44px));display:flex;flex-direction:column;
+  background:color-mix(in srgb,var(--surface) 95%,transparent);
+  -webkit-backdrop-filter:blur(16px);backdrop-filter:blur(16px);
+  border:1px solid var(--line);border-radius:var(--r-lg);box-shadow:0 24px 64px rgba(0,0,0,.5);overflow:hidden}
+#chat-dock.min{height:auto}
+#chat-dock.min .cd-body,#chat-dock.min .cd-foot{display:none}
+.cd-head{display:flex;align-items:center;gap:8px;padding:11px 14px;border-bottom:1px solid var(--line-soft);
+  background:var(--surface-2)}
+.cd-head b{font-size:13.5px;flex:1}
+.cd-body{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px}
+.cd-foot{display:flex;gap:8px;padding:10px 12px;border-top:1px solid var(--line-soft);background:var(--surface-2)}
+.cd-foot textarea{flex:1;min-height:38px;max-height:110px;padding:8px 10px;font-size:13px;resize:none}
+.cd-msg{max-width:92%;padding:8px 11px;border-radius:10px;font-size:13px;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere}
+.cd-msg.user{align-self:flex-end;background:var(--accent);color:var(--accent-ink)}
+.cd-msg.bot{align-self:flex-start;background:var(--bg);border:1px solid var(--line-soft);color:var(--fg)}
+.cd-msg.bot.md{white-space:normal}
+.cd-msg.bot.md p{margin:0 0 6px}
+.cd-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px}
+@media(max-width:700px){
+  #chat-dock-fab{right:14px;bottom:max(14px,env(safe-area-inset-bottom))}
+  #chat-dock{right:12px;bottom:max(12px,env(safe-area-inset-bottom))}
+}
 """
 
 JS += r"""
@@ -9112,6 +9413,102 @@ JS += r"""
   const noteKey=el=>{const t=(el.textContent||'').replace(/\s+/g,' ').trim().slice(0,240);
     let h=0;for(let i=0;i<t.length;i++)h=(h*31+t.charCodeAt(i))|0;return 'n'+(h>>>0).toString(36);};
   const restore=()=>{const b=document.getElementById('notes-restore');if(b)b.hidden=!read().size;};
+  const syncUiMode=(force)=>{
+    const mode=(window.ROMTHEME&&typeof ROMTHEME.uiMode==='function')?ROMTHEME.uiMode():'simple';
+    const adv=mode==='advanced';
+    const btn=document.getElementById('ui-mode-toggle');
+    if(btn){
+      btn.textContent=adv?'Advanced view':'Simple view';
+      btn.setAttribute('aria-pressed',String(adv));
+      btn.title=adv?'Showing all advanced sections expanded — click for Simple view'
+                   :'Clean Simple view (advanced sections folded) — click for Advanced view';
+    }
+    document.querySelectorAll('#page details.adv').forEach(d=>{
+      if(force){
+        d.dataset.uiSynced='1';
+        d.open=adv||Boolean(d.dataset.keepOpen);
+      }else if(!d.dataset.uiSynced){
+        d.dataset.uiSynced='1';
+        if(!d.dataset.keepOpen) d.open=adv;
+      }
+    });
+  };
+  const openCommandPalette=()=>{
+    if(document.querySelector('.cmd-modal'))return;
+    const opener=document.activeElement;
+    const actions=[
+      {label:'Interactive Search',hint:'Find & grab any game',run:()=>go('search')},
+      {label:'Add New Game',hint:'Request a game automatically',run:()=>go('add')},
+      {label:'My Library (Games)',hint:'Browse your collection',run:()=>go('library')},
+      {label:'Setup Guide & Live Proof',hint:'Verify library, downloads & sources',run:()=>go('setup')},
+      {label:'ROM Hub Plugins',hint:'Install zero-key sources (Repacks, Archive.org, Myrient…)',run:()=>go('hub')},
+      {label:'Library & Devices',hint:'Play in RomM or sync handhelds',run:()=>go('portal')},
+      {label:'Download Queue',hint:'Check active downloads & imports',run:()=>go('queue')},
+      {label:'Download Clients',hint:'1-click Direct HTTP, ROM Hub, qBittorrent, Usenet',run:()=>go('clients')},
+      {label:'Indexers & Hydra Sources',hint:'Manage Prowlarr, Torznab, Newznab & Hydra',run:()=>go('indexers')},
+      {label:'Manual Import',hint:'Adopt ROMs already on disk',run:()=>go('manualimport')},
+      {label:'Collections (1G1R)',hint:'Compare DAT sets & request missing',run:()=>go('collections')},
+      {label:'System Status & Health',hint:'Check connections & backups',run:()=>go('status')},
+      {label:'Toggle Simple / Advanced View',hint:'Switch between clean & power-user mode',run:()=>{
+        const next=(window.ROMTHEME&&ROMTHEME.uiMode()==='advanced')?'simple':'advanced';
+        if(window.ROMTHEME)ROMTHEME.setUiMode(next);
+        syncUiMode(true);
+      }},
+    ];
+    const modal=document.createElement('div');
+    modal.className='cmd-modal';
+    modal.innerHTML='<div class="cmd-box" role="dialog" aria-modal="true" aria-label="Quick Command Palette">'
+      +'<div class="cmd-head"><span aria-hidden="true">⌘</span>'
+      +'<input id="cmd-q" type="search" placeholder="Jump to page or type a game title to search…" autocomplete="off">'
+      +'<button type="button" class="mini" id="cmd-x">Esc</button></div>'
+      +'<div class="cmd-list" id="cmd-list"></div>'
+      +'<div class="cmd-foot"><span>↑↓ Navigate · Enter Open</span><span>ROMarr Quick Launch</span></div></div>';
+    document.body.appendChild(modal);
+    const input=modal.querySelector('#cmd-q'), list=modal.querySelector('#cmd-list');
+    let idx=0, items=[];
+    const close=()=>{
+      modal.remove();
+      if(opener&&typeof opener.focus==='function'&&opener.isConnected) opener.focus({preventScroll:true});
+    };
+    const paint=()=>{
+      const raw=(input.value||'').trim(), q=raw.toLowerCase();
+      items=actions.filter(a=>!q||a.label.toLowerCase().includes(q)||a.hint.toLowerCase().includes(q));
+      if(raw.length>=2){
+        const searchAct={label:'Search for "'+raw+'"',hint:'Open Interactive Search & run immediately',run:()=>{
+          go('search');
+          const f=$('#s-name'),b=$('#s-go');
+          if(f&&b){f.value=raw;b.click();}
+        }};
+        items=items.length?[...items,searchAct]:[searchAct];
+      }
+      if(idx>=items.length) idx=0;
+      list.innerHTML=items.map((it,n)=>'<button type="button" class="cmd-item'+(n===idx?' on':'')+'" data-ci="'+n+'">'
+        +'<span><b>'+esc(it.label)+'</b></span><small>'+esc(it.hint)+'</small></button>').join('')
+        ||'<div class="empty" style="padding:18px">No matching action.</div>';
+      list.querySelectorAll('[data-ci]').forEach(b=>b.onclick=()=>{const it=items[Number(b.dataset.ci)];close();if(it)it.run();});
+    };
+    input.oninput=()=>{idx=0;paint();};
+    modal.addEventListener('keydown',e=>{
+      if(e.key==='Escape'){e.preventDefault();close();return;}
+      if(e.key==='Tab'){
+        const focusable=[...modal.querySelectorAll('button, input, [tabindex]:not([tabindex="-1"])')].filter(el=>!el.disabled);
+        if(focusable.length){
+          const first=focusable[0], last=focusable[focusable.length-1];
+          if(e.shiftKey&&(document.activeElement===first||!modal.contains(document.activeElement))){e.preventDefault();last.focus();}
+          else if(!e.shiftKey&&(document.activeElement===last||!modal.contains(document.activeElement))){e.preventDefault();first.focus();}
+        }
+        return;
+      }
+      if(document.activeElement===input){
+        if(e.key==='ArrowDown'){e.preventDefault();if(items.length){idx=(idx+1)%items.length;paint();}}
+        else if(e.key==='ArrowUp'){e.preventDefault();if(items.length){idx=(idx-1+items.length)%items.length;paint();}}
+        else if(e.key==='Enter'){e.preventDefault();const it=items[idx];close();if(it)it.run();}
+      }
+    });
+    modal.onclick=e=>{if(e.target===modal||e.target.id==='cmd-x')close();};
+    paint();
+    input.focus();
+  };
   const decorate=()=>{
     const gone=read();
     document.querySelectorAll('#page .panel-note:not([data-keep]):not([data-note])').forEach(el=>{
@@ -9132,6 +9529,7 @@ JS += r"""
       b.onclick=()=>{const open=p.classList.toggle('clamp');b.textContent=open?'More':'Less';};
       p.after(b);
     });
+    syncUiMode(false);
     restore();
   };
   let queued=false;
@@ -9141,6 +9539,159 @@ JS += r"""
     if(page&&window.MutationObserver)new MutationObserver(schedule).observe(page,{childList:true,subtree:true});
     const b=document.getElementById('notes-restore');
     if(b)b.onclick=()=>{write(new Set());document.querySelectorAll('#page .panel-note[data-note]').forEach(el=>{el.hidden=false;});restore();};
+    const modeBtn=document.getElementById('ui-mode-toggle');
+    if(modeBtn&&window.ROMTHEME&&typeof ROMTHEME.setUiMode==='function'){
+      modeBtn.onclick=()=>{
+        const next=ROMTHEME.uiMode()==='advanced'?'simple':'advanced';
+        ROMTHEME.setUiMode(next);
+        syncUiMode(true);
+      };
+      document.documentElement.addEventListener('uimodechange',()=>syncUiMode(true));
+    }
+    const cmdBtn=document.getElementById('cmd-trigger');
+    if(cmdBtn) cmdBtn.onclick=openCommandPalette;
+    document.addEventListener('keydown',e=>{
+      if((e.ctrlKey||e.metaKey)&&e.key.toLowerCase()==='k'){
+        e.preventDefault();
+        openCommandPalette();
+      }
+    });
+    // Background texture & wallpaper controls in Appearance
+    const bindBg=()=>{
+      if(!window.ROMTHEME||typeof ROMTHEME.bg!=='function') return;
+      const preset=document.getElementById('bg-preset');
+      const url=document.getElementById('bg-url');
+      const fit=document.getElementById('bg-fit');
+      const op=document.getElementById('bg-opacity');
+      const bl=document.getElementById('bg-blur');
+      const clr=document.getElementById('bg-clear');
+      if(!preset||!url||!fit||!op||!bl) return;
+      const paintBg=()=>{
+        const c=ROMTHEME.bg();
+        preset.value=c.preset||'none';
+        url.value=c.url||'';
+        fit.value=c.fit||'cover';
+        op.value=String(c.opacity??22);
+        bl.value=String(c.blur??0);
+      };
+      preset.onchange=()=>ROMTHEME.setBg({preset:preset.value});
+      url.onchange=()=>ROMTHEME.setBg({url:url.value.trim()});
+      fit.onchange=()=>ROMTHEME.setBg({fit:fit.value});
+      op.oninput=()=>ROMTHEME.setBg({opacity:Number(op.value)});
+      bl.oninput=()=>ROMTHEME.setBg({blur:Number(bl.value)});
+      if(clr) clr.onclick=()=>{ROMTHEME.setBg({preset:'none',url:'',fit:'cover',opacity:22,blur:0});paintBg();};
+      paintBg();
+    };
+    bindBg();
+
+    // Global hovering, minimizable AI chat dock across every page
+    const fab=document.getElementById('chat-dock-fab');
+    const dock=document.getElementById('chat-dock');
+    if(fab&&dock){
+      const body=document.getElementById('cd-body');
+      const input=document.getElementById('cd-input');
+      const sendBtn=document.getElementById('cd-send');
+      let loaded=false, loading=false, busy=false;
+      const syncDockVisibility=()=>{
+        const onAssistant=(location.hash||'').slice(1)==='assistant';
+        if(onAssistant){fab.hidden=true;dock.hidden=true;}
+        else if(dock.hidden){fab.hidden=false;}
+      };
+      window.addEventListener('hashchange',syncDockVisibility);
+      const addMsg=(html,cls)=>{
+        const div=document.createElement('div');
+        div.className='cd-msg '+cls;
+        div.innerHTML=html;
+        body.appendChild(div);
+        body.scrollTop=body.scrollHeight;
+        return div;
+      };
+      const addConfirm=(ev)=>{
+        const box=addMsg('<b>'+(ev.destructive?'Confirm removal':'Confirm action')+':</b> '+esc(ev.summary)
+          +'<div class="row" style="margin-top:6px;gap:6px"><button type="button" class="mini accent" data-cdok>Confirm</button>'
+          +'<button type="button" class="mini" data-cdno>Cancel</button></div>','bot');
+        const answer=approve=>{
+          if(busy||loading) return;
+          box.querySelectorAll('button').forEach(b=>b.disabled=true);
+          streamChat('/api/v1/chat/confirm',{id:ev.id,approve});
+        };
+        box.querySelector('[data-cdok]').onclick=()=>answer(true);
+        box.querySelector('[data-cdno]').onclick=()=>answer(false);
+      };
+      const renderWelcome=(enabled)=>{
+        body.innerHTML='';
+        addMsg(enabled
+          ?'<b>ROMarr AI Assistant</b><br><span class="help">Ask me anything about your library, setup, plugins, or games — I hover across every page.</span>'
+            +'<div class="cd-chips">'
+            +'<button type="button" class="chip" data-cdq="Check my setup status and tell me what is ready or missing">Audit my setup</button>'
+            +'<button type="button" class="chip" data-cdq="What games are currently in my download queue?">Check queue</button>'
+            +'<button type="button" class="chip" data-cdq="Search for Chrono Trigger on snes">Find a game</button>'
+            +'</div>'
+          :'<b>AI Assistant not configured yet</b><br><span class="help">Connect Ollama, OpenAI, OpenRouter, or Anthropic once to unlock live AI assistance across every page.</span>'
+            +'<div style="margin-top:8px"><button type="button" class="mini accent" id="cd-setup-go">Configure AI Provider →</button></div>','bot md');
+        body.querySelectorAll('[data-cdq]').forEach(b=>b.onclick=()=>{input.value=b.dataset.cdq;submitDock();});
+        const sg=document.getElementById('cd-setup-go');
+        if(sg) sg.onclick=()=>{dock.hidden=true;fab.hidden=false;go('assistant');};
+      };
+      const loadDock=async()=>{
+        if(loaded||loading) return;
+        loading=true;
+        if(sendBtn) sendBtn.disabled=true;
+        body.innerHTML='<div class="help">Connecting to ROMarr AI…</div>';
+        try{
+          const hist=await j('/api/v1/chat/history');
+          loaded=true;
+          const msgs=hist.messages||[];
+          if(!msgs.length){renderWelcome(!!hist.enabled);return;}
+          body.innerHTML='';
+          msgs.forEach(m=>{
+            if(m.role==='user') addMsg(esc(m.content),'user');
+            else if(m.role==='assistant'&&m.content) addMsg(mdLite(m.content),'bot md');
+          });
+          (hist.pending||[]).forEach(addConfirm);
+        }catch(_){renderWelcome(false);}
+        finally{loading=false; if(sendBtn&&!busy) sendBtn.disabled=false;}
+      };
+      const streamChat=async(url,payload)=>{
+        if(busy||loading) return;
+        busy=true; if(sendBtn) sendBtn.disabled=true;
+        let bot=null;
+        const botNode=()=>{if(!bot) bot=addMsg('','bot md'); return bot;};
+        try{
+          const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+          if(!r.ok||!r.body){const e=await r.json().catch(()=>({}));throw new Error(e.error||('HTTP '+r.status));}
+          const reader=r.body.getReader(), dec=new TextDecoder(); let buf='';
+          for(;;){
+            const {value,done}=await reader.read(); if(done) break;
+            buf+=dec.decode(value,{stream:true}); let nl;
+            while((nl=buf.indexOf('\n'))>=0){
+              const line=buf.slice(0,nl).trim(); buf=buf.slice(nl+1); if(!line) continue;
+              let ev; try{ev=JSON.parse(line);}catch(_){continue;}
+              if(ev.type==='text'){const n=botNode(); n.dataset.raw=(n.dataset.raw||'')+ev.delta; n.innerHTML=mdLite(n.dataset.raw);}
+              else if(ev.type==='tool_call'){bot=null; addMsg('<code>'+esc(ev.name)+'</code> <span class="help">running…</span>','bot');}
+              else if(ev.type==='confirm'){bot=null; addConfirm(ev);}
+              else if(ev.type==='error'){bot=null; addMsg('<span style="color:var(--bad)">'+esc(ev.message)+'</span>','bot');}
+            }
+            body.scrollTop=body.scrollHeight;
+          }
+        }catch(err){addMsg('<span style="color:var(--bad)">'+esc(err.message||err)+'</span>','bot');}
+        finally{busy=false; if(sendBtn&&!loading) sendBtn.disabled=false;}
+      };
+      const submitDock=()=>{
+        const text=(input.value||'').trim();
+        if(!text||busy||loading) return;
+        input.value='';
+        addMsg(esc(text),'user');
+        streamChat('/api/v1/chat',{message:text});
+      };
+      fab.onclick=()=>{fab.hidden=true;dock.hidden=false;dock.classList.remove('min');loadDock();input.focus();};
+      document.getElementById('cd-min').onclick=()=>dock.classList.toggle('min');
+      document.getElementById('cd-close').onclick=()=>{dock.hidden=true;fab.hidden=false;};
+      document.getElementById('cd-full').onclick=()=>{dock.hidden=true;go('assistant');};
+      sendBtn.onclick=submitDock;
+      input.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();submitDock();}};
+      syncDockVisibility();
+    }
     schedule();
   };
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',start);else start();
@@ -9173,6 +9724,7 @@ def page() -> str:
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <title>ROMarr</title><meta name="viewport" content="width=device-width,initial-scale=1">
 {FAVICON_LINK}{APP_HEAD}<style>{CSS}</style><script>{THEME_BOOT}</script></head><body>
+<div id="bg-layer" aria-hidden="true"></div>
 <input id="sidebar-native-toggle" type="checkbox" aria-label="Toggle navigation" aria-controls="rail">
 <nav id="rail" aria-label="Main navigation"><div id="brand">{BRAND_ICON_SVG}ROM<span>arr</span></div>
 <button id="sidebar-close" type="button" aria-label="Close navigation">×</button>
@@ -9183,9 +9735,23 @@ def page() -> str:
 <div id="main">
   <div id="top"><label id="sidebar-menu-native" for="sidebar-native-toggle">☰</label>
   <button id="sidebar-menu" type="button" aria-label="Open navigation"
-    aria-controls="rail" aria-expanded="false">☰</button><h1>Games</h1><button id="install-app" class="btn ghost" type="button" hidden>Install app</button><input id="search" aria-label="Filter current page" placeholder="Filter…" autocomplete="off"></div>
+    aria-controls="rail" aria-expanded="false">☰</button><h1>Games</h1><button id="cmd-trigger" class="btn ghost" type="button" title="Quick jump or search any game">Quick Launch <kbd>⌘K</kbd></button><button id="ui-mode-toggle" class="btn ghost" type="button" aria-pressed="false" title="Toggle Simple / Advanced view">Simple view</button><button id="install-app" class="btn ghost" type="button" hidden>Install app</button><input id="search" aria-label="Filter current page" placeholder="Filter…" autocomplete="off"></div>
   <div class="page" id="page"></div>
 </div>
+<button id="chat-dock-fab" type="button" aria-label="Open AI Assistant" title="Open ROMarr AI Assistant">✦ AI Chat</button>
+<aside id="chat-dock" aria-label="AI Assistant" hidden>
+  <div class="cd-head">
+    <b>✦ ROMarr AI</b>
+    <button type="button" class="mini" id="cd-full" title="Open full Chat Agent & settings">⚙</button>
+    <button type="button" class="mini" id="cd-min" title="Minimize">_</button>
+    <button type="button" class="mini" id="cd-close" title="Close">×</button>
+  </div>
+  <div class="cd-body" id="cd-body" aria-live="polite"></div>
+  <div class="cd-foot">
+    <textarea id="cd-input" rows="1" maxlength="4000" placeholder="Ask ROMarr AI…"></textarea>
+    <button type="button" class="btn" id="cd-send">Send</button>
+  </div>
+</aside>
 <script>{JS}</script><script>{APP_BOOT}</script></body></html>"""
 
 

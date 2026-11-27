@@ -464,3 +464,43 @@ def test_normalise_url_defaults():
     assert chat_providers.normalise_url("anthropic", "https://api.anthropic.com/") == "https://api.anthropic.com"
     for provider, url in chat_providers.DEFAULT_URLS.items():
         assert chat_providers.approved_base_url(provider, "") == url
+
+
+def test_expanded_tools_audit_plugins_clients_history_devices_and_confirmations(service):
+    by_name = {t["name"]: t for t in chat_agent.tools()}
+    for name in (
+        "setup_audit", "list_plugins", "manage_plugin", "run_plugin_search",
+        "list_clients_and_indexers", "enable_builtin_downloads", "run_task",
+        "recent_history", "list_devices", "system_updates",
+    ):
+        assert name in by_name, name
+    # Write actions must require explicit user confirmation
+    for write_tool in ("manage_plugin", "enable_builtin_downloads", "run_task"):
+        assert by_name[write_tool]["confirm"] == "write"
+    ok, raw = chat_agent.execute(service, by_name["setup_audit"], {}, "owner")
+    assert ok and "gaps" in json.loads(raw)
+    ok, raw = chat_agent.execute(service, by_name["list_clients_and_indexers"], {}, "owner")
+    assert ok and "clients" in json.loads(raw)
+    ok, raw = chat_agent.execute(service, by_name["recent_history"], {"limit": 5}, "owner")
+    assert ok and "items" in json.loads(raw)
+    ok, raw = chat_agent.execute(service, by_name["list_devices"], {}, "owner")
+    assert ok and "devices" in json.loads(raw)
+    ok, raw = chat_agent.execute(service, by_name["list_plugins"], {"filter": "all", "limit": 5}, "owner")
+    assert ok and "plugins" in json.loads(raw)
+    # Re-enable a disabled client and verify reload_clients runs
+    service.store.update_settings({"download_clients": [{"id": "d1", "type": "direct", "name": "Direct HTTP", "enable": False}]})
+    reloaded = []
+    service.reload_clients = lambda: reloaded.append(True)
+    ok, raw = chat_agent.execute(service, by_name["enable_builtin_downloads"], {}, "owner")
+    assert ok and json.loads(raw)["ok"] is True and reloaded == [True]
+    assert any(c["id"] == "d1" and c["enable"] is True for c in service.store.settings["download_clients"])
+    # Verify run_task passes task name as string
+    ran = []
+    service.run_command = lambda name: ran.append(name) or {"ok": True}
+    ok, raw = chat_agent.execute(service, by_name["run_task"], {"task": "ImportCompleted"}, "owner")
+    assert ok and ran == ["ImportCompleted"]
+    # Reject invalid plugin slug in manage_plugin
+    ok, raw = chat_agent.execute(service, by_name["manage_plugin"],
+                                 {"slug": "../bad", "action": "install"}, "owner")
+    assert ok is False and "error" in json.loads(raw)
+

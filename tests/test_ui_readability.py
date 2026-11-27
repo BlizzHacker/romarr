@@ -34,3 +34,44 @@ def test_an_unconfigured_prowlarr_is_not_an_error(tmp_path):
     finally:
         httpd.shutdown(); httpd.server_close()
     assert body["error"] is None and body["proxied"] == []
+
+
+def test_simple_advanced_ui_mode_and_progressive_disclosure():
+    html = ui.page()
+    assert 'id="ui-mode-toggle"' in html
+    assert 'id="cmd-trigger"' in html
+    assert 'id="bg-layer"' in html
+    assert 'id="bg-preset"' in html
+    assert 'id="bg-url"' in html
+    assert 'id="bg-fit"' in html
+    assert 'id="chat-dock-fab"' in html
+    assert 'id="chat-dock"' in html
+    assert "romarr.uiMode" in html
+    assert "romarr.bg" in html
+    assert "details.adv{" in ui.CSS
+    assert ".best-match{" in ui.CSS
+    assert ".proof-bar{" in ui.CSS
+    assert "#chat-dock{" in ui.CSS
+    # Progressive disclosure sections across Search, Hub, Setup, General, Media, Profiles, Indexers, Portal, Stats, Update
+    for summary in (
+        "Recommended Zero-Key Starter Sources",
+        "Recommended Best Match",
+        "rejected release(s) and why they were refused",
+        "Live Readiness Proof",
+        "setup-oneclick-hub",
+        "Advanced: Power tools, custom repositories &amp; sandbox status",
+        "Advanced: Scheduler intervals (The clock)",
+        "Advanced: Peering URL, FlareSolverr, custom plugin forges &amp; GitHub token",
+        "Advanced: Two-Factor Authentication (TOTP) &amp; Single Sign-On (OIDC)",
+        "Advanced: Path mappings, per-platform folder overrides &amp; import rules",
+        "Advanced: Switch NSZ/XCI compression &amp; multi-part package folders",
+        "Advanced: Antivirus &amp; hash reputation scanners",
+        "Advanced: 1G1R fan-translation &amp; language rules",
+        "Advanced: Size limits, Usenet retention, video standard &amp; custom scoring rules",
+        "Advanced: Hydra Launcher community JSON sources",
+        "Advanced library actions",
+        "Advanced maintenance: Library audit &amp; Fix existing filenames",
+        "Advanced: Release channels &amp; pull request previews",
+    ):
+        assert summary in html, summary
+
