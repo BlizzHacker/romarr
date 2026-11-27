@@ -19,7 +19,7 @@ The user guide is [docs/NAS.md](../../docs/NAS.md#asustor-adm).
 Asustor's `apkg-tools.py` is all-rights-reserved, so it isn't in this repo. CI fetches it from a pinned commit and checks its SHA-256 (`.github/workflows/nas-packages.yml`).
 
 ```bash
-python3 apkg-tools.py create packaging/asustor/apk --destination dist   # romarr_1.14.1_any.apk
+python3 apkg-tools.py create packaging/asustor/apk --destination dist   # romarr_1.14.2_any.apk
 ```
 
 The output is a zip of `apkg-version`, `control.tar.gz` and `data.tar.gz`, as ADM expects.
@@ -27,13 +27,13 @@ The output is a zip of `apkg-version`, `control.tar.gz` and `data.tar.gz`, as AD
 ### Install test
 
 ```bash
-PORT=16870 packaging/asustor/test/adm-apk-smoke.sh romarr_1.14.1_any.apk
+PORT=16870 packaging/asustor/test/adm-apk-smoke.sh romarr_1.14.2_any.apk
 ```
 
 The 2026-11-27 CI smoke run ended with `ADM APK SMOKE PASSED`:
 
 1. **post-install** wrote `romarr.env`.
-2. **Start** ran `ghcr.io/blizzhacker/romarr:1.14.1`. `/api/health` answered, and `/share/Media/Games` was created.
+2. **Start** ran `ghcr.io/blizzhacker/romarr:1.14.2`. `/api/health` answered, and `/share/Media/Games` was created.
 3. **Reinstall** kept an edited `romarr.env`.
 4. **Reload** started it healthy again.
 5. **Mistyped downloads.** A misspelled downloads path refused to start.
