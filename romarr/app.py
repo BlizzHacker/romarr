@@ -10783,7 +10783,10 @@ def make_handler(service: ROMarr):
                     (query.get("title") or [""])[0],
                     (query.get("source") or [""])[0]))
             if route.path == "/api/v1/queue":
-                return self._json(200, {"items": service.queue_rows()})
+                return self._json(200, {
+                    "items": service.queue_rows(),
+                    "max_queue": service.store.queue_limit,
+                })
             if route.path == "/api/v1/history":
                 limit = int((query.get("limit") or ["100"])[0])
                 return self._json(200, {"items": service.store.history(limit)})

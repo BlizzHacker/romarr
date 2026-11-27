@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from romarr.app import QueueItem, ROMarr
 from romarr.selection import Release
 from romarr.store import Store
@@ -95,6 +97,61 @@ def test_the_queue_is_capped_so_it_cannot_grow_without_bound(tmp_path):
         s.enqueue(QueueItem(f"Game {n}", "nes", f"Release {n}", 1, "grabbed"))
     assert len(s.queue) == Store.MAX_QUEUE
     assert s.queue[-1].game == f"Game {Store.MAX_QUEUE + 24}"
+
+
+def test_max_queue_is_configurable_and_persists(tmp_path):
+    path = tmp_path / "r.json"
+    s = Store(path)
+    s.update_settings({"max_queue": 750})
+    for n in range(620):
+        s.enqueue(QueueItem(f"Game {n}", "nes", f"Release {n}", 1, "grabbed"))
+    assert len(s.queue) == 620
+
+    reloaded = Store(path)
+    assert reloaded.queue_limit == 750
+    assert len(reloaded.queue) == 620
+
+
+def test_max_queue_rejects_invalid_values(tmp_path):
+    s = Store(tmp_path / "r.json")
+    for bad in (0, 49, 50_001, -10, "nope", True, 100.5):
+        with pytest.raises(ValueError):
+            s.update_settings({"max_queue": bad})
+    assert s.queue_limit == Store.MAX_QUEUE
+
+
+def test_queue_trims_failed_rows_before_active_downloads(tmp_path):
+    s = Store(tmp_path / "r.json")
+    s.update_settings({"max_queue": 50})
+    # Fill with 10 active downloads followed by 40 failed items.
+    for n in range(10):
+        s.enqueue(QueueItem(f"Active {n}", "snes", f"Active {n}", 5, "grabbed"))
+    for n in range(40):
+        s.enqueue(QueueItem(f"Failed {n}", "snes", f"Failed {n}", 0, "failed"))
+    # Adding 5 more active items should evict 5 oldest failed rows, keeping all active rows.
+    for n in range(10, 15):
+        s.enqueue(QueueItem(f"Active {n}", "snes", f"Active {n}", 5, "grabbed"))
+    assert len(s.queue) == 50
+    active = [q.game for q in s.queue if q.state == "grabbed"]
+    failed = [q.game for q in s.queue if q.state == "failed"]
+    assert active == [f"Active {n}" for n in range(15)]
+    assert len(failed) == 35
+    assert failed[0] == "Failed 5"
+
+
+def test_lowering_max_queue_preserves_active_downloads(tmp_path):
+    path = tmp_path / "r.json"
+    s = Store(path)
+    s.update_settings({"max_queue": 120})
+    for n in range(80):
+        s.enqueue(QueueItem(f"Active {n}", "snes", f"Active {n}", 5, "grabbed"))
+    for n in range(20):
+        s.enqueue(QueueItem(f"Failed {n}", "snes", f"Failed {n}", 0, "failed"))
+    s.update_settings({"max_queue": 50})
+    # All 20 failed rows are trimmed, while all 80 active downloads survive on disk.
+    assert [q.game for q in s.queue] == [f"Active {n}" for n in range(80)]
+    reloaded = Store(path)
+    assert [q.game for q in reloaded.queue] == [f"Active {n}" for n in range(80)]
 
 
 # --- the service uses the stored one --------------------------------------
