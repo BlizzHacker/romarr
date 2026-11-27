@@ -5535,7 +5535,7 @@ RENDER.queue=async()=>{
       <button class="btn ghost" id="q-import">Import completed now</button>
       <button class="btn ghost" id="q-refresh">Refresh</button>
       ${failed?`<button class="btn ghost" id="q-clearfail">Clear ${failed} failed</button>`:''}
-      <span class="help" style="margin:0">${(d.items||[]).length} in flight</span>
+      <span class="help" style="margin:0">${(d.items||[]).length}${SETTINGS&&SETTINGS.max_queue?' / '+SETTINGS.max_queue:''} in flight</span>
     </div>`+(d.items.length?`<table><thead><tr><th>Game</th>
     <th>Platform</th><th>Release</th><th>Seeders</th><th>State</th><th></th></tr></thead><tbody>
     ${d.items.map((i,n)=>`<tr><td>${esc(i.game)}</td><td>${esc(i.platform)}</td>
@@ -6793,6 +6793,8 @@ RENDER.general=async()=>{
        SETTINGS.rss_sync_interval_minutes,'number')
   +fld('list_sync_interval_hours','List sync (hours)',
        SETTINGS.list_sync_interval_hours,'number')
+  +fld('max_queue','Max queue size (in-flight limit, 50–50,000)',
+       SETTINGS.max_queue??500,'number')
   +`</details>`
   +`<details class="adv"><summary>Advanced: Peering URL, FlareSolverr, custom plugin forges &amp; GitHub token</summary>
     <div class="field"><label>Your public URL (for Friends)</label>
