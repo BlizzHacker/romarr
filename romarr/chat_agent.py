@@ -361,11 +361,11 @@ def _setup_audit(service, args, user):
     from . import hub
     setup = service.setup_status() if hasattr(service, "setup_status") else {}
     health = service.health() if hasattr(service, "health") else {}
-    hs = hub.status() if hasattr(hub, "status") else {}
+    hub_avail = bool(hub.available()) if hasattr(hub, "available") else False
+    searchable = list(hub.searchable_plugins()) if hub_avail and hasattr(hub, "searchable_plugins") else []
     libs = setup.get("libraries") or []
     clients = setup.get("download_clients") or []
     indexers = setup.get("indexers") or []
-    searchable = hs.get("searchable_plugins") or []
     gaps = []
     if not any(x.get("enabled", True) for x in libs):
         gaps.append("No enabled library configured (add a folder or RomM under Settings -> Libraries)")
@@ -381,9 +381,8 @@ def _setup_audit(service, args, user):
         "clients_count": len(clients),
         "indexers_count": len(indexers),
         "prowlarr_connected": bool(health.get("prowlarr")),
-        "searchable_plugins": list(searchable)[:20],
-        "hub_available": bool(hs.get("available")),
-        "hub_acquisition": hs.get("acquisition") or "",
+        "searchable_plugins": searchable[:20],
+        "hub_available": hub_avail,
         "dats_loaded": setup.get("dat_loaded") or 0,
         "dat_games": setup.get("dat_games") or 0,
         "gaps": gaps,
@@ -392,15 +391,24 @@ def _setup_audit(service, args, user):
 
 def _list_plugins(service, args, user):
     from . import hub
-    q = args.get("query", "")
-    cap = args.get("capability", "")
+    q = (args.get("query") or "").strip().lower()
+    cap = (args.get("capability") or "").strip().lower()
     filt = args.get("filter", "all")
-    installed = "1" if filt == "installed" else ("0" if filt == "available" else "")
-    cat = hub.catalogue(q=q, capability=cap, installed=installed)
-    items = cat.get("items") or []
-    limit = args.get("limit", 25)
+    cat = hub.plugins()
+    items = list(cat.get("items") or [])
+    if filt == "installed":
+        items = [p for p in items if p.get("installed")]
+    elif filt == "available":
+        items = [p for p in items if not p.get("installed")]
+    if cap:
+        items = [p for p in items if cap in [str(c).lower() for c in (p.get("capabilities") or [])]]
+    if q:
+        items = [p for p in items if q in " ".join(
+            str(p.get(k) or "") for k in ("slug", "name", "description", "author")
+        ).lower()]
+    limit = args.get("limit", 15)
     return {
-        "total": cat.get("total", len(items)),
+        "total": len(items),
         "error": cat.get("error"),
         "plugins": [{
             "slug": p.get("slug"),
@@ -437,12 +445,12 @@ def _run_plugin_search(service, args, user):
     slug = args["slug"].lower()
     if not _SAFE_SLUG.match(slug):
         raise ValueError("slug must be a valid ROM Hub plugin slug")
-    res = hub.run_plugin(slug, "search", query=args["query"], platform=args.get("platform", ""))
-    rows = res.get("rows") or []
+    rows, error = hub.search(args["query"], platform=args.get("platform") or None, limit=15, only=slug)
+    rows = rows or []
     return {
         "slug": slug,
-        "ok": not res.get("error"),
-        "error": res.get("error"),
+        "ok": not error,
+        "error": error,
         "count": len(rows),
         "rows": [{
             "title": r.get("title"),
@@ -454,12 +462,13 @@ def _run_plugin_search(service, args, user):
 
 def _list_clients_and_indexers(service, args, user):
     health = service.health() if hasattr(service, "health") else {}
+    raw_clients = service.download_clients() if hasattr(service, "download_clients") else []
     clients = [{
         "name": c.get("name"),
         "protocol": c.get("protocol"),
         "configured": bool(c.get("configured")),
         "ok": bool(c.get("ok")),
-    } for c in (health.get("clients") or [])]
+    } for c in raw_clients]
     stored_idx = service.store.settings.get("indexers") or []
     indexers = [{
         "name": i.get("name"),
@@ -474,18 +483,24 @@ def _list_clients_and_indexers(service, args, user):
 
 
 def _enable_builtin_downloads(service, args, user):
-    existing = list(service.store.settings.get("download_clients") or [])
+    existing = [dict(c) for c in (service.store.settings.get("download_clients") or [])]
     base = service.store.settings.get("library_path") or "/downloads"
-    added = []
+    changed = []
     for ctype, label in (("direct", "Direct HTTP"), ("hub", "ROM Hub")):
-        if not any(str(c.get("type", "")).lower() == ctype for c in existing):
-            if hasattr(service, "save_download_client"):
-                service.save_download_client({"type": ctype, "name": label, "enable": True, "save_path": base})
-            else:
-                existing.append({"id": f"builtin-{ctype}", "type": ctype, "name": label, "enable": True, "save_path": base})
-                service.store.update_settings({"download_clients": existing})
-            added.append(label)
-    return {"ok": True, "added": added, "message": ("Enabled: " + ", ".join(added)) if added else "Direct HTTP and ROM Hub clients are already configured."}
+        matches = [c for c in existing if str(c.get("type", "")).lower() == ctype]
+        if matches:
+            if not any(c.get("enable", True) is not False for c in matches):
+                matches[0]["enable"] = True
+                changed.append(f"re-enabled {matches[0].get('name') or label}")
+        else:
+            existing.append({"id": f"builtin-{ctype}", "type": ctype, "name": label, "enable": True, "save_path": base})
+            changed.append(f"added {label}")
+    if changed:
+        service.store.update_settings({"download_clients": existing})
+        if hasattr(service, "reload_clients"):
+            service.reload_clients()
+    return {"ok": True, "changed": changed,
+            "message": ("Updated: " + ", ".join(changed)) if changed else "Direct HTTP and ROM Hub clients are already enabled."}
 
 
 def _run_task(service, args, user):
@@ -493,16 +508,14 @@ def _run_task(service, args, user):
     if name not in _ALLOWED_TASKS:
         raise ValueError(f"task must be one of {', '.join(sorted(_ALLOWED_TASKS))}")
     if hasattr(service, "run_command"):
-        return service.run_command({"name": name})
+        return service.run_command(name)
     return {"ok": False, "error": "Command runner unavailable"}
 
 
 def _recent_history(service, args, user):
     limit = args.get("limit", 20)
-    kind = args.get("kind", "")
-    events = service.store.history(limit=min(limit * 2, 100)) if hasattr(service.store, "history") else []
-    if kind:
-        events = [e for e in events if e.get("kind") == kind]
+    kind = (args.get("kind") or "").strip() or None
+    events = service.store.history(limit=limit, kind=kind) if hasattr(service.store, "history") else []
     return {
         "total": len(events),
         "items": [{k: e.get(k) for k in ("at", "kind", "game", "platform", "release", "indexer", "detail") if k in e}
@@ -512,7 +525,7 @@ def _recent_history(service, args, user):
 
 def _list_devices(service, args, user):
     from . import hub
-    fleet = hub.fleet_status() if hasattr(hub, "fleet_status") else {"profiles": []}
+    fleet = hub.fleet_profiles() if hasattr(hub, "fleet_profiles") else {"profiles": []}
     profiles = fleet.get("profiles") or []
     return {
         "igir_available": bool((fleet.get("igir") or {}).get("available")),

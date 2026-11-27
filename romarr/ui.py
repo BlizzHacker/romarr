@@ -2718,7 +2718,7 @@ RENDER.search=async()=>{
       ${acceptedRows.length?`<table><thead><tr><th>Score</th><th>Release</th><th>Size</th>
         <th>Seeders</th><th>Indexer</th><th>Why</th><th></th></tr></thead><tbody>
         ${acceptedRows.map(renderRow).join('')}</tbody></table>`:''}
-      ${rejectedRows.length?`<details class="adv"${acceptedRows.length?'':' open'}><summary>Advanced: ${rejectedRows.length} rejected release(s) and why they were refused</summary>
+      ${rejectedRows.length?`<details class="adv"${acceptedRows.length?'':' open data-keep-open="1"'}><summary>Advanced: ${rejectedRows.length} rejected release(s) and why they were refused</summary>
         <table><thead><tr><th>Score</th><th>Release</th><th>Size</th>
         <th>Seeders</th><th>Indexer</th><th>Why</th><th></th></tr></thead><tbody>
         ${rejectedRows.map(renderRow).join('')}</tbody></table></details>`:''}`;
@@ -6474,11 +6474,15 @@ RENDER.clients=async()=>{
   if(quickBtn) quickBtn.onclick=async()=>{
     quickBtn.disabled=true; quickBtn.textContent='Enabling…';
     const base=(SETTINGS&&SETTINGS.library_path)||'/downloads';
-    await j('/api/v1/downloadclient',{method:'POST',headers:{'content-type':'application/json'},
-      body:JSON.stringify({type:'direct',name:'Direct HTTP',enable:true,save_path:base})}).catch(()=>({}));
-    await j('/api/v1/downloadclient',{method:'POST',headers:{'content-type':'application/json'},
-      body:JSON.stringify({type:'hub',name:'ROM Hub',enable:true,save_path:base})}).catch(()=>({}));
-    toast('Enabled Direct HTTP & ROM Hub download clients');
+    const saveOne=(type,name)=>j('/api/v1/downloadclient',{method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({type,name,enable:true,save_path:base})}).catch(e=>({error:e.message||'Request failed'}));
+    const r1=await saveOne('direct','Direct HTTP');
+    const r2=await saveOne('hub','ROM Hub');
+    const okNames=[!r1.error?'Direct HTTP':null,!r2.error?'ROM Hub':null].filter(Boolean);
+    const errs=[r1.error?('Direct HTTP: '+r1.error):null,r2.error?('ROM Hub: '+r2.error):null].filter(Boolean);
+    if(okNames.length&&!errs.length) toast('Enabled '+okNames.join(' & '));
+    else if(okNames.length) toast('Enabled '+okNames.join(', ')+'; failed: '+errs.join('; '));
+    else toast('Could not enable built-in clients: '+errs.join('; '));
     if(isCurrentClients()) RENDER.clients();
   };
   const installBtn=$('#mdm-install');
@@ -8061,11 +8065,16 @@ RENDER.setup=async()=>{
   bind('setup-oneclick-hub',async()=>{
     const btn=$('#setup-oneclick-hub'); if(btn)btn.disabled=true;
     const base=state.library_path||'/downloads';
-    await j('/api/v1/downloadclient',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({type:'direct',name:'Direct HTTP',enable:true,save_path:base})}).catch(()=>({}));
-    await j('/api/v1/downloadclient',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({type:'hub',name:'ROM Hub',enable:true,save_path:base})}).catch(()=>({}));
-    toast('Enabled built-in Direct HTTP & ROM Hub downloads');
+    const saveOne=(type,name)=>j('/api/v1/downloadclient',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({type,name,enable:true,save_path:base})}).catch(e=>({error:e.message||'Request failed'}));
+    const r1=await saveOne('direct','Direct HTTP');
+    const r2=await saveOne('hub','ROM Hub');
+    const okNames=[!r1.error?'Direct HTTP':null,!r2.error?'ROM Hub':null].filter(Boolean);
+    const errs=[r1.error?('Direct HTTP: '+r1.error):null,r2.error?('ROM Hub: '+r2.error):null].filter(Boolean);
+    if(okNames.length&&!errs.length) toast('Enabled '+okNames.join(' & '));
+    else if(okNames.length) toast('Enabled '+okNames.join(', ')+'; failed: '+errs.join('; '));
+    else toast('Could not enable built-in clients: '+errs.join('; '));
+    if(btn)btn.disabled=false;
     saved();
   });
   bind('setup-newznab',()=>editItem('indexer',{type:'newznab'},saved));
@@ -9406,14 +9415,18 @@ JS += r"""
                    :'Clean Simple view (advanced sections folded) — click for Advanced view';
     }
     document.querySelectorAll('#page details.adv').forEach(d=>{
-      if(force||!d.dataset.uiSynced){
+      if(force){
         d.dataset.uiSynced='1';
-        d.open=adv;
+        d.open=adv||Boolean(d.dataset.keepOpen);
+      }else if(!d.dataset.uiSynced){
+        d.dataset.uiSynced='1';
+        if(!d.dataset.keepOpen) d.open=adv;
       }
     });
   };
   const openCommandPalette=()=>{
     if(document.querySelector('.cmd-modal'))return;
+    const opener=document.activeElement;
     const actions=[
       {label:'Interactive Search',hint:'Find & grab any game',run:()=>go('search')},
       {label:'Add New Game',hint:'Request a game automatically',run:()=>go('add')},
@@ -9435,7 +9448,7 @@ JS += r"""
     ];
     const modal=document.createElement('div');
     modal.className='cmd-modal';
-    modal.innerHTML='<div class="cmd-box" role="dialog" aria-label="Quick Command Palette">'
+    modal.innerHTML='<div class="cmd-box" role="dialog" aria-modal="true" aria-label="Quick Command Palette">'
       +'<div class="cmd-head"><span aria-hidden="true">⌘</span>'
       +'<input id="cmd-q" type="search" placeholder="Jump to page or type a game title to search…" autocomplete="off">'
       +'<button type="button" class="mini" id="cmd-x">Esc</button></div>'
@@ -9444,16 +9457,20 @@ JS += r"""
     document.body.appendChild(modal);
     const input=modal.querySelector('#cmd-q'), list=modal.querySelector('#cmd-list');
     let idx=0, items=[];
-    const close=()=>modal.remove();
+    const close=()=>{
+      modal.remove();
+      if(opener&&typeof opener.focus==='function'&&opener.isConnected) opener.focus({preventScroll:true});
+    };
     const paint=()=>{
-      const q=(input.value||'').trim().toLowerCase();
+      const raw=(input.value||'').trim(), q=raw.toLowerCase();
       items=actions.filter(a=>!q||a.label.toLowerCase().includes(q)||a.hint.toLowerCase().includes(q));
-      if(q.length>=2){
-        items=[{label:'Search for "'+input.value.trim()+'"',hint:'Open Interactive Search & run immediately',run:()=>{
-          const term=input.value.trim();
+      if(raw.length>=2){
+        const searchAct={label:'Search for "'+raw+'"',hint:'Open Interactive Search & run immediately',run:()=>{
           go('search');
-          setTimeout(()=>{const f=$('#s-name'),b=$('#s-go');if(f&&b){f.value=term;b.click();}},60);
-        }},...items];
+          const f=$('#s-name'),b=$('#s-go');
+          if(f&&b){f.value=raw;b.click();}
+        }};
+        items=items.length?[...items,searchAct]:[searchAct];
       }
       if(idx>=items.length) idx=0;
       list.innerHTML=items.map((it,n)=>'<button type="button" class="cmd-item'+(n===idx?' on':'')+'" data-ci="'+n+'">'
@@ -9462,12 +9479,23 @@ JS += r"""
       list.querySelectorAll('[data-ci]').forEach(b=>b.onclick=()=>{const it=items[Number(b.dataset.ci)];close();if(it)it.run();});
     };
     input.oninput=()=>{idx=0;paint();};
-    input.onkeydown=e=>{
-      if(e.key==='Escape'){e.preventDefault();close();}
-      else if(e.key==='ArrowDown'){e.preventDefault();if(items.length){idx=(idx+1)%items.length;paint();}}
-      else if(e.key==='ArrowUp'){e.preventDefault();if(items.length){idx=(idx-1+items.length)%items.length;paint();}}
-      else if(e.key==='Enter'){e.preventDefault();const it=items[idx];close();if(it)it.run();}
-    };
+    modal.addEventListener('keydown',e=>{
+      if(e.key==='Escape'){e.preventDefault();close();return;}
+      if(e.key==='Tab'){
+        const focusable=[...modal.querySelectorAll('button, input, [tabindex]:not([tabindex="-1"])')].filter(el=>!el.disabled);
+        if(focusable.length){
+          const first=focusable[0], last=focusable[focusable.length-1];
+          if(e.shiftKey&&(document.activeElement===first||!modal.contains(document.activeElement))){e.preventDefault();last.focus();}
+          else if(!e.shiftKey&&(document.activeElement===last||!modal.contains(document.activeElement))){e.preventDefault();first.focus();}
+        }
+        return;
+      }
+      if(document.activeElement===input){
+        if(e.key==='ArrowDown'){e.preventDefault();if(items.length){idx=(idx+1)%items.length;paint();}}
+        else if(e.key==='ArrowUp'){e.preventDefault();if(items.length){idx=(idx-1+items.length)%items.length;paint();}}
+        else if(e.key==='Enter'){e.preventDefault();const it=items[idx];close();if(it)it.run();}
+      }
+    });
     modal.onclick=e=>{if(e.target===modal||e.target.id==='cmd-x')close();};
     paint();
     input.focus();
@@ -9554,7 +9582,7 @@ JS += r"""
       const body=document.getElementById('cd-body');
       const input=document.getElementById('cd-input');
       const sendBtn=document.getElementById('cd-send');
-      let loaded=false, busy=false;
+      let loaded=false, loading=false, busy=false;
       const syncDockVisibility=()=>{
         const onAssistant=(location.hash||'').slice(1)==='assistant';
         if(onAssistant){fab.hidden=true;dock.hidden=true;}
@@ -9574,6 +9602,7 @@ JS += r"""
           +'<div class="row" style="margin-top:6px;gap:6px"><button type="button" class="mini accent" data-cdok>Confirm</button>'
           +'<button type="button" class="mini" data-cdno>Cancel</button></div>','bot');
         const answer=approve=>{
+          if(busy||loading) return;
           box.querySelectorAll('button').forEach(b=>b.disabled=true);
           streamChat('/api/v1/chat/confirm',{id:ev.id,approve});
         };
@@ -9596,11 +9625,13 @@ JS += r"""
         if(sg) sg.onclick=()=>{dock.hidden=true;fab.hidden=false;go('assistant');};
       };
       const loadDock=async()=>{
-        if(loaded) return;
-        loaded=true;
+        if(loaded||loading) return;
+        loading=true;
+        if(sendBtn) sendBtn.disabled=true;
         body.innerHTML='<div class="help">Connecting to ROMarr AI…</div>';
         try{
           const hist=await j('/api/v1/chat/history');
+          loaded=true;
           const msgs=hist.messages||[];
           if(!msgs.length){renderWelcome(!!hist.enabled);return;}
           body.innerHTML='';
@@ -9610,9 +9641,10 @@ JS += r"""
           });
           (hist.pending||[]).forEach(addConfirm);
         }catch(_){renderWelcome(false);}
+        finally{loading=false; if(sendBtn&&!busy) sendBtn.disabled=false;}
       };
       const streamChat=async(url,payload)=>{
-        if(busy) return;
+        if(busy||loading) return;
         busy=true; if(sendBtn) sendBtn.disabled=true;
         let bot=null;
         const botNode=()=>{if(!bot) bot=addMsg('','bot md'); return bot;};
@@ -9634,11 +9666,11 @@ JS += r"""
             body.scrollTop=body.scrollHeight;
           }
         }catch(err){addMsg('<span style="color:var(--bad)">'+esc(err.message||err)+'</span>','bot');}
-        finally{busy=false; if(sendBtn) sendBtn.disabled=false;}
+        finally{busy=false; if(sendBtn&&!loading) sendBtn.disabled=false;}
       };
       const submitDock=()=>{
         const text=(input.value||'').trim();
-        if(!text||busy) return;
+        if(!text||busy||loading) return;
         input.value='';
         addMsg(esc(text),'user');
         streamChat('/api/v1/chat',{message:text});

@@ -485,8 +485,20 @@ def test_expanded_tools_audit_plugins_clients_history_devices_and_confirmations(
     assert ok and "items" in json.loads(raw)
     ok, raw = chat_agent.execute(service, by_name["list_devices"], {}, "owner")
     assert ok and "devices" in json.loads(raw)
+    ok, raw = chat_agent.execute(service, by_name["list_plugins"], {"filter": "all", "limit": 5}, "owner")
+    assert ok and "plugins" in json.loads(raw)
+    # Re-enable a disabled client and verify reload_clients runs
+    service.store.update_settings({"download_clients": [{"id": "d1", "type": "direct", "name": "Direct HTTP", "enable": False}]})
+    reloaded = []
+    service.reload_clients = lambda: reloaded.append(True)
     ok, raw = chat_agent.execute(service, by_name["enable_builtin_downloads"], {}, "owner")
-    assert ok and json.loads(raw)["ok"] is True
+    assert ok and json.loads(raw)["ok"] is True and reloaded == [True]
+    assert any(c["id"] == "d1" and c["enable"] is True for c in service.store.settings["download_clients"])
+    # Verify run_task passes task name as string
+    ran = []
+    service.run_command = lambda name: ran.append(name) or {"ok": True}
+    ok, raw = chat_agent.execute(service, by_name["run_task"], {"task": "ImportCompleted"}, "owner")
+    assert ok and ran == ["ImportCompleted"]
     # Reject invalid plugin slug in manage_plugin
     ok, raw = chat_agent.execute(service, by_name["manage_plugin"],
                                  {"slug": "../bad", "action": "install"}, "owner")
