@@ -8459,6 +8459,14 @@ function collectionsNoDat(){
 }
 function collectionsPlanHtml(d,platform,passMinutes){
   const c=d.counts;
+  const scan=d.library_scan;
+  const scanned=scan?(scan.folders||[]).map(f=>{
+    const result=f.files==null?'unavailable':f.files.toLocaleString()+' files scanned';
+    return '<p class="help" style="margin:4px 0"><code>'+esc(f.path)+'</code> · '+result+'</p>';
+  }).join(''):'';
+  const scanNote=scan&&scan.used_cache
+    ?'<p class="help" style="margin:4px 0 12px">Used '+scan.cached_rows.toLocaleString()
+      +' cached library entries. Check the library mount and platform folder for a complete disk scan.</p>':'';
   const tile=(n,label,colour,hint)=>'<div style="flex:1;min-width:110px;padding:10px 12px;'
     +'background:var(--bg);border:1px solid var(--line);border-radius:6px"'
     +(hint?' title="'+esc(hint)+'"':'')+'>'
@@ -8470,7 +8478,7 @@ function collectionsPlanHtml(d,platform,passMinutes){
       ?'<span class="pill" style="background:var(--bad);color:#2a0b0b" title="On disk, but a DAT marks this dump as bad. Replace it.">bad dump</span>'
       :t.status==='missing'
         ?'<span class="pill" style="background:var(--warn);color:#2a1c05" title="Not found in this platform’s library folder">missing</span>'
-        :'<span class="pill" title="A file with this name is on disk. ROMarr has not hash-checked it.">present</span>';
+        :'<span class="pill" title="Matched by name or ZIP metadata. ROMarr has not verified the file contents.">present</span>';
   const action=c.missing
     ?(platform
       ?'<div class="row" style="align-items:center;gap:10px"><button class="btn" id="cstart">Request '+c.missing
@@ -8496,6 +8504,7 @@ function collectionsPlanHtml(d,platform,passMinutes){
     +' — region order '+esc((d.policy.regions||[]).join(' → '))
     +((d.policy.preferred_languages||[]).length?' · preferred languages '+esc(d.policy.preferred_languages.join(' → ')):'')
     +(d.policy.region_mode==='strict'?' (strict: titles without a matching-region dump are omitted)':'')+'.</p>'
+    +scanned+scanNote
     +action
     +'<table style="margin-top:14px"><thead><tr><th>Title</th><th>Status</th>'
     +'<th>Why this dump</th></tr></thead><tbody>'

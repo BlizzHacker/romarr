@@ -75,7 +75,7 @@ from .emulators import EmulatorHub
 from .libretro import CoreHub
 from .cartridge import CartridgeHub
 from .emulator_catalog import resource_catalog
-from .dat import DatIndex, dat_from_record, parse_dat
+from .dat import Dat, DatIndex, dat_from_record, parse_dat
 from .decompress import run_batch as run_decompress_batch
 from . import switch_compress
 from .switch_report import report as build_switch_report
@@ -5218,74 +5218,97 @@ class ROMarr:
 
     # ------------------------------------------------------- collections --
 
-    def _present_titles(self, platform_slug: str = "") -> dict[str, str]:
-        """What the library already has, keyed by DAT-style name.
-
-        Read from the platform's directory on disk when there is one, and only
-        from the cached shelf otherwise. The shelf is a page -- a few hundred
-        rows kept for the Library grid -- and comparing a 1,900-entry DAT
-        against the first page of a 166,578-game library reports almost
-        everything as missing. The directory is the whole truth for one
-        platform and costs one listing.
-
-        Matched by name, not by hash. Hashing a library that size to draw a
-        progress bar would take hours, and the verdict recorded when ROMarr
-        imported a file is already the better answer where it exists.
-        """
+    def _present_titles(self, platform_slug: str = "", dat: Dat | None = None,
+                        *, scan: dict | None = None) -> dict[str, str]:
+        """Read the platform folders or the cached shelf, keyed by DAT title."""
+        from .audit_archive import single_zip_fingerprint
         from .collections import PRESENT_UNKNOWN, PRESENT_VERIFIED, PRESENT_BAD
+
+        platform = resolve(platform_slug) if platform_slug else None
+        slug = platform.slug if platform else platform_slug
+        dat_games = dat.games if dat is not None else ()
+        names: dict[str, str | None] = {}
+        fingerprints: dict[tuple[int, str], str | None] = {}
+
+        def name_key(name: str) -> str:
+            return unicodedata.normalize("NFC", name).casefold()
+
+        for name in dat_games:
+            key = name_key(name)
+            names[key] = None if key in names else name
+        if platform and not platform.archive_is_the_rom and dat is not None:
+            for game in dat.games.values():
+                for rom in game.roms:
+                    if rom.size > 0 and rom.crc:
+                        key = (rom.size, rom.crc.lower())
+                        # A shared fingerprint or one track of a larger set
+                        # cannot identify a complete DAT entry.
+                        fingerprints[key] = (
+                            game.name if len(game.roms) == 1
+                            and key not in fingerprints else None)
 
         verdicts: dict[str, str] = {}
         for event in self.store.events:
-            if event.kind != "imported" or not event.game:
+            if (event.kind != "imported" or not event.game
+                    or (slug and event.platform != slug)):
                 continue
             detail = (event.detail or "").lower()
             if "verified" in detail:
-                verdicts[event.game.lower()] = PRESENT_VERIFIED
+                verdicts[name_key(event.game)] = PRESENT_VERIFIED
             elif "bad-dump" in detail or "bad dump" in detail:
-                verdicts[event.game.lower()] = PRESENT_BAD
+                verdicts[name_key(event.game)] = PRESENT_BAD
 
         present: dict[str, str] = {}
 
-        def note(name: str) -> None:
-            if name:
-                present[name] = verdicts.get(name.lower(), PRESENT_UNKNOWN)
+        def note(name: str) -> bool:
+            if dat is not None and name not in dat_games:
+                name = names.get(name_key(name))
+            if not name:
+                return False
+            present[name] = verdicts.get(name_key(name), PRESENT_UNKNOWN)
+            return True
 
-        listed = False
-        if platform_slug:
+        folders = []
+        if platform:
             for cfg, _ in self.game_libraries:
-                folder = platform_dir(self.library_root(cfg), platform_slug,
+                folder = platform_dir(self.library_root(cfg), slug,
                                       layout=self.library_layout(cfg),
                                       platform_folders=self.platform_folders(cfg))
+                row = {"path": str(folder), "files": None}
+                folders.append(row)
                 try:
-                    # Recursive on purpose. iterdir() sees one level: a game
-                    # filed in a subfolder ("Nintendo/Chrono Trigger.zip", a
-                    # disc-set's inner tracks, anything under Translations/)
-                    # surfaced as its PARENT DIRECTORY's name and the title
-                    # itself read as missing -- so collection import queued a
-                    # fresh download of a game already on disk. Walk the tree;
-                    # a directory named for a game (a disc set) still answers
-                    # to its own name via its files' stems below.
-                    # is_dir() guard first: rglob on a MISSING directory
-                    # yields nothing instead of raising, which would mark the
-                    # platform as listed and skip the shelf fallback below.
                     if not folder.is_dir():
                         continue
                     entries = [p for p in folder.rglob("*") if p.is_file()]
                 except OSError:
                     continue
-                listed = True
+                row["files"] = len(entries)
                 for entry in entries:
-                    # A cartridge zip answers to its stem. A disc-set file
-                    # inside a game-named directory answers to BOTH its own
-                    # stem and the directory name, because that is how the
-                    # set is filed and how the DAT names the game.
-                    note(entry.stem)
+                    # Also count folders named for disc sets and nested ROMs.
+                    if (not note(entry.stem) and entry.suffix.lower() == ".zip"
+                            and fingerprints
+                            and (fingerprint := single_zip_fingerprint(entry))
+                            and (name := fingerprints.get(fingerprint))):
+                        # Central directory metadata identifies the dump. Only a
+                        # full read can verify that the payload is intact.
+                        present.setdefault(name, PRESENT_UNKNOWN)
                     for parent in entry.relative_to(folder).parents:
-                        if str(parent) not in (".", ""):
+                        if parent != Path("."):
                             note(parent.name)
-        if not listed:
-            for item in (self.library_view() or {}).get("items", []):
-                note(str(item.get("name") or ""))
+
+        on_disk = any(row["files"] is not None for row in folders)
+        cached_rows = 0
+        if not on_disk and (platform or not slug):
+            games = self._library_cache[0] or ()
+            for game in games:
+                if (platform and game.platform_slug != slug
+                        and resolve(game.platform) != platform):
+                    continue
+                note(game.name)
+                cached_rows += 1
+        if scan is not None:
+            scan.update(folders=folders, used_cache=not on_disk,
+                        cached_rows=cached_rows)
         return present
 
     def dat_names(self) -> list[str]:
@@ -5502,12 +5525,15 @@ class ROMarr:
             else "prefer",
             preferred_languages=preferred_languages,
         )
-        plan = build_plan(dat, self._present_titles(platform), policy)
+        scan: dict = {}
+        present = self._present_titles(platform, dat, scan=scan)
+        plan = build_plan(dat, present, policy)
         return {
             "dat": plan.dat,
             "dat_version": plan.dat_version,
             "platform": platform,
             "counts": plan.counts(),
+            "library_scan": scan,
             "policy": {"regions": list(policy.regions),
                        "one_game_one_rom": policy.one_game_one_rom,
                        "exclude": sorted(policy.exclude),

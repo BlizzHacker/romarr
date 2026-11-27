@@ -237,7 +237,7 @@ files match your DAT.
 
 ### Will it re-download games I already have?
 
-Only titles the plan marks *missing* are requested. If you have a game under a different name, the plan cannot see it: rename it to the DAT name (see [Existing library rename](EXISTING-LIBRARY-RENAME.md)) or adopt it with Manual Import before you request the set. Avoid queueing the same set twice: each **Request missing** creates a new set.
+Only titles the plan marks *missing* are requested. Preview shows which folders it scanned and how many files it saw. File and game-folder names can match the DAT regardless of case. For a renamed single-file ZIP, ROMarr can also match the stored file size and CRC to an unambiguous DAT entry without extracting the ROM. Other archives, including 7z, can match by name. Review the preview before requesting missing titles, especially if your copies use different regions or revisions.
 
 ### How long does a 1,800-game set take?
 
@@ -249,7 +249,7 @@ Yes. Sets and torrent jobs are saved and survive restarts. Sets can be paused, r
 
 ### What is the difference between "present" and "verified"?
 
-*Verified* files were hash-checked against a DAT when ROMarr imported them. *Present* only means a file with that name exists. Both count as "you have".
+*Verified* files were hash-checked against a DAT when ROMarr imported them. *Present* means a filename, folder name, or ZIP metadata matched a DAT entry. Both count as "you have".
 
 ### Where do translations go with "Keep both"?
 
