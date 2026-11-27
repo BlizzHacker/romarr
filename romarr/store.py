@@ -514,7 +514,7 @@ class Store:
         except ValueError:
             return self.MAX_QUEUE
 
-    def _trim_queue_locked(self) -> None:
+    def _trim_queue_locked(self, *, allow_active: bool = True) -> None:
         limit = self.queue_limit
         excess = len(self.queue) - limit
         if excess <= 0:
@@ -527,13 +527,14 @@ class Store:
                 break
             if row.state in failed_states:
                 drop_indices.add(idx)
-        if len(drop_indices) < excess:
+        if allow_active and len(drop_indices) < excess:
             for idx in range(len(self.queue)):
                 if len(drop_indices) >= excess:
                     break
                 if idx not in drop_indices:
                     drop_indices.add(idx)
-        self.queue = [row for idx, row in enumerate(self.queue) if idx not in drop_indices]
+        if drop_indices:
+            self.queue = [row for idx, row in enumerate(self.queue) if idx not in drop_indices]
 
     def __init__(self, path: str | Path):
         self.path = Path(path)
@@ -607,7 +608,7 @@ class Store:
                 "settings": self.settings,
                 "events": [asdict(e) for e in self.events[-self.MAX_EVENTS:]],
                 "wanted": [asdict(w) for w in self.wanted],
-                "queue": [asdict(q) for q in self.queue[-self.queue_limit:]],
+                "queue": [asdict(q) for q in self.queue],
                 "switch_compression": [asdict(j) for j in self._switch_compression.values()],
             }
             tmp = None
@@ -1075,7 +1076,7 @@ class Store:
                 if key in DEFAULT_SETTINGS:
                     self.settings[key] = mapping if key == "dat_catalog_platforms" else value
             if "max_queue" in patch:
-                self._trim_queue_locked()
+                self._trim_queue_locked(allow_active=False)
             out = dict(self.settings)
         self.save()
         return out

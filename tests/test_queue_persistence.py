@@ -139,6 +139,21 @@ def test_queue_trims_failed_rows_before_active_downloads(tmp_path):
     assert failed[0] == "Failed 5"
 
 
+def test_lowering_max_queue_preserves_active_downloads(tmp_path):
+    path = tmp_path / "r.json"
+    s = Store(path)
+    s.update_settings({"max_queue": 120})
+    for n in range(80):
+        s.enqueue(QueueItem(f"Active {n}", "snes", f"Active {n}", 5, "grabbed"))
+    for n in range(20):
+        s.enqueue(QueueItem(f"Failed {n}", "snes", f"Failed {n}", 0, "failed"))
+    s.update_settings({"max_queue": 50})
+    # All 20 failed rows are trimmed, while all 80 active downloads survive on disk.
+    assert [q.game for q in s.queue] == [f"Active {n}" for n in range(80)]
+    reloaded = Store(path)
+    assert [q.game for q in reloaded.queue] == [f"Active {n}" for n in range(80)]
+
+
 # --- the service uses the stored one --------------------------------------
 
 def test_a_grab_lands_in_a_queue_that_outlives_the_process(tmp_path):
