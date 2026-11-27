@@ -5535,7 +5535,7 @@ RENDER.queue=async()=>{
       <button class="btn ghost" id="q-import">Import completed now</button>
       <button class="btn ghost" id="q-refresh">Refresh</button>
       ${failed?`<button class="btn ghost" id="q-clearfail">Clear ${failed} failed</button>`:''}
-      <span class="help" style="margin:0">${(d.items||[]).length}${SETTINGS&&SETTINGS.max_queue?' / '+SETTINGS.max_queue:''} in flight</span>
+      <span class="help" style="margin:0">${(d.items||[]).length}${typeof SETTINGS!=='undefined'&&SETTINGS&&SETTINGS.max_queue?' / '+SETTINGS.max_queue:''} in flight</span>
     </div>`+(d.items.length?`<table><thead><tr><th>Game</th>
     <th>Platform</th><th>Release</th><th>Seeders</th><th>State</th><th></th></tr></thead><tbody>
     ${d.items.map((i,n)=>`<tr><td>${esc(i.game)}</td><td>${esc(i.platform)}</td>
