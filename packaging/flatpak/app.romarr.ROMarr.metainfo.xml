@@ -87,6 +87,15 @@
   </keywords>
 
   <releases>
+    <release version="1.15.0" date="2026-11-27">
+      <url type="details">https://github.com/BlizzHacker/romarr/releases/tag/v1.15.0</url>
+      <description>
+        <ul>
+          <li>Expanded curated standalone emulators from 26 to 60 and bundled catalog from 1,220 to 2,089 verified open-source emulators (2,439 total with 350 libretro cores).</li>
+          <li>Automatically removes retired failed downloads from the Activity queue once logged to History and returned to Wanted (configurable via auto_clear_failed_queue).</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.14.2" date="2026-11-27">
       <url type="details">https://github.com/BlizzHacker/romarr/releases/tag/v1.14.2</url>
       <description>

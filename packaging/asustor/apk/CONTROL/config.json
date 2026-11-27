@@ -2,7 +2,7 @@
   "general": {
     "package": "romarr",
     "name": "ROMarr",
-    "version": "1.14.2",
+    "version": "1.15.0",
     "depends": [
       "docker-ce(>=20.10.17.r1)"
     ],

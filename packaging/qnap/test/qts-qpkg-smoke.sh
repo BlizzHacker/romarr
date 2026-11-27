@@ -1,7 +1,7 @@
 #!/bin/sh
 # Run the ROMarr QPKG's service script the way QTS does, against real Docker.
 #
-#   packaging/qnap/test/qts-qpkg-smoke.sh romarr_1.14.2.qpkg
+#   packaging/qnap/test/qts-qpkg-smoke.sh romarr_1.15.0.qpkg
 #
 # QTS only runs on QNAP hardware, so this unpacks the QPKG QDK built, puts the
 # QTS helpers it calls (/sbin/getcfg, /sbin/log_tool) in front of it, points

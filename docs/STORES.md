@@ -6,7 +6,7 @@ exact steps left to publish each one. The packaging itself lives in
 validation log and submission guide. Live listings (Unraid CA, Google Play beta,
 Microsoft Store, GHCR) are tracked in [SUBMISSIONS.md](SUBMISSIONS.md).
 
-Status as of 2026-11-27, packaging ROMarr **1.14.2**. Every NAS has a package or a template; the per-platform install guide is [NAS.md](NAS.md). Live: TrueNAS
+Status as of 2026-11-27, packaging ROMarr **1.15.0**. Every NAS has a package or a template; the per-platform install guide is [NAS.md](NAS.md). Live: TrueNAS
 Community train, Unraid CA, the Homebrew tap. Submitted: SynoCommunity, CasaOS, Umbrel, winget. Flathub's checklist requires the
 submitter to confirm the PR was not made by an AI agent, so a maintainer opens
 it by hand. Proxmox community-scripts waits for their eligibility rules.
@@ -24,8 +24,8 @@ it by hand. Proxmox community-scripts waits for their eligibility rules.
 | **openmediavault** (compose plugin) | [`packaging/openmediavault`](../packaging/openmediavault/) | `docker compose config` | Ready (template) | No store to submit to |
 | **Unraid** (Community Applications) | [BlizzHacker/cartridge-unraid](https://github.com/BlizzHacker/cartridge-unraid) `templates/romarr.xml` | `xmllint`, CA listing | **Live** | Template follows `latest`; see [Unraid](#unraid) |
 | **TrueNAS SCALE** (Community train) | [`packaging/truenas`](../packaging/truenas/) `ix-dev/community/romarr` | `port_validation.py`, `check_metadata.py`, `ci.py` render + run (healthy) | **Live** (merged 2026-11-16) | [truenas/apps#6524](https://github.com/truenas/apps/pull/6524); iX's Renovate bot bumps the image |
-| **CasaOS / ZimaOS** | [`packaging/casaos`](../packaging/casaos/) `Apps/ROMarr` | `validate_compose.py` (0 issues, re-run for 1.14.2), `build_dist.sh`, real compose run | **Submitted**, updated to 1.14.2 | [IceWhaleTech/CasaOS-AppStore#1156](https://github.com/IceWhaleTech/CasaOS-AppStore/pull/1156) |
-| **Umbrel** | [`packaging/umbrel`](../packaging/umbrel/) `romarr/` | `lint-apps.mjs --check-images` (no issues, re-run for 1.14.2) | **Submitted** | [getumbrel/umbrel-apps#5947](https://github.com/getumbrel/umbrel-apps/pull/5947), updated to 1.14.2 |
+| **CasaOS / ZimaOS** | [`packaging/casaos`](../packaging/casaos/) `Apps/ROMarr` | `validate_compose.py` (0 issues, re-run for 1.15.0), `build_dist.sh`, real compose run | **Submitted**, updated to 1.15.0 | [IceWhaleTech/CasaOS-AppStore#1156](https://github.com/IceWhaleTech/CasaOS-AppStore/pull/1156) |
+| **Umbrel** | [`packaging/umbrel`](../packaging/umbrel/) `romarr/` | `lint-apps.mjs --check-images` (no issues, re-run for 1.15.0) | **Submitted** | [getumbrel/umbrel-apps#5947](https://github.com/getumbrel/umbrel-apps/pull/5947), updated to 1.15.0 |
 | **winget** (Windows) | [`packaging/winget`](../packaging/winget/) `MoveWeight.ROMarr` | `winget validate` | **Submitted** | [microsoft/winget-pkgs#481242](https://github.com/microsoft/winget-pkgs/pull/481242); sign the Microsoft CLA when the bot asks |
 | **Homebrew** (macOS, Linux) | [`packaging/homebrew`](../packaging/homebrew/) `Formula/romarr.rb` | `brew style`, `brew audit --strict --new --online`, source install, `brew test` | **Tap live** | `brew install blizzhacker/romarr/romarr` ([tap](https://github.com/BlizzHacker/homebrew-romarr)); homebrew-core later |
 
@@ -61,7 +61,7 @@ Both ship a native package that runs the published image on the vendor's Docker:
 - **QNAP:** a QPKG built with QDK, needing Container Station.
 - **Asustor:** an APK built with Asustor's apkg-tools, needing Docker Engine.
 
-CI attaches both to every release published after the workflow landed, and they were uploaded to v1.14.2 by hand, so users can install them by hand today.
+CI attaches both to every release published after the workflow landed, and they were uploaded to v1.15.0 by hand, so users can install them by hand today.
 
 **Wade:**
 
@@ -74,7 +74,7 @@ Compose templates, linked from [NAS.md](NAS.md). None of them can be self-submit
 
 ## Unraid
 
-The Community Applications template is in [BlizzHacker/cartridge-unraid](https://github.com/BlizzHacker/cartridge-unraid). It follows `latest`, so it's always current. For 1.14.2 it gained a `UMASK` setting, an optional DAT folder, and the `/dev/fuse` device for cloud mounts ([cartridge-unraid#5](https://github.com/BlizzHacker/cartridge-unraid/pull/5)).
+The Community Applications template is in [BlizzHacker/cartridge-unraid](https://github.com/BlizzHacker/cartridge-unraid). It follows `latest`, so it's always current. For 1.15.0 it gained a `UMASK` setting, an optional DAT folder, and the `/dev/fuse` device for cloud mounts ([cartridge-unraid#5](https://github.com/BlizzHacker/cartridge-unraid/pull/5)).
 
 ## Proxmox VE Community Scripts
 
