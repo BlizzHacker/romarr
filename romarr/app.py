@@ -5301,8 +5301,7 @@ class ROMarr:
         if not on_disk and (platform or not slug):
             games = self._library_cache[0] or ()
             for game in games:
-                if (platform and game.platform_slug != slug
-                        and resolve(game.platform) != platform):
+                if not self._is_local(game) or (platform and self._slug_of(game) != slug):
                     continue
                 note(game.name)
                 cached_rows += 1

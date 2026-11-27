@@ -69,7 +69,7 @@ def single_zip_fingerprint(path: Path) -> tuple[int, str] | None:
                         or not 0 < info.file_size <= MAX_MEMBER_BYTES):
                     return None
                 return info.file_size, f"{info.CRC:08x}"
-    except (OSError, zipfile.BadZipFile, UnicodeError, ValueError):
+    except (OSError, zipfile.BadZipFile, ValueError, NotImplementedError):
         return None
 
 

@@ -65,6 +65,7 @@ def test_it_falls_back_to_the_shelf_when_there_is_no_directory(tmp_path):
         *(Game(id=str(i), name=f"NES Friend {i} (USA)", platform="nes")
           for i in range(125)),
         Game(id="snes", name="Some Game (USA)", platform="Super Nintendo"),
+        Game(id="cloud", name="Another Game (USA)", platform="snes", origin="cloud"),
     ], 0.0, "")
     scan = {}
     assert service._present_titles("snes", scan=scan) == {
@@ -254,3 +255,23 @@ def test_zip_headers_do_not_guess_from_ambiguous_or_partial_dumps(tmp_path):
     (folder / "cartridge.zip").write_bytes(b"not a ZIP")
 
     assert service._present_titles("snes", Dat("SNES", games=games)) == {}
+
+
+
+def test_a_zip_using_an_unsupported_version_does_not_abort_the_preview(tmp_path):
+    """ZIP metadata that this Python cannot parse is skipped."""
+    service, library = service_with(tmp_path)
+    folder = library / "snes"
+    folder.mkdir()
+    name, data = "Game (USA)", b"cart data"
+    dat = Dat("SNES", games={name: DatGame(
+        name, (Rom("game.sfc", len(data), f"{zlib.crc32(data):08x}"),))})
+    service.dats.add(dat)
+    with zipfile.ZipFile(folder / "bad.zip", "w") as archive:
+        info = zipfile.ZipInfo("game.sfc")
+        info.extract_version = zipfile.MAX_EXTRACT_VERSION + 1
+        archive.writestr(info, data)
+
+    plan = service.collection_plan("SNES", "snes")
+    assert plan["counts"]["have"] == 0
+    assert plan["counts"]["missing"] == 1
