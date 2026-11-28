@@ -385,6 +385,16 @@ DESCRIPTIONS: dict[str, tuple[str, str]] = {
     "/api/v1/friends/netplay": ("POST", "Offer a friend a game to play, "
                                         "carrying the SHA1 of your dump so "
                                         "both sides agree on the bytes."),
+    "/api/v1/friends/fetch": ("POST", "Download one game directly P2P from a "
+                                      "confirmed friend whose sharing policy "
+                                      "grants fetch access."),
+    "/api/v1/friends/sync": ("POST", "Compare a friend's platform against your "
+                                     "library and optionally pull all missing "
+                                     "games directly P2P."),
+    "/api/v1/friends/transfers": ("GET", "Live status and progress of active "
+                                         "and recent P2P friend transfers."),
+    "/api/v1/friends/transfers/cancel": ("POST", "Cancel one or all active/queued "
+                                                 "P2P friend transfers."),
     "/api/v1/ecosystem": ("GET", "The projects ROMarr stands on: library "
                                  "servers, players, indexers, DAT databases "
                                  "-- repo, site and install command for each."),

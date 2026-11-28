@@ -419,3 +419,153 @@ def test_a_romm_friend_survives_a_restart_with_its_credential():
     back = restarted.peers[peer.peer_id]
     assert back.kind == "romm"
     assert (back.username, back.password) == ("me", "secret")
+
+
+def test_p2p_friend_file_fetch_range_and_bulk_platform_sync(tmp_path):
+    """End-to-end two-server P2P: Borb shares PS2 with fetch; Ant compares and pulls missing."""
+    import threading
+    from romarr.dat import Dat, Game as DatGame, Rom, hash_file
+    import time
+    from http.server import ThreadingHTTPServer
+    import requests
+    from romarr.app import ROMarr, make_handler
+    from romarr.libraries import Game
+
+    borb_lib = tmp_path / "borb_roms"
+    (borb_lib / "snes").mkdir(parents=True)
+    payload = b"SNES-ROM-HEADER" + (b"\x01" * 65536) + b"-END"
+    (borb_lib / "snes" / "Chrono Trigger (USA).sfc").write_bytes(payload)
+
+    ant_lib = tmp_path / "ant_roms"
+    (ant_lib / "snes").mkdir(parents=True)
+
+    borb = ROMarr({"ROMARR_DATA": str(tmp_path / "borb.json"),
+                   "LIBRARY_PATH": str(borb_lib), "ROMARR_API_KEY": "bk"})
+    ant = ROMarr({"ROMARR_DATA": str(tmp_path / "ant.json"),
+                  "LIBRARY_PATH": str(ant_lib), "ROMARR_API_KEY": "ak"})
+    ant.store.put_item("libraries", {
+        "type": "folder", "name": "Ant ROMs",
+        "path": str(ant_lib), "is_default": True, "enable": True,
+    })
+    ant.reload_libraries()
+    borb.scheduler.stop()
+    ant.scheduler.stop()
+
+    rom_path = borb_lib / "snes" / "Chrono Trigger (USA).sfc"
+    hashes = hash_file(rom_path)
+    sha1 = hashes["sha1"]
+    game = "Chrono Trigger (USA)"
+    ant.dats.add(Dat("Nintendo - Super Nintendo Entertainment System", games={
+        game: DatGame(game, (Rom(rom_path.name, **hashes),)),
+    }))
+    ant.store.want("Chrono Trigger (USA)", "snes")
+    borb._library_cache = ([
+        Game(id="1", name="Chrono Trigger (USA)", platform="snes",
+             platform_slug="snes",
+             file_name="Chrono Trigger (USA).sfc"),
+    ], 9e18, "")
+    ant._library_cache = ([], 9e18, "")
+
+    b_srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(borb))
+    a_srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(ant))
+    threading.Thread(target=b_srv.serve_forever, daemon=True).start()
+    threading.Thread(target=a_srv.serve_forever, daemon=True).start()
+    try:
+        b_url = f"http://127.0.0.1:{b_srv.server_port}"
+        a_url = f"http://127.0.0.1:{a_srv.server_port}"
+
+        borb.federation.url = b_url
+        ant.federation.url = a_url
+        inv = borb.federation.invite("Borb")
+        ant_peer = ant.federation.redeem(inv.blob())
+        borb_peer = borb.federation.accept(inv.peer_id, inv.secret, name="Ant", url=a_url)
+        borb.federation.confirm(borb_peer.peer_id)
+
+        # Borb initially grants catalogue only; Ant sets outbound fetch -> Ant must see Borb's catalogue, not his own!
+        ant_peer.access = "fetch"
+        borb_peer.scope = "all"
+        borb_peer.access = "catalogue"
+        shelf = ant.friend_shelf(ant_peer.peer_id, refresh=True)
+        assert shelf["ok"] is True
+        assert shelf["access"] == "catalogue"
+        assert shelf["my_access"] == "fetch"
+
+        # Direct download is refused (403) while Borb is on catalogue
+        r_denied = requests.get(
+            f"{b_url}/api/v1/peer/shelf?download=1&title=Chrono+Trigger+(USA)&platform=snes",
+            headers=ant_peer.headers(), timeout=5)
+        assert r_denied.status_code == 403
+
+        # Borb enables fetch -> Range request returns 206, dry-run sync reports 1 missing, pull imports it
+        borb_peer.access = "fetch"
+        r_range = requests.get(
+            f"{b_url}/api/v1/peer/shelf?download=1&title=Chrono+Trigger+(USA)&platform=snes",
+            headers={**ant_peer.headers(), "Range": "bytes=0-14"}, timeout=5)
+        assert r_range.status_code == 206
+        assert r_range.content == b"SNES-ROM-HEADER"
+
+        # RFC 9110 suffix range: the LAST n bytes, not the first n+1.
+        r_suffix = requests.get(
+            f"{b_url}/api/v1/peer/shelf?download=1&title=Chrono+Trigger+(USA)&platform=snes",
+            headers={**ant_peer.headers(), "Range": "bytes=-4"}, timeout=5)
+        assert r_suffix.status_code == 206 and r_suffix.content == b"-END"
+
+        # A SHA1 that no shared file carries must never fall back to title+platform.
+        r_wrong_dump = requests.get(
+            f"{b_url}/api/v1/peer/shelf?download=1&title=Chrono+Trigger+(USA)"
+            f"&platform=snes&sha1={'0' * 40}",
+            headers=ant_peer.headers(), timeout=5)
+        assert r_wrong_dump.status_code == 404
+        r_exact = requests.get(
+            f"{b_url}/api/v1/peer/shelf",
+            params={"download": "1", "title": "Chrono Trigger (USA)",
+                    "platform": "snes", "sha1": sha1},
+            headers=ant_peer.headers(), timeout=5)
+        assert r_exact.status_code == 200 and r_exact.content == payload
+        assert ant.friend_fetch(ant_peer.peer_id, "Chrono Trigger (USA)", "snes",
+                                sha1="not-a-hash")["ok"] is False
+
+        preview = ant.friend_sync_platform(ant_peer.peer_id, "snes", dry_run=True)
+        assert preview["ok"] is True and preview["can_fetch"] is True
+        assert preview["missing_count"] == 1 and preview["already_have"] == 0
+
+        ant._library_cache = ([
+            Game(id="2", name=game, platform="Super Nintendo", platform_slug="snes"),
+        ], 9e18, "")
+        assert ant.friend_sync_platform(ant_peer.peer_id, "Super Nintendo")["missing_count"] == 0
+        ant._library_cache = ([], 9e18, "")
+
+        pulled = ant.friend_sync_platform(ant_peer.peer_id, "snes", dry_run=False)
+        assert pulled["ok"] is True and pulled["queued"] == 1
+
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline:
+            st = ant.friend_transfers_status()
+            if st["items"] and st["items"][0]["state"] in ("done", "failed"):
+                break
+            time.sleep(0.05)
+        final = ant.friend_transfers_status()["items"][0]
+        assert final["state"] == "done", final["error"]
+        imported = list((ant_lib / "snes").glob("*.sfc"))
+        assert len(imported) == 1
+        assert imported[0].read_bytes() == payload
+        assert ant.store.missing() == []
+        imports = [record for record in ant.store.events if record.kind == "imported"]
+        assert len(imports) == 1
+        assert imports[0].indexer == f"Friend: {ant_peer.name}"
+    finally:
+        b_srv.shutdown(); b_srv.server_close()
+        a_srv.shutdown(); a_srv.server_close()
+
+
+
+def test_netplay_title_fallback_uses_the_offered_platform():
+    """A name shared across platforms does not identify a compatible dump."""
+    from romarr.federation import Federation
+    from romarr.hashes import Entry
+
+    offer = {"title": "Doom", "platform": "snes", "sha1": "a" * 40}
+    gba = Entry("b" * 40, "Doom", "gba")
+    snes = Entry("c" * 40, "Doom", "Super Nintendo")
+    assert Federation.netplay_answer(offer, [gba])["status"] == "missing"
+    assert Federation.netplay_answer(offer, [gba, snes])["their_sha1"] == snes.sha1

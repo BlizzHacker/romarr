@@ -630,6 +630,14 @@ class Federation:
         """
         wanted = str(offer.get("sha1") or "").lower()
         title = str(offer.get("title") or "")
+        from .platforms import resolve
+
+        def platform_key(value):
+            text = str(value or "").casefold()
+            parsed = resolve(text)
+            return parsed.slug if parsed else text
+
+        platform = platform_key(offer.get("platform"))
         if not wanted:
             return {"status": "missing",
                     "detail": "the invitation carried no hash, so the dump "
@@ -648,14 +656,15 @@ class Federation:
                               "the bytes match, but one side has not verified "
                               "this dump against a DAT",
                 }
-            if not by_title and str(getattr(game, "name", "")).lower() \
-                    == title.lower():
+            if (not by_title and str(getattr(game, "name", "")).casefold() == title.casefold()
+                    and (not platform or platform_key(getattr(game, "platform", "")) == platform)):
                 by_title = game
 
         if by_title is not None:
             return {
                 "status": "mismatch",
                 "title": getattr(by_title, "name", title),
+                "their_sha1": str(getattr(by_title, "sha1", "") or "").lower(),
                 "detail": "you both have this game and they are different "
                           "dumps -- netplay would desync within seconds, "
                           "which usually gets blamed on the connection",
