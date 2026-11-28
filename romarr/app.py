@@ -2058,6 +2058,10 @@ class ROMarr:
         one anybody would call configured.
         """
         with self._metadata_lock:
+            try:
+                self.store.coalesce_hub_clients()
+            except OSError as exc:
+                log.warning("could not save ROM Hub client cleanup: %s", exc)
             previous_transmission = {
                 (type(client), getattr(client, "romarr_id", "")): client
                 for client in self.clients if isinstance(client, Transmission)

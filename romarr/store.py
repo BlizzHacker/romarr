@@ -964,6 +964,41 @@ class Store:
         with self._lock:
             return [dict(i) for i in self._collection(key)]
 
+    def coalesce_hub_clients(self) -> int:
+        """Combine ROM Hub rows that use the same staging ledger."""
+        with self._lock:
+            clients = self._collection("download_clients")
+            paths: dict[str, list[dict]] = {}
+            for client in clients:
+                if str(client.get("type") or "").lower() != "hub" or not client.get("id"):
+                    continue
+                path = str(client.get("save_path") or "")
+                paths.setdefault(path, []).append(client)
+
+            aliases = {}
+            for group in paths.values():
+                if len(group) < 2:
+                    continue
+                keep = next((row for row in group if row.get("enable", True)), group[0])
+                aliases.update({row["id"]: keep["id"] for row in group if row is not keep})
+            if not aliases:
+                return 0
+
+            key = "download_clients"
+            reassigned = [(job, job.download_client) for job in self.queue
+                          if job.download_client in aliases]
+            self.settings[key] = [row for row in clients if row.get("id") not in aliases]
+            for job, previous in reassigned:
+                job.download_client = aliases[previous]
+            try:
+                self.save(raise_on_error=True)
+            except OSError:
+                self.settings[key] = clients
+                for job, previous in reassigned:
+                    job.download_client = previous
+                raise
+            return len(aliases)
+
     def get_item(self, key: str, item_id: str) -> dict | None:
         with self._lock:
             for item in self._collection(key):
