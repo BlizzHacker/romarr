@@ -168,4 +168,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.release.tag_name }}
-        run: gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
+        run: |
+          set -eu
+          version="${TAG#v}"
+          set -- dist/romarr_noarch-dsm7_"${version}"-*.spk \
+            "dist/romarr_${version}.qpkg" "dist/romarr_${version}_any.apk"
+          for asset in "$@"; do
+            test -f "$asset" || { echo "Package version does not match $TAG: $asset"; exit 1; }
+          done
+          gh release upload "$TAG" "$@" --clobber --repo "$GITHUB_REPOSITORY"
