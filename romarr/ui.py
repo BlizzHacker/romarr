@@ -3947,15 +3947,21 @@ async function refreshPeerTransfers(){
 //: here, so typing in the search box does not bill somebody else's server
 //: for every keystroke.
 const FSHELF={peer:'',q:'',platform:'',offset:0};
+let FSHELF_REQ=0;
 
 async function friendShelf(peerId, opts){
   Object.assign(FSHELF, {peer:peerId}, opts||{});
   const out=$('#p-shelf');
   if(!out) return;
+  const reqId=++FSHELF_REQ, ver=(typeof pageVersion==='number'?pageVersion:0);
+  const stale=()=>reqId!==FSHELF_REQ||!out.isConnected||
+    (typeof pageVersion==='number'&&ver!==pageVersion)||
+    (typeof activePage!=='undefined'&&activePage&&activePage!=='peers');
   out.innerHTML='<div class="empty">Asking your friend’s server…</div>';
   const p=new URLSearchParams({peer_id:FSHELF.peer, q:FSHELF.q,
     platform:FSHELF.platform, offset:FSHELF.offset, limit:100});
   const r=await j('/api/v1/friends/shelf?'+p.toString()).catch(()=>({}));
+  if(stale()) return;
   if(!r.ok){
     out.innerHTML=`<div class="panel panel-warn" style="margin-top:14px">${
       esc(r.error||'Could not reach that friend.')}</div>`;
@@ -4026,11 +4032,11 @@ async function friendShelf(peerId, opts){
     <div id="fs-out"></div></div>`;
 
   enhancePlatformSelect($('#fs-plat'));
-  const reload=o=>friendShelf(FSHELF.peer,o);
+  const reload=o=>friendShelf(peerId,o);
   $('#fs-q').onchange=e=>reload({q:e.target.value,offset:0});
   $('#fs-plat').onchange=e=>reload({platform:e.target.value,offset:0});
   $('#fs-refresh').onclick=async()=>{
-    const rp=new URLSearchParams({peer_id:FSHELF.peer,refresh:'1',limit:1});
+    const rp=new URLSearchParams({peer_id:peerId,refresh:'1',limit:1});
     await j('/api/v1/friends/shelf?'+rp.toString()).catch(()=>({}));
     reload({});
   };
@@ -4043,7 +4049,7 @@ async function friendShelf(peerId, opts){
     const sout=$('#fs-sync-out');
     sout.innerHTML='<span class="help">Comparing your library with '+esc(r.friend||'friend')+'…</span>';
     const res=await j('/api/v1/friends/sync',{method:'POST',headers:{'content-type':'application/json'},
-      body:JSON.stringify({peer_id:FSHELF.peer,platform:plat,dry_run:true})}).catch(()=>({error:'Compare failed'}));
+      body:JSON.stringify({peer_id:peerId,platform:plat,dry_run:true})}).catch(()=>({error:'Compare failed'}));
     if(!res.ok){sout.innerHTML='<span style="color:var(--bad)">'+esc(res.error||'Compare failed')+'</span>';return;}
     sout.innerHTML=`<div class="help" style="margin:0"><b>${esc(res.friend)}</b> has <b>${res.remote_total}</b> ${esc(plat)} title(s): you already have <b>${res.already_have}</b> and are missing <b>${res.missing_count}</b>.`
       +(res.missing_count?` Sample: ${res.missing.slice(0,5).map(m=>esc(m.title)).join(', ')}${res.missing_count>5?'…':''}`:' Everything is already in your library!')
@@ -4054,7 +4060,7 @@ async function friendShelf(peerId, opts){
     if(!confirm(`Pull all missing ${plat} games directly P2P from ${r.friend||'your friend'}? Existing games in your library are skipped automatically.`)) return;
     syncPull.disabled=true; syncPull.textContent='Queueing…';
     const res=await j('/api/v1/friends/sync',{method:'POST',headers:{'content-type':'application/json'},
-      body:JSON.stringify({peer_id:FSHELF.peer,platform:plat,dry_run:false})}).catch(()=>({error:'Sync failed'}));
+      body:JSON.stringify({peer_id:peerId,platform:plat,dry_run:false})}).catch(()=>({error:'Sync failed'}));
     syncPull.disabled=false; syncPull.textContent='Pull Missing from '+(r.friend||'Friend');
     toast(res.ok?(res.detail||'Queued'):(res.error||'Could not start sync'));
     if(res.ok) refreshPeerTransfers();
@@ -4064,7 +4070,7 @@ async function friendShelf(peerId, opts){
     b.disabled=true; b.textContent='Queueing…';
     const res=await j('/api/v1/friends/fetch',{method:'POST',
       headers:{'content-type':'application/json'},
-      body:JSON.stringify({peer_id:FSHELF.peer,title:b.dataset.ffetch,
+      body:JSON.stringify({peer_id:peerId,title:b.dataset.ffetch,
         platform:b.dataset.ffplat})}).catch(()=>({error:'Request failed'}));
     b.disabled=false; b.textContent=res.ok?'Queued ✓':'Download P2P';
     toast(res.ok?(res.detail||'Queued P2P download'):(res.error||'Could not start download'));
@@ -4073,19 +4079,20 @@ async function friendShelf(peerId, opts){
   document.querySelectorAll('[data-fwant]').forEach(b=>b.onclick=async()=>{
     const r=await j('/api/v1/friends/want',{method:'POST',
       headers:{'content-type':'application/json'},
-      body:JSON.stringify({peer_id:FSHELF.peer,title:b.dataset.fwant,
+      body:JSON.stringify({peer_id:peerId,title:b.dataset.fwant,
         platform:b.dataset.fplat})});
     toast(r.ok?('Added — '+(r.detail||'')):(r.error||'Could not add'));
   });
   document.querySelectorAll('[data-fplay]').forEach(b=>b.onclick=async()=>{
-    const peer=FSHELF.peer;
-    $('#fs-out').innerHTML='<div class="empty">Comparing dumps…</div>';
+    const peer=peerId;
+    const fsOut=$('#fs-out'), nver=(typeof pageVersion==='number'?pageVersion:0);
+    fsOut.innerHTML='<div class="empty">Comparing dumps…</div>';
     const nv=await j('/api/v1/friends/netplay',{method:'POST',
       headers:{'content-type':'application/json'},
       body:JSON.stringify({peer_id:peer,title:b.dataset.fplay,
         platform:b.dataset.fpplat})});
-    if(FSHELF.peer!==peer) return;
-    $('#fs-out').innerHTML=netplayVerdict(nv, canFetch ? {peer_id:peer,title:b.dataset.fplay,platform:b.dataset.fpplat} : null);
+    if(stale()||!fsOut.isConnected||(typeof pageVersion==='number'&&nver!==pageVersion)) return;
+    fsOut.innerHTML=netplayVerdict(nv, (canFetch&&nv.their_sha1) ? {peer_id:peer,title:b.dataset.fplay,platform:b.dataset.fpplat,sha1:nv.their_sha1} : null);
     const cp=$('#np-copy-room');
     if(cp) cp.onclick=async()=>{try{await navigator.clipboard.writeText(nv.room||'');toast('Room code copied');}catch{toast(nv.room||'');}};
     const npf=$('#np-fetch-dump');
@@ -4093,7 +4100,7 @@ async function friendShelf(peerId, opts){
       const origLabel=npf.textContent;
       npf.disabled=true; npf.textContent='Queueing…';
       const res=await j('/api/v1/friends/fetch',{method:'POST',headers:{'content-type':'application/json'},
-        body:JSON.stringify({peer_id:peer,title:b.dataset.fplay,platform:b.dataset.fpplat})}).catch(()=>({ok:false,error:'Request failed'}));
+        body:JSON.stringify({peer_id:peer,title:b.dataset.fplay,platform:b.dataset.fpplat,sha1:nv.their_sha1})}).catch(()=>({ok:false,error:'Request failed'}));
       if(res&&res.ok){
         npf.textContent='Queued ✓';
         toast('Queued matching dump from friend');

@@ -7202,7 +7202,8 @@ class ROMarr:
                 roots.append(resolved)
         return roots
 
-    def peer_resolve_file(self, peer, title: str, platform: str = "") -> tuple[Path | None, str, str]:
+    def peer_resolve_file(self, peer, title: str, platform: str = "",
+                          sha1: str = "") -> tuple[Path | None, str, str]:
         """Resolve one local ROM file a confirmed `fetch` peer is allowed to download.
 
         Returns `(path, platform_slug, error)`. Never accepts a filesystem path
@@ -7214,6 +7215,7 @@ class ROMarr:
             return None, "", "this server has not enabled 'Download from me' (fetch) for you"
         want_title = str(title or "").strip().lower()
         want_plat = str(platform or "").strip().lower()
+        want_sha1 = str(sha1 or "").strip().lower()
         if not want_title:
             return None, "", "missing title"
         games, _, _ = self._library_cache
@@ -7224,11 +7226,20 @@ class ROMarr:
             g_name = str(getattr(game, "name", "") or "").strip().lower()
             g_plat = str(getattr(game, "platform", "") or "").strip().lower()
             if g_name == want_title and (not want_plat or g_plat == want_plat):
+                if want_sha1 and str(getattr(game, "sha1", "") or "").lower() != want_sha1:
+                    continue
                 matched = game
                 break
         if matched is None:
+            if want_sha1:
+                return None, "", "that exact dump (SHA1) is not shared with you"
             return None, "", "that game is not shared with you"
-        plat_slug = str(getattr(matched, "platform", "") or want_plat or "").strip().lower()
+        plat_slug = str(
+            getattr(matched, "platform_slug", "")
+            or getattr(matched, "platform", "")
+            or want_plat
+            or ""
+        ).strip().lower()
         file_name = str(getattr(matched, "file_name", "") or "").strip()
         source = str(getattr(matched, "source", "") or "").strip()
 
@@ -7311,7 +7322,9 @@ class ROMarr:
                         return found, plat_slug, ""
                 # Subfolder match inside the configured platform directory
                 if plat_slug and search_dirs and search_dirs[0].is_dir():
-                    for child in search_dirs[0].rglob(safe_rel):
+                    for child in search_dirs[0].rglob("*"):
+                        if child.name != safe_rel:
+                            continue
                         found = _safe_file(child, root)
                         if found is not None:
                             return found, plat_slug, ""
@@ -8069,7 +8082,8 @@ class ROMarr:
                     cancelled += 1
         return {"ok": True, "cancelled": cancelled}
 
-    def friend_fetch(self, peer_id: str, title: str, platform: str = "") -> dict:
+    def friend_fetch(self, peer_id: str, title: str, platform: str = "",
+                     sha1: str = "") -> dict:
         """Enqueue a direct P2P download of one game from a friend's server."""
         import secrets
         peer, why = self._friend(peer_id)
@@ -8081,6 +8095,9 @@ class ROMarr:
         platform = str(platform or "").strip().lower()
         if not title:
             return {"ok": False, "error": "no title specified"}
+        sha1 = str(sha1 or "").strip().lower()
+        if sha1 and not re.fullmatch(r"[0-9a-f]{40}", sha1):
+            return {"ok": False, "error": "sha1 must be 40 hex characters"}
         transfers, _ = self._p2p_state()
         job = {
             "id": secrets.token_hex(6),
@@ -8088,6 +8105,7 @@ class ROMarr:
             "friend": peer.name,
             "title": title,
             "platform": platform,
+            "sha1": sha1,
             "filename": "",
             "state": "queued",
             "bytes_done": 0,
@@ -8221,6 +8239,8 @@ class ROMarr:
             return
 
         qs = f"/api/v1/peer/shelf?download=1&title={quote(job['title'])}&platform={quote(job['platform'])}"
+        if job.get("sha1"):
+            qs += f"&sha1={quote(job['sha1'])}"
         staging_dir = Path(self.store.path).parent / "peer-staging" / job["id"]
         try:
             response = None
@@ -8386,6 +8406,9 @@ class ROMarr:
             "sha1": entry.sha1,
             "detail": str(body.get("detail") or ""),
         }
+        their_sha1 = str(body.get("their_sha1") or "").lower()
+        if their_sha1:
+            answer["their_sha1"] = their_sha1
         if answer["ok"]:
             answer["room"] = self.federation.netplay_room(peer.peer_id,
                                                           entry.sha1)
@@ -11678,7 +11701,8 @@ def make_handler(service: ROMarr):
                 if (query.get("download") or [""])[0] == "1":
                     title = (query.get("title") or [""])[0]
                     plat = (query.get("platform") or [""])[0]
-                    fpath, plat_slug, err = service.peer_resolve_file(peer, title, plat)
+                    fpath, plat_slug, err = service.peer_resolve_file(
+                        peer, title, plat, (query.get("sha1") or [""])[0])
                     if fpath is None:
                         code = 403 if "not enabled" in err else 404
                         return self._json(code, {"error": err})
@@ -12692,7 +12716,8 @@ def make_handler(service: ROMarr):
                 return self._json(200, service.friend_fetch(
                     str(body.get("peer_id") or ""),
                     str(body.get("title") or ""),
-                    str(body.get("platform") or "")))
+                    str(body.get("platform") or ""),
+                    str(body.get("sha1") or "")))
             if route.path == "/api/v1/friends/sync":
                 return self._json(200, service.friend_sync_platform(
                     str(body.get("peer_id") or ""),

@@ -656,6 +656,7 @@ class Federation:
             return {
                 "status": "mismatch",
                 "title": getattr(by_title, "name", title),
+                "their_sha1": str(getattr(by_title, "sha1", "") or "").lower(),
                 "detail": "you both have this game and they are different "
                           "dumps -- netplay would desync within seconds, "
                           "which usually gets blamed on the connection",

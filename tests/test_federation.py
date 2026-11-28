@@ -494,6 +494,21 @@ def test_p2p_friend_file_fetch_range_and_bulk_platform_sync(tmp_path):
         assert r_range.status_code == 206
         assert r_range.content == b"SNES-ROM-HEADER"
 
+        # RFC 9110 suffix range: the LAST n bytes, not the first n+1.
+        r_suffix = requests.get(
+            f"{b_url}/api/v1/peer/shelf?download=1&title=Chrono+Trigger+(USA)&platform=snes",
+            headers={**ant_peer.headers(), "Range": "bytes=-4"}, timeout=5)
+        assert r_suffix.status_code == 206 and r_suffix.content == b"-END"
+
+        # A SHA1 that no shared file carries must never fall back to title+platform.
+        r_wrong_dump = requests.get(
+            f"{b_url}/api/v1/peer/shelf?download=1&title=Chrono+Trigger+(USA)"
+            f"&platform=snes&sha1={'0' * 40}",
+            headers=ant_peer.headers(), timeout=5)
+        assert r_wrong_dump.status_code == 404
+        assert ant.friend_fetch(ant_peer.peer_id, "Chrono Trigger (USA)", "snes",
+                                sha1="not-a-hash")["ok"] is False
+
         preview = ant.friend_sync_platform(ant_peer.peer_id, "snes", dry_run=True)
         assert preview["ok"] is True and preview["can_fetch"] is True
         assert preview["missing_count"] == 1 and preview["already_have"] == 0
