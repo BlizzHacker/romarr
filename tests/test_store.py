@@ -494,3 +494,35 @@ def test_an_emptied_qbittorrent_api_key_is_removed_but_the_placeholder_keeps_it(
     kept = merge_secrets({"type": "qbittorrent", "api_key": SECRET_PLACEHOLDER}, old)
     assert kept["api_key"] == "KEY"
     assert merge_secrets({"type": "qbittorrent"}, old)["api_key"] == "KEY"
+
+
+def test_rom_hub_upgrade_coalesces_matching_clients_and_keeps_pending_jobs(tmp_path):
+    """An old config gets one active row per ledger and retains queue ownership."""
+    from romarr.app import ROMarr
+    from romarr.store import QueueItem
+
+    path = tmp_path / "romarr.json"
+    store = Store(path)
+    for id_, kind, staging, enabled in (
+        ("disabled", "hub", "/downloads/hub", False),
+        ("preserved", "hub", "/downloads/hub", True),
+        ("legacy", "hub", "/downloads/hub", True),
+        ("direct", "direct", "/downloads/hub", True),
+        ("another-ledger", "hub", "/downloads/old-hub", False),
+    ):
+        store.put_item("download_clients", {
+            "id": id_, "type": kind, "save_path": staging, "enable": enabled,
+        })
+    store.queue.append(QueueItem(
+        "Game", "snes", "Game", 0, "grabbed", download_client="legacy"))
+    store.save(raise_on_error=True)
+
+    app = ROMarr({"ROMARR_DATA": str(path), "ROMARR_API_KEY": "test-key"})
+    app.scheduler.stop()
+    assert [c.romarr_id for c in app.clients if c.protocol == "hub"] == ["preserved"]
+    reopened = Store(path)
+    assert [r["id"] for r in reopened.list_items("download_clients")] == [
+        "preserved", "direct", "another-ledger",
+    ]
+    assert reopened.queue[0].download_client == "preserved"
+    assert reopened.coalesce_hub_clients() == 0
