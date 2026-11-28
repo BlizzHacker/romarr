@@ -4,7 +4,7 @@
 # Assistant's /data/options.json natively, so there is no add-on-specific
 # build, no entrypoint shim, and no drift between the two.
 name: ROMarr
-version: "0.9.0"
+version: "1.16.0"
 slug: romarr
 description: The *arr for games — request a title, ROMarr searches your indexers and files the ROM into your library.
 url: https://github.com/BlizzHacker/romarr

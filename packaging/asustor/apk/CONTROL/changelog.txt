@@ -1,2 +1,5 @@
+1.16.0
+- Update ROMarr to 1.16.0.
+
 1.15.0
 - First App Central package. Runs ghcr.io/blizzhacker/romarr:1.15.0 on Docker Engine.
