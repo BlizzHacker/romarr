@@ -7230,8 +7230,48 @@ class ROMarr:
             return None, "", "that game is not shared with you"
         plat_slug = str(getattr(matched, "platform", "") or want_plat or "").strip().lower()
         file_name = str(getattr(matched, "file_name", "") or "").strip()
-        roots = self._library_roots()
-        if not roots:
+        source = str(getattr(matched, "source", "") or "").strip()
+
+        # Select only the owning library when the matched row names a source,
+        # so two libraries sharing a filename can never serve the wrong file.
+        lib_entries: list[tuple[Path, dict]] = []
+        seen_roots: set[str] = set()
+        if source:
+            for cfg, backend in self.game_libraries:
+                label = str(cfg.get("name") or getattr(backend, "name", "library") or "")
+                if label != source:
+                    continue
+                root = self.library_root(cfg)
+                if not root:
+                    continue
+                try:
+                    resolved = Path(root).resolve()
+                except OSError:
+                    continue
+                if resolved.is_dir() and str(resolved) not in seen_roots:
+                    seen_roots.add(str(resolved))
+                    lib_entries.append((resolved, cfg))
+        if not lib_entries and not source:
+            for cfg, _ in self.game_libraries:
+                root = self.library_root(cfg)
+                if not root:
+                    continue
+                try:
+                    resolved = Path(root).resolve()
+                except OSError:
+                    continue
+                if resolved.is_dir() and str(resolved) not in seen_roots:
+                    seen_roots.add(str(resolved))
+                    lib_entries.append((resolved, cfg))
+            if self.library:
+                try:
+                    resolved = Path(self.library).resolve()
+                    if resolved.is_dir() and str(resolved) not in seen_roots:
+                        seen_roots.add(str(resolved))
+                        lib_entries.append((resolved, {}))
+                except OSError:
+                    pass
+        if not lib_entries:
             return None, plat_slug, "no readable local library folder on this server"
 
         def _safe_file(candidate: Path, root: Path) -> Path | None:
@@ -7245,27 +7285,41 @@ class ROMarr:
             except OSError:
                 return None
 
-        # 1. Exact filename lookup under platform folders (flat & nested layouts)
+        def _plat_dirs(root: Path, cfg: dict) -> list[Path]:
+            dirs: list[Path] = []
+            if plat_slug:
+                pdir = platform_dir(
+                    root, plat_slug,
+                    layout=self.library_layout(cfg),
+                    platform_folders=self.platform_folders(cfg),
+                )
+                for d in (pdir, root / plat_slug, root / plat_slug / "roms", root):
+                    if d not in dirs:
+                        dirs.append(d)
+            else:
+                dirs.append(root)
+            return dirs
+
+        # 1. Exact filename lookup under configured platform folders
         if file_name:
             safe_rel = Path(file_name).name
-            for root in roots:
-                search_dirs = [root]
-                if plat_slug:
-                    search_dirs = [root / plat_slug, root / plat_slug / "roms", root]
+            for root, cfg in lib_entries:
+                search_dirs = _plat_dirs(root, cfg)
                 for folder in search_dirs:
                     found = _safe_file(folder / safe_rel, root)
                     if found is not None:
                         return found, plat_slug, ""
-                # Subfolder match (e.g. multi-file or game folder)
-                if plat_slug and (root / plat_slug).is_dir():
-                    for child in (root / plat_slug).rglob(safe_rel):
+                # Subfolder match inside the configured platform directory
+                if plat_slug and search_dirs and search_dirs[0].is_dir():
+                    for child in search_dirs[0].rglob(safe_rel):
                         found = _safe_file(child, root)
                         if found is not None:
                             return found, plat_slug, ""
 
-        # 2. Stem-based match inside the platform folder (e.g. Title.zip / Title.iso)
-        for root in roots:
-            for folder in ([root / plat_slug, root / plat_slug / "roms"] if plat_slug else [root]):
+        # 2. Stem-based match inside the configured platform folder
+        for root, cfg in lib_entries:
+            search_dirs = _plat_dirs(root, cfg)
+            for folder in search_dirs:
                 if not folder.is_dir():
                     continue
                 try:
@@ -7995,8 +8049,8 @@ class ROMarr:
         """Snapshot of active and recent P2P downloads from friends."""
         transfers, _ = self._p2p_state()
         with self._lock:
+            active = sum(1 for t in transfers if t["state"] in ("queued", "downloading", "importing"))
             rows = [dict(t) for t in transfers[-60:]]
-        active = sum(1 for r in rows if r["state"] in ("queued", "downloading", "importing"))
         return {"ok": True, "active": active, "items": list(reversed(rows))}
 
     def friend_transfers_cancel(self, transfer_id: str = "", cancel_all: bool = False) -> dict:
@@ -8047,7 +8101,15 @@ class ROMarr:
         with self._lock:
             transfers.append(job)
             if len(transfers) > 200:
-                del transfers[:-200]
+                terminal = ("done", "failed", "cancelled")
+                excess = len(transfers) - 200
+                pruned = []
+                for t in transfers:
+                    if excess > 0 and t["state"] in terminal:
+                        excess -= 1
+                        continue
+                    pruned.append(t)
+                transfers[:] = pruned
         self._ensure_p2p_worker()
         return {"ok": True, "job": dict(job), "detail": f"Queued '{title}' from {peer.name}"}
 
@@ -8057,15 +8119,23 @@ class ROMarr:
         plat = str(platform or "").strip().lower()
         if not plat:
             return {"ok": False, "error": "choose a platform to compare"}
-        shelf = self.friend_shelf(peer_id, platform=plat, offset=0, limit=1000, refresh=dry_run)
+        shelf = self.friend_shelf(peer_id, platform=plat, offset=0, limit=1, refresh=dry_run)
         if not shelf.get("ok"):
             return {"ok": False, "error": shelf.get("error") or "could not read friend's library"}
-        remote_items = shelf.get("items") or []
+        # Compare against ALL rows on the friend's cached shelf for this platform
+        # (not just the first page), so large platforms (>1,000 titles) never miss games.
+        cached = self._friend_shelves.get(peer_id)
+        all_rows = cached[0] if cached else (shelf.get("items") or [])
+        remote_items = [
+            r for r in all_rows
+            if str(r.get("platform") or "").strip().lower() == plat
+        ]
         games, _, _ = self._library_cache
         owned = {
             str(getattr(g, "name", "") or "").strip().lower()
             for g in (games or [])
-            if str(getattr(g, "platform", "") or "").strip().lower() == plat
+            if self._is_local(g)
+            and str(getattr(g, "platform", "") or "").strip().lower() == plat
         }
         missing = [
             {"title": r.get("title", ""), "platform": r.get("platform", plat),
@@ -8129,8 +8199,9 @@ class ROMarr:
                         item["detail"] = f"Connecting to {item['friend']}…"
                         job = item
                         break
-            if job is None:
-                return
+                if job is None:
+                    self._p2p_worker = None
+                    return
             self._run_one_p2p_transfer(job)
 
     def _run_one_p2p_transfer(self, job: dict) -> None:
@@ -8208,6 +8279,25 @@ class ROMarr:
                         job["detail"] = f"Downloading {safe_name} ({done // 1048576} MB)"
             finally:
                 response.close()
+
+            # Refuse loose multi-file disc sheets (.cue/.gdi/.m3u) whose
+            # referenced tracks were not transferred, so we never publish an
+            # unbootable disc or falsely report `done`.
+            if dest.suffix.lower() in (".cue", ".gdi", ".m3u"):
+                from .selection import _cue_and_gdi_names, _playlist_names
+                raw_sheet = dest.read_text(encoding="utf-8", errors="replace")
+                refs = (_playlist_names(raw_sheet) if dest.suffix.lower() == ".m3u"
+                        else _cue_and_gdi_names(raw_sheet))
+                missing_tracks = [ref for ref in refs if not (staging_dir / Path(ref).name).is_file()]
+                if missing_tracks or not refs:
+                    sample = ", ".join(missing_tracks[:3]) if missing_tracks else "track files"
+                    job["state"] = "failed"
+                    job["error"] = (
+                        f"Incomplete multi-file disc sheet ({dest.suffix}): missing {sample}. "
+                        f"Ask your friend to convert to .chd/.iso or archive the set before P2P transfer."
+                    )
+                    job["detail"] = job["error"]
+                    return
 
             job["state"] = "importing"
             job["percent"] = 100.0
@@ -11598,16 +11688,24 @@ def make_handler(service: ROMarr):
                     rng = self.headers.get("Range", "")
                     if rng.startswith("bytes=") and size > 0:
                         part = rng[6:].split(",", 1)[0].strip()
-                        a, _, b = part.partition("-")
-                        try:
-                            start = int(a) if a else 0
-                            end = int(b) if b else size - 1
-                            if 0 <= start <= end < size:
-                                status = 206
-                            else:
+                        a, sep, b = part.partition("-")
+                        if sep:
+                            try:
+                                if not a and b:
+                                    suffix = int(b)
+                                    if suffix > 0:
+                                        start = max(0, size - suffix)
+                                        end = size - 1
+                                        status = 206
+                                elif a:
+                                    start = int(a)
+                                    end = min(int(b), size - 1) if b else size - 1
+                                    if 0 <= start <= end < size:
+                                        status = 206
+                                    else:
+                                        start, end = 0, size - 1
+                            except ValueError:
                                 start, end = 0, size - 1
-                        except ValueError:
-                            start, end = 0, size - 1
                     length = max(0, end - start + 1) if size > 0 else 0
                     self.send_response(status)
                     self.send_header("Content-Type", "application/octet-stream")

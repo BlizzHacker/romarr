@@ -3901,7 +3901,11 @@ async function refreshPeerTransfers(){
   const box=$('#p-transfers');
   if(!box||location.hash.replace('#','')!=='peers') return;
   const d=await j('/api/v1/friends/transfers').catch(()=>null);
-  if(!d||!d.ok||!box.isConnected) return;
+  if(!box.isConnected||location.hash.replace('#','')!=='peers') return;
+  if(!d||!d.ok){
+    PEER_XFER_TIMER=setTimeout(refreshPeerTransfers,5000);
+    return;
+  }
   const rows=d.items||[];
   if(!rows.length){box.innerHTML='';return;}
   const mb=n=>n>=1073741824?(n/1073741824).toFixed(2)+' GB':n>=1048576?(n/1048576).toFixed(1)+' MB':n>0?(n/1024).toFixed(0)+' KB':'—';
@@ -4074,21 +4078,30 @@ async function friendShelf(peerId, opts){
     toast(r.ok?('Added — '+(r.detail||'')):(r.error||'Could not add'));
   });
   document.querySelectorAll('[data-fplay]').forEach(b=>b.onclick=async()=>{
+    const peer=FSHELF.peer;
     $('#fs-out').innerHTML='<div class="empty">Comparing dumps…</div>';
     const nv=await j('/api/v1/friends/netplay',{method:'POST',
       headers:{'content-type':'application/json'},
-      body:JSON.stringify({peer_id:FSHELF.peer,title:b.dataset.fplay,
+      body:JSON.stringify({peer_id:peer,title:b.dataset.fplay,
         platform:b.dataset.fpplat})});
-    $('#fs-out').innerHTML=netplayVerdict(nv, canFetch ? {peer_id:FSHELF.peer,title:b.dataset.fplay,platform:b.dataset.fpplat} : null);
+    if(FSHELF.peer!==peer) return;
+    $('#fs-out').innerHTML=netplayVerdict(nv, canFetch ? {peer_id:peer,title:b.dataset.fplay,platform:b.dataset.fpplat} : null);
     const cp=$('#np-copy-room');
     if(cp) cp.onclick=async()=>{try{await navigator.clipboard.writeText(nv.room||'');toast('Room code copied');}catch{toast(nv.room||'');}};
     const npf=$('#np-fetch-dump');
     if(npf) npf.onclick=async()=>{
+      const origLabel=npf.textContent;
       npf.disabled=true; npf.textContent='Queueing…';
       const res=await j('/api/v1/friends/fetch',{method:'POST',headers:{'content-type':'application/json'},
-        body:JSON.stringify({peer_id:FSHELF.peer,title:b.dataset.fplay,platform:b.dataset.fpplat})});
-      toast(res.ok?'Queued matching dump from friend':(res.error||'Failed'));
-      if(res.ok) refreshPeerTransfers();
+        body:JSON.stringify({peer_id:peer,title:b.dataset.fplay,platform:b.dataset.fpplat})}).catch(()=>({ok:false,error:'Request failed'}));
+      if(res&&res.ok){
+        npf.textContent='Queued ✓';
+        toast('Queued matching dump from friend');
+        refreshPeerTransfers();
+      }else{
+        npf.disabled=false; npf.textContent=origLabel;
+        toast((res&&res.error)||'Failed');
+      }
     };
   });
 }
