@@ -5075,7 +5075,7 @@ class ROMarr:
 
     def adopt(self, path: str, platform_slug: str = "", *,
               force: bool = False, require_verified: bool = False,
-              friend_request: tuple[str, str] | None = None) -> dict:
+              friend_request: tuple[str, str, str] | None = None) -> dict:
         """Import one file the operator picked out of a manual-import scan.
 
         Separate from `import_finished` because the two have different
@@ -5129,6 +5129,9 @@ class ROMarr:
         target_cfg, target_lib = target
         label = target_cfg.get("name") or getattr(target_lib, "name", "library")
         target_folders = self.platform_folders(target_cfg)
+        requested_game = friend_request[0] if friend_request and not friend_request[2] else None
+        catalog_platforms = ({dat.name: self._dat_platform(dat.name) for dat in self.dats.dats}
+                             if requested_game else None)
 
         try:
             with self._scanned_manual_source(source, platform) as (staged_source, scan_refusal):
@@ -5146,6 +5149,8 @@ class ROMarr:
                                       layout=self.library_layout(target_cfg),
                                       translation=is_translation(source.name),
                                       platform_folders=target_folders,
+                                      requested_game=requested_game,
+                                      catalog_platforms=catalog_platforms,
                                       **self._import_hash_options())
         except (OSError, ValueError) as err:
             reason = f"could not prepare scanned import: {err}"
@@ -5206,7 +5211,7 @@ class ROMarr:
             })
 
         if imported and not refused and friend_request:
-            identities = _fulfil_identities(friend_request[0], outcomes)
+            identities = _fulfil_identities("", outcomes) - {""}
             for wanted in list(self.store.wanted):
                 if wanted.platform != platform.slug or not any(
                         _titles_are_same(wanted.game, identity) for identity in identities):
@@ -7721,7 +7726,10 @@ class ROMarr:
                     good = self.dats.lookup(sha1=row["sha1"]).status == VERIFIED
                     if good:
                         confirmed += 1
-                if self.hashes.add(row["sha1"], row["name"], row["platform"],
+                stored_platform = str(row["platform"] or "")
+                resolved = resolve(stored_platform)
+                if self.hashes.add(row["sha1"], row["name"],
+                                   resolved.slug if resolved else stored_platform,
                                    good, row.get("path", "")):
                     added += 1
             if progress is not None:
@@ -8124,7 +8132,11 @@ class ROMarr:
         if peer.kind != "romarr":
             return {"ok": False, "error": "Direct P2P fetch requires a ROMarr peer"}
         title = str(title or "").strip()
-        platform = str(platform or "").strip().lower()
+        platform = str(platform or "").strip()
+        chosen = resolve(platform) if platform else None
+        if platform and chosen is None:
+            return {"ok": False, "error": "unknown platform"}
+        platform = chosen.slug if chosen else ""
         if not title:
             return {"ok": False, "error": "no title specified"}
         sha1 = str(sha1 or "").strip().lower()
@@ -8166,9 +8178,10 @@ class ROMarr:
     def friend_sync_platform(self, peer_id: str, platform: str, *,
                              dry_run: bool = True, limit: int = 500) -> dict:
         """Compare a friend's platform against your library and optionally pull all missing games."""
-        plat = str(platform or "").strip().lower()
-        if not plat:
+        chosen = resolve(str(platform or "").strip())
+        if chosen is None:
             return {"ok": False, "error": "choose a platform to compare"}
+        plat = chosen.slug
         shelf = self.friend_shelf(peer_id, platform=plat, offset=0, limit=1, refresh=dry_run)
         if not shelf.get("ok"):
             return {"ok": False, "error": shelf.get("error") or "could not read friend's library"}
@@ -8178,14 +8191,14 @@ class ROMarr:
         all_rows = cached[0] if cached else (shelf.get("items") or [])
         remote_items = [
             r for r in all_rows
-            if str(r.get("platform") or "").strip().lower() == plat
+            if resolve(str(r.get("platform") or "")) == chosen
         ]
         games, _, _ = self._library_cache
         owned = {
             str(getattr(g, "name", "") or "").strip().lower()
             for g in (games or [])
             if self._is_local(g)
-            and str(getattr(g, "platform", "") or "").strip().lower() == plat
+            and self._slug_of(g) == plat
         }
         missing = [
             {"title": r.get("title", ""), "platform": r.get("platform", plat),
@@ -8304,11 +8317,12 @@ class ROMarr:
 
             raw_name = response.headers.get("X-ROMarr-Filename") or f"{job['title']}.bin"
             safe_name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", Path(raw_name).name).strip(" .") or "game.bin"
-            plat = job["platform"]
-            reported = response.headers.get("X-ROMarr-Platform") or plat
-            if resolve(reported) != resolve(plat):
+            requested = job["platform"]
+            received = resolve(response.headers.get("X-ROMarr-Platform") or requested)
+            if received is None or (requested and received.slug != requested):
                 response.close()
-                raise ValueError("friend returned a different platform")
+                raise ValueError("friend returned an invalid or different platform")
+            plat = received.slug
             total = int(response.headers.get("Content-Length") or 0)
             job["filename"] = safe_name
             job["bytes_total"] = total
@@ -8356,13 +8370,18 @@ class ROMarr:
                     job["detail"] = job["error"]
                     return
 
-            job["state"] = "importing"
-            job["percent"] = 100.0
-            job["detail"] = f"Verifying & importing {safe_name}…"
-            if job.get("sha1") and hash_file(dest)["sha1"] != job["sha1"]:
+            expected_sha1 = job.get("sha1", "")
+            if expected_sha1 and hash_file(dest)["sha1"] != expected_sha1:
                 raise ValueError("the received file does not match the requested SHA1")
+            with self._lock:
+                if job["id"] in cancel_set:
+                    job["state"], job["detail"] = "cancelled", "Cancelled"
+                    return
+                job["state"] = "importing"
+                job["percent"] = 100.0
+                job["detail"] = f"Verifying & importing {safe_name}…"
             adopted = self.adopt(str(dest), plat, force=False,
-                                 friend_request=(job["title"], job["friend"]))
+                                 friend_request=(job["title"], job["friend"], expected_sha1))
             if adopted.get("ok"):
                 job["state"] = "done"
                 job["detail"] = f"Imported {safe_name} from {job['friend']}"

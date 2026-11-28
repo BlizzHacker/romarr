@@ -424,7 +424,7 @@ def test_a_romm_friend_survives_a_restart_with_its_credential():
 def test_p2p_friend_file_fetch_range_and_bulk_platform_sync(tmp_path):
     """End-to-end two-server P2P: Borb shares PS2 with fetch; Ant compares and pulls missing."""
     import threading
-    from romarr.dat import hash_file
+    from romarr.dat import Dat, Game as DatGame, Rom, hash_file
     import time
     from http.server import ThreadingHTTPServer
     import requests
@@ -452,7 +452,12 @@ def test_p2p_friend_file_fetch_range_and_bulk_platform_sync(tmp_path):
     ant.scheduler.stop()
 
     rom_path = borb_lib / "snes" / "Chrono Trigger (USA).sfc"
-    sha1 = hash_file(rom_path)["sha1"]
+    hashes = hash_file(rom_path)
+    sha1 = hashes["sha1"]
+    game = "Chrono Trigger (USA)"
+    ant.dats.add(Dat("Nintendo - Super Nintendo Entertainment System", games={
+        game: DatGame(game, (Rom(rom_path.name, **hashes),)),
+    }))
     ant.store.want("Chrono Trigger (USA)", "snes")
     borb._library_cache = ([
         Game(id="1", name="Chrono Trigger (USA)", platform="snes",
@@ -524,6 +529,12 @@ def test_p2p_friend_file_fetch_range_and_bulk_platform_sync(tmp_path):
         assert preview["ok"] is True and preview["can_fetch"] is True
         assert preview["missing_count"] == 1 and preview["already_have"] == 0
 
+        ant._library_cache = ([
+            Game(id="2", name=game, platform="Super Nintendo", platform_slug="snes"),
+        ], 9e18, "")
+        assert ant.friend_sync_platform(ant_peer.peer_id, "Super Nintendo")["missing_count"] == 0
+        ant._library_cache = ([], 9e18, "")
+
         pulled = ant.friend_sync_platform(ant_peer.peer_id, "snes", dry_run=False)
         assert pulled["ok"] is True and pulled["queued"] == 1
 
@@ -534,7 +545,7 @@ def test_p2p_friend_file_fetch_range_and_bulk_platform_sync(tmp_path):
                 break
             time.sleep(0.05)
         final = ant.friend_transfers_status()["items"][0]
-        assert final["state"] == "done", final
+        assert final["state"] == "done", final["error"]
         imported = list((ant_lib / "snes").glob("*.sfc"))
         assert len(imported) == 1
         assert imported[0].read_bytes() == payload
@@ -555,6 +566,6 @@ def test_netplay_title_fallback_uses_the_offered_platform():
 
     offer = {"title": "Doom", "platform": "snes", "sha1": "a" * 40}
     gba = Entry("b" * 40, "Doom", "gba")
-    snes = Entry("c" * 40, "Doom", "snes")
+    snes = Entry("c" * 40, "Doom", "Super Nintendo")
     assert Federation.netplay_answer(offer, [gba])["status"] == "missing"
     assert Federation.netplay_answer(offer, [gba, snes])["their_sha1"] == snes.sha1

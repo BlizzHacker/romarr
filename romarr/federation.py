@@ -630,7 +630,14 @@ class Federation:
         """
         wanted = str(offer.get("sha1") or "").lower()
         title = str(offer.get("title") or "")
-        platform = str(offer.get("platform") or "").casefold()
+        from .platforms import resolve
+
+        def platform_key(value):
+            text = str(value or "").casefold()
+            parsed = resolve(text)
+            return parsed.slug if parsed else text
+
+        platform = platform_key(offer.get("platform"))
         if not wanted:
             return {"status": "missing",
                     "detail": "the invitation carried no hash, so the dump "
@@ -650,7 +657,7 @@ class Federation:
                               "this dump against a DAT",
                 }
             if (not by_title and str(getattr(game, "name", "")).casefold() == title.casefold()
-                    and (not platform or str(getattr(game, "platform", "")).casefold() == platform)):
+                    and (not platform or platform_key(getattr(game, "platform", "")) == platform)):
                 by_title = game
 
         if by_title is not None:
