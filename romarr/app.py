@@ -8422,7 +8422,7 @@ class ROMarr:
                                                           time.monotonic())
             if err:
                 return {"ok": False, "status": "error", "detail": err}
-            theirs = [_RommDump(r) for r in rows if r.get("sha1")]
+            theirs = [self._RommDump(r) for r in rows if r.get("sha1")]
             body = self.federation.netplay_answer(offer, theirs)
         else:
             body, err = self._call_friend(peer, "POST",
