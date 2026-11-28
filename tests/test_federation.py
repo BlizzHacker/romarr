@@ -424,6 +424,7 @@ def test_a_romm_friend_survives_a_restart_with_its_credential():
 def test_p2p_friend_file_fetch_range_and_bulk_platform_sync(tmp_path):
     """End-to-end two-server P2P: Borb shares PS2 with fetch; Ant compares and pulls missing."""
     import threading
+    from romarr.dat import hash_file
     import time
     from http.server import ThreadingHTTPServer
     import requests
@@ -450,8 +451,12 @@ def test_p2p_friend_file_fetch_range_and_bulk_platform_sync(tmp_path):
     borb.scheduler.stop()
     ant.scheduler.stop()
 
+    rom_path = borb_lib / "snes" / "Chrono Trigger (USA).sfc"
+    sha1 = hash_file(rom_path)["sha1"]
+    ant.store.want("Chrono Trigger (USA)", "snes")
     borb._library_cache = ([
         Game(id="1", name="Chrono Trigger (USA)", platform="snes",
+             platform_slug="snes",
              file_name="Chrono Trigger (USA).sfc"),
     ], 9e18, "")
     ant._library_cache = ([], 9e18, "")
@@ -506,6 +511,12 @@ def test_p2p_friend_file_fetch_range_and_bulk_platform_sync(tmp_path):
             f"&platform=snes&sha1={'0' * 40}",
             headers=ant_peer.headers(), timeout=5)
         assert r_wrong_dump.status_code == 404
+        r_exact = requests.get(
+            f"{b_url}/api/v1/peer/shelf",
+            params={"download": "1", "title": "Chrono Trigger (USA)",
+                    "platform": "snes", "sha1": sha1},
+            headers=ant_peer.headers(), timeout=5)
+        assert r_exact.status_code == 200 and r_exact.content == payload
         assert ant.friend_fetch(ant_peer.peer_id, "Chrono Trigger (USA)", "snes",
                                 sha1="not-a-hash")["ok"] is False
 
@@ -527,6 +538,23 @@ def test_p2p_friend_file_fetch_range_and_bulk_platform_sync(tmp_path):
         imported = list((ant_lib / "snes").glob("*.sfc"))
         assert len(imported) == 1
         assert imported[0].read_bytes() == payload
+        assert ant.store.missing() == []
+        imports = [record for record in ant.store.events if record.kind == "imported"]
+        assert len(imports) == 1
+        assert imports[0].indexer == f"Friend: {ant_peer.name}"
     finally:
         b_srv.shutdown(); b_srv.server_close()
         a_srv.shutdown(); a_srv.server_close()
+
+
+
+def test_netplay_title_fallback_uses_the_offered_platform():
+    """A name shared across platforms does not identify a compatible dump."""
+    from romarr.federation import Federation
+    from romarr.hashes import Entry
+
+    offer = {"title": "Doom", "platform": "snes", "sha1": "a" * 40}
+    gba = Entry("b" * 40, "Doom", "gba")
+    snes = Entry("c" * 40, "Doom", "snes")
+    assert Federation.netplay_answer(offer, [gba])["status"] == "missing"
+    assert Federation.netplay_answer(offer, [gba, snes])["their_sha1"] == snes.sha1

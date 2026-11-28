@@ -4038,18 +4038,21 @@ async function friendShelf(peerId, opts){
   $('#fs-refresh').onclick=async()=>{
     const rp=new URLSearchParams({peer_id:peerId,refresh:'1',limit:1});
     await j('/api/v1/friends/shelf?'+rp.toString()).catch(()=>({}));
+    if(stale()) return;
     reload({});
   };
   if($('#fs-prev')) $('#fs-prev').onclick=()=>reload({offset:Math.max(0,FSHELF.offset-100)});
   if($('#fs-next')) $('#fs-next').onclick=()=>reload({offset:FSHELF.offset+100});
 
+  let syncSeq=0, netplaySeq=0;
   const syncPrev=$('#fs-sync-preview'), syncPull=$('#fs-sync-pull');
   if(syncPrev) syncPrev.onclick=async()=>{
     const plat=$('#fs-sync-plat').value;
-    const sout=$('#fs-sync-out');
+    const sout=$('#fs-sync-out'), seq=++syncSeq;
     sout.innerHTML='<span class="help">Comparing your library with '+esc(r.friend||'friend')+'…</span>';
     const res=await j('/api/v1/friends/sync',{method:'POST',headers:{'content-type':'application/json'},
       body:JSON.stringify({peer_id:peerId,platform:plat,dry_run:true})}).catch(()=>({error:'Compare failed'}));
+    if(stale()||!sout.isConnected||seq!==syncSeq) return;
     if(!res.ok){sout.innerHTML='<span style="color:var(--bad)">'+esc(res.error||'Compare failed')+'</span>';return;}
     sout.innerHTML=`<div class="help" style="margin:0"><b>${esc(res.friend)}</b> has <b>${res.remote_total}</b> ${esc(plat)} title(s): you already have <b>${res.already_have}</b> and are missing <b>${res.missing_count}</b>.`
       +(res.missing_count?` Sample: ${res.missing.slice(0,5).map(m=>esc(m.title)).join(', ')}${res.missing_count>5?'…':''}`:' Everything is already in your library!')
@@ -4085,13 +4088,13 @@ async function friendShelf(peerId, opts){
   });
   document.querySelectorAll('[data-fplay]').forEach(b=>b.onclick=async()=>{
     const peer=peerId;
-    const fsOut=$('#fs-out'), nver=(typeof pageVersion==='number'?pageVersion:0);
+    const fsOut=$('#fs-out'), seq=++netplaySeq;
     fsOut.innerHTML='<div class="empty">Comparing dumps…</div>';
     const nv=await j('/api/v1/friends/netplay',{method:'POST',
       headers:{'content-type':'application/json'},
       body:JSON.stringify({peer_id:peer,title:b.dataset.fplay,
         platform:b.dataset.fpplat})});
-    if(stale()||!fsOut.isConnected||(typeof pageVersion==='number'&&nver!==pageVersion)) return;
+    if(stale()||!fsOut.isConnected||seq!==netplaySeq) return;
     fsOut.innerHTML=netplayVerdict(nv, (canFetch&&nv.their_sha1) ? {peer_id:peer,title:b.dataset.fplay,platform:b.dataset.fpplat,sha1:nv.their_sha1} : null);
     const cp=$('#np-copy-room');
     if(cp) cp.onclick=async()=>{try{await navigator.clipboard.writeText(nv.room||'');toast('Room code copied');}catch{toast(nv.room||'');}};

@@ -5074,7 +5074,8 @@ class ROMarr:
             yield stage, refusal
 
     def adopt(self, path: str, platform_slug: str = "", *,
-              force: bool = False, require_verified: bool = False) -> dict:
+              force: bool = False, require_verified: bool = False,
+              friend_request: tuple[str, str] | None = None) -> dict:
         """Import one file the operator picked out of a manual-import scan.
 
         Separate from `import_finished` because the two have different
@@ -5191,7 +5192,9 @@ class ROMarr:
             self.store.record(Event(
                 kind="imported", game=source.stem, platform=platform.slug,
                 release=source.name, library=label,
-                detail=(f"manual import ({'FORCED over ' + str(status) if forced else status or 'unknown'})"
+                indexer=f"Friend: {friend_request[1]}" if friend_request else "",
+                detail=(f"{'P2P import' if friend_request else 'manual import'} "
+                        f"({'FORCED over ' + str(status) if forced else status or 'unknown'})"
                         f": {outcome.destination} ({outcome.import_method or 'copy'}) {outcome.fallback_reason}")))
             self._compress_after_import(outcome.destination, platform.slug, source.stem, target_cfg)
             imported.append({
@@ -5202,6 +5205,19 @@ class ROMarr:
                 "fallback_reason": outcome.fallback_reason,
             })
 
+        if imported and not refused and friend_request:
+            identities = _fulfil_identities(friend_request[0], outcomes)
+            for wanted in list(self.store.wanted):
+                if wanted.platform != platform.slug or not any(
+                        _titles_are_same(wanted.game, identity) for identity in identities):
+                    continue
+                if platform.slug not in PACKAGE_PLATFORMS:
+                    self.store.fulfil(wanted.game, platform.slug)
+                    continue
+                request = QueueItem(wanted.game, platform.slug, source.name, 0,
+                                    "imported", manual=True)
+                self._settle_parts(request, platform, outcomes,
+                                   self._pending_parts(request, platform))
         if imported and self.store.settings.get("rescan_after_import", True):
             self._rescan_library(target_lib, target_cfg, platform.slug,
                                  platform_folders=target_folders)
@@ -7213,33 +7229,36 @@ class ROMarr:
             return None, "", "unknown or unconfirmed peer"
         if peer.access != "fetch":
             return None, "", "this server has not enabled 'Download from me' (fetch) for you"
-        want_title = str(title or "").strip().lower()
-        want_plat = str(platform or "").strip().lower()
+        want_title = str(title or "").strip().casefold()
+        want_platform = resolve(platform) if platform else None
         want_sha1 = str(sha1 or "").strip().lower()
         if not want_title:
             return None, "", "missing title"
+        if platform and want_platform is None:
+            return None, "", "unknown platform"
+        if want_sha1 and not re.fullmatch(r"[0-9a-f]{40}", want_sha1):
+            return None, "", "invalid SHA1"
         games, _, _ = self._library_cache
-        matched = None
-        for game in (games or []):
+        error = ("that exact dump (SHA1) is not shared with you" if want_sha1
+                 else "that game is not shared with you")
+        for game in games or ():
+            if not self._is_local(game) or game.name.strip().casefold() != want_title:
+                continue
+            slug = self._slug_of(game)
+            if want_platform and slug != want_platform.slug:
+                continue
             if not peer.may_see(game):
                 continue
-            g_name = str(getattr(game, "name", "") or "").strip().lower()
-            g_plat = str(getattr(game, "platform", "") or "").strip().lower()
-            if g_name == want_title and (not want_plat or g_plat == want_plat):
-                if want_sha1 and str(getattr(game, "sha1", "") or "").lower() != want_sha1:
-                    continue
-                matched = game
-                break
-        if matched is None:
-            if want_sha1:
-                return None, "", "that exact dump (SHA1) is not shared with you"
-            return None, "", "that game is not shared with you"
-        plat_slug = str(
-            getattr(matched, "platform_slug", "")
-            or getattr(matched, "platform", "")
-            or want_plat
-            or ""
-        ).strip().lower()
+            found, _, error = self._peer_file_for_game(game, slug, want_sha1)
+            if found is not None:
+                return found, slug, ""
+        return None, "", error
+
+    def _peer_file_for_game(self, matched, plat_slug: str,
+                            want_sha1: str) -> tuple[Path | None, str, str]:
+        """Find a readable file belonging to a shared local library row."""
+        from .dat import hash_file
+
         file_name = str(getattr(matched, "file_name", "") or "").strip()
         source = str(getattr(matched, "source", "") or "").strip()
 
@@ -7292,6 +7311,8 @@ class ROMarr:
                 resolved = candidate.resolve()
                 if not resolved.is_relative_to(root):
                     return None
+                if want_sha1 and hash_file(resolved)["sha1"] != want_sha1:
+                    return None
                 return resolved
             except OSError:
                 return None
@@ -7311,9 +7332,18 @@ class ROMarr:
                 dirs.append(root)
             return dirs
 
-        # 1. Exact filename lookup under configured platform folders
+        local_path = str(getattr(matched, "local_path", "") or "")
+        if local_path:
+            candidate = Path(local_path)
+            for root, _ in lib_entries:
+                found = _safe_file(candidate if candidate.is_absolute() else root / candidate, root)
+                if found is not None:
+                    return found, plat_slug, ""
+            return None, plat_slug, "the indexed file is unavailable or its SHA1 differs"
+
+        # 1. Exact filename lookup under configured platform folders.
         if file_name:
-            safe_rel = Path(file_name).name
+            safe_rel = Path(file_name.replace(chr(92), "/")).name
             for root, cfg in lib_entries:
                 search_dirs = _plat_dirs(root, cfg)
                 for folder in search_dirs:
@@ -7337,7 +7367,7 @@ class ROMarr:
                     continue
                 try:
                     for entry in folder.iterdir():
-                        if entry.stem.lower() == want_title or entry.name.lower() == want_title:
+                        if matched.name.casefold() in (entry.stem.casefold(), entry.name.casefold()):
                             found = _safe_file(entry, root)
                             if found is not None:
                                 return found, plat_slug, ""
@@ -7837,11 +7867,13 @@ class ROMarr:
         could drift into disagreeing about what "mismatch" means.
         """
 
-        __slots__ = ("sha1", "name", "verified")
+        __slots__ = ("sha1", "name", "platform", "verified")
 
         def __init__(self, row):
             self.sha1 = row.get("sha1", "")
             self.name = row.get("title", "")
+            self.platform = (getattr(resolve(row.get("platform", "")), "slug", "")
+                             or row.get("platform", ""))
             self.verified = bool(row.get("verified"))
 
     def _romm_friend_client(self, peer):
@@ -8226,6 +8258,7 @@ class ROMarr:
         import requests as _rq
         import shutil
         from urllib.parse import quote
+        from .dat import hash_file
         from .federation import url_candidates
 
         _, cancel_set = self._p2p_state()
@@ -8248,7 +8281,7 @@ class ROMarr:
             for base in candidates:
                 try:
                     r = _rq.get(base.rstrip("/") + qs, headers=peer.headers(),
-                                stream=True, timeout=(15, 120))
+                                stream=True, timeout=(15, 120), allow_redirects=False)
                 except _rq.RequestException as exc:
                     last_err = str(exc)
                     continue
@@ -8271,7 +8304,11 @@ class ROMarr:
 
             raw_name = response.headers.get("X-ROMarr-Filename") or f"{job['title']}.bin"
             safe_name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", Path(raw_name).name).strip(" .") or "game.bin"
-            plat = response.headers.get("X-ROMarr-Platform") or job["platform"]
+            plat = job["platform"]
+            reported = response.headers.get("X-ROMarr-Platform") or plat
+            if resolve(reported) != resolve(plat):
+                response.close()
+                raise ValueError("friend returned a different platform")
             total = int(response.headers.get("Content-Length") or 0)
             job["filename"] = safe_name
             job["bytes_total"] = total
@@ -8322,15 +8359,13 @@ class ROMarr:
             job["state"] = "importing"
             job["percent"] = 100.0
             job["detail"] = f"Verifying & importing {safe_name}…"
-            adopted = self.adopt(str(dest), plat, force=False)
+            if job.get("sha1") and hash_file(dest)["sha1"] != job["sha1"]:
+                raise ValueError("the received file does not match the requested SHA1")
+            adopted = self.adopt(str(dest), plat, force=False,
+                                 friend_request=(job["title"], job["friend"]))
             if adopted.get("ok"):
                 job["state"] = "done"
                 job["detail"] = f"Imported {safe_name} from {job['friend']}"
-                self.store.record(Event(
-                    kind="imported", game=job["title"], platform=plat,
-                    release=safe_name, indexer=f"Friend: {job['friend']}",
-                    detail="Direct P2P transfer from friend"))
-                self.store.save()
             else:
                 refused = (adopted.get("refused") or [{}])[0]
                 job["state"] = "failed"
@@ -12667,8 +12702,13 @@ def make_handler(service: ROMarr):
                 # Judged against the hash index, not the shelf: a library
                 # server's game object has no SHA1, so answering from it
                 # could only ever say "missing".
-                return self._json(200, service.federation.netplay_answer(
-                    body.get("offer") or {}, service.hashes.entries()))
+                answer = service.federation.netplay_answer(
+                    body.get("offer") or {}, service.hashes.entries())
+                if digest := answer.get("their_sha1"):
+                    entry = service.hashes.by_sha1(digest)
+                    if peer.access != "fetch" or entry is None or not peer.may_see(entry):
+                        answer.pop("their_sha1")
+                return self._json(200, answer)
             if route.path == "/api/v1/hashes/seed":
                 # Netplay from the library server's own hashes, so it works
                 # on a shelf too large to audit. Backgrounded: this is

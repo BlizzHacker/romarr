@@ -630,6 +630,7 @@ class Federation:
         """
         wanted = str(offer.get("sha1") or "").lower()
         title = str(offer.get("title") or "")
+        platform = str(offer.get("platform") or "").casefold()
         if not wanted:
             return {"status": "missing",
                     "detail": "the invitation carried no hash, so the dump "
@@ -648,8 +649,8 @@ class Federation:
                               "the bytes match, but one side has not verified "
                               "this dump against a DAT",
                 }
-            if not by_title and str(getattr(game, "name", "")).lower() \
-                    == title.lower():
+            if (not by_title and str(getattr(game, "name", "")).casefold() == title.casefold()
+                    and (not platform or str(getattr(game, "platform", "")).casefold() == platform)):
                 by_title = game
 
         if by_title is not None:
