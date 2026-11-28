@@ -7178,7 +7178,105 @@ class ROMarr:
     def peer_shelf(self, peer) -> list[dict]:
         """The projection this peer is allowed to see, from the live cache."""
         games, _, _ = self._library_cache
-        return self.federation.project(peer, games or [])
+        projected = self.federation.project(peer, games or [])
+        if peer.access == "fetch":
+            for row in projected:
+                row["fetchable"] = True
+        return projected
+
+    def _library_roots(self) -> list[Path]:
+        """All configured local library roots, deduplicated and resolved."""
+        roots: list[Path] = []
+        seen: set[str] = set()
+        candidates = [self.library] + [self.library_root(cfg) for cfg, _ in self.game_libraries]
+        for root in candidates:
+            if not root:
+                continue
+            try:
+                resolved = Path(root).resolve()
+            except OSError:
+                continue
+            key = str(resolved)
+            if key not in seen and resolved.is_dir():
+                seen.add(key)
+                roots.append(resolved)
+        return roots
+
+    def peer_resolve_file(self, peer, title: str, platform: str = "") -> tuple[Path | None, str, str]:
+        """Resolve one local ROM file a confirmed `fetch` peer is allowed to download.
+
+        Returns `(path, platform_slug, error)`. Never accepts a filesystem path
+        from the peer and always verifies containment inside a library root.
+        """
+        if peer is None or not peer.confirmed:
+            return None, "", "unknown or unconfirmed peer"
+        if peer.access != "fetch":
+            return None, "", "this server has not enabled 'Download from me' (fetch) for you"
+        want_title = str(title or "").strip().lower()
+        want_plat = str(platform or "").strip().lower()
+        if not want_title:
+            return None, "", "missing title"
+        games, _, _ = self._library_cache
+        matched = None
+        for game in (games or []):
+            if not peer.may_see(game):
+                continue
+            g_name = str(getattr(game, "name", "") or "").strip().lower()
+            g_plat = str(getattr(game, "platform", "") or "").strip().lower()
+            if g_name == want_title and (not want_plat or g_plat == want_plat):
+                matched = game
+                break
+        if matched is None:
+            return None, "", "that game is not shared with you"
+        plat_slug = str(getattr(matched, "platform", "") or want_plat or "").strip().lower()
+        file_name = str(getattr(matched, "file_name", "") or "").strip()
+        roots = self._library_roots()
+        if not roots:
+            return None, plat_slug, "no readable local library folder on this server"
+
+        def _safe_file(candidate: Path, root: Path) -> Path | None:
+            try:
+                if candidate.is_symlink() or not candidate.is_file():
+                    return None
+                resolved = candidate.resolve()
+                if not resolved.is_relative_to(root):
+                    return None
+                return resolved
+            except OSError:
+                return None
+
+        # 1. Exact filename lookup under platform folders (flat & nested layouts)
+        if file_name:
+            safe_rel = Path(file_name).name
+            for root in roots:
+                search_dirs = [root]
+                if plat_slug:
+                    search_dirs = [root / plat_slug, root / plat_slug / "roms", root]
+                for folder in search_dirs:
+                    found = _safe_file(folder / safe_rel, root)
+                    if found is not None:
+                        return found, plat_slug, ""
+                # Subfolder match (e.g. multi-file or game folder)
+                if plat_slug and (root / plat_slug).is_dir():
+                    for child in (root / plat_slug).rglob(safe_rel):
+                        found = _safe_file(child, root)
+                        if found is not None:
+                            return found, plat_slug, ""
+
+        # 2. Stem-based match inside the platform folder (e.g. Title.zip / Title.iso)
+        for root in roots:
+            for folder in ([root / plat_slug, root / plat_slug / "roms"] if plat_slug else [root]):
+                if not folder.is_dir():
+                    continue
+                try:
+                    for entry in folder.iterdir():
+                        if entry.stem.lower() == want_title or entry.name.lower() == want_title:
+                            found = _safe_file(entry, root)
+                            if found is not None:
+                                return found, plat_slug, ""
+                except OSError:
+                    continue
+        return None, plat_slug, "file is not stored locally on disk on this friend's server"
 
     def peer_request(self, peer, title: str, platform: str) -> dict:
         """A peer asking me to acquire something.
@@ -7815,25 +7913,36 @@ class ROMarr:
                             "total": 0}
                 if not err:
                     self._friend_shelves[peer.peer_id] = (rows,
-                                                          time.monotonic())
+                                                          time.monotonic(),
+                                                          "catalogue", "all")
                 rows = self._friend_shelves[peer.peer_id][0]
                 return {**self._slice_shelf(rows, q, platform, offset, limit),
                         "ok": True, "friend": peer.name, "kind": "romm",
-                        "access": "catalogue"}
+                        "access": "catalogue", "my_access": peer.access}
             body, err = self._call_friend(peer, "GET", "/api/v1/peer/shelf")
             if body is None:
                 if cached is None:
                     return {"ok": False, "error": err, "items": [], "total": 0}
                 # Serve what we last saw rather than blanking the page.
-                rows, at = cached
+                rows = cached[0]
+                remote_access = cached[2] if len(cached) > 2 else "catalogue"
                 return {**self._slice_shelf(rows, q, platform, offset, limit),
                         "ok": True, "stale": True, "error": err,
-                        "friend": peer.name}
+                        "friend": peer.name, "access": remote_access,
+                        "my_access": peer.access}
             rows = [r for r in (body.get("items") or []) if isinstance(r, dict)]
-            self._friend_shelves[peer.peer_id] = (rows, time.monotonic())
-        rows = self._friend_shelves[peer.peer_id][0]
+            remote_access = str(body.get("access") or (
+                "fetch" if any(r.get("fetchable") for r in rows) else "catalogue"))
+            remote_scope = str(body.get("scope") or "")
+            self._friend_shelves[peer.peer_id] = (rows, time.monotonic(),
+                                                  remote_access, remote_scope)
+        entry = self._friend_shelves[peer.peer_id]
+        rows = entry[0]
+        remote_access = entry[2] if len(entry) > 2 else "catalogue"
+        remote_scope = entry[3] if len(entry) > 3 else ""
         return {**self._slice_shelf(rows, q, platform, offset, limit),
-                "ok": True, "friend": peer.name, "access": peer.access}
+                "ok": True, "friend": peer.name, "access": remote_access,
+                "remote_scope": remote_scope, "my_access": peer.access}
 
     @staticmethod
     def _slice_shelf(rows, q: str, platform: str, offset: int,
@@ -7871,6 +7980,258 @@ class ROMarr:
         self.store.save()
         return {"ok": True, "title": title, "platform": platform,
                 "detail": f"added to Wanted -- your indexers will look for it"}
+
+    # -- P2P friend file transfers & bulk platform recovery -----------------
+
+    def _p2p_state(self):
+        with self._lock:
+            if not hasattr(self, "_p2p_transfers"):
+                self._p2p_transfers: list[dict] = []
+                self._p2p_cancel: set[str] = set()
+                self._p2p_worker = None
+            return self._p2p_transfers, self._p2p_cancel
+
+    def friend_transfers_status(self) -> dict:
+        """Snapshot of active and recent P2P downloads from friends."""
+        transfers, _ = self._p2p_state()
+        with self._lock:
+            rows = [dict(t) for t in transfers[-60:]]
+        active = sum(1 for r in rows if r["state"] in ("queued", "downloading", "importing"))
+        return {"ok": True, "active": active, "items": list(reversed(rows))}
+
+    def friend_transfers_cancel(self, transfer_id: str = "", cancel_all: bool = False) -> dict:
+        """Cancel one or all active/queued P2P friend transfers."""
+        transfers, cancel_set = self._p2p_state()
+        cancelled = 0
+        with self._lock:
+            for item in transfers:
+                if item["state"] not in ("queued", "downloading"):
+                    continue
+                if cancel_all or item["id"] == transfer_id:
+                    cancel_set.add(item["id"])
+                    if item["state"] == "queued":
+                        item["state"] = "cancelled"
+                        item["detail"] = "Cancelled before starting"
+                    cancelled += 1
+        return {"ok": True, "cancelled": cancelled}
+
+    def friend_fetch(self, peer_id: str, title: str, platform: str = "") -> dict:
+        """Enqueue a direct P2P download of one game from a friend's server."""
+        import secrets
+        peer, why = self._friend(peer_id)
+        if peer is None:
+            return {"ok": False, "error": why}
+        if peer.kind != "romarr":
+            return {"ok": False, "error": "Direct P2P fetch requires a ROMarr peer"}
+        title = str(title or "").strip()
+        platform = str(platform or "").strip().lower()
+        if not title:
+            return {"ok": False, "error": "no title specified"}
+        transfers, _ = self._p2p_state()
+        job = {
+            "id": secrets.token_hex(6),
+            "peer_id": peer.peer_id,
+            "friend": peer.name,
+            "title": title,
+            "platform": platform,
+            "filename": "",
+            "state": "queued",
+            "bytes_done": 0,
+            "bytes_total": 0,
+            "percent": 0.0,
+            "speed_bps": 0,
+            "detail": f"Queued from {peer.name}",
+            "error": "",
+            "created": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+        with self._lock:
+            transfers.append(job)
+            if len(transfers) > 200:
+                del transfers[:-200]
+        self._ensure_p2p_worker()
+        return {"ok": True, "job": dict(job), "detail": f"Queued '{title}' from {peer.name}"}
+
+    def friend_sync_platform(self, peer_id: str, platform: str, *,
+                             dry_run: bool = True, limit: int = 500) -> dict:
+        """Compare a friend's platform against your library and optionally pull all missing games."""
+        plat = str(platform or "").strip().lower()
+        if not plat:
+            return {"ok": False, "error": "choose a platform to compare"}
+        shelf = self.friend_shelf(peer_id, platform=plat, offset=0, limit=1000, refresh=dry_run)
+        if not shelf.get("ok"):
+            return {"ok": False, "error": shelf.get("error") or "could not read friend's library"}
+        remote_items = shelf.get("items") or []
+        games, _, _ = self._library_cache
+        owned = {
+            str(getattr(g, "name", "") or "").strip().lower()
+            for g in (games or [])
+            if str(getattr(g, "platform", "") or "").strip().lower() == plat
+        }
+        missing = [
+            {"title": r.get("title", ""), "platform": r.get("platform", plat),
+             "verified": bool(r.get("verified", False))}
+            for r in remote_items
+            if str(r.get("title") or "").strip().lower() not in owned
+        ]
+        can_fetch = shelf.get("access") == "fetch"
+        if dry_run:
+            return {
+                "ok": True,
+                "friend": shelf.get("friend") or "",
+                "platform": plat,
+                "access": shelf.get("access") or "catalogue",
+                "can_fetch": can_fetch,
+                "remote_total": len(remote_items),
+                "already_have": len(remote_items) - len(missing),
+                "missing_count": len(missing),
+                "missing": missing[:200],
+            }
+        if not can_fetch:
+            return {
+                "ok": False,
+                "error": f"{shelf.get('friend') or 'This friend'} has not enabled 'Download from me' (fetch) for you yet.",
+            }
+        cap = max(1, min(int(limit or 500), 1000))
+        queued = 0
+        for item in missing[:cap]:
+            res = self.friend_fetch(peer_id, item["title"], item["platform"])
+            if res.get("ok"):
+                queued += 1
+        return {
+            "ok": True,
+            "friend": shelf.get("friend") or "",
+            "platform": plat,
+            "queued": queued,
+            "missing_count": len(missing),
+            "detail": f"Queued {queued} missing {plat} game(s) from {shelf.get('friend') or 'friend'}",
+        }
+
+    def _ensure_p2p_worker(self) -> None:
+        with self._lock:
+            worker = getattr(self, "_p2p_worker", None)
+            if worker is not None and worker.is_alive():
+                return
+            worker = threading.Thread(target=self._p2p_worker_loop, name="romarr-p2p", daemon=True)
+            self._p2p_worker = worker
+            worker.start()
+
+    def _p2p_worker_loop(self) -> None:
+        transfers, cancel_set = self._p2p_state()
+        while True:
+            job = None
+            with self._lock:
+                for item in transfers:
+                    if item["state"] == "queued":
+                        if item["id"] in cancel_set:
+                            item["state"] = "cancelled"
+                            continue
+                        item["state"] = "downloading"
+                        item["detail"] = f"Connecting to {item['friend']}…"
+                        job = item
+                        break
+            if job is None:
+                return
+            self._run_one_p2p_transfer(job)
+
+    def _run_one_p2p_transfer(self, job: dict) -> None:
+        import requests as _rq
+        import shutil
+        from urllib.parse import quote
+        from .federation import url_candidates
+
+        _, cancel_set = self._p2p_state()
+        peer = self.federation.peers.get(job["peer_id"])
+        if peer is None or not peer.confirmed:
+            job["state"], job["error"] = "failed", "peer is no longer connected"
+            return
+        candidates = url_candidates(peer.url)
+        if not candidates:
+            job["state"], job["error"] = "failed", "peer has no reachable URL"
+            return
+
+        qs = f"/api/v1/peer/shelf?download=1&title={quote(job['title'])}&platform={quote(job['platform'])}"
+        staging_dir = Path(self.store.path).parent / "peer-staging" / job["id"]
+        try:
+            response = None
+            last_err = ""
+            for base in candidates:
+                try:
+                    r = _rq.get(base.rstrip("/") + qs, headers=peer.headers(),
+                                stream=True, timeout=(15, 120))
+                except _rq.RequestException as exc:
+                    last_err = str(exc)
+                    continue
+                if r.status_code == 200:
+                    response = r
+                    break
+                try:
+                    msg = (r.json() or {}).get("error") or f"HTTP {r.status_code}"
+                except ValueError:
+                    msg = f"HTTP {r.status_code}"
+                r.close()
+                last_err = msg
+                if r.status_code in (401, 403, 404):
+                    break
+            if response is None:
+                job["state"] = "failed"
+                job["error"] = last_err or "could not download from friend"
+                job["detail"] = job["error"]
+                return
+
+            raw_name = response.headers.get("X-ROMarr-Filename") or f"{job['title']}.bin"
+            safe_name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", Path(raw_name).name).strip(" .") or "game.bin"
+            plat = response.headers.get("X-ROMarr-Platform") or job["platform"]
+            total = int(response.headers.get("Content-Length") or 0)
+            job["filename"] = safe_name
+            job["bytes_total"] = total
+            staging_dir.mkdir(parents=True, exist_ok=True)
+            dest = staging_dir / safe_name
+
+            started = time.monotonic()
+            done = 0
+            try:
+                with dest.open("wb") as handle:
+                    for chunk in response.iter_content(chunk_size=262144):
+                        if job["id"] in cancel_set:
+                            response.close()
+                            job["state"] = "cancelled"
+                            job["detail"] = "Cancelled"
+                            return
+                        if not chunk:
+                            continue
+                        handle.write(chunk)
+                        done += len(chunk)
+                        elapsed = max(0.05, time.monotonic() - started)
+                        job["bytes_done"] = done
+                        job["speed_bps"] = int(done / elapsed)
+                        job["percent"] = round((done / total) * 100.0, 1) if total > 0 else 0.0
+                        job["detail"] = f"Downloading {safe_name} ({done // 1048576} MB)"
+            finally:
+                response.close()
+
+            job["state"] = "importing"
+            job["percent"] = 100.0
+            job["detail"] = f"Verifying & importing {safe_name}…"
+            adopted = self.adopt(str(dest), plat, force=False)
+            if adopted.get("ok"):
+                job["state"] = "done"
+                job["detail"] = f"Imported {safe_name} from {job['friend']}"
+                self.store.record(Event(
+                    kind="imported", game=job["title"], platform=plat,
+                    release=safe_name, indexer=f"Friend: {job['friend']}",
+                    detail="Direct P2P transfer from friend"))
+                self.store.save()
+            else:
+                refused = (adopted.get("refused") or [{}])[0]
+                job["state"] = "failed"
+                job["error"] = refused.get("reason") or adopted.get("reason") or adopted.get("error") or "Import refused"
+                job["detail"] = job["error"]
+        except Exception as exc:  # noqa: BLE001
+            job["state"] = "failed"
+            job["error"] = str(exc)
+            job["detail"] = str(exc)
+        finally:
+            shutil.rmtree(staging_dir, ignore_errors=True)
 
     def netplay_invite(self, peer_id: str, title: str,
                        platform: str = "") -> dict:
@@ -11224,8 +11585,58 @@ def make_handler(service: ROMarr):
                     self.headers.get("X-Peer-Token", ""))
                 if peer is None:
                     return self._json(401, {"error": "unknown peer"})
+                if (query.get("download") or [""])[0] == "1":
+                    title = (query.get("title") or [""])[0]
+                    plat = (query.get("platform") or [""])[0]
+                    fpath, plat_slug, err = service.peer_resolve_file(peer, title, plat)
+                    if fpath is None:
+                        code = 403 if "not enabled" in err else 404
+                        return self._json(code, {"error": err})
+                    size = fpath.stat().st_size
+                    start, end = 0, size - 1
+                    status = 200
+                    rng = self.headers.get("Range", "")
+                    if rng.startswith("bytes=") and size > 0:
+                        part = rng[6:].split(",", 1)[0].strip()
+                        a, _, b = part.partition("-")
+                        try:
+                            start = int(a) if a else 0
+                            end = int(b) if b else size - 1
+                            if 0 <= start <= end < size:
+                                status = 206
+                            else:
+                                start, end = 0, size - 1
+                        except ValueError:
+                            start, end = 0, size - 1
+                    length = max(0, end - start + 1) if size > 0 else 0
+                    self.send_response(status)
+                    self.send_header("Content-Type", "application/octet-stream")
+                    self.send_header("Accept-Ranges", "bytes")
+                    self.send_header("Content-Length", str(length))
+                    if status == 206:
+                        self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+                    safe_disp = fpath.name.replace('"', "_").replace("\r", "").replace("\n", "")
+                    self.send_header("Content-Disposition", f'attachment; filename="{safe_disp}"')
+                    self.send_header("X-ROMarr-Filename", safe_disp)
+                    self.send_header("X-ROMarr-Platform", plat_slug)
+                    self.end_headers()
+                    with fpath.open("rb") as handle:
+                        if start:
+                            handle.seek(start)
+                        remaining = length
+                        while remaining > 0:
+                            chunk = handle.read(min(262144, remaining))
+                            if not chunk:
+                                break
+                            self.wfile.write(chunk)
+                            remaining -= len(chunk)
+                    return
                 return self._json(200, {"items": service.peer_shelf(peer),
-                                        "origin": service.federation.name})
+                                        "origin": service.federation.name,
+                                        "access": peer.access,
+                                        "scope": peer.scope})
+            if route.path == "/api/v1/friends/transfers":
+                return self._json(200, service.friend_transfers_status())
             if route.path == "/api/v1/hashes":
                 # What netplay can actually prove. Without this an operator
                 # has no way to tell "we disagree on the dump" apart from
@@ -12179,6 +12590,21 @@ def make_handler(service: ROMarr):
                     str(body.get("peer_id") or ""),
                     str(body.get("title") or ""),
                     str(body.get("platform") or "")))
+            if route.path == "/api/v1/friends/fetch":
+                return self._json(200, service.friend_fetch(
+                    str(body.get("peer_id") or ""),
+                    str(body.get("title") or ""),
+                    str(body.get("platform") or "")))
+            if route.path == "/api/v1/friends/sync":
+                return self._json(200, service.friend_sync_platform(
+                    str(body.get("peer_id") or ""),
+                    str(body.get("platform") or ""),
+                    dry_run=bool(body.get("dry_run", True)),
+                    limit=int(body.get("limit") or 500)))
+            if route.path == "/api/v1/friends/transfers/cancel":
+                return self._json(200, service.friend_transfers_cancel(
+                    str(body.get("id") or ""),
+                    cancel_all=bool(body.get("all", False))))
             if route.path == "/api/v1/audit/quarantine/move":
                 return self._json(200, service.quarantine_duplicates(
                     str(body.get("platform") or ""),

@@ -3632,7 +3632,7 @@ RENDER.peers=async()=>{
       </div>
       <div id="p-seedout"></div></div>
     ${list.length?`<div class="card"><h3>Your friends</h3>
-      <table><thead><tr><th>Name</th><th>They see</th><th>They may</th>
+      <table><thead><tr><th>Name</th><th>You share (scope)</th><th>You allow (access)</th>
         <th>State</th><th></th></tr></thead><tbody>
       ${list.map((p,i)=>`<tr><td><b>${esc(p.name)}</b>
         ${p.kind==='romm'?' <span class="pill">RomM</span>':''}
@@ -3640,20 +3640,21 @@ RENDER.peers=async()=>{
         <td>${esc(scopeLabel[p.scope]||p.scope)}${
           p.scope==='platforms'&&(p.platforms||[]).length
             ?`<div style="color:var(--dim);font-size:11.5px">${esc(p.platforms.join(', '))}</div>`:''}</td>
-        <td>${esc(accessLabel[p.access]||p.access)}${
+        <td>${p.access==='fetch'?'<span class="pill imported">Download from me</span>':esc(accessLabel[p.access]||p.access)}${
           p.delegate_users?' <span class="pill">their users too</span>':''}</td>
         <td>${p.confirmed?'<span class="pill imported">confirmed</span>'
           :'<span class="pill failed">awaiting your confirmation</span>'}</td>
         <td style="text-align:right"><div class="rowact">
-          ${p.confirmed?`<button data-pbrowse="${esc(p.peer_id)}"${
+          ${p.confirmed?`<button class="accent" data-pbrowse="${esc(p.peer_id)}"${
              p.url?'':' disabled title="Their invitation carried no address, '
                      +'so there is nowhere to call. Ask them to set their '
                      +'public URL and send a fresh invitation."'}
-             >Browse library</button>
+             >Browse &amp; Pull</button>
             <button data-pedit="${i}">Sharing</button>`
             :`<button data-pconfirm="${esc(p.peer_id)}">Confirm</button>`}
           <button data-prevoke="${esc(p.peer_id)}">Remove</button>
         </div></td></tr>`).join('')}</tbody></table>
+      <div id="p-transfers" style="margin-top:14px"></div>
       <div id="p-shelf"></div></div>`
       :'<div class="empty">No friends yet. Invite someone, or paste an invitation they sent you.</div>'}`;
 
@@ -3838,6 +3839,7 @@ RENDER.peers=async()=>{
     }
   };
   seedPoll();
+  refreshPeerTransfers();
 
   $('#p-seed').onclick=async()=>{
     const b=$('#p-seed');
@@ -3847,6 +3849,7 @@ RENDER.peers=async()=>{
     b.disabled=false; b.textContent='Read them again now';
     toast(r.detail||r.error||'');
     seedPoll();
+  refreshPeerTransfers();
   };
 
   $('#p-romm').onclick=()=>{
@@ -3891,6 +3894,51 @@ RENDER.peers=async()=>{
   };
 };
 
+//: Live P2P transfer monitor on the Friends page.
+let PEER_XFER_TIMER=null;
+async function refreshPeerTransfers(){
+  if(PEER_XFER_TIMER){clearTimeout(PEER_XFER_TIMER);PEER_XFER_TIMER=null;}
+  const box=$('#p-transfers');
+  if(!box||location.hash.replace('#','')!=='peers') return;
+  const d=await j('/api/v1/friends/transfers').catch(()=>null);
+  if(!d||!d.ok||!box.isConnected) return;
+  const rows=d.items||[];
+  if(!rows.length){box.innerHTML='';return;}
+  const mb=n=>n>=1073741824?(n/1073741824).toFixed(2)+' GB':n>=1048576?(n/1048576).toFixed(1)+' MB':n>0?(n/1024).toFixed(0)+' KB':'—';
+  const pillCls=st=>st==='done'?'imported':st==='failed'||st==='cancelled'?'failed':'';
+  box.innerHTML=`<div class="proof-bar">
+    <div class="row" style="justify-content:space-between;align-items:center;margin-bottom:8px">
+      <b>P2P Friend Transfers ${d.active?`(${d.active} active)`:''}</b>
+      <div class="row" style="gap:6px">
+        ${d.active?'<button class="mini" id="px-cancel-all">Cancel all</button>':''}
+        <button class="mini" id="px-refresh">Refresh</button>
+      </div>
+    </div>
+    <table><thead><tr><th>Game</th><th>Friend</th><th>Progress</th><th>State</th><th></th></tr></thead><tbody>
+    ${rows.slice(0,25).map(t=>`<tr>
+      <td><b>${esc(t.title)}</b> <span class="pill">${esc(t.platform||'')}</span>
+        ${t.detail?`<div class="help" style="margin:2px 0 0">${esc(t.detail)}</div>`:''}</td>
+      <td>${esc(t.friend||'')}</td>
+      <td style="white-space:nowrap">${t.state==='downloading'
+        ?`${t.percent||0}% · ${mb(t.bytes_done)} / ${mb(t.bytes_total)} · ${mb(t.speed_bps)}/s`
+        :t.bytes_total?mb(t.bytes_total):'—'}</td>
+      <td><span class="pill ${pillCls(t.state)}">${esc(t.state)}</span></td>
+      <td>${['queued','downloading'].includes(t.state)
+        ?`<button class="mini" data-pxcancel="${esc(t.id)}">Cancel</button>`:''}</td>
+    </tr>`).join('')}</tbody></table></div>`;
+  const ref=$('#px-refresh'); if(ref) ref.onclick=refreshPeerTransfers;
+  const call=$('#px-cancel-all');
+  if(call) call.onclick=async()=>{
+    await j('/api/v1/friends/transfers/cancel',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({all:true})});
+    toast('Cancelled active P2P transfers'); refreshPeerTransfers();
+  };
+  box.querySelectorAll('[data-pxcancel]').forEach(b=>b.onclick=async()=>{
+    await j('/api/v1/friends/transfers/cancel',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({id:b.dataset.pxcancel})});
+    refreshPeerTransfers();
+  });
+  if(d.active>0) PEER_XFER_TIMER=setTimeout(refreshPeerTransfers,2000);
+}
+
 //: Browsing a friend's library. Their shelf is fetched once and filtered
 //: here, so typing in the search box does not bill somebody else's server
 //: for every keystroke.
@@ -3912,20 +3960,39 @@ async function friendShelf(peerId, opts){
   const rows=r.items||[];
   const pages=Math.ceil((r.total||0)/100);
   const page=Math.floor(FSHELF.offset/100)+1;
+  const canFetch=r.access==='fetch'&&r.kind!=='romm';
+  const sortedPlats=(r.platforms||[]).slice().sort((a,b)=>a.localeCompare(b,undefined,{sensitivity:'base',numeric:true}));
   out.innerHTML=`<div style="margin-top:18px;border-top:1px solid var(--line);
       padding-top:16px">
-    <h3 style="margin:0 0 4px">${esc(r.friend||'Your friend')}’s library</h3>
+    <div class="row" style="justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:6px">
+      <h3 style="margin:0">${esc(r.friend||'Your friend')}’s library</h3>
+      <div class="row" style="gap:6px">
+        ${canFetch
+          ?'<span class="pill imported">✓ They allow Direct P2P Download</span>'
+          :'<span class="pill">They allow: '+esc(r.access||'catalogue')+' (ask them to set Sharing → Download from me)</span>'}
+      </div>
+    </div>
     <p class="help">${r.total||0} of ${r.shelf_total||0} shared title(s).
-      ${r.access==='catalogue'
-        ? 'You can add anything here to your own Wanted list — your '
-          +'indexers fetch it, not your friend.'
-        : 'They allow: '+esc(r.access||'')}
-      ${r.stale?'<b>Showing the last copy — their server did not answer.</b>':''}</p>
+      ${canFetch
+        ? 'You can download individual games directly P2P or pull an entire missing platform collection below.'
+        : 'You can add anything here to your own Wanted list — your indexers fetch it, not your friend.'}
+      ${r.stale?' <b>Showing the last copy — their server did not answer.</b>':''}</p>
+    ${sortedPlats.length?`<div class="proof-bar" style="margin-bottom:12px">
+      <div class="row" style="align-items:center;flex-wrap:wrap;gap:8px">
+        <b>Bulk Platform Recovery / Missing Sync:</b>
+        <select id="fs-sync-plat" aria-label="Platform to compare">
+          ${sortedPlats.map(pl=>`<option value="${esc(pl)}"${pl===FSHELF.platform?' selected':''}>${esc(pl)}</option>`).join('')}
+        </select>
+        <button class="btn ghost" id="fs-sync-preview">Compare Missing</button>
+        ${canFetch?'<button class="btn" id="fs-sync-pull">Pull Missing from '+esc(r.friend||'Friend')+'</button>':''}
+      </div>
+      <div id="fs-sync-out" style="margin-top:8px"></div>
+    </div>`:''}
     <div class="row" style="flex-wrap:wrap;gap:8px;margin-bottom:10px">
       <input type="text" id="fs-q" placeholder="Search their library"
         value="${esc(FSHELF.q)}" style="flex:1;min-width:200px">
       <select id="fs-plat"><option value="">All platforms</option>
-        ${(r.platforms||[]).slice().sort((a,b)=>a.localeCompare(b,undefined,{sensitivity:'base',numeric:true})).map(pl=>`<option value="${esc(pl)}"${
+        ${sortedPlats.map(pl=>`<option value="${esc(pl)}"${
           pl===FSHELF.platform?' selected':''}>${esc(pl)}</option>`).join('')}
       </select>
       <button class="btn ghost" id="fs-refresh">Refresh from them</button>
@@ -3938,6 +4005,8 @@ async function friendShelf(peerId, opts){
         <td>${g.year||''}</td>
         <td>${g.verified?'<span class="pill imported">verified</span>':''}</td>
         <td style="text-align:right"><div class="rowact">
+          ${canFetch?`<button class="accent" data-ffetch="${esc(g.title||'')}"
+            data-ffplat="${esc(g.platform||'')}">Download P2P</button>`:''}
           <button data-fwant="${esc(g.title||'')}"
             data-fplat="${esc(g.platform||'')}">Add to Wanted</button>
           <button data-fplay="${esc(g.title||'')}"
@@ -3964,6 +4033,39 @@ async function friendShelf(peerId, opts){
   if($('#fs-prev')) $('#fs-prev').onclick=()=>reload({offset:Math.max(0,FSHELF.offset-100)});
   if($('#fs-next')) $('#fs-next').onclick=()=>reload({offset:FSHELF.offset+100});
 
+  const syncPrev=$('#fs-sync-preview'), syncPull=$('#fs-sync-pull');
+  if(syncPrev) syncPrev.onclick=async()=>{
+    const plat=$('#fs-sync-plat').value;
+    const sout=$('#fs-sync-out');
+    sout.innerHTML='<span class="help">Comparing your library with '+esc(r.friend||'friend')+'…</span>';
+    const res=await j('/api/v1/friends/sync',{method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({peer_id:FSHELF.peer,platform:plat,dry_run:true})}).catch(()=>({error:'Compare failed'}));
+    if(!res.ok){sout.innerHTML='<span style="color:var(--bad)">'+esc(res.error||'Compare failed')+'</span>';return;}
+    sout.innerHTML=`<div class="help" style="margin:0"><b>${esc(res.friend)}</b> has <b>${res.remote_total}</b> ${esc(plat)} title(s): you already have <b>${res.already_have}</b> and are missing <b>${res.missing_count}</b>.`
+      +(res.missing_count?` Sample: ${res.missing.slice(0,5).map(m=>esc(m.title)).join(', ')}${res.missing_count>5?'…':''}`:' Everything is already in your library!')
+      +`</div>`;
+  };
+  if(syncPull) syncPull.onclick=async()=>{
+    const plat=$('#fs-sync-plat').value;
+    if(!confirm(`Pull all missing ${plat} games directly P2P from ${r.friend||'your friend'}? Existing games in your library are skipped automatically.`)) return;
+    syncPull.disabled=true; syncPull.textContent='Queueing…';
+    const res=await j('/api/v1/friends/sync',{method:'POST',headers:{'content-type':'application/json'},
+      body:JSON.stringify({peer_id:FSHELF.peer,platform:plat,dry_run:false})}).catch(()=>({error:'Sync failed'}));
+    syncPull.disabled=false; syncPull.textContent='Pull Missing from '+(r.friend||'Friend');
+    toast(res.ok?(res.detail||'Queued'):(res.error||'Could not start sync'));
+    if(res.ok) refreshPeerTransfers();
+  };
+
+  document.querySelectorAll('[data-ffetch]').forEach(b=>b.onclick=async()=>{
+    b.disabled=true; b.textContent='Queueing…';
+    const res=await j('/api/v1/friends/fetch',{method:'POST',
+      headers:{'content-type':'application/json'},
+      body:JSON.stringify({peer_id:FSHELF.peer,title:b.dataset.ffetch,
+        platform:b.dataset.ffplat})}).catch(()=>({error:'Request failed'}));
+    b.disabled=false; b.textContent=res.ok?'Queued ✓':'Download P2P';
+    toast(res.ok?(res.detail||'Queued P2P download'):(res.error||'Could not start download'));
+    if(res.ok) refreshPeerTransfers();
+  });
   document.querySelectorAll('[data-fwant]').forEach(b=>b.onclick=async()=>{
     const r=await j('/api/v1/friends/want',{method:'POST',
       headers:{'content-type':'application/json'},
@@ -3973,18 +4075,28 @@ async function friendShelf(peerId, opts){
   });
   document.querySelectorAll('[data-fplay]').forEach(b=>b.onclick=async()=>{
     $('#fs-out').innerHTML='<div class="empty">Comparing dumps…</div>';
-    const r=await j('/api/v1/friends/netplay',{method:'POST',
+    const nv=await j('/api/v1/friends/netplay',{method:'POST',
       headers:{'content-type':'application/json'},
       body:JSON.stringify({peer_id:FSHELF.peer,title:b.dataset.fplay,
         platform:b.dataset.fpplat})});
-    $('#fs-out').innerHTML=netplayVerdict(r);
+    $('#fs-out').innerHTML=netplayVerdict(nv, canFetch ? {peer_id:FSHELF.peer,title:b.dataset.fplay,platform:b.dataset.fpplat} : null);
+    const cp=$('#np-copy-room');
+    if(cp) cp.onclick=async()=>{try{await navigator.clipboard.writeText(nv.room||'');toast('Room code copied');}catch{toast(nv.room||'');}};
+    const npf=$('#np-fetch-dump');
+    if(npf) npf.onclick=async()=>{
+      npf.disabled=true; npf.textContent='Queueing…';
+      const res=await j('/api/v1/friends/fetch',{method:'POST',headers:{'content-type':'application/json'},
+        body:JSON.stringify({peer_id:FSHELF.peer,title:b.dataset.fplay,platform:b.dataset.fpplat})});
+      toast(res.ok?'Queued matching dump from friend':(res.error||'Failed'));
+      if(res.ok) refreshPeerTransfers();
+    };
   });
 }
 
 //: Netplay never reports a bare success. Each verdict says what was compared
 //: and what it means, because "mismatch" is the one people otherwise spend an
 //: evening blaming on their connection.
-function netplayVerdict(r){
+function netplayVerdict(r, fetchCtx){
   const cls=r.ok?'panel':'panel panel-warn';
   const head={
     ready:'Ready — you both have the same dump',
@@ -3996,9 +4108,13 @@ function netplayVerdict(r){
   }[r.status]||r.status||'No answer';
   let extra='';
   if(r.room){
-    extra=`<div style="margin-top:8px">Room <code>${esc(r.room)}</code>
-      — both servers derive this independently, so you and
-      ${esc(r.friend||'your friend')} can join it without a lobby.</div>`;
+    extra=`<div class="row" style="margin-top:8px;align-items:center;gap:8px">
+      <span>Room <code>${esc(r.room)}</code> — both servers derive this independently, so you and
+      ${esc(r.friend||'your friend')} can join it without a lobby.</span>
+      <button type="button" class="mini accent" id="np-copy-room">Copy room code</button></div>`;
+  }
+  if(fetchCtx&&(r.status==='mismatch'||r.status==='missing'||r.status==='unhashed')){
+    extra+=`<div style="margin-top:8px"><button type="button" class="mini accent" id="np-fetch-dump">Fetch exact dump from ${esc(r.friend||'friend')} (P2P)</button></div>`;
   }
   if(r.sha1){
     extra+=`<div style="margin-top:6px;color:var(--dim);font-size:11.5px">
